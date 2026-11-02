@@ -250,6 +250,10 @@ them. See [repo hooks](docs/repo-hooks.md).
 
 ## Architectural guardrails
 
+- Formal Mac publication uses `scripts/release.sh` and the private publisher's
+  `--developer-id` mode. Keep credentials in Keychain. Verify nested code and
+  both App/DMG notarization tickets; do not bypass archive or Gatekeeper checks.
+
 - Live terminal bytes and bootstrap snapshots use the same ordered tmux control
   connection. `pipe-pane` is scan-only for OSC side effects, never a second feed.
 - Viewer pane identity includes the Host `pairId`; do not key multiple Hosts

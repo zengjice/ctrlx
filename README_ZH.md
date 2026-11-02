@@ -36,7 +36,8 @@ curl -fsSL https://ctrlx-1256844776.cos.ap-guangzhou.myqcloud.com/macos/mac.sh |
 ```
 
 安装器会校验安装包并仅替换 `/Applications/CtrlX.app`，已有 tmux session 不会中断。当前
-安装包使用 Apple Development 签名，尚未 notarize，也不是 App Store 发行包。
+正式发行包使用 Developer ID 签名并经过 Apple 公证；本地开发包使用 Apple Development
+签名。两者均不通过 App Store 分发。
 
 ### 复用并共享 tmux session
 

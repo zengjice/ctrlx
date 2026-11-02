@@ -40,8 +40,9 @@ curl -fsSL https://ctrlx-1256844776.cos.ap-guangzhou.myqcloud.com/macos/mac.sh |
 ```
 
 The installer verifies the package and replaces only `/Applications/CtrlX.app`;
-existing tmux sessions continue running. The current package uses an Apple
-Development signature and is not notarized or distributed through the App Store.
+existing tmux sessions continue running. Formal releases use Developer ID signing
+and Apple notarization. Local development packages use Apple Development signing;
+neither channel uses the App Store.
 
 ### Reuse and share a tmux session
 

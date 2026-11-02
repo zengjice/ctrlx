@@ -929,12 +929,13 @@ class BuildCleanupTests(unittest.TestCase):
     def test_packaging_prunes_only_after_metadata_is_written(self):
         for name, variable, platform in (("package-local-ios.sh", "IPA_PATH", ' iOS "$SAVE_SPACE"'),
                                          ("package-local-macos.sh", "DMG_PATH", ' macOS "$SAVE_SPACE"'),
-                                         ("release.sh", "DMG_PATH", "")):
+                                         ("release.sh", "DMG_PATH", " macOS")):
             with self.subTest(script=name):
                 script = (SCRIPTS / name).read_text()
                 staged = "STAGED_IPA" if variable == "IPA_PATH" else "STAGED_DMG"
-                expected = (f'write_artifact_metadata "${variable}"\n' if name == "release.sh" else
-                            f'write_artifact_metadata "${staged}"\npublish_local_package "${staged}" "${variable}"\n')
+                expected = f'write_artifact_metadata "${staged}"\npublish_local_package "${staged}" "${variable}"\n'
+                if name == "release.sh":
+                    expected += 'mv "$STAGED_APPCAST" "$APPCAST_PATH"\n'
                 self.assertIn(expected + f'prune_local_artifacts "${variable}"{platform}\n', script)
 
     def test_space_saving_packaging_tail_only_cleans_after_success(self):

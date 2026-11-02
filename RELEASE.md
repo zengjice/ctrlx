@@ -20,14 +20,33 @@ Choose the workflow that matches the task:
    notification extension on the same build number. iOS uses this build string
    to recognize updates during synchronization; see Apple's
    [version and build guidance](https://help.apple.com/xcode/mac/current/en.lproj/devba7f53ad4.html).
-2. Run all boundary checks, Swift tests, website build and Mac/iOS build checks.
+2. Run boundary checks, relevant tests and isolated native-runtime acceptance.
+   Mac-only releases do not build the iOS Simulator unless explicitly requested.
 3. Commit from the selected worktree and create `v<version>` at that exact commit.
 4. Copy `.env.example` to the selected root environment file and configure the
    signing identity, notary profile and owned download URL.
 5. Run the zero-parameter `./scripts/release.sh`.
 
-The script refuses dirty or untagged source, archives and signs `CtrlX.app`,
-submits the app and DMG for notarization, generates `CtrlX-<version>.dmg`, a
+The script refuses dirty or untagged source, missing Developer ID identities or
+unusable notarization credentials before building. Configure the Keychain profile
+interactively with `xcrun notarytool store-credentials ctrlx-notary`; use an
+App-specific password for the same Apple account/team. Keep passwords and private
+keys out of environment files, command arguments and logs.
+
+It prepares native dependencies, archives and exports `CtrlX.app`, signs nested
+Mach-O files and bundles from the inside out, and checks their Developer ID team,
+secure timestamp, Hardened Runtime and exact entitlements. Renderer/GPU helpers
+receive JIT permission; other processes retain their scoped entitlements. The
+bundled automation engine and CEF framework libraries are included in the inventory.
+The original CEF SDK is never signed or modified.
+The upstream automation-engine download is hash-verified before signing. Its
+signature attests the pinned upstream hash in a fixed identifier; the CLI accepts
+either the original pinned bytes or a strict Developer ID signature for that
+identifier from its own team. Arbitrarily re-signed engines are rejected.
+
+It submits the app and DMG separately, requires `Accepted`, staples and validates
+both tickets, and requires Gatekeeper acceptance before publishing the local
+package. It generates `CtrlX-<version>.dmg`, a
 Sparkle appcast, SHA-256 file and JSON manifest containing the full source
 commit and AGPL license. The appcast is retained for older clients that still
 used Sparkle's in-process updater; current clients use the Qcloud installer
@@ -46,11 +65,19 @@ signatures fail closed; HTTPS alone is not the update trust root. The app does
 not check the installer merely because Settings → General opened; startup, the
 daily maintenance loop and the explicit **Check Again** action trigger a check.
 
+Formal archives reuse this worktree's Mac DerivedData and package downloads.
+They keep compilation caches. Failed releases retain their staging directory and
+notarization reports under `dist/qcloud-release/<version>/`; do not rebuild just
+because a notarization wait timed out. Resume the same input and submission with
+`python3 scripts/notarize_macos.py <artifact> --profile <profile> --report <report>`.
+An `Invalid` result retains the notary log and stops publication. Only fully
+verified staged packages replace the previous local package and its sidecars.
+
 The simulator build scripts sign both `CtrlxSimulatorHost` and the pinned
 `simslim` helper with Hardened Runtime. Validate actual display, input,
 accessibility and profile changes in the signed candidate before distribution.
-Full App hardening and notarization still require the Agent Browser archive
-gates described in `docs/agent-browser.md`.
+Agent Browser archives require the Developer ID mode and verified nested code;
+plain development archives remain blocked. See `docs/agent-browser.md`.
 
 ## Publish only the macOS package
 
@@ -77,6 +104,11 @@ python3 /path/to/publish-ctrlx-macos.py --root "$PWD" --yes
 `CTRLX_ROOT` remains supported; without either option, the maintainer's usual
 primary checkout remains the default. This path uses
 `scripts/package-local-macos.sh` (Apple Development signature, not notarized).
+For a formal release prepared with `scripts/release.sh`, pass `--developer-id`
+to the private publisher's `--check` and `--yes` commands. It verifies all nested
+code, the chosen team, both stapled tickets and Gatekeeper acceptance before
+uploading or switching the installer. If the DMG is absent, this mode invokes
+`scripts/release.sh`; it never falls back to a development package.
 The publishing Mac uploads directly to COS using its exported `COS_SECRET_ID`
 and `COS_SECRET_KEY`. Neither publication nor installer/package downloads require
 SSH, SCP or the Qcloud host. Publication does not install locally or deploy the Relay.

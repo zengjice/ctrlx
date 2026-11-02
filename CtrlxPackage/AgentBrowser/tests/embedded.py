@@ -51,7 +51,7 @@ def main():
     cli = app / 'Contents/MacOS/CtrlXCLI'
     tmux_socket = str(root / 'tmux.sock')
     shell_config = str(Path(__file__).resolve().parent / 'shell')
-    api_socket = str(Path(tempfile.gettempdir()) / 'ctrlx-e2e.sock')
+    api_socket = str(root / 'api.sock')
     # This socket belongs only to the repository's E2E app, never the normal app.
     class ExistingHost:
         def __init__(self, pid): self.pid = pid
@@ -67,6 +67,7 @@ def main():
     else:
         log = (root / 'host.log').open('wb')
         host = subprocess.Popen([str(app / 'Contents/MacOS/CtrlX'), '--e2e-test',
+            '--e2e-api-socket', api_socket,
             '--tmux-socket', tmux_socket, '--ctrlx-state-root', str(root),
             '--zdotdir', shell_config], stdout=log, stderr=log,
             start_new_session=True)
@@ -195,6 +196,7 @@ def main():
             old_endpoint = endpoint
             log = (root / 'restart.log').open('wb')
             host = subprocess.Popen([str(app / 'Contents/MacOS/CtrlX'), '--e2e-test',
+                '--e2e-api-socket', api_socket,
                 '--tmux-socket', tmux_socket, '--ctrlx-state-root', str(root),
                 '--zdotdir', shell_config], stdout=log, stderr=log,
                 start_new_session=True)
@@ -211,6 +213,9 @@ def main():
             subprocess.run([str(cli), 'wait-ready', '--socket', api_socket, '--timeout', '30'], check=True, capture_output=True)
             control('select-session', 'embedded-beta')
             persisted = request(fresh, 'open', url=url + 'shared')['id']
+            request(fresh, 'show', tab=persisted)
+            wait_for(lambda: any(tab['id'] == persisted and tab['presentation']['visible']
+                                 for tab in request(fresh, 'tabs')))
             request(fresh, 'wait', tab=persisted)
             contents = request(fresh, 'read', tab=persisted)['text']
             assert all(value in contents for value in persisted_values), contents

@@ -117,8 +117,11 @@ CEF 使用固定的页面脚本读取选区，并给当前焦点派发带 `DataT
 
 Current embedded-browser contract, followed by dated acceptance history. The
 Apple Development-signed runtime is distributed through the private Mac channel;
-this does not mean hardened-runtime/notarized distribution is approved. Formal
-archives remain gated; see [RELEASE.md](../RELEASE.md). Historical statements such
+Formal archives now require Developer ID mode and verification of every embedded
+component's team, secure timestamp, runtime flags and scoped entitlements. The
+release workflow also requires App/DMG notarization, stapled tickets and Gatekeeper
+acceptance; see [RELEASE.md](../RELEASE.md). Plain development archives remain
+blocked. Historical statements such
 as “not published” apply only to their recorded checkpoint, not today's channel.
 
 **Open Browser** belongs to a terminal Window, not the global New menu. On Mac,
