@@ -7,6 +7,34 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.130 — Workflow steps, images and shared model shortcuts
+
+- Separate workflow participants from execution steps so several serial steps
+  can reuse one Agent conversation. Add an editable development/review/repair
+  template, selectable original inputs and upstream results, and loops that
+  restart from a chosen step.
+- Accept pasted, dropped and selected images in workflow task inputs, with
+  bounded preparation and verified chunk uploads. Require explicit Take over
+  before typing in workflow terminals; Continue revokes pending human writes.
+  Keep reporting requirements in step instructions and injected context concise.
+- Breaking change: remove workflow share and workflow.artifact. Agent outputs
+  carry text; downstream Agents use agreed workspace paths for files. Workflow
+  management now uses protocol version 3; update Host and Viewer together for
+  workflow controls. Existing configuration archives remain readable.
+- Save model shortcut display preferences on the Host and synchronize revisions
+  across clients through existing session updates. Older Hosts retain the local
+  Viewer behavior; hidden choices never change the Agent's active model.
+- Recover missing Agent descriptors from uniquely matching persistent identities
+  only after native history validation, then require explicit Resume. Preserve
+  invalidation across restarts so stale identities cannot revive replaced Agents.
+- Release validation: 475 focused Swift tests and two opt-in native probes
+  passed: Mac image paste/text editing, and a private Codex/Claude review/repair
+  loop using deterministic local replies, real image reads and authorized finish.
+  All 117 publisher/COS/installer tests and both boundary checks passed. SwiftFormat
+  passes for 79 of 81 changed Swift files; the other two retain only verified
+  pre-existing violations. Full Swift regression and complete App UI acceptance
+  were not rerun; this release builds macOS only.
+
 ## 3.0.129 — Checkpoints for stopped terminals
 
 - Use stopped tmux panes' launch directory consistently in live discovery and
