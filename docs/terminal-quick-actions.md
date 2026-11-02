@@ -227,12 +227,18 @@ status fields or use native `/model`. Claude can establish an unknown selection
 through its native picker. Native manual changes are reflected when their
 current state is visible.
 
-Safe shortcut switching also requires the running Host tmux server to expose
-`bracket_paste_flag` (tmux 3.7+). On older servers, including 3.6a, the model list
-and any readable current selection still appear, while switch requests are rejected
-with an upgrade explanation. A missing field remains unknown and cannot enable
-automatic terminal input. Updating the tmux executable or resuming an Agent does
-not upgrade an already-running tmux server.
+Model and effort shortcuts also work with tmux 3.6a on the Host. When the server
+cannot expose `bracket_paste_flag`, the Host verifies the native empty composer
+and submits the validated single-line `/model` command with `paste-buffer -p`,
+letting tmux add paste delimiters according to the terminal's actual mode. The
+private buffer is consumed and deleted; paste and Return share a guarded command
+queue. Foreground command, cursor, size, copy mode, pane/process identity and
+human-input checks still apply. Servers that expose an explicitly disabled paste
+mode remain blocked; tmux 3.7+ retains the single-write submission. This fallback
+is limited to user-requested model/effort changes, including Mac/iOS Viewer
+requests executed on the Host. Automatic workflows and hook approval retain
+their explicit input-mode requirement. Only the Host needs the compatibility fix;
+updating a Viewer alone does not change the Host's behavior.
 
 Only an idle Agent with an empty native composer can accept a switch. Questions,
 approvals, drafts and external editors prevent it. The Host checks stable pane

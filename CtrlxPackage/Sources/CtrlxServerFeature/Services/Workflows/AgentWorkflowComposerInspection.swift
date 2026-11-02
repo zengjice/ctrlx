@@ -60,13 +60,14 @@ enum AgentWorkflowComposerInspection {
         return current
     }
 
-    static func readiness(_ capture: AgentWorkflowTerminalCapture, composer: AgentWorkflowComposer) -> AgentWorkflowReadiness {
+    static func readiness(_ capture: AgentWorkflowTerminalCapture, composer: AgentWorkflowComposer, allowUnknownBracketedPaste: Bool = false) -> AgentWorkflowReadiness {
         guard
             capture.width >= 20, capture.width <= 4_096,
             capture.height > 0, capture.height <= 512,
             capture.cursorY >= 0, capture.cursorY < capture.height,
             capture.cursorX == composer.prompt.count,
-            capture.bracketedPaste == true, !capture.inCopyMode else { return .unavailable }
+            capture.bracketedPaste == true || (allowUnknownBracketedPaste && capture.bracketedPaste == nil),
+            !capture.inCopyMode else { return .unavailable }
         let rows = capture.ansi.components(separatedBy: "\n")
         guard rows.count >= capture.height else { return .unavailable }
         let delegate = Delegate()

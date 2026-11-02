@@ -191,30 +191,16 @@ extension AppCoordinator {
         if let issue = agentModelInputIssue(paneID: paneID, screen: screen, provider: provider, models: models) {
             throw AgentModelError(issue)
         }
-        let bytes = try AgentModelTerminal.commandBytes(command)
-        // Bracketed paste and Return share one write, leaving no half-command
-        // for newly queued human input to join.
-        let input = ["send-keys", "-t", paneID, "-H"] + bytes.map { String(format: "%02x", $0) }
-        let conditions = [
-            "#{bracket_paste_flag}", "#{==:#{pane_in_mode},0}",
-            "#{==:#{cursor_x},\(screen.cursorX)}", "#{==:#{cursor_y},\(screen.cursorY)}",
-            "#{==:#{pane_width},\(screen.width)}", "#{==:#{pane_height},\(screen.height)}",
-        ]
-        let condition = conditions.dropFirst().reduce(conditions[0]) { "#{&&:\($0),\($1)}" }
-        let result = try await tmuxService.runWorkspaceCommand([
-            ["if-shell", "-F", "-t", paneID, condition, input.map(\.posixSingleQuoted).joined(separator: " "), "display-message -p ctrlx-model-input-changed"],
-        ], target: paneID, identity: identity) { launch in
+        let commands = try AgentModelTmuxSubmission.commands(command, paneID: paneID, capture: screen)
+        let result = try await tmuxService.runWorkspaceCommand(commands, target: paneID, identity: identity) { launch in
             try gate.validate(claim)
             guard identityClient.runtimeID(processID) == runtimeID else { throw AgentModelError("The Agent process changed before input was sent.") }
             try gate.perform(claim, write: launch)
         }
-        guard !result.stdoutString.contains("ctrlx-model-input-changed") else { throw AgentModelError("The terminal input changed. Nothing was sent.") }
+        guard !result.stdoutString.contains(AgentModelTmuxSubmission.rejection) else { throw AgentModelError("The terminal input changed. Nothing was sent.") }
     }
 
     func agentModelInputIssue(paneID: String, screen: AgentWorkflowTerminalCapture, provider: any AgentModelProviding, models: [AgentModelOption]) -> String? {
-        guard screen.bracketedPaste != nil else {
-            return "Model switching requires tmux 3.7 or newer on the Host. Upgrade the running tmux server, or use /model in this terminal."
-        }
         guard let pane = windowManager.paneStates[paneID], pane.agentSession != nil else { return "The Agent is not ready." }
         if pane.agentSession?.state.openForm != nil {
             return "Answer the Agent's question or permission request first."
@@ -231,7 +217,9 @@ extension AppCoordinator {
         if pane.editorSession != nil || !recoveredWorkspaceDrafts.localDrafts(paneID: paneID).isEmpty {
             return "Finish or clear the input draft before switching models."
         }
-        guard AgentWorkflowComposerInspection.readiness(screen, composer: provider.modelComposer) == .ready else {
+        // Single-line model commands can use tmux's native paste on older servers.
+        // Workflows and hook approval retain their explicit input-mode requirement.
+        guard AgentWorkflowComposerInspection.readiness(screen, composer: provider.modelComposer, allowUnknownBracketedPaste: true) == .ready else {
             return "Switch models when the Agent is idle and its input is empty."
         }
         return provider.modelSwitchIssue(lines: lines, models: models)
