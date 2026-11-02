@@ -11,16 +11,22 @@ extension AppCoordinator {
     func localWorkflowEndpoint() -> AgentWorkflowEndpoint {
         AgentWorkflowEndpoint(
             id: "local", name: "This Mac", connected: { true },
-            supported: { [weak self] in self?.agentWorkflowService != nil }
+            supported: { true }
         ) { [weak self] request in
-            guard let service = self?.agentWorkflowService else {
-                throw AgentWorkflowError("Workflows are unavailable on this Host.")
-            }
-            return try await service.handle(request)
+            guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
+            return try await handleAgentWorkflowRequest(request)
         }
     }
 
+    func handleAgentWorkflowRequest(_ request: ManageAgentWorkflows) async throws -> AgentWorkflowResponse {
+        guard let agentWorkflowService else {
+            throw AgentWorkflowError(agentWorkflowStartupError ?? "Workflows are still starting on this Mac. Try again shortly.")
+        }
+        return try await agentWorkflowService.handle(request)
+    }
+
     func setupAgentWorkflows() async {
+        agentWorkflowStartupError = nil
         guard let paths = ctrlxPaths else { return }
         do {
             @Dependency(HostIdentityClient.self) var identity
@@ -81,6 +87,7 @@ extension AppCoordinator {
             tmuxService.workflowInputGate = gate
             controlClientManager.workflowInputGate = gate
         } catch {
+            agentWorkflowStartupError = "Could not load workflows on this Mac: \(error.localizedDescription)"
             workflowLogger.error("Could not load workflow storage: \(error)")
         }
     }
