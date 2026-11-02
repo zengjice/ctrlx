@@ -84,46 +84,17 @@ Pausing handoffs retains access for an already accepted, still-running invocatio
 Expired, ended, unaccepted and completed invocations cannot read files.
 Target overrides and self-reported caller identities are not accepted.
 
-`workflow share` snapshots one local artifact for the current invocation:
-
-```bash
-ctrlx workflow share --invocation '<UUID supplied with the task>' --file report.md --json
-```
-
-Share required files before providing the final answer. The CLI reads a regular
-file, checks for changes while reading, and sends 64 KiB chunks with a SHA-256
-digest. It never asks the Host to open a caller-supplied path. Supported formats
-are PNG/JPEG, UTF-8 text/Markdown, WAV/MP3/M4A and MP4/MOV, up to 1 GiB per file;
-the receiving Agent's reading or conversion limits still apply. Storage success
-does not prove model media support.
-
-**JSON-RPC:** `workflow.artifact`, common params `invocationId`, `uploadId` (UUID
-strings) and `action`: `begin` adds `name`, `mediaType`, `size`; `append` adds
-`offset` and Base64 `data`; `finish` adds `sha256`; `cancel` adds no fields.
-The Host checks the socket caller, active accepted invocation and live binding
-before and after disk I/O. The upload belongs to that invocation; another
-invocation cannot adopt or cancel it. Finish records the attachment metadata and
-invocation reference atomically. Up to 32 artifacts can be shared per invocation.
-They become downstream input only after verified successful completion; fan-out
-reuses the same immutable IDs, and fan-in keeps configured source order.
-
-Receipts contain `invocationId`, `uploadId`, `offset`; finish also includes
-`artifact` with `id`, `name`, `mediaType`, `size`, `sha256`. The CLI prints only
-the final receipt, always as JSON. Each request has a 30-second timeout and
-64 KiB response limit. Failed transfers attempt cancellation without resending
-chunks. A lost finish reply may mean the artifact was already saved: inspect
-the workflow record before sharing again. Mentioning a path in prose does not
-publish an artifact. An accepted invocation can keep sharing while handoffs are
-paused; the snapshots stay with its result until an operator continues the run.
-Expired, ended and completed invocations cannot publish new artifacts; an already
-committed snapshot is never overwritten.
+Code, reports and other files stay in the task's working directory. Downstream
+Agents read agreed workspace paths. Text results follow the configured
+connections; workflow-supplied images use the attachment reader above.
 
 `workflow finish` requests completion of the current, explicitly authorized
-workflow invocation. Workflow creation and the full runtime are still under
-development; this command alone does not start a workflow.
+workflow invocation. Completion conditions are defined in the workflow task or
+step instructions; the CLI does not define business criteria. This command
+alone does not start a workflow.
 
 ```bash
-ctrlx workflow finish --invocation '<UUID supplied with the task>' --reason 'Review passed'
+ctrlx workflow finish --invocation '<UUID supplied with the task>' --reason '<completion reason>'
 ```
 
 **JSON-RPC:** `workflow.finish`, params `invocationId` (UUID string) and `reason`

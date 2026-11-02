@@ -73,6 +73,7 @@ actor AgentWorkflowStore {
     private let hostID: UUID
     private var archive: AgentWorkflowArchive?
     private var writeAuthorizations: [UUID: AgentWorkflowWriteAuthorization] = [:]
+    private var humanInputAuthorizations: [String: AgentWorkflowHumanInputAuthorization] = [:]
     let attachmentUploads = HostFileUploads()
     var pendingAttachments: [UUID: PendingAttachment] = [:]
     var busyAttachmentUploads: Set<UUID> = []
@@ -86,6 +87,22 @@ actor AgentWorkflowStore {
 
     func snapshot() throws -> AgentWorkflowArchive {
         try load()
+    }
+
+    func authorizeHumanInput(paneID: String) throws -> AgentWorkflowHumanInputAuthorization {
+        let archive = try load()
+        if
+            archive.runs.contains(where: {
+                ($0.status == .running || $0.status == .finishing) && $0.instances.contains { $0.paneID == paneID }
+            }) {
+            throw AgentWorkflowInputReadOnlyError()
+        }
+        if let authorization = humanInputAuthorizations[paneID] {
+            return authorization
+        }
+        let authorization = AgentWorkflowHumanInputAuthorization()
+        humanInputAuthorizations[paneID] = authorization
+        return authorization
     }
 
     /// Call only with a complete, verified process snapshot. Failed inspection
@@ -186,7 +203,9 @@ actor AgentWorkflowStore {
             !run.status.isTerminal && run.instances.contains { instanceIDs.contains($0.id) }
         }
         guard !occupied else { throw AgentWorkflowError("An Agent is already reserved by another active workflow.") }
-        let instances = definition.nodes.compactMap { node in updated.instances.first { $0.id == node.agentInstanceID } }
+        let instances = definition.agents.compactMap { participant in
+            instanceIDs.contains(participant.id) ? updated.instances.first { $0.id == participant.id } : nil
+        }
         let execution = try AgentWorkflowExecution(
             definition: definition,
             instances: instances,
@@ -259,7 +278,7 @@ actor AgentWorkflowStore {
         }
         var loaded = try JSONDecoder().decode(AgentWorkflowArchive.self, from: Data(contentsOf: fileURL))
         guard
-            [1, 2].contains(loaded.schemaVersion), loaded.hostID == hostID,
+            [1, 2, 3].contains(loaded.schemaVersion), loaded.hostID == hostID,
             Set(loaded.definitions.map(\.id)).count == loaded.definitions.count,
             Set(loaded.runs.map(\.id)).count == loaded.runs.count,
             Set(loaded.instances.map(\.id)).count == loaded.instances.count else {
@@ -288,7 +307,10 @@ actor AgentWorkflowStore {
 
     func commit(_ updated: AgentWorkflowArchive) throws {
         var updated = updated
-        if
+        if (updated.definitions + updated.runs.map(\.definition)).contains(where: \.usesSteps) {
+            updated.schemaVersion = 3
+        } else if
+            updated.schemaVersion < 2,
             updated.definitions.contains(where: { $0.nodes.contains { $0.kind == .content } })
             || updated.runs.contains(where: { $0.definition.nodes.contains { $0.kind == .content } }) {
             updated.schemaVersion = 2
@@ -302,6 +324,11 @@ actor AgentWorkflowStore {
         )
         try data.write(to: fileURL, options: .atomic)
         archive = updated
+        let readOnlyPanes = Set(updated.runs.filter { $0.status == .running || $0.status == .finishing }.flatMap { $0.instances.map(\.paneID) })
+        for (paneID, authorization) in humanInputAuthorizations where readOnlyPanes.contains(paneID) {
+            authorization.revoke()
+            humanInputAuthorizations.removeValue(forKey: paneID)
+        }
         let writable = Set(updated.runs.filter { $0.status == .running }.flatMap {
             $0.invocations.filter { $0.status == .writing }.map(\.id)
         })

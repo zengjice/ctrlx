@@ -81,6 +81,30 @@ struct AgentWorkflowExecutionTests {
     }
 
     @Test
+    func agentResultsPassFileReferencesAsTextAndCannotPublishAttachments() throws {
+        var execution = try execution()
+        let task = try start(0, in: &execution)
+        let before = execution.run
+        let agent = execution.run.instances[0]
+        #expect(throws: AgentWorkflowError.self) {
+            try execution.succeed(.init(invocationID: task.id, nativeTurnID: task.id.uuidString, text: "report.md", attachmentIDs: [UUID()], completedAt: now), instance: agent, now: now)
+        }
+        #expect(execution.run == before)
+        try finish(0, invocation: task, text: "Review the report at /work/review.md.", in: &execution)
+        let downstream = try execution.prepareInvocation(nodeID: execution.run.definition.nodes[1].id, now: now)
+        #expect(downstream.delivery.input.text.contains("/work/review.md"))
+        #expect(downstream.delivery.input.attachmentIDs.isEmpty)
+        _ = try AgentWorkflowExecution(validating: execution.run)
+        var invalid = execution.run
+        let saved = try #require(invalid.invocations[0].result)
+        invalid.invocations[0].result = .init(
+            id: saved.id, invocationID: saved.invocationID, nativeTurnID: saved.nativeTurnID,
+            text: saved.text, attachmentIDs: [UUID()], completedAt: saved.completedAt
+        )
+        #expect(throws: AgentWorkflowError.self) { try AgentWorkflowExecution(validating: invalid) }
+    }
+
+    @Test
     func fanOutJoinsOnceInConfiguredOrder() throws {
         var execution = try execution()
         let developer = try start(0, in: &execution)

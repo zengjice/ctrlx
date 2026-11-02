@@ -36,7 +36,7 @@ struct AgentWorkflowModelTests {
         case "duplicate-edge": definition.edges.append(definition.edges[0])
         case "disconnected": definition.edges.removeAll { $0.target == nodes[2].id }
         case "duplicate-node": definition.nodes.append(nodes[0])
-        case "duplicate-instance": definition.nodes[1].agentInstanceID = nodes[0].agentInstanceID
+        case "duplicate-instance": definition.nodes[2].agentInstanceID = nodes[1].agentInstanceID
         case "missing-entry": definition.entryNodeID = UUID()
         case "empty-role": definition.nodes[0].name = " \n"
         default: definition.revision = 0

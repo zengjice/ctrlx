@@ -12,6 +12,19 @@ public struct AgentWorkflowInput: Codable, Equatable, Sendable {
 
 public struct AgentWorkflowNode: Codable, Equatable, Identifiable, Sendable {
     public enum Kind: String, Codable, Sendable { case agent, content }
+    public enum InitialTask: String, Codable, CaseIterable, Sendable {
+        case omit
+        case text
+        case textAndAttachments
+
+        public var title: String {
+            switch self {
+            case .omit: "None"
+            case .text: "Text only"
+            case .textAndAttachments: "Text and attachments"
+            }
+        }
+    }
 
     public let id: UUID
     public let kind: Kind
@@ -19,13 +32,16 @@ public struct AgentWorkflowNode: Codable, Equatable, Identifiable, Sendable {
     public var agentInstanceID: UUID?
     public var input: AgentWorkflowInput
     public var allowsFinish: Bool
+    /// Nil preserves the input policy of configurations saved before steps.
+    public var initialTask: InitialTask?
 
     public init(
         id: UUID = UUID(),
         name: String,
         agentInstanceID: UUID,
         input: AgentWorkflowInput = .init(),
-        allowsFinish: Bool = false
+        allowsFinish: Bool = false,
+        initialTask: InitialTask? = nil
     ) {
         self.id = id
         self.kind = .agent
@@ -33,18 +49,20 @@ public struct AgentWorkflowNode: Codable, Equatable, Identifiable, Sendable {
         self.agentInstanceID = agentInstanceID
         self.input = input
         self.allowsFinish = allowsFinish
+        self.initialTask = initialTask
     }
 
-    public init(id: UUID = UUID(), name: String, content: AgentWorkflowInput = .init()) {
+    public init(id: UUID = UUID(), name: String, content: AgentWorkflowInput = .init(), initialTask: InitialTask? = nil) {
         self.id = id
         self.kind = .content
         self.name = name
         self.agentInstanceID = nil
         self.input = content
         self.allowsFinish = false
+        self.initialTask = initialTask
     }
 
-    private enum CodingKeys: String, CodingKey { case id, kind, name, agentInstanceID, input, allowsFinish }
+    private enum CodingKeys: String, CodingKey { case id, kind, name, agentInstanceID, input, allowsFinish, initialTask }
 
     public init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -54,26 +72,65 @@ public struct AgentWorkflowNode: Codable, Equatable, Identifiable, Sendable {
         self.agentInstanceID = try values.decodeIfPresent(UUID.self, forKey: .agentInstanceID)
         self.input = try values.decode(AgentWorkflowInput.self, forKey: .input)
         self.allowsFinish = try values.decode(Bool.self, forKey: .allowsFinish)
+        self.initialTask = try values.decodeIfPresent(InitialTask.self, forKey: .initialTask)
+    }
+}
+
+public struct AgentWorkflowParticipant: Codable, Equatable, Identifiable, Sendable {
+    public var agentInstanceID: UUID
+    public var name: String
+    public var id: UUID {
+        agentInstanceID
+    }
+
+    public init(agentInstanceID: UUID, name: String) {
+        self.agentInstanceID = agentInstanceID
+        self.name = name
     }
 }
 
 public struct AgentWorkflowEdge: Codable, Equatable, Hashable, Sendable {
     public var source: UUID
     public var target: UUID
+    public var includesResult: Bool
 
-    public init(source: UUID, target: UUID) {
+    public init(source: UUID, target: UUID, includesResult: Bool = true) {
         self.source = source
         self.target = target
+        self.includesResult = includesResult
+    }
+
+    private enum CodingKeys: String, CodingKey { case source, target, includesResult }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.source = try values.decode(UUID.self, forKey: .source)
+        self.target = try values.decode(UUID.self, forKey: .target)
+        self.includesResult = try values.decodeIfPresent(Bool.self, forKey: .includesResult) ?? true
     }
 }
 
 public struct AgentWorkflowLoop: Codable, Equatable, Sendable {
     public var finalNodeID: UUID
     public var maximumRounds: Int
+    public var entryNodeID: UUID?
+    public var includesResult: Bool
 
-    public init(finalNodeID: UUID, maximumRounds: Int = 5) {
+    public init(finalNodeID: UUID, maximumRounds: Int = 5, entryNodeID: UUID? = nil, includesResult: Bool = true) {
         self.finalNodeID = finalNodeID
         self.maximumRounds = maximumRounds
+        self.entryNodeID = entryNodeID
+        self.includesResult = includesResult
+    }
+
+    private enum CodingKeys: String, CodingKey { case finalNodeID, maximumRounds, entryNodeID, includesResult }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.finalNodeID = try values.decode(UUID.self, forKey: .finalNodeID)
+        self.maximumRounds = try values.decode(Int.self, forKey: .maximumRounds)
+        self.entryNodeID = try values.decodeIfPresent(UUID.self, forKey: .entryNodeID)
+        self.includesResult = try values.decodeIfPresent(Bool.self, forKey: .includesResult) ?? true
     }
 }
 
@@ -101,6 +158,7 @@ public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendabl
     public var loop: AgentWorkflowLoop?
     /// Launch preference only; it grants no execution or terminal access.
     public var creationSession: AgentWorkflowSessionReference?
+    public var participants: [AgentWorkflowParticipant]?
 
     public init(
         id: UUID = UUID(),
@@ -112,7 +170,8 @@ public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendabl
         entryNodeID: UUID,
         initialInput: AgentWorkflowInput = .init(),
         loop: AgentWorkflowLoop? = nil,
-        creationSession: AgentWorkflowSessionReference? = nil
+        creationSession: AgentWorkflowSessionReference? = nil,
+        participants: [AgentWorkflowParticipant]? = nil
     ) {
         self.id = id
         self.revision = revision
@@ -124,6 +183,7 @@ public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendabl
         self.initialInput = initialInput
         self.loop = loop
         self.creationSession = creationSession
+        self.participants = participants
     }
 
     /// Node order, rather than arrival order, determines a join's prompt order.
@@ -134,6 +194,47 @@ public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendabl
 
     public var agentInstanceIDs: Set<UUID> {
         Set(nodes.compactMap(\.agentInstanceID))
+    }
+
+    public var agents: [AgentWorkflowParticipant] {
+        if let participants {
+            return participants
+        }
+        var seen: Set<UUID> = []
+        return nodes.compactMap { node in
+            guard let id = node.agentInstanceID, seen.insert(id).inserted else { return nil }
+            return .init(agentInstanceID: id, name: node.name)
+        }
+    }
+
+    public var usesSteps: Bool {
+        participants != nil || nodes.contains { $0.initialTask != nil }
+            || edges.contains { !$0.includesResult } || loop?.entryNodeID != nil || loop?.includesResult == false
+            || agentInstanceIDs.count != nodes.filter { $0.kind == .agent }.count
+    }
+
+    public func initialTask(for node: AgentWorkflowNode) -> AgentWorkflowNode.InitialTask {
+        node.initialTask ?? (node.id == entryNodeID ? .textAndAttachments : (node.kind == .agent ? .text : .omit))
+    }
+
+    public func entryNodeID(round: Int) -> UUID {
+        round > 1 ? (loop?.entryNodeID ?? entryNodeID) : entryNodeID
+    }
+
+    public func descendants(of id: UUID) -> Set<UUID> {
+        var reached: Set<UUID> = [id]
+        var previousCount = 0
+        while reached.count != previousCount {
+            previousCount = reached.count
+            for edge in edges where reached.contains(edge.source) {
+                reached.insert(edge.target)
+            }
+        }
+        return reached
+    }
+
+    public func activeNodeIDs(round: Int) -> Set<UUID> {
+        round > 1 && loop != nil ? descendants(of: entryNodeID(round: round)) : Set(nodes.map(\.id))
     }
 
     public func validate() throws {
@@ -147,14 +248,17 @@ public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendabl
         guard nodes.allSatisfy({ $0.kind == .agent ? $0.agentInstanceID != nil : $0.agentInstanceID == nil && !$0.allowsFinish }) else {
             throw AgentWorkflowError("Agent nodes need an instance. Content nodes cannot bind an Agent or request completion.")
         }
-        guard agentInstanceIDs.count == nodes.filter({ $0.kind == .agent }).count else {
-            throw AgentWorkflowError("An Agent instance can participate only once in a workflow.")
+        guard
+            Set(agents.map(\.id)).count == agents.count,
+            agents.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+            agentInstanceIDs.isSubset(of: Set(agents.map(\.id))) else {
+            throw AgentWorkflowError("Choose distinct named Agent participants and bind every Agent step to one of them.")
         }
         guard nodes.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
             throw AgentWorkflowError("Each node needs a role name.")
         }
         guard
-            Set(edges).count == edges.count,
+            Set(edges.map { AgentWorkflowEdge(source: $0.source, target: $0.target) }).count == edges.count,
             edges.allSatisfy({ nodeIDs.contains($0.source) && nodeIDs.contains($0.target) && $0.source != $0.target }) else {
             throw AgentWorkflowError("Connections must join distinct, existing nodes without duplicates.")
         }
@@ -178,11 +282,27 @@ public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendabl
             remaining.removeAll { visited.contains($0) }
         }
 
+        for id in agentInstanceIDs {
+            let steps = nodes.filter { $0.agentInstanceID == id }
+            for (index, step) in steps.enumerated() {
+                for other in steps.dropFirst(index + 1) {
+                    guard descendants(of: step.id).contains(other.id) || descendants(of: other.id).contains(step.id) else {
+                        throw AgentWorkflowError("Steps using the same Agent must be connected in sequence, so their terminal inputs cannot overlap.")
+                    }
+                }
+            }
+        }
+
         if let loop {
             let sources = Set(edges.map(\.source))
             let exits = nodeIDs.subtracting(sources)
-            guard loop.maximumRounds > 0, exits == [loop.finalNodeID] else {
+            let loopEntry = loop.entryNodeID ?? entryNodeID
+            guard loop.maximumRounds > 0, nodeIDs.contains(loopEntry), exits == [loop.finalNodeID] else {
                 throw AgentWorkflowError("A loop needs a positive round limit and one final node reached by every branch.")
+            }
+            let repeated = descendants(of: loopEntry)
+            guard edges.allSatisfy({ !repeated.contains($0.target) || repeated.contains($0.source) || $0.target == loopEntry }) else {
+                throw AgentWorkflowError("Repeated steps can depend on first-round steps only at the loop entry.")
             }
         }
     }

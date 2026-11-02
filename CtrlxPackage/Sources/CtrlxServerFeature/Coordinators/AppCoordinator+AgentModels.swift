@@ -118,8 +118,8 @@ extension AppCoordinator {
         if let selection = request.selection {
             guard reason == nil else { throw AgentModelError(reason ?? "The terminal is not ready.") }
             guard let gate = tmuxService.workflowInputGate else { throw AgentModelError("The terminal input queue is not ready.") }
-            cache.selection = try await gate.human(paneID: paneID) { [self] in
-                let claim = gate.claim(paneID: paneID)
+            cache.selection = try await gate.human(paneID: paneID) { [self] authorization in
+                let claim = gate.claim(paneID: paneID, humanAuthorization: authorization)
                 let current = try await tmuxService.captureAgentTerminal(paneID: paneID, identity: request.workspacePane)
                 if let issue = agentModelInputIssue(paneID: paneID, screen: current, provider: provider, models: models) {
                     throw AgentModelError(issue)
@@ -162,7 +162,11 @@ extension AppCoordinator {
                         provider.isModelPicker(lines: screen.plainLines, models: models) {
                         _ = try await tmuxService.runWorkspaceCommand([["send-keys", "-t", paneID, "Escape"]], target: paneID, identity: request.workspacePane) { launch in
                             guard identityClient.runtimeID(pid) == runtime else { throw AgentModelError("The Agent process changed.") }
-                            try launch()
+                            if let authorization {
+                                try authorization.perform(launch)
+                            } else {
+                                try launch()
+                            }
                         }
                         try? await Task.sleep(for: .milliseconds(100))
                     }
@@ -202,7 +206,7 @@ extension AppCoordinator {
         ], target: paneID, identity: identity) { launch in
             try gate.validate(claim)
             guard identityClient.runtimeID(processID) == runtimeID else { throw AgentModelError("The Agent process changed before input was sent.") }
-            try launch()
+            try gate.perform(claim, write: launch)
         }
         guard !result.stdoutString.contains("ctrlx-model-input-changed") else { throw AgentModelError("The terminal input changed. Nothing was sent.") }
     }
@@ -256,7 +260,7 @@ extension AppCoordinator {
             _ = try await tmuxService.runWorkspaceCommand([arguments], target: paneID, identity: identity) { launch in
                 try gate.validate(claim)
                 guard identityClient.runtimeID(processID) == runtimeID else { throw AgentModelError("The Agent process changed before input was sent.") }
-                try launch()
+                try gate.perform(claim, write: launch)
             }
         }
     }

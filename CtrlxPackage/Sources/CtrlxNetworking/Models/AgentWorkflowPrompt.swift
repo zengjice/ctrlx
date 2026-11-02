@@ -26,23 +26,27 @@ public enum AgentWorkflowPrompt {
         if node.kind == .content {
             return contentOutput(definition: definition, node: node, answers: answers)
         }
-        var sections = [node.input.text, "Initial task:\n\(definition.initialInput.text)"]
+        let initial = definition.initialTask(for: node)
+        var sections = [node.input.text]
         var attachments = node.input.attachmentIDs
-        if node.id == definition.entryNodeID {
+        if initial != .omit {
+            sections.append("Initial task:\n\(definition.initialInput.text)")
+        }
+        if initial == .textAndAttachments {
             attachments += definition.initialInput.attachmentIDs
         }
         for answer in answers {
             sections.append("\(answer.kind == .content ? "Content" : "Answer") from \(answer.role) (round \(answer.round)):\n\(answer.text)")
             attachments += answer.attachmentIDs
         }
+        var context = ["[CtrlX workflow invocation: \(invocationReference)]"]
         if !attachments.isEmpty {
-            sections.append("This task includes authorized attachments. Before answering, run: ctrlx workflow attachments --invocation \(invocationReference) --json. Read every returned image with your image-reading tool and every text file in full. If a file cannot be read, ask for help; do not claim to have inspected it.")
+            context.append("Attachments: ctrlx workflow attachments --invocation \(invocationReference) --json")
         }
-        sections.append("To hand off a file, save it and run: ctrlx workflow share --invocation \(invocationReference) --file <local-file> --json. Share each required artifact before your final answer. This snapshots the file for downstream tasks; mentioning a path alone does not share it. If sharing fails, report the error rather than claiming delivery.")
         if node.allowsFinish {
-            sections.append("You may end this workflow by running: ctrlx workflow finish --invocation \(invocationReference) --reason \"your conclusion\". Then provide your final answer.")
+            context.append("May end workflow: ctrlx workflow finish --invocation \(invocationReference) --reason \"<reason>\"")
         }
-        sections.append("[CtrlX workflow invocation: \(invocationReference)]")
+        sections.append(context.joined(separator: "\n"))
         var seen: Set<UUID> = []
         return .init(
             text: sections.filter { !$0.isEmpty }.joined(separator: "\n\n"),
@@ -57,10 +61,13 @@ public enum AgentWorkflowPrompt {
     ) -> AgentWorkflowInput {
         var sections = [node.input.text]
         var attachments = node.input.attachmentIDs
-        if node.id == definition.entryNodeID {
+        let initial = definition.initialTask(for: node)
+        if initial != .omit {
             if !definition.initialInput.text.isEmpty {
                 sections.append("Initial task:\n\(definition.initialInput.text)")
             }
+        }
+        if initial == .textAndAttachments {
             attachments += definition.initialInput.attachmentIDs
         }
         for answer in answers {
@@ -74,13 +81,15 @@ public enum AgentWorkflowPrompt {
     /// Before execution, upstream answers and the correlation UUID do not yet
     /// exist. The UI labels these placeholders instead of claiming an exact task.
     public static func preview(definition: AgentWorkflowDefinition, node: AgentWorkflowNode, round: Int) -> AgentWorkflowInput {
+        guard definition.activeNodeIDs(round: round).contains(node.id) else { return .init() }
         let sources: [AgentWorkflowNode]
         let sourceRound: Int
-        if node.id == definition.entryNodeID, round > 1, let loop = definition.loop {
-            sources = definition.nodes.filter { $0.id == loop.finalNodeID }
+        if node.id == definition.entryNodeID(round: round), round > 1, let loop = definition.loop {
+            sources = definition.nodes.filter { $0.id == loop.finalNodeID && loop.includesResult }
             sourceRound = round - 1
         } else {
-            sources = definition.upstream(of: node.id)
+            let sourceIDs = Set(definition.edges.filter { $0.target == node.id && $0.includesResult }.map(\.source))
+            sources = definition.nodes.filter { sourceIDs.contains($0.id) }
             sourceRound = round
         }
         return compose(

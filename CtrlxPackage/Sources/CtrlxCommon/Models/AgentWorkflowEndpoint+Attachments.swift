@@ -12,6 +12,34 @@ public extension AgentWorkflowEndpoint {
     ) async throws -> AgentWorkflowAttachment {
         @Dependency(FileBrowserUploadReader.self) var reader
         let file = try await reader.open(url)
+        return try await importAttachment(
+            file, mediaType: mediaType, hostID: hostID,
+            read: { try await reader.read(file.id) }, finish: { try await reader.finish(file.id) },
+            close: { await reader.close(file.id) }, onProgress: onProgress
+        )
+    }
+
+    internal func importImage(
+        _ image: AgentWorkflowImage, hostID: UUID,
+        onProgress: @MainActor (Int, Int) -> Void = { _, _ in }
+    ) async throws -> AgentWorkflowAttachment {
+        let file = FileBrowserUploadFile(id: UUID(), name: image.name, size: image.data.count)
+        var cursor = 0
+        return try await importAttachment(
+            file, mediaType: image.mediaType, hostID: hostID,
+            read: {
+                let end = min(cursor + FileBrowserLimits.chunkBytes, image.data.count)
+                defer { cursor = end }
+                return image.data.subdata(in: cursor..<end)
+            }, finish: { image.sha256 }, close: { }, onProgress: onProgress
+        )
+    }
+
+    private func importAttachment(
+        _ file: FileBrowserUploadFile, mediaType: String, hostID: UUID,
+        read: @MainActor () async throws -> Data, finish: @MainActor () async throws -> String,
+        close: @MainActor () async -> Void, onProgress: @MainActor (Int, Int) -> Void
+    ) async throws -> AgentWorkflowAttachment {
         var result: Result<AgentWorkflowAttachment, any Error>
         do {
             try Task.checkCancellation()
@@ -20,7 +48,7 @@ public extension AgentWorkflowEndpoint {
             onProgress(0, file.size)
             while offset < file.size {
                 try Task.checkCancellation()
-                let chunk = try await reader.read(file.id)
+                let chunk = try await read()
                 guard !chunk.isEmpty, chunk.count <= FileBrowserLimits.chunkBytes, chunk.count <= file.size - offset else {
                     throw AgentWorkflowError("The source file returned an invalid chunk.")
                 }
@@ -33,7 +61,7 @@ public extension AgentWorkflowEndpoint {
                     onProgress(offset, file.size)
                 }
             }
-            let checksum = try await reader.finish(file.id)
+            let checksum = try await finish()
             let response = try await request(.uploadAttachment(.finish(id: file.id, sha256: checksum)), hostID: hostID)
             guard
                 response.uploadedOffset == file.size,
@@ -45,7 +73,7 @@ public extension AgentWorkflowEndpoint {
             try Task.checkCancellation()
             result = .success(attachment)
         } catch { result = .failure(error) }
-        await reader.close(file.id)
+        await close()
         if Task.isCancelled {
             result = .failure(CancellationError())
         }

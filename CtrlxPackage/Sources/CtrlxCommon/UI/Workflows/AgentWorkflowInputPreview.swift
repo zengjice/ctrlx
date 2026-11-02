@@ -10,9 +10,13 @@ struct AgentWorkflowInputPreview: View {
 
     var body: some View {
         let input = AgentWorkflowPrompt.preview(definition: definition, node: node, round: nextRound ? 2 : 1)
+        let isActive = definition.activeNodeIDs(round: nextRound ? 2 : 1).contains(node.id)
+        let receivesResults = nextRound && node.id == definition.entryNodeID(round: 2)
+            ? definition.loop?.includesResult == true
+            : definition.edges.contains { $0.target == node.id && $0.includesResult }
         List {
             Section {
-                if definition.loop != nil, node.id == definition.entryNodeID {
+                if definition.loop != nil {
                     Toggle("Preview a later round", isOn: $nextRound)
                 }
                 Text(node.kind == .content
@@ -21,16 +25,20 @@ struct AgentWorkflowInputPreview: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
             Section(node.kind == .content ? "Text forwarded to downstream nodes" : "Text sent to Agent") {
-                Text(verbatim: input.text).font(.body.monospaced()).textSelection(.enabled)
+                if isActive {
+                    Text(verbatim: input.text).font(.body.monospaced()).textSelection(.enabled)
+                } else {
+                    Text("This step runs only in the first round. No task is sent in later rounds.")
+                }
             }
             Section("Attachments") {
-                if input.attachmentIDs.isEmpty {
+                if !isActive || input.attachmentIDs.isEmpty {
                     Text("No initial or preset attachments for this task.").foregroundStyle(.secondary)
                 } else {
                     ForEach(input.attachmentIDs, id: \.self) { AgentWorkflowAttachmentLabel(attachment: attachments[$0]) }
                 }
-                if !definition.upstream(of: node.id).isEmpty || nextRound {
-                    Text("Attachments from upstream content nodes and artifacts explicitly shared by upstream Agents are added after they complete.").foregroundStyle(.secondary)
+                if isActive, receivesResults {
+                    Text("Images from upstream content steps are added after those steps complete.").foregroundStyle(.secondary)
                 }
             }
         }

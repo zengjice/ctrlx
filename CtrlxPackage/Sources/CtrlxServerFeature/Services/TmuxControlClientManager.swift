@@ -339,8 +339,8 @@
             guard let workflowInputGate else {
                 return try await writeInputCommandsIfConnected(commands, sessionName: sessionName, onFirstCommandWritten: onFirstCommandWritten, checksWorkspaceIdentity: checksWorkspaceIdentity)
             }
-            return try await workflowInputGate.human(paneID: paneID, editsInput: editsInput) {
-                try await self.writeInputCommandsIfConnected(commands, sessionName: sessionName, onFirstCommandWritten: onFirstCommandWritten, checksWorkspaceIdentity: checksWorkspaceIdentity)
+            return try await workflowInputGate.human(paneID: paneID, editsInput: editsInput) { authorization in
+                try await self.writeInputCommandsIfConnected(commands, sessionName: sessionName, onFirstCommandWritten: onFirstCommandWritten, checksWorkspaceIdentity: checksWorkspaceIdentity, authorization: authorization)
             }
         }
 
@@ -348,10 +348,14 @@
             _ commands: [String],
             sessionName: String,
             onFirstCommandWritten: (@Sendable () -> Void)?,
-            checksWorkspaceIdentity: Bool
+            checksWorkspaceIdentity: Bool,
+            authorization: AgentWorkflowHumanInputAuthorization? = nil
         ) async throws -> Bool {
             guard !commands.isEmpty else { return true }
             guard let client = clients[sessionName], await client.isConnected else { return false }
+            let beforeWrite: (@Sendable (@Sendable () throws -> Void) throws -> Void)? = authorization.map { authorization in
+                { @Sendable write in try authorization.perform(write) }
+            }
 
             var completedCommand = false
             for (index, command) in commands.enumerated() {
@@ -363,14 +367,14 @@
                         // could be mistaken for the next input's result.
                         let responses = try await client.sendCommandList(
                             [command], onWritten: index == 0 ? onFirstCommandWritten : nil,
-                            additionalResponseCount: 1
+                            additionalResponseCount: 1, beforeWrite: beforeWrite
                         )
                         guard let last = responses.last else { throw TmuxControlError.notConnected }
                         response = last
                     } else {
                         response = try await client.sendCommand(
                             command,
-                            onWritten: index == 0 ? onFirstCommandWritten : nil
+                            onWritten: index == 0 ? onFirstCommandWritten : nil, beforeWrite: beforeWrite
                         )
                     }
                 } catch TmuxControlError.notConnected where !completedCommand {

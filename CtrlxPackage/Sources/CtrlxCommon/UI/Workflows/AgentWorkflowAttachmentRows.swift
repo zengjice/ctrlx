@@ -5,7 +5,6 @@ import SwiftUI
 struct AgentWorkflowAttachmentRows: View {
     let ids: [UUID]
     let attachments: [UUID: AgentWorkflowAttachment]
-    let add: () -> Void
     let remove: (UUID) -> Void
 
     var body: some View {
@@ -18,7 +17,6 @@ struct AgentWorkflowAttachmentRows: View {
                     .accessibilityLabel("Remove \(attachments[id]?.name ?? "attachment")")
             }
         }
-        Button(action: add) { Label("Add attachments", symbol: .plus) }
     }
 }
 

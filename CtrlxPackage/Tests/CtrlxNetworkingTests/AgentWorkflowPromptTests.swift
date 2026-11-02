@@ -41,11 +41,8 @@ struct AgentWorkflowPromptTests {
         Answer from Review B (round 2):
         B's final answer.
 
-        To hand off a file, save it and run: ctrlx workflow share --invocation invocation-1 --file <local-file> --json. Share each required artifact before your final answer. This snapshots the file for downstream tasks; mentioning a path alone does not share it. If sharing fails, report the error rather than claiming delivery.
-
-        You may end this workflow by running: ctrlx workflow finish --invocation invocation-1 --reason "your conclusion". Then provide your final answer.
-
         [CtrlX workflow invocation: invocation-1]
+        May end workflow: ctrlx workflow finish --invocation invocation-1 --reason "<reason>"
         """)
     }
 
@@ -63,6 +60,8 @@ struct AgentWorkflowPromptTests {
         #expect(second.contains("Answer from Summary (round 1):"))
         #expect(!second.contains("Answer from Review A"))
         #expect(!first.contains("workflow finish"))
+        #expect(!first.contains("workflow share"))
+        #expect(!first.contains("workflow attachments"))
     }
 
     @Test
@@ -77,6 +76,8 @@ struct AgentWorkflowPromptTests {
         let summary = AgentWorkflowPrompt.compose(definition: definition, node: definition.nodes[3], answers: answers, invocationReference: "id")
         #expect(entry.attachmentIDs == [preset, initial, result])
         #expect(summary.attachmentIDs == [preset, result])
+        #expect(entry.text.contains("ctrlx workflow attachments --invocation id --json"))
+        #expect(summary.text.contains("ctrlx workflow attachments --invocation id --json"))
     }
 
     @Test

@@ -3,7 +3,7 @@ import CtrlxPluginProtocol
 
 extension ClaudeCodePluginCore: AgentWorkflowProviding {
     public nonisolated var workflowCLIVersions: [String] {
-        ["2.1.308 (Claude Code)"]
+        ["2.1.308 (Claude Code)", "2.1.312 (Claude Code)"]
     }
 
     public nonisolated var workflowComposer: AgentWorkflowComposer {

@@ -1,4 +1,5 @@
 #if os(macOS)
+    import ConcurrencyExtras
     import CtrlxCommon
     import CtrlxNetworking
     import Darwin
@@ -218,6 +219,42 @@
 
         @Suite("Process Lifecycle")
         struct ProcessLifecycleTests {
+            @Test("Revoked human input never reaches the control pipe or corrupts its response queue")
+            @MainActor
+            func revokedInputIsRejectedAtPipeWrite() async throws {
+                let tmuxPath = try #require(TmuxBinaryLocator.liveValue.find())
+                let socketPath = "/tmp/ctrlx-input-\(UUID().uuidString.prefix(8)).sock"
+                defer { killTmuxServer(tmuxPath: tmuxPath, socketPath: socketPath) }
+                try await withDependencies {
+                    $0[ProcessRunner.self] = .liveValue
+                } operation: {
+                    let tmux = TmuxService(tmuxPath: tmuxPath, socketPath: socketPath)
+                    let created = try await tmux.createSession(baseName: "input-guard", width: 80, height: 24)
+                    let client = TmuxControlClient(tmuxPath: tmuxPath, socketPath: socketPath)
+                    do {
+                        try await client.connect(sessionTarget: created.sessionName)
+                        let authorization = AgentWorkflowHumanInputAuthorization()
+                        authorization.revoke()
+                        let written = LockIsolated(false)
+                        await #expect(throws: AgentWorkflowInputReadOnlyError.self) {
+                            try await client.sendCommand("set-option -g @ctrlx_late_input unexpected", onWritten: { written.setValue(true) }, beforeWrite: { write in
+                                try authorization.perform(write)
+                            })
+                        }
+                        #expect(!written.value)
+                        #expect(await client.testPendingCommandCount == 0)
+                        let value = try await client.sendCommand("show-option -gqv @ctrlx_late_input")
+                        #expect(value.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        let healthy = try await client.sendCommand("display-message -p guard-still-connected")
+                        #expect(healthy.output.contains("guard-still-connected"))
+                        await client.disconnect()
+                    } catch {
+                        await client.disconnect()
+                        throw error
+                    }
+                }
+            }
+
             @Test("Disconnect reaps only the control client and preserves its tmux pane")
             @MainActor
             func disconnectReapsControlClient() async throws {

@@ -36,7 +36,6 @@
         "browser.start",
         "workflow.finish",
         "workflow.attachments",
-        "workflow.artifact",
         "system.set_env",
         "session.list",
         "session.create",

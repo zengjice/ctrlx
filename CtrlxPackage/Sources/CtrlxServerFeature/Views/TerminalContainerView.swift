@@ -426,6 +426,10 @@ struct TerminalContainerView: NSViewRepresentable {
                 }
                 transportMetrics.recordLocalInput(metricsToken, stage: .tmuxAcknowledged)
                 consecutiveKeyFailures = 0
+            } catch let error as AgentWorkflowInputReadOnlyError {
+                transportMetrics.discardLocalInput(metricsToken)
+                consecutiveKeyFailures = 0
+                terminalView.showWorkflowReadOnlyNotice(error.localizedDescription)
             } catch {
                 transportMetrics.failLocalInput(metricsToken)
                 consecutiveKeyFailures += 1
@@ -468,6 +472,10 @@ struct TerminalContainerView: NSViewRepresentable {
                 }
                 transportMetrics.recordLocalInput(metricsToken, stage: .tmuxAcknowledged)
                 consecutiveKeyFailures = 0
+            } catch let error as AgentWorkflowInputReadOnlyError {
+                transportMetrics.discardLocalInput(metricsToken)
+                consecutiveKeyFailures = 0
+                terminalView.showWorkflowReadOnlyNotice(error.localizedDescription)
             } catch {
                 transportMetrics.failLocalInput(metricsToken)
                 consecutiveKeyFailures += 1
@@ -497,6 +505,8 @@ struct TerminalContainerView: NSViewRepresentable {
                     content: content,
                     bufferName: "ctrlx-drop-\(UUID().uuidString.prefix(8))"
                 )
+            } catch let error as AgentWorkflowInputReadOnlyError {
+                terminalView.showWorkflowReadOnlyNotice(error.localizedDescription)
             } catch {
                 print("Failed to paste dropped files into tmux: \(error)")
             }
