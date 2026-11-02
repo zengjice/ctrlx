@@ -7,9 +7,13 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
-## 3.0.134 — Developer ID signing and notarized Mac releases
+## 3.0.135 — Developer ID signing and notarized Mac releases
 
-3.0.133 remained an internal candidate and was not distributed.
+3.0.133 and 3.0.134 remained internal candidates and were not distributed.
+
+- Keep menu-bar attention/quota observation inside its label instead of the
+  App Scene body, reducing unrelated scene updates while preserving initial
+  Dock badges and updates when no Sessions window is open.
 
 - Restore model/effort shortcuts on tmux 3.6a using a guarded single-line native
   paste when the paste-mode field is unavailable. Preserve foreground process,
@@ -24,6 +28,10 @@
   acceptance for the App and DMG before local package replacement or public
   installer promotion. Retain failed inputs, logs and submission IDs; resume
   notarization waits without submitting the same input again.
+- Disable S3 transfer acceleration/progress callbacks for notarization uploads
+  after an observed Apple notarytool upload crash, and preserve process status
+  when the tool exits without diagnostics. Allow an archive-only preparation
+  phase so confirmed inputs can continue from a clean release checkout.
 - Build formal archives for Apple Silicon, matching the bundled CEF SDK.
   Reuse Mac compilation caches for formal archives and keep signing credentials
   in Keychain. Continue to support explicit local development packages.
@@ -32,9 +40,11 @@
   and pass strict Developer ID validation against the running CLI's team.
 - Make the isolated browser fixture use its own explicit API socket and wait
   for the restored page's presentation before testing restart persistence.
-- Validation: 96 repository script tests, 43 CLI tests, focused workflow/model
+- Validation: 97 repository script tests, 43 CLI tests, focused workflow/model
   regressions and 118 private publisher/COS/installer
-  tests passed. A Developer ID-signed isolated App with the updated CLI passed native page actions,
+  tests passed. Native menu-bar label tests passed for local and remote state,
+  including badge updates without invalidating the parent view. A Developer
+  ID-signed isolated App with the updated CLI passed native page actions,
   multi-session routing, ownership checks, graceful restart, profile persistence
   and stale-grant rejection without new crash reports. Both browser engines
   passed the complete managed-engine acceptance; separate native signature

@@ -171,6 +171,11 @@ class DistributionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             notary.resume_stamp(state, 'commit', 'TEAM')
 
+    def test_notary_crash_without_output_reports_exit_status(self):
+        with mock.patch.object(notary.subprocess, 'run', return_value=mock.Mock(returncode=-10, stdout='', stderr='')):
+            with self.assertRaisesRegex(RuntimeError, 'status -10'):
+                notary.command('info', 'JOB')
+
 
 if __name__ == '__main__':
     unittest.main()

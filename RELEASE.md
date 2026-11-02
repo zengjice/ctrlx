@@ -67,6 +67,11 @@ daily maintenance loop and the explicit **Check Again** action trigger a check.
 
 Formal archives reuse this worktree's Mac DerivedData and package downloads.
 They target arm64, matching the Apple Silicon-only CEF distribution.
+When development continues concurrently, use
+`CTRLX_RELEASE_PREPARE_ONLY=1 ./scripts/release.sh` to stop after signing and preparing the ZIP. Copy the
+retained state/App/ZIP and notary reports into a clean checkout of the exact
+same commit, then resume there. This avoids copying compilation caches or
+changing the artifact's source identity.
 They keep compilation caches. Failed releases retain their staging directory and
 notarization reports under `dist/qcloud-release/<version>/`; do not rebuild just
 because a notarization wait timed out. Resume the whole workflow using the exact

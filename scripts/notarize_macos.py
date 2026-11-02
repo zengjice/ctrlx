@@ -12,7 +12,7 @@ def command(*args):
     result = subprocess.run(['/usr/bin/xcrun', 'notarytool', *map(str, args),
                              '--output-format', 'json'], capture_output=True, text=True)
     if result.returncode:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip())
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f'notarytool exited with status {result.returncode}; no diagnostic output was returned.')
     return json.loads(result.stdout)
 
 
@@ -27,7 +27,7 @@ def notarize(artifact, profile, report):
         if state['sha256'] != checksum or state['profile'] != profile:
             raise ValueError('Notarization report belongs to another artifact/profile; use a new report path.')
     else:
-        submitted = command('submit', artifact, '--keychain-profile', profile)
+        submitted = command('submit', artifact, '--keychain-profile', profile, '--no-s3-acceleration', '--no-progress')
         state = {'artifact': str(artifact.resolve()), 'sha256': checksum, 'profile': profile,
                  'id': submitted['id'], 'status': 'Submitted'}
         report.parent.mkdir(parents=True, exist_ok=True)

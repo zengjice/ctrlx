@@ -156,7 +156,15 @@ xcodebuild -exportArchive \
 python3 "$SCRIPT_DIR/macos_signing.py" sign "$APP_PATH" \
     --identity "$CTRLX_MAC_SIGNING_IDENTITY" --team "$CTRLX_MAC_DEVELOPMENT_TEAM"
 
+[ "$(git -C "$PROJECT_ROOT" rev-parse HEAD)" = "$SOURCE_REVISION" ] \
+    && [ -z "$(git -C "$PROJECT_ROOT" status --porcelain)" ] \
+    || log_error 'Source changed during archive; no notarization submitted.'
 ditto -c -k --keepParent "$APP_PATH" "$WORK_ROOT/CtrlX-notary.zip"
+fi
+if [ "${CTRLX_RELEASE_PREPARE_ONLY:-}" = 1 ]; then
+    log_success "Prepared notarization inputs: $WORK_ROOT"
+    trap - EXIT
+    exit 0
 fi
 python3 "$SCRIPT_DIR/notarize_macos.py" "$WORK_ROOT/CtrlX-notary.zip" \
     --profile "$CTRLX_NOTARYTOOL_PROFILE" --report "$NOTARY_REPORTS/app.json"
