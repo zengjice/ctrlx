@@ -45,6 +45,21 @@ enum AgentWorkflowComposerInspection {
         func send(source: Terminal, data: ArraySlice<UInt8>) { }
     }
 
+    static func settledCapture(
+        composer: AgentWorkflowComposer,
+        capture: @MainActor () async throws -> AgentWorkflowTerminalCapture
+    ) async throws -> AgentWorkflowTerminalCapture {
+        var current = try await capture()
+        // Focusing a tab can Fit it. Codex briefly moves its cursor onto a
+        // blank row while redrawing, even though its composer is still empty.
+        for _ in 0..<4 {
+            guard !current.inCopyMode, readiness(current, composer: composer) == .unavailable else { return current }
+            try await Task.sleep(for: .milliseconds(100))
+            current = try await capture()
+        }
+        return current
+    }
+
     static func readiness(_ capture: AgentWorkflowTerminalCapture, composer: AgentWorkflowComposer) -> AgentWorkflowReadiness {
         guard
             capture.width >= 20, capture.width <= 4_096,
