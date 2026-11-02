@@ -39,14 +39,14 @@ public enum AgentWorkflowPrompt {
             sections.append("\(answer.kind == .content ? "Content" : "Answer") from \(answer.role) (round \(answer.round)):\n\(answer.text)")
             attachments += answer.attachmentIDs
         }
+        var context = ["[CtrlX workflow invocation: \(invocationReference)]"]
         if !attachments.isEmpty {
-            sections.append("This task includes authorized attachments. Before answering, run: ctrlx workflow attachments --invocation \(invocationReference) --json. Read every returned image with your image-reading tool and every text file in full. If a file cannot be read, ask for help; do not claim to have inspected it.")
+            context.append("Attachments: ctrlx workflow attachments --invocation \(invocationReference) --json")
         }
-        sections.append("To hand off a file, save it and run: ctrlx workflow share --invocation \(invocationReference) --file <local-file> --json. Share each required artifact before your final answer. This snapshots the file for downstream tasks; mentioning a path alone does not share it. If sharing fails, report the error rather than claiming delivery.")
         if node.allowsFinish {
-            sections.append("You may end this workflow by running: ctrlx workflow finish --invocation \(invocationReference) --reason \"your conclusion\". Then provide your final answer.")
+            context.append("May end workflow: ctrlx workflow finish --invocation \(invocationReference) --reason \"<reason>\"")
         }
-        sections.append("[CtrlX workflow invocation: \(invocationReference)]")
+        sections.append(context.joined(separator: "\n"))
         var seen: Set<UUID> = []
         return .init(
             text: sections.filter { !$0.isEmpty }.joined(separator: "\n\n"),

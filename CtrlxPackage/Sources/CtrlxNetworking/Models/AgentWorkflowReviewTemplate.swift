@@ -7,8 +7,9 @@ public enum AgentWorkflowReviewTemplate {
             name: "Review", agentInstanceID: reviewerID,
             input: .init(text: """
             Review the current implementation and tests in the shared working directory. Report concrete findings with severity, location and evidence.
-            If there are no P0, P1, P2 or P3 findings, request workflow completion using the provided finish tool and give your conclusion.
-            Otherwise provide the findings for the Developer to judge. Do not modify files.
+            Do not modify files.
+
+            Provide the findings for the Developer to judge.
             """), allowsFinish: true, initialTask: .omit
         )
         let judge = AgentWorkflowNode(

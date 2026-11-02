@@ -30,7 +30,7 @@ struct AgentWorkflowReviewTemplatePicker: View {
                     Text("3. Developer: judge the findings, without fixing yet")
                     Text("4. Content: prepare repair instructions")
                     Text("5. Developer: fix Accepted findings")
-                    Text("Then repeat from Review. The Reviewer can finish when there are no P0–P3 findings. The default limit is five rounds.")
+                    Text("Edit the Review task after applying this template, including when to finish and any report requirements. Then repeat from Review. The default limit is five rounds.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }

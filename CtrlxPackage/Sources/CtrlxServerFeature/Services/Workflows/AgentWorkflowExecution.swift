@@ -50,7 +50,7 @@ struct AgentWorkflowExecution: Sendable {
         var slots: Set<String> = []
         for invocation in run.invocations {
             let node = run.definition.nodes.first { $0.id == invocation.nodeID }
-            let shared = invocation.sharedAttachmentIDs ?? []
+            let attachments = invocation.result?.attachmentIDs ?? []
             guard
                 let node, invocation.round > 0, invocation.round <= run.round,
                 run.definition.activeNodeIDs(round: invocation.round).contains(node.id),
@@ -59,9 +59,8 @@ struct AgentWorkflowExecution: Sendable {
                 invocation.delivery.runID == run.id,
                 invocation.delivery.round == invocation.round,
                 invocation.delivery.toAgentID == node.agentInstanceID,
-                shared.count <= AgentWorkflowWire.maximumAttachments,
-                Set(shared).count == shared.count,
-                invocation.result.map({ $0.attachmentIDs == shared }) ?? true,
+                attachments.count <= AgentWorkflowWire.maximumAttachments,
+                Set(attachments).count == attachments.count,
                 (invocation.status == .succeeded) == (invocation.result != nil),
                 invocation.result.map({ $0.invocationID == invocation.id && $0.nativeTurnID == invocation.nativeTurnID }) ?? true else {
                 throw AgentWorkflowError("The saved workflow contains an invalid invocation.")
@@ -70,11 +69,13 @@ struct AgentWorkflowExecution: Sendable {
                 guard
                     invocation.status == .succeeded, invocation.nativeTurnID == nil, invocation.nativeTranscriptPath == nil,
                     invocation.result?.text == invocation.delivery.input.text,
-                    shared == invocation.delivery.input.attachmentIDs else {
+                    attachments == invocation.delivery.input.attachmentIDs else {
                     throw AgentWorkflowError("The saved content output is inconsistent.")
                 }
-            } else if invocation.status == .succeeded, invocation.result?.nativeTurnID?.isEmpty != false {
-                throw AgentWorkflowError("The saved Agent result has no verified native turn.")
+            } else if invocation.status == .succeeded {
+                guard invocation.result?.nativeTurnID?.isEmpty == false, attachments.isEmpty else {
+                    throw AgentWorkflowError("A saved Agent result must contain text and a verified native turn.")
+                }
             }
         }
         if let finish = run.finishRequest {
@@ -193,7 +194,6 @@ struct AgentWorkflowExecution: Sendable {
         )
         if node.kind == .content {
             created.status = .succeeded
-            created.sharedAttachmentIDs = input.attachmentIDs
             created.result = .init(invocationID: invocationID, nativeTurnID: nil, text: input.text, attachmentIDs: input.attachmentIDs, completedAt: now)
         }
         run.invocations.append(created)
@@ -291,45 +291,15 @@ struct AgentWorkflowExecution: Sendable {
         guard [.running, .uncertain].contains(invocation.status) else {
             throw AgentWorkflowError("Verify the Agent's accepted task before recording a result.")
         }
-        let shared = invocation.sharedAttachmentIDs ?? []
-        guard result.attachmentIDs.isEmpty || result.attachmentIDs == shared else {
-            throw AgentWorkflowError("Only explicitly shared snapshots can be included in a workflow result.")
+        guard result.attachmentIDs.isEmpty else {
+            throw AgentWorkflowError("Agent results contain text only. Reference files by their workspace paths.")
         }
         run.invocations[index].status = .succeeded
-        run.invocations[index].result = .init(
-            id: result.id, invocationID: result.invocationID, nativeTurnID: result.nativeTurnID,
-            text: result.text, attachmentIDs: shared, completedAt: result.completedAt
-        )
+        run.invocations[index].result = result
         run.invocations[index].issue = nil
         settle(now: now)
         changed()
         return true
-    }
-
-    func authorizeArtifact(invocationID: UUID, instance: AgentWorkflowInstance, now: Date) throws {
-        let invocation = try run.invocations[index(of: invocationID)]
-        try validate(instance, for: invocation)
-        guard
-            !run.status.isTerminal,
-            invocation.round == run.round, invocation.status == .running,
-            now < run.authorizationExpiresAt else {
-            throw AgentWorkflowError("This invocation is no longer authorized to share artifacts.")
-        }
-    }
-
-    mutating func shareArtifact(_ id: UUID, invocationID: UUID, instance: AgentWorkflowInstance, now: Date) throws {
-        try authorizeArtifact(invocationID: invocationID, instance: instance, now: now)
-        let index = try index(of: invocationID)
-        var shared = run.invocations[index].sharedAttachmentIDs ?? []
-        if shared.contains(id) {
-            return
-        }
-        guard shared.count < AgentWorkflowWire.maximumAttachments else {
-            throw AgentWorkflowError("Share up to 32 artifacts per invocation.")
-        }
-        shared.append(id)
-        run.invocations[index].sharedAttachmentIDs = shared
-        changed()
     }
 
     mutating func fail(invocationID: UUID, instance: AgentWorkflowInstance, nativeTurnID: String, reason: String) throws {

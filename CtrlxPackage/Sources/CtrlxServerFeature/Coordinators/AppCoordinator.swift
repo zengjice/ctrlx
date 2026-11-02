@@ -3168,7 +3168,7 @@
                 if request.method == "simulator.action" {
                     return await agentSimulator.handle(request)
                 }
-                if ["workflow.finish", "workflow.attachments", "workflow.artifact"].contains(request.method) {
+                if ["workflow.finish", "workflow.attachments"].contains(request.method) {
                     guard let self else { return .internalError(id: request.id, "Host is shutting down.") }
                     return await self.handleWorkflowAgentCommand(request, peer: peer)
                 }

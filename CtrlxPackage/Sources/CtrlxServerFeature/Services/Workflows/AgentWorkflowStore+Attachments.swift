@@ -8,7 +8,6 @@ extension AgentWorkflowStore {
         let name: String
         let mediaType: String
         let size: Int
-        let owner: ArtifactOwner?
         var activity = ContinuousClock.now
     }
 
@@ -107,9 +106,7 @@ extension AgentWorkflowStore {
 
     /// Paired operators can import files, but cannot choose a Host destination.
     /// Agents only receive the attachments named by their authorized invocation.
-    func uploadAttachment(
-        _ operation: AgentWorkflowAttachmentUpload, artifact: ArtifactUpload? = nil
-    ) async throws -> (offset: Int, attachment: AgentWorkflowAttachment?) {
+    func uploadAttachment(_ operation: AgentWorkflowAttachmentUpload) async throws -> (offset: Int, attachment: AgentWorkflowAttachment?) {
         try Task.checkCancellation()
         guard !attachmentUploadsClosed else { throw AgentWorkflowError("Workflow uploads are shutting down.") }
         let id = operation.id
@@ -117,18 +114,8 @@ extension AgentWorkflowStore {
             throw AgentWorkflowError("An operation for this attachment is already in progress.")
         }
         defer { busyAttachmentUploads.remove(id) }
-        // Reject another invocation (or an operator) before the cleanup scope.
-        // Knowing an upload UUID must not let a caller cancel someone else's I/O.
-        if let pending = pendingAttachments[id], pending.owner != artifact?.owner {
-            throw AgentWorkflowError("This upload belongs to another caller.")
-        }
-
         do {
-            _ = try await authorizeArtifactUpload(artifact)
             if let existing = try load().attachments?.first(where: { $0.id == id }) {
-                if let artifact, try !ownsArtifact(id, owner: artifact.owner) {
-                    throw AgentWorkflowError("This invocation did not share that artifact.")
-                }
                 // A lost finish reply may be retried, but never overwrite a snapshot.
                 if case let .finish(_, hash) = operation, hash == existing.sha256 {
                     return (Int(existing.byteCount), existing)
@@ -154,10 +141,9 @@ extension AgentWorkflowStore {
                     throw AgentWorkflowError("This upload identity was already used. Import the file again.")
                 }
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-                pendingAttachments[id] = .init(name: name, mediaType: mediaType, size: size, owner: artifact?.owner)
+                pendingAttachments[id] = .init(name: name, mediaType: mediaType, size: size)
                 _ = try await attachmentUploads.request(.begin(id: id, directory: directory.path, name: "content.\(ext)", size: size))
                 guard !attachmentUploadsClosed else { throw CancellationError() }
-                _ = try await authorizeArtifactUpload(artifact)
                 startAttachmentExpiry()
                 return (0, nil)
             case let .append(_, offset, data):
@@ -168,7 +154,6 @@ extension AgentWorkflowStore {
                     throw AgentWorkflowError("The Host could not acknowledge the attachment chunk.")
                 }
                 guard !attachmentUploadsClosed else { throw CancellationError() }
-                _ = try await authorizeArtifactUpload(artifact)
                 pendingAttachments[id]?.activity = .now
                 return (next, nil)
             case let .finish(_, checksum):
@@ -178,7 +163,6 @@ extension AgentWorkflowStore {
                 _ = try await attachmentUploads.request(.finish(id: id, sha256: checksum))
                 try Task.checkCancellation()
                 guard !attachmentUploadsClosed else { throw CancellationError() }
-                let timestamp = try await authorizeArtifactUpload(artifact)
                 let attachment = AgentWorkflowAttachment(
                     id: id,
                     name: pending.name,
@@ -189,9 +173,6 @@ extension AgentWorkflowStore {
                 // Reload after the I/O await; never overwrite concurrent run edits.
                 var archive = try load()
                 archive.attachments = (archive.attachments ?? []) + [attachment]
-                if let artifact {
-                    try recordArtifact(id, artifact: artifact, in: &archive, now: timestamp)
-                }
                 try commit(archive)
                 pendingAttachments.removeValue(forKey: id)
                 return (pending.size, attachment)

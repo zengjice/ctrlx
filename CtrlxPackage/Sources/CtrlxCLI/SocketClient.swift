@@ -136,7 +136,7 @@ enum SocketClient {
         }
     }
 
-    /// Large artifact chunks may require multiple writes on the same connection.
+    /// A request may require multiple writes on the same connection.
     /// Continue only the remaining bytes; never retry the whole request.
     static func writeAll(_ data: Data, write: (UnsafeRawBufferPointer) throws -> Int) throws {
         try data.withUnsafeBytes { bytes in

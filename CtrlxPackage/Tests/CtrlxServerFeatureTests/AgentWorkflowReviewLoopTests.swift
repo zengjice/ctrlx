@@ -54,6 +54,7 @@ struct AgentWorkflowReviewLoopTests {
         _ = try await store.uploadAttachment(.finish(id: imageID, sha256: SHA256.hash(data: image).map { String(format: "%02x", $0) }.joined()))
         var definition = AgentWorkflowDefinition(name: "Requested sample", hostID: hostID, nodes: [], edges: [], entryNodeID: UUID(), initialInput: .init(text: "USER_IMAGE_TASK: implement this image", attachmentIDs: [imageID]))
         AgentWorkflowReviewTemplate.apply(to: &definition, developerID: agents[0].id, reviewerID: agents[1].id)
+        definition.nodes[1].input.text += "\nEnd this workflow only when there are no P0, P1, P2 or P3 findings."
         let saved = try await store.saveDefinition(definition, expectedRevision: nil)
         let run = try await store.start(definitionID: saved.id, expectedRevision: saved.revision, requestID: UUID(), now: now, authorizationExpiresAt: now.addingTimeInterval(3_600))
         #expect(run.instances.count == 2)
@@ -138,6 +139,7 @@ struct AgentWorkflowReviewLoopTests {
         let agents = observations().map { $0.instance(hostID: hostID, id: UUID()) }
         var definition = AgentWorkflowDefinition(name: "Already correct", hostID: hostID, nodes: [], edges: [], entryNodeID: UUID())
         AgentWorkflowReviewTemplate.apply(to: &definition, developerID: agents[0].id, reviewerID: agents[1].id)
+        definition.nodes[1].input.text += "\nEnd this workflow only when there are no P0, P1, P2 or P3 findings."
         var execution = try AgentWorkflowExecution(definition: definition, instances: agents, now: now, authorizationExpiresAt: now.addingTimeInterval(3_600))
         for (index, node) in definition.nodes.prefix(2).enumerated() {
             let task = try execution.prepareInvocation(nodeID: node.id, now: now)
@@ -162,6 +164,7 @@ struct AgentWorkflowReviewLoopTests {
         let agents = observations().map { $0.instance(hostID: hostID, id: UUID()) }
         var definition = AgentWorkflowDefinition(name: "Restore", hostID: hostID, nodes: [], edges: [], entryNodeID: UUID())
         AgentWorkflowReviewTemplate.apply(to: &definition, developerID: agents[0].id, reviewerID: agents[1].id)
+        definition.nodes[1].input.text += "\nEnd this workflow only when there are no P0, P1, P2 or P3 findings."
         var execution = try AgentWorkflowExecution(definition: definition, instances: agents, now: now, authorizationExpiresAt: now.addingTimeInterval(3_600))
         for node in definition.nodes {
             let task = try execution.prepareInvocation(nodeID: node.id, now: now)

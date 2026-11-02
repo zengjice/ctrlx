@@ -451,10 +451,11 @@ actor TmuxControlClient {
         _ command: String,
         timeout: TimeInterval = 5,
         onWritten: (@Sendable () -> Void)? = nil,
-        onResponse: (@MainActor @Sendable (CommandResponse) -> Void)? = nil
+        onResponse: (@MainActor @Sendable (CommandResponse) -> Void)? = nil,
+        beforeWrite: (@Sendable (@Sendable () throws -> Void) throws -> Void)? = nil
     ) async throws -> CommandResponse {
         let responses = try await sendCommandList(
-            [command], timeout: timeout, onWritten: onWritten, onResponse: onResponse
+            [command], timeout: timeout, onWritten: onWritten, onResponse: onResponse, beforeWrite: beforeWrite
         )
         return responses[0] // A nonempty list completes only after a response.
     }
@@ -467,7 +468,8 @@ actor TmuxControlClient {
         timeout: TimeInterval = 5,
         onWritten: (@Sendable () -> Void)? = nil,
         onResponse: (@MainActor @Sendable (CommandResponse) -> Void)? = nil,
-        additionalResponseCount: Int = 0
+        additionalResponseCount: Int = 0,
+        beforeWrite: (@Sendable (@Sendable () throws -> Void) throws -> Void)? = nil
     ) async throws -> [CommandResponse] {
         guard !commands.isEmpty else { return [] }
         guard let stdin else {
@@ -501,7 +503,11 @@ actor TmuxControlClient {
                     onResponse: onResponse
                 ))
                 do {
-                    try stdin.write(contentsOf: commandData)
+                    if let beforeWrite {
+                        try beforeWrite { try stdin.write(contentsOf: commandData) }
+                    } else {
+                        try stdin.write(contentsOf: commandData)
+                    }
                     onWritten?()
                 } catch {
                     pendingCommandQueue.removeLast()

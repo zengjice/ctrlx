@@ -239,6 +239,7 @@ struct AgentWorkflowNativeReviewLoopTests {
             _ = try await store.uploadAttachment(.finish(id: imageID, sha256: SHA256.hash(data: image).map { String(format: "%02x", $0) }.joined()))
             var draft = AgentWorkflowDefinition(name: "Native development and review", hostID: hostID, nodes: [], edges: [], entryNodeID: UUID(), initialInput: .init(text: "Implement the attached fixture image. USER_IMAGE_TASK", attachmentIDs: [imageID]))
             try AgentWorkflowReviewTemplate.apply(to: &draft, developerID: #require(instances.first { $0.pluginID == "codex" }?.id), reviewerID: #require(instances.first { $0.pluginID == "claude-code" }?.id))
+            draft.nodes[1].input.text += "\nEnd this workflow only when there are no P0, P1, P2 or P3 findings."
             let definition = try await store.saveDefinition(draft, expectedRevision: nil)
             let run = try await store.start(definitionID: definition.id, expectedRevision: definition.revision, requestID: UUID(), now: Date(), authorizationExpiresAt: Date().addingTimeInterval(180))
             await runner.schedule(runID: run.id)

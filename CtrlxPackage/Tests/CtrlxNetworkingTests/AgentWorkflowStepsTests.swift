@@ -23,6 +23,23 @@ struct AgentWorkflowStepsTests {
         #expect(try JSONDecoder().decode(AgentWorkflowDefinition.self, from: JSONEncoder().encode(definition)) == definition)
     }
 
+    @Test(arguments: [
+        "使用 $review-changes 审查当前工作区。直至没有P3及以上问题项就退出workflow。",
+        "使用 $review-changes 审查当前工作区，评审报告保存为review.md，直至没有P3及以上问题项就退出workflow。",
+    ])
+    func reviewTaskKeepsReportAndCompletionInstructionsTogether(_ task: String) throws {
+        var definition = sample()
+        definition.nodes[1].input.text = task
+        let saved = try JSONDecoder().decode(AgentWorkflowDefinition.self, from: JSONEncoder().encode(definition))
+        #expect(saved.nodes[1].input.text == task)
+        for round in [1, 2] {
+            for node in saved.nodes {
+                let input = AgentWorkflowPrompt.preview(definition: saved, node: node, round: round)
+                #expect(input.text.contains(task) == (node.id == saved.nodes[1].id))
+            }
+        }
+    }
+
     @Test
     func completionOnlyInputsDoNotLeakAnswersImagesOrOriginalTask() {
         let definition = sample()

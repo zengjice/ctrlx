@@ -35,9 +35,8 @@ extension AppCoordinator {
                 guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
                 return try await inspectWorkflowInstance(instance)
             })
-            let gate = AgentWorkflowInputGate { [weak self] paneID in
-                guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
-                try await pauseAgentWorkflowInput(paneID: paneID, reason: "Human input took over the Agent. Continue the workflow when the terminal is ready.")
+            let gate = AgentWorkflowInputGate { paneID in
+                try await store.authorizeHumanInput(paneID: paneID)
             }
             let delivery = AgentWorkflowTerminalTransport(
                 store: store, gate: gate,

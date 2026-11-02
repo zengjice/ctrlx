@@ -60,11 +60,12 @@ struct AgentWorkflowRunView: View {
                                 change(.resume(runID, expectedRevision: state.summary.revision, roundLimit: roundLimit))
                             }
                         } else {
-                            Button("Pause handoffs") { change(.pause(runID, expectedRevision: state.summary.revision)) }
+                            Button("Take over") { change(.pause(runID, expectedRevision: state.summary.revision)) }
+                                .accessibilityIdentifier("workflow-take-over")
                         }
                         Button("End workflow", role: .destructive) { confirmingEnd = true }
                     } footer: {
-                        Text("Pausing stops new handoffs. Ending releases the Agents; their tabs and current tasks stay open.")
+                        Text("Agent terminals are read-only while the workflow runs; viewing and scrolling remain available. Take over pauses new handoffs and enables input. Continue resumes handoffs. Ending keeps the Agent tabs and current tasks open.")
                     }
                     .disabled(changing || !endpoint.isConnected)
                 } else {
@@ -225,7 +226,7 @@ private struct AgentWorkflowInvocationView: View {
                 }
                 .pickerStyle(.segmented)
                 if !attachments.isEmpty {
-                    Text(part == .input ? "Attachments" : "Shared artifacts").font(.headline)
+                    Text("Attachments").font(.headline)
                     ForEach(attachments) { AgentWorkflowAttachmentLabel(attachment: $0) }
                     Divider()
                 }

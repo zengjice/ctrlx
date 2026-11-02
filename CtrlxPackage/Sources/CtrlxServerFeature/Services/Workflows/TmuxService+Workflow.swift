@@ -41,8 +41,11 @@ extension TmuxService {
         } else {
             paneID = try await captureWorkspacePane(target: target).info.paneId
         }
-        return try await workflowInputGate.human(paneID: paneID, editsInput: editsInput) {
-            try await self.runTmuxCommand(arguments)
+        return try await workflowInputGate.human(paneID: paneID, editsInput: editsInput) { authorization in
+            if let authorization {
+                return try await self.runTmuxCommand(arguments) { launch in try authorization.perform(launch) }
+            }
+            return try await self.runTmuxCommand(arguments)
         }
     }
 }

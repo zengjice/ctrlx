@@ -23,14 +23,11 @@ struct AgentWorkflowContentNodeTests {
         )
     }
 
-    private func finish(_ task: AgentWorkflowInvocation, text: String, in execution: inout AgentWorkflowExecution, artifacts: [UUID] = []) throws {
+    private func finish(_ task: AgentWorkflowInvocation, text: String, in execution: inout AgentWorkflowExecution) throws {
         let agent = try #require(execution.run.instances.first { $0.id == task.delivery.toAgentID })
         try execution.beginWriting(invocationID: task.id, instance: agent, now: now)
         try execution.didWrite(invocationID: task.id)
         try execution.accept(invocationID: task.id, instance: agent, nativeTurnID: task.id.uuidString)
-        for id in artifacts {
-            try execution.shareArtifact(id, invocationID: task.id, instance: agent, now: now)
-        }
         try execution.succeed(.init(invocationID: task.id, nativeTurnID: task.id.uuidString, text: text, completedAt: now), instance: agent, now: now)
     }
 
@@ -40,7 +37,7 @@ struct AgentWorkflowContentNodeTests {
         let agents = ["Review A", "Review B", "Dev A", "Dev B"].map { instance(hostID: hostID, name: $0) }
         let root = AgentWorkflowNode(name: "Brief", content: .init(text: "Original brief"))
         let reviewers = agents.prefix(2).map { AgentWorkflowNode(name: $0.displayName, agentInstanceID: $0.id) }
-        let preset = UUID(), artifact = UUID()
+        let preset = UUID()
         let content = AgentWorkflowNode(name: "Implementation instructions", content: .init(text: "$implement\nFix all findings", attachmentIDs: [preset]))
         let developers = agents.suffix(2).map { AgentWorkflowNode(name: $0.displayName, agentInstanceID: $0.id) }
         let nodes = [root] + reviewers + [content] + developers
@@ -55,10 +52,10 @@ struct AgentWorkflowContentNodeTests {
         try finish(b, text: "B's complete answer", in: &execution)
         #expect(!execution.readyNodeIDs.contains(content.id))
         #expect(throws: AgentWorkflowError.self) { try execution.prepareInvocation(nodeID: content.id, now: now) }
-        try finish(a, text: "A's complete answer", in: &execution, artifacts: [artifact])
+        try finish(a, text: "A's complete answer", in: &execution)
         let joined = try execution.prepareInvocation(nodeID: content.id, now: now)
         #expect(joined.result?.text == "$implement\nFix all findings\n\nOutput from Review A (round 1):\nA's complete answer\n\nOutput from Review B (round 1):\nB's complete answer")
-        #expect(joined.result?.attachmentIDs == [preset, artifact])
+        #expect(joined.result?.attachmentIDs == [preset])
         #expect(try execution.prepareInvocation(nodeID: content.id, now: now) == joined)
         #expect(execution.readyNodeIDs == developers.map(\.id))
         let left = try execution.prepareInvocation(nodeID: developers[0].id, now: now)
@@ -66,13 +63,12 @@ struct AgentWorkflowContentNodeTests {
         #expect(left.delivery.sources == right.delivery.sources)
         #expect(left.delivery.sources.first?.resultID == joined.result?.id)
         #expect(left.delivery.sources.first?.agentInstanceID == nil)
-        #expect(left.delivery.input.attachmentIDs == [preset, artifact])
+        #expect(left.delivery.input.attachmentIDs == [preset])
         #expect(left.delivery.input.text.contains("Content from Implementation instructions"))
         #expect(try left.delivery.input.text.contains(#require(joined.result?.text)))
         _ = try AgentWorkflowExecution(validating: execution.run)
         #expect(throws: AgentWorkflowError.self) { try execution.accept(invocationID: joined.id, instance: agents[0], nativeTurnID: "forged") }
         #expect(throws: AgentWorkflowError.self) { try execution.requestFinish(invocationID: joined.id, instance: agents[0], reason: "forged", now: now) }
-        #expect(throws: AgentWorkflowError.self) { try execution.authorizeArtifact(invocationID: joined.id, instance: agents[0], now: now) }
     }
 
     @Test(arguments: ["pause", "end", "expired"])
@@ -106,18 +102,14 @@ struct AgentWorkflowContentNodeTests {
 
     @Test(arguments: ["text", "attachments"])
     func oversizedContentDoesNotCreatePartialResult(scenario: String) throws {
-        let agent = instance(hostID: UUID(), name: "Agent")
-        let first = AgentWorkflowNode(name: "Agent", agentInstanceID: agent.id)
-        let next = AgentWorkflowNode(name: "Content", content: .init(text: "Preset", attachmentIDs: scenario == "attachments" ? [UUID()] : []))
-        let definition = AgentWorkflowDefinition(name: "Limit", hostID: agent.hostID, nodes: [first, next], edges: [.init(source: first.id, target: next.id)], entryNodeID: first.id)
-        var execution = try AgentWorkflowExecution(definition: definition, instances: [agent], now: now, authorizationExpiresAt: now.addingTimeInterval(60))
-        let task = try execution.prepareInvocation(nodeID: first.id, now: now)
-        try finish(
-            task,
+        let first = AgentWorkflowNode(name: "Upstream", content: .init(
             text: scenario == "text" ? String(repeating: "x", count: AgentWorkflowWire.maximumContentBytes) : "Done",
-            in: &execution,
-            artifacts: scenario == "attachments" ? (0..<32).map { _ in UUID() } : []
-        )
+            attachmentIDs: scenario == "attachments" ? (0..<32).map { _ in UUID() } : []
+        ))
+        let next = AgentWorkflowNode(name: "Content", content: .init(text: "Preset", attachmentIDs: scenario == "attachments" ? [UUID()] : []))
+        let definition = AgentWorkflowDefinition(name: "Limit", hostID: UUID(), nodes: [first, next], edges: [.init(source: first.id, target: next.id)], entryNodeID: first.id)
+        var execution = try AgentWorkflowExecution(definition: definition, instances: [], now: now, authorizationExpiresAt: now.addingTimeInterval(60))
+        _ = try execution.prepareInvocation(nodeID: first.id, now: now)
         #expect(throws: AgentWorkflowError.self) { try execution.prepareInvocation(nodeID: next.id, now: now) }
         #expect(execution.run.invocations.count == 1)
     }

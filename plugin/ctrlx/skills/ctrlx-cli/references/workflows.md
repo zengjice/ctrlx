@@ -75,6 +75,12 @@ setting instead.
 
 ## Agent collaboration
 
+The task's `[CtrlX workflow invocation: …]` block identifies the current
+invocation. It includes a completion command only when that step is authorized
+to end the workflow, and an attachment command only when files are present.
+The task and step instructions determine the response; the workflow block adds
+no answer format.
+
 When the current task includes workflow attachments, use the invocation UUID
 supplied with that task. Check `ctrlx workflow attachments --help` first if the
 installed CLI's capabilities are unknown.
@@ -100,49 +106,35 @@ you inspected an original audio/video file merely because it is retained by the
 workflow.
 
 Pausing handoffs does not revoke your current accepted invocation's attachment
-access. You may finish its authorized work and share artifacts while the workflow
+access. You may finish its authorized work while the workflow
 is paused. New tasks remain stopped; ended or expired runs and completed or
 replaced invocations cannot obtain further access.
 
-### Sharing artifacts
+### Workspace files
 
-To include a file in this task's handoff, save it first and run:
-
-```bash
-ctrlx workflow share --invocation '<UUID from this task>' --file report.md --json
-```
-
-Check `ctrlx workflow share --help` if the installed CLI's capabilities are
-unknown. Run once per required file before your final answer. It snapshots
-PNG/JPEG, UTF-8 text/Markdown, audio or video into workflow storage and returns
-the immutable artifact ID and checksum. Paths mentioned in prose alone are not
-shared. Storage accepts up to 1 GiB per file and 32 artifacts per invocation;
-the target's media and reading limits still apply. Audio/video need explicit
-conversion before the current attachment reader can supply them.
-
-The Host binds the upload to your accepted invocation. Your final verified
-answer carries those same snapshots to each configured downstream Agent.
-If the command fails, report the failure; do not claim delivery. If a finish
-receipt was lost, inspect the workflow record before sharing again: the first
-snapshot may already be saved. Never switch invocation IDs, borrow another
-Agent's identity, or retry using a different pane.
+Save code, reports and other files in the working directory agreed by the task.
+Downstream Agents read them through those workspace paths. Text answers follow
+the configured connections; images supplied by the workflow use the attachment
+reader above. The workflow does not upload files mentioned in an answer.
 
 ### Requesting completion
 
-Use this only when the current workflow task explicitly grants completion and
+The workflow task or step instructions define the completion condition. This
+skill and the CLI do not choose business criteria. Use this only when that
+configured condition is met, the current step grants completion, and the task
 supplies its invocation UUID. Check `ctrlx workflow finish --help` on the installed
 CLI; older releases may not provide the command.
 
 ```bash
-ctrlx workflow finish --invocation '<UUID from this task>' --reason 'Review passed'
+ctrlx workflow finish --invocation '<UUID from this task>' --reason '<completion reason>'
 ```
 
 The Host verifies the calling Agent process, the current invocation and the
 node's finish grant. Knowing a UUID or command does not grant authority. Do not
 reuse an invocation from an earlier round or pass pane/session/window overrides.
-An accepted request stops new handoffs but still requires your final answer:
-write that answer normally after the command succeeds. If the workflow is paused,
-the request and answer are saved while it remains paused until an operator
+An accepted request stops new handoffs. Completion waits for the Host to verify
+the current turn's final result; command success alone does not close the run.
+If the workflow is paused, the request and result are saved until an operator
 continues it. Do not resume the workflow or resend the task yourself. A denied request is not
 workflow completion; report the reason without switching to another Agent's
 identity or forcibly closing its terminal. This command does not kill Agents.

@@ -6,6 +6,20 @@
 
     @MainActor
     struct MacTerminalInputTests {
+        @Test("Repeated read-only input shows one notice while the terminal stays mounted")
+        func workflowReadOnlyNoticeDoesNotReplaceTerminal() throws {
+            let (_, view) = makeTerminalWindow()
+            let message = AgentWorkflowInputReadOnlyError().localizedDescription
+            view.showWorkflowReadOnlyNotice(message)
+            view.showWorkflowReadOnlyNotice(message)
+            view.layoutSubtreeIfNeeded()
+            let notices = view.subviews.filter { $0.identifier?.rawValue == "workflow-read-only-notice" }
+            #expect(notices.count == 1)
+            let notice = try #require(notices.first as? NSTextField)
+            #expect(notice.stringValue == message)
+            #expect(view.terminalView.superview === view)
+        }
+
         @Test("SwiftTerm receives terminal focus")
         func swiftTermReceivesTerminalFocus() {
             let (window, view) = makeTerminalWindow()

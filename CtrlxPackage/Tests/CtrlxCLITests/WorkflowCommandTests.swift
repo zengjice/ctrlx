@@ -5,15 +5,9 @@ import Testing
 
 struct WorkflowCommandTests {
     @Test
-    func shareUsesTheAuthenticatedInvocationAndLocalFile() throws {
-        let id = UUID()
-        let command = try WorkflowShareCommand.parse(["--invocation", id.uuidString, "--file", "report.md", "--json"])
-        #expect(try command.invocationID() == id)
-        #expect(command.file == "report.md")
-        #expect(try CtrlxCLI.parseAsRoot(["workflow", "share", "--invocation", id.uuidString, "--file", "report.md"]) is WorkflowShareCommand)
-        for flag in ["--pane", "--session", "--window"] {
-            let invalid = try WorkflowShareCommand.parse(["--invocation", id.uuidString, "--file", "report.md", flag, "other"])
-            #expect(throws: (any Error).self) { try invalid.invocationID() }
+    func shareIsNotAWorkflowCommand() {
+        #expect(throws: (any Error).self) {
+            try CtrlxCLI.parseAsRoot(["workflow", "share", "--invocation", UUID().uuidString, "--file", "report.md"])
         }
     }
 

@@ -38,7 +38,7 @@ struct AgentWorkflowInputPreview: View {
                     ForEach(input.attachmentIDs, id: \.self) { AgentWorkflowAttachmentLabel(attachment: attachments[$0]) }
                 }
                 if isActive, receivesResults {
-                    Text("Attachments from upstream content nodes and artifacts explicitly shared by upstream Agents are added after they complete.").foregroundStyle(.secondary)
+                    Text("Images from upstream content steps are added after those steps complete.").foregroundStyle(.secondary)
                 }
             }
         }
