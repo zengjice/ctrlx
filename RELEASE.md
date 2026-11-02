@@ -68,8 +68,13 @@ daily maintenance loop and the explicit **Check Again** action trigger a check.
 Formal archives reuse this worktree's Mac DerivedData and package downloads.
 They keep compilation caches. Failed releases retain their staging directory and
 notarization reports under `dist/qcloud-release/<version>/`; do not rebuild just
-because a notarization wait timed out. Resume the same input and submission with
-`python3 scripts/notarize_macos.py <artifact> --profile <profile> --report <report>`.
+because a notarization wait timed out. Resume the whole workflow using the exact
+absolute staging path printed by the failed run:
+`CTRLX_RELEASE_RESUME=/path/to/worktree/.build-local/package-macos.XXXXXX ./scripts/release.sh`.
+The source revision, signing team and original build stamp must still match.
+It reuses the signed App/ZIP, submission IDs and existing DMG; it does not archive
+or re-sign them. `scripts/notarize_macos.py` can also query/resume an individual
+input using its existing `--profile` and `--report`.
 An `Invalid` result retains the notary log and stops publication. Only fully
 verified staged packages replace the previous local package and its sidecars.
 

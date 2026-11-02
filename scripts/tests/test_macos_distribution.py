@@ -160,6 +160,17 @@ class DistributionTests(unittest.TestCase):
                 signing.process(self.root, 'TEAM', 'IDENTITY')
         run.assert_not_called()
 
+    def test_release_resume_requires_original_source_team_and_stamp(self):
+        state = self.root / 'release-state.json'
+        state.write_text(json.dumps({'revision': 'commit', 'team': 'TEAM', 'stamp': '20261103-001122'}))
+        self.assertEqual(notary.resume_stamp(state, 'commit', 'TEAM'), '20261103-001122')
+        for revision, team in [('changed', 'TEAM'), ('commit', 'OTHER')]:
+            with self.assertRaises(ValueError):
+                notary.resume_stamp(state, revision, team)
+        state.write_text(json.dumps({'revision': 'commit', 'team': 'TEAM', 'stamp': 'invalid'}))
+        with self.assertRaises(ValueError):
+            notary.resume_stamp(state, 'commit', 'TEAM')
+
 
 if __name__ == '__main__':
     unittest.main()

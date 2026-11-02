@@ -55,7 +55,30 @@ DIST_DIR="$PROJECT_ROOT/dist"
 check_build_space "$PROJECT_ROOT"
 check_build_space "${TMPDIR:-/tmp}"
 mkdir -p "$PROJECT_ROOT/.build-local"
-WORK_ROOT="$(mktemp -d "$PROJECT_ROOT/.build-local/package-macos.XXXXXX")"
+RESUMING=false
+if [ -n "${CTRLX_RELEASE_RESUME:-}" ]; then
+    WORK_ROOT="$CTRLX_RELEASE_RESUME"
+    [[ "$(dirname "$WORK_ROOT")" = "$PROJECT_ROOT/.build-local" \
+        && "$(basename "$WORK_ROOT")" = package-macos.* && ! -L "$WORK_ROOT" ]] \
+        || log_error 'Resume requires the exact worktree-local staging directory printed by release.sh.'
+    BUILD_STAMP="$(python3 "$SCRIPT_DIR/notarize_macos.py" resume-state "$WORK_ROOT/release-state.json" \
+        --revision "$SOURCE_REVISION" --team "$CTRLX_MAC_DEVELOPMENT_TEAM")"
+    [ -f "$WORK_ROOT/CtrlX-notary.zip" ] || log_error 'No notarization input exists yet; start a fresh release.'
+    RESUMING=true
+else
+    WORK_ROOT="$(mktemp -d "$PROJECT_ROOT/.build-local/package-macos.XXXXXX")"
+    CTRLX_RELEASE_STATE="$WORK_ROOT/release-state.json" \
+    CTRLX_RELEASE_STAMP="$BUILD_STAMP" CTRLX_RELEASE_REVISION="$SOURCE_REVISION" \
+        python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+Path(os.environ['CTRLX_RELEASE_STATE']).write_text(json.dumps({
+    'revision': os.environ['CTRLX_RELEASE_REVISION'], 'stamp': os.environ['CTRLX_RELEASE_STAMP'],
+    'team': os.environ['CTRLX_MAC_DEVELOPMENT_TEAM'],
+}, indent=2) + '\n')
+PY
+fi
 DERIVED_DATA="$PROJECT_ROOT/.build-local/DerivedData/macOS"
 SOURCE_PACKAGES="$PROJECT_ROOT/.build-local/SourcePackages"
 ARCHIVE_PATH="$WORK_ROOT/CtrlX.xcarchive"
@@ -82,6 +105,7 @@ mkdir -p "$DIST_DIR" "$SOURCE_PACKAGES" "$PACKAGE_ROOT/root"
 export CTRLX_MAC_DISTRIBUTION=developer-id
 export CTRLX_AGENT_BROWSER_SIGN_IDENTITY="$CTRLX_MAC_SIGNING_IDENTITY"
 export CTRLX_DEVICE_INSTALLER_SIGN_IDENTITY="$CTRLX_MAC_SIGNING_IDENTITY"
+if [ "$RESUMING" = false ]; then
 bash "$SCRIPT_DIR/build-device-installer.sh"
 bash "$SCRIPT_DIR/build-agent-browser.sh"
 
@@ -131,13 +155,17 @@ python3 "$SCRIPT_DIR/macos_signing.py" sign "$APP_PATH" \
     --identity "$CTRLX_MAC_SIGNING_IDENTITY" --team "$CTRLX_MAC_DEVELOPMENT_TEAM"
 
 ditto -c -k --keepParent "$APP_PATH" "$WORK_ROOT/CtrlX-notary.zip"
+fi
 python3 "$SCRIPT_DIR/notarize_macos.py" "$WORK_ROOT/CtrlX-notary.zip" \
     --profile "$CTRLX_NOTARYTOOL_PROFILE" --report "$NOTARY_REPORTS/app.json"
-xcrun stapler staple "$APP_PATH"
+if ! xcrun stapler validate "$APP_PATH" >/dev/null 2>&1; then
+    xcrun stapler staple "$APP_PATH"
+fi
 xcrun stapler validate "$APP_PATH"
 python3 "$SCRIPT_DIR/macos_signing.py" verify "$APP_PATH" --team "$CTRLX_MAC_DEVELOPMENT_TEAM"
 spctl --assess --type execute --verbose=2 "$APP_PATH"
 
+if [ ! -f "$STAGED_DMG" ]; then
 ditto "$APP_PATH" "$PACKAGE_ROOT/root/CtrlX.app"
 ln -s /Applications "$PACKAGE_ROOT/root/Applications"
 hdiutil create \
@@ -147,9 +175,13 @@ hdiutil create \
     -ov \
     "$STAGED_DMG"
 codesign --force --sign "$CTRLX_MAC_SIGNING_IDENTITY" --timestamp "$STAGED_DMG"
+fi
+if ! xcrun stapler validate "$STAGED_DMG" >/dev/null 2>&1; then
+hdiutil verify "$STAGED_DMG" >/dev/null
 python3 "$SCRIPT_DIR/notarize_macos.py" "$STAGED_DMG" \
     --profile "$CTRLX_NOTARYTOOL_PROFILE" --report "$NOTARY_REPORTS/dmg.json"
 xcrun stapler staple "$STAGED_DMG"
+fi
 xcrun stapler validate "$STAGED_DMG"
 codesign --verify --strict "$STAGED_DMG"
 spctl --assess --type open --context context:primary-signature --verbose=2 "$STAGED_DMG"
@@ -198,6 +230,9 @@ xml = f'''<?xml version="1.0" encoding="utf-8"?>
 Path(os.environ["CTRLX_APPCAST_PATH"]).write_text(xml, encoding="utf-8")
 PY
 
+[ "$(git -C "$PROJECT_ROOT" rev-parse HEAD)" = "$SOURCE_REVISION" ] \
+    && [ -z "$(git -C "$PROJECT_ROOT" status --porcelain)" ] \
+    || log_error 'Source changed during release; verified artifacts retained without replacing packages.'
 write_artifact_metadata "$STAGED_DMG"
 publish_local_package "$STAGED_DMG" "$DMG_PATH"
 mv "$STAGED_APPCAST" "$APPCAST_PATH"

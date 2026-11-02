@@ -9,6 +9,11 @@
 
 ## 3.0.133 — Developer ID signing and notarized Mac releases
 
+- Restore model/effort shortcuts on tmux 3.6a using a guarded single-line native
+  paste when the paste-mode field is unavailable. Preserve foreground process,
+  cursor, size, copy-mode, identity and human-input checks; automatic workflows
+  and hook approval retain their explicit input-mode requirement. Update the
+  Host to receive this compatibility fix.
 - Add a formal Mac release path with Developer ID signatures, secure timestamps
   and Hardened Runtime checks for every embedded native component. Sign CEF
   libraries, helpers, the automation engine and the enclosing App in order;
@@ -24,7 +29,8 @@
   and pass strict Developer ID validation against the running CLI's team.
 - Make the isolated browser fixture use its own explicit API socket and wait
   for the restored page's presentation before testing restart persistence.
-- Validation: 95 repository script tests, 43 CLI tests and 118 private publisher/COS/installer
+- Validation: 96 repository script tests, 43 CLI tests, focused workflow/model
+  regressions and 118 private publisher/COS/installer
   tests passed. A Developer ID-signed isolated App with the updated CLI passed native page actions,
   multi-session routing, ownership checks, graceful restart, profile persistence
   and stale-grant rejection without new crash reports. Both browser engines

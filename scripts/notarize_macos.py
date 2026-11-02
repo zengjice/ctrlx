@@ -4,6 +4,8 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import re
+import sys
 
 
 def command(*args):
@@ -46,12 +48,30 @@ def notarize(artifact, profile, report):
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == 'resume-state':
+        parser = argparse.ArgumentParser(description='Validate a retained release before reusing its signed inputs.')
+        parser.add_argument('operation')
+        parser.add_argument('state', type=Path)
+        parser.add_argument('--revision', required=True)
+        parser.add_argument('--team', required=True)
+        args = parser.parse_args()
+        print(resume_stamp(args.state, args.revision, args.team))
+        return
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('artifact', type=Path)
     parser.add_argument('--profile', required=True)
     parser.add_argument('--report', type=Path, required=True)
     args = parser.parse_args()
     notarize(args.artifact, args.profile, args.report)
+
+
+def resume_stamp(path, revision, team):
+    state = json.loads(path.read_text())
+    if state['revision'] != revision or state['team'] != team:
+        raise ValueError('Retained release belongs to another source revision or signing team.')
+    if not re.fullmatch(r'\d{8}-\d{6}', state['stamp']):
+        raise ValueError('Invalid retained build stamp.')
+    return state['stamp']
 
 
 if __name__ == '__main__':
