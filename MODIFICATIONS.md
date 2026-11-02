@@ -7,6 +7,25 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.131 — Workflow history recovery and deletion
+
+- Restore older workflow ledgers that still reference removed Agent output
+  attachments. Migrate schemas 1–3 to schema 4 only after full validation,
+  preserving configurations, answers, native turn records, input images and
+  content outputs. Unfinished runs still pause after restart. Earlier releases
+  cannot read the migrated ledger.
+- Show actual workflow startup or loading errors on local and remote clients
+  instead of incorrectly asking users to upgrade a compatible Host.
+- Add confirmed deletion of completed and ended runs from the shared history
+  list. Delete that run and its handoff history while retaining configurations,
+  Agent tabs and sessions; active and paused runs must be ended first.
+- Release validation: focused workflow regressions passed, including legacy
+  ledger migration, rejected-record preservation, startup recovery and native
+  Mac deletion confirmation. All 117 publisher/COS/installer tests, eight Swift
+  format checks and both boundary checks passed. Full Swift regression, opt-in
+  native Agent/clipboard probes and iOS runtime validation were not rerun;
+  this release builds macOS only.
+
 ## 3.0.130 — Workflow steps, images and shared model shortcuts
 
 - Separate workflow participants from execution steps so several serial steps
