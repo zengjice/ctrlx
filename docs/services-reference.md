@@ -1177,6 +1177,13 @@ dock icon visibility and the dock tile badge.
   `.accessory` transitions, so the manager clears the label before every set
   and re-applies it on policy updates (issue #217)
 
+`MenuBarStatusLabel` observes local/remote attention and Dashboard quotas inside
+the always-mounted menu-bar label. It updates the Dock badge on initial mount
+and count changes, including when no Sessions window is open. The app Scene
+passes store references without reading their live collections, so these updates
+do not invalidate the entire scene tree. Attention totals still use the shared
+aggregation rules and remain scoped by Host.
+
 **Mac completion/read handling:** `VisiblePaneAttentionModifier` is attached to
 each rendered terminal tile in `WindowPaneLayoutView` and
 `RemoteWindowPaneLayoutView`, including both split sides and fallback layouts.

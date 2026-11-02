@@ -465,13 +465,6 @@ struct TmuxPaneMirrorApp: App {
             (coordinator.settings.openPanesWindowOnLaunch || showingTmuxInstallGuide) ? .presented : .suppressed
         )
         .restorationBehavior(coordinator.settings.restoresWorkspaceOnLaunch ? .disabled : .automatic)
-        .onChange(of: totalPendingSessionCount, initial: true) { _, newValue in
-            // Routed through DockIconService (not NSApp.dockTile directly) so
-            // the badge survives .accessory → .regular activation-policy
-            // transitions, which destroy the Dock's tile state (issue #217).
-            @Dependency(DockIconService.self) var dockIconService
-            dockIconService.setBadgeCount(newValue)
-        }
         .commands {
             WorkbenchKeyboardCommands(settings: coordinator.settings)
             IPAInstallerCommands()
@@ -571,39 +564,28 @@ struct TmuxPaneMirrorApp: App {
                 .environment(coordinator.settings)
                 .environment(coordinator)
         } label: {
-            MenuBarLabel(pendingCount: totalPendingSessionCount, lowQuotaCount: coordinator.dashboardStore.quotaSummaries().filter(\.isLow).count)
-                .handleIPAFileRequests(ipaFiles)
-                .task {
-                    coordinator.settings.applyAppearance()
-                    // Capture the Settings-opening action once at launch so a
-                    // non-view context (the license trial-expiry notification
-                    // tap handler) can open Settings later. `MenuBarLabel` is
-                    // the menu bar icon itself, so — unlike the Panes window's
-                    // content — it's guaranteed to run even if no window is
-                    // ever shown (issue #392, Task 14).
-                    coordinator.openSettingsAction = { openSettings() }
-                }
-                .task(id: showingTmuxInstallGuide) {
-                    guard !showingTmuxInstallGuide else { return }
-                    await coordinator.setupAllServices()
-                    await coordinator.dashboardStore.monitor(endpoints: coordinator.dashboardEndpoints)
-                }
+            MenuBarStatusLabel(
+                windowManager: coordinator.windowManager,
+                remoteStore: coordinator.remoteSessionStore,
+                dashboard: coordinator.dashboardStore
+            )
+            .handleIPAFileRequests(ipaFiles)
+            .task {
+                coordinator.settings.applyAppearance()
+                // Capture the Settings-opening action once at launch so a
+                // non-view context (the license trial-expiry notification
+                // tap handler) can open Settings later. `MenuBarLabel` is
+                // the menu bar icon itself, so — unlike the Panes window's
+                // content — it's guaranteed to run even if no window is
+                // ever shown (issue #392, Task 14).
+                coordinator.openSettingsAction = { openSettings() }
+            }
+            .task(id: showingTmuxInstallGuide) {
+                guard !showingTmuxInstallGuide else { return }
+                await coordinator.setupAllServices()
+                await coordinator.dashboardStore.monitor(endpoints: coordinator.dashboardEndpoints)
+            }
         }
-    }
-
-    /// Total number of sessions needing attention across local and remote
-    /// sources. Both halves use the shared `pendingSessionCount` helper, so the
-    /// manual "Set State" override is honored in both directions and a pinned
-    /// terminal-only session counts once (issue #702). The remote half is
-    /// computed per host so same-named sessions on different hosts don't merge.
-    private var totalPendingSessionCount: Int {
-        let localCount = coordinator.windowManager.pendingSessionCount
-        let remoteCount = coordinator.remoteSessionStore.map { store in
-            Dictionary(grouping: store.paneStates, by: \.key.pairId)
-                .values
-                .reduce(0) { $0 + $1.map(\.value).pendingSessionCount }
-        } ?? 0
-        return localCount + remoteCount
     }
 
     /// Checks if we should show the launch at login prompt.
