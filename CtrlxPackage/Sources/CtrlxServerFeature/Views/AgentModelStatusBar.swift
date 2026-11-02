@@ -19,6 +19,9 @@ struct AgentModelStatusBar: View {
     @State private var showsCustomization = false
     @State private var refreshGeneration = 0
     @State private var reads = AgentModelReadRequests()
+    @State private var shortcutWrite: Task<Void, Never>?
+    @State private var pendingShortcuts: (id: UUID, key: AgentModelPreferences.Key, hidden: AgentModelShortcuts)?
+    @State private var shortcutError: String?
 
     private var displayKey: AgentModelDisplayCache.Key? {
         guard let identity = pane?.workspaceIdentity, let pluginID = pane?.agentSession?.pluginID else { return nil }
@@ -38,7 +41,18 @@ struct AgentModelStatusBar: View {
     }
 
     private var hidden: AgentModelPreferences.Hidden {
-        preferenceKey.flatMap { coordinator.agentModelPreferences.tabs[$0] } ?? .init()
+        if let pendingShortcuts, pendingShortcuts.key == preferenceKey {
+            return pendingShortcuts.hidden
+        }
+        return shortcutPreferences.hidden
+    }
+
+    private var shortcutPreferences: AgentModelShortcutPreferences {
+        guard let key = preferenceKey else { return .init(hidden: .init()) }
+        if let hostID, let shared = coordinator.remoteSessionStore?.agentModelShortcutsByHost[hostID] {
+            return shared[key.windowID] ?? .init(hidden: .init())
+        }
+        return coordinator.agentModelPreferences.preferences(for: key)
     }
 
     private var unavailableReason: String? {
@@ -109,16 +123,12 @@ struct AgentModelStatusBar: View {
             .popover(isPresented: $showsCustomization, arrowEdge: .bottom) {
                 AgentModelCustomization(
                     snapshot: snapshot,
-                    hidden: Binding(get: { hidden }, set: { value in
-                        if let key = preferenceKey {
-                            coordinator.agentModelPreferences.tabs[key] = value
-                        }
-                    }),
+                    hidden: Binding(get: { hidden }, set: saveShortcuts),
                     unavailableReason: unavailableReason,
                     refreshing: refreshing || changing,
                     refresh: { Task { await refresh(force: true) } },
                     done: { showsCustomization = false },
-                    defaults: preferenceKey.flatMap { coordinator.agentModelPreferences.defaults[$0] } ?? .init()
+                    defaults: shortcutPreferences.defaults ?? .init()
                 )
             }
         }
@@ -135,6 +145,17 @@ struct AgentModelStatusBar: View {
             Button("OK", role: .cancel) { changeError = nil }
         } message: {
             Text(changeError ?? "")
+        }
+        .alert("Model Shortcuts Not Saved", isPresented: Binding(
+            get: { shortcutError != nil }, set: {
+                if !$0 {
+                    shortcutError = nil
+                }
+            }
+        )) {
+            Button("OK", role: .cancel) { shortcutError = nil }
+        } message: {
+            Text(shortcutError ?? "")
         }
         .task(id: isVisible ? displayKey : nil) {
             guard isVisible, let key = displayKey else { return }
@@ -160,7 +181,6 @@ struct AgentModelStatusBar: View {
     }
 
     private func setHidden(model: String? = nil, effort: String? = nil, visible: Bool) {
-        guard let key = preferenceKey else { return }
         var value = hidden
         if let model {
             if visible {
@@ -176,7 +196,50 @@ struct AgentModelStatusBar: View {
                 value.efforts.insert(effort)
             }
         }
-        coordinator.agentModelPreferences.tabs[key] = value
+        saveShortcuts(value)
+    }
+
+    private func saveShortcuts(_ hidden: AgentModelShortcuts) {
+        guard let key = preferenceKey, let identity = pane?.workspaceIdentity else { return }
+        let connection = hostID.flatMap { coordinator.viewerConnectionManager?.connection(for: $0) }
+        if
+            let hostID,
+            connection?.isHostConnected == true,
+            coordinator.remoteSessionStore?.hasReceivedState(for: hostID) == true,
+            connection?.relayClient.hostSupportsSharedAgentModelShortcuts == false {
+            coordinator.agentModelPreferences.update(hidden, for: key)
+            return
+        }
+        let scope = hostID.flatMap { coordinator.remoteSessionStore?.workspaceCatalogsByHost[$0]?.scope }
+        let id = UUID()
+        pendingShortcuts = (id, key, hidden)
+        let previous = shortcutWrite
+        let request = SetAgentModelShortcuts(pane: identity, hidden: hidden)
+        // Keep rapid checkbox edits ordered even if the popover or tab closes.
+        shortcutWrite = Task {
+            await previous?.value
+            defer {
+                if pendingShortcuts?.id == id {
+                    pendingShortcuts = nil
+                }
+            }
+            do {
+                if let hostID {
+                    guard let connection, let scope, connection.relayClient.workspaceInputState.catalog?.scope == scope else { throw ModelControlError("The Host is disconnected or the workspace changed. Reconnect and try again.") }
+                    let response = try await connection.sendCommand(request, paneId: paneID).get()
+                    guard response.success, let value = response.agentModelShortcutPreferences else {
+                        throw ModelControlError(response.error ?? "The Host did not save the model shortcuts.")
+                    }
+                    coordinator.remoteSessionStore?.acceptAgentModelShortcuts(value, pane: identity, hostID: hostID, scope: scope)
+                } else {
+                    _ = try await coordinator.handleSetAgentModelShortcuts(request, paneID: paneID)
+                }
+            } catch {
+                if pendingShortcuts?.id == id, key == preferenceKey {
+                    shortcutError = error.localizedDescription
+                }
+            }
+        }
     }
 
     private func refresh(force: Bool = false) async {

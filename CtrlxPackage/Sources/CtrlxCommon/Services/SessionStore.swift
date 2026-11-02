@@ -84,6 +84,20 @@ final public class SessionStore {
     /// Host-owned terminal layouts, grouped by source Host and session name.
     public private(set) var sharedTerminalLayoutsByHost: [String: [String: SharedTerminalLayout]] = [:]
 
+    /// A missing Host entry means the peer uses client-local shortcut preferences.
+    public private(set) var agentModelShortcutsByHost: [String: [UUID: AgentModelShortcutPreferences]] = [:]
+
+    public func acceptAgentModelShortcuts(_ value: AgentModelShortcutPreferences, pane: WorkspacePaneIdentity, hostID: String, scope: WorkspaceIdentityScope) {
+        guard
+            let catalog = workspaceCatalogsByHost[hostID], catalog.scope == scope,
+            pane.isSamePane(as: catalog.routes[pane.paneID]?.identity),
+            pane.isSameWindow(as: catalog.routes[pane.paneID]?.identity),
+            let current = agentModelShortcutsByHost[hostID]?[pane.windowID],
+            (value.revision ?? 0) >= (current.revision ?? 0), value != current
+        else { return }
+        agentModelShortcutsByHost[hostID]?[pane.windowID] = value
+    }
+
     /// Distinguishes a new Host publishing an empty layout dictionary from an
     /// older Host whose optional wire field is absent. Never send the new
     /// command to a peer that has not advertised support.
@@ -302,6 +316,7 @@ final public class SessionStore {
             lastWorkspaceScopeByHost[hostId] = scope
         }
         if workspaceChanged {
+            agentModelShortcutsByHost.removeValue(forKey: hostId)
             // Layout revisions and finished-turn summaries belong to a tmux
             // incarnation, not to whichever pane reuses its numeric route.
             sharedTerminalLayoutsByHost.removeValue(forKey: hostId)
@@ -401,6 +416,21 @@ final public class SessionStore {
         }
         hostsWithReceivedState.insert(hostId)
 
+        if let incoming = state.agentModelShortcuts, let catalog {
+            let windows = Set(catalog.routes.values.map { $0.identity.windowID })
+            var accepted = incoming.filter { windows.contains($0.key) }
+            for (id, current) in agentModelShortcutsByHost[hostId] ?? [:] {
+                if let value = accepted[id], (value.revision ?? 0) < (current.revision ?? 0) {
+                    accepted[id] = current
+                }
+            }
+            if agentModelShortcutsByHost[hostId] != accepted {
+                agentModelShortcutsByHost[hostId] = accepted
+            }
+        } else {
+            agentModelShortcutsByHost.removeValue(forKey: hostId)
+        }
+
         // Open response forms ride `AgentSession.state` inside `paneStates`, so a
         // form that opened while we were disconnected is replayed for free as part
         // of the snapshot above — no separate reconcile needed.
@@ -408,6 +438,7 @@ final public class SessionStore {
 
     /// Clear all sessions and panes for a specific host
     public func clearSessions(for hostId: String) {
+        agentModelShortcutsByHost.removeValue(forKey: hostId)
         resourceSessionsByHost.removeValue(forKey: hostId)
         workspaceCatalogsByHost.removeValue(forKey: hostId)
         paneStates = paneStates.filter { $0.key.pairId != hostId }

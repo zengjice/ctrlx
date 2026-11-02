@@ -12,6 +12,91 @@ import Testing
 
 @MainActor
 struct AgentModelPreferencesTests {
+    @Test("Late recovery of creation defaults cannot be undone by an earlier edit acknowledgement")
+    func lateDefaultsAdvanceRevision() throws {
+        let store = AgentModelPreferences()
+        let pane = WorkspacePaneIdentity(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+        let earlier = try store.update(.init(pane: pane, hidden: .init(models: ["edit"])), current: pane)
+        let saved = [pane.windowID: AgentModelPreferences.Snapshot(hidden: .init(models: ["old"]), defaults: .init(efforts: ["low"]))]
+        store.restore(saved, hostID: "local", serverID: pane.serverID, windowIDs: [pane.windowID])
+        let current = try #require(store.shared(identities: [pane])[pane.windowID])
+        #expect(current.hidden == earlier.hidden)
+        #expect(current.defaults == saved[pane.windowID]?.defaults)
+        #expect((current.revision ?? 0) > (earlier.revision ?? 0))
+        store.restore(saved, hostID: "local", serverID: pane.serverID, windowIDs: [pane.windowID])
+        #expect(store.shared(identities: [pane])[pane.windowID] == current)
+    }
+
+    @Test("Explicitly showing all buttons is saved before any delayed recovery")
+    func emptySelectionSurvivesRecovery() throws {
+        let store = AgentModelPreferences()
+        let pane = WorkspacePaneIdentity(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+        let value = try store.update(.init(pane: pane, hidden: .init()), current: pane)
+        store.restore([pane.windowID: .init(hidden: .init(models: ["old"]))], hostID: "local", serverID: pane.serverID, windowIDs: [pane.windowID])
+        #expect(store.shared(identities: [pane])[pane.windowID] == value)
+        #expect(store.capture(hostID: "local", serverID: pane.serverID, windowIDs: [pane.windowID])?[pane.windowID]?.hidden == .init())
+    }
+
+    @Test("Viewer edits become Host preferences and survive restoration with creation defaults")
+    func sharedPreferencesSurviveRestore() throws {
+        let store = AgentModelPreferences()
+        let pane = WorkspacePaneIdentity(serverID: "old", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+        let defaults = AgentModelShortcuts(models: ["default-hidden"])
+        store.initialize(.init(pane: pane, defaults: defaults), hostID: "local")
+        let edit = SetAgentModelShortcuts(pane: pane, hidden: .init(models: ["viewer-hidden"], efforts: ["low"]))
+        let saved = try store.update(edit, current: pane)
+        #expect(saved.defaults == defaults)
+        #expect(store.shared(identities: [pane])[pane.windowID] == saved)
+        #expect(try store.update(edit, current: pane) == saved)
+        let captured = try JSONDecoder().decode([UUID: AgentModelPreferences.Snapshot].self, from: JSONEncoder().encode(
+            #require(store.capture(hostID: "local", serverID: pane.serverID, windowIDs: [pane.windowID]))
+        ))
+        let restored = AgentModelPreferences()
+        var newPane = pane
+        newPane.serverID = "new"
+        restored.restore(captured, hostID: "local", serverID: newPane.serverID, windowIDs: [pane.windowID])
+        #expect(restored.shared(identities: [newPane])[pane.windowID] == saved)
+        let reset = try restored.update(.init(pane: newPane, hidden: defaults), current: newPane)
+        #expect(reset.hidden == defaults && reset.defaults == defaults)
+        #expect(reset.revision == (saved.revision ?? 0) + 1)
+        restored.restore(captured, hostID: "local", serverID: newPane.serverID, windowIDs: [pane.windowID])
+        #expect(restored.shared(identities: [newPane])[pane.windowID] == reset)
+    }
+
+    @Test("Shortcut writes reject replaced targets but allow linked session aliases", arguments: ["server", "window", "pane", "session"])
+    func validatesShortcutTarget(_ changed: String) throws {
+        let store = AgentModelPreferences()
+        let pane = WorkspacePaneIdentity(serverID: "old", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+        var current = pane
+        switch changed {
+        case "server": current.serverID = "new"
+        case "window": current.windowID = UUID()
+        case "pane": current.paneID = UUID()
+        default: current.sessionID = UUID()
+        }
+        let request = SetAgentModelShortcuts(pane: pane, hidden: .init(models: ["hidden"]))
+        if changed == "session" {
+            #expect(try store.update(request, current: current).hidden == request.hidden)
+        } else {
+            #expect(throws: (any Error).self) { try store.update(request, current: current) }
+            #expect(store.tabs.isEmpty)
+        }
+    }
+
+    @Test("Untouched windows advertise all buttons and unchanged writes do not invalidate preferences")
+    func unchangedSharedPreferences() throws {
+        let store = AgentModelPreferences()
+        let pane = WorkspacePaneIdentity(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+        #expect(store.shared(identities: [pane])[pane.windowID]?.hidden == .init())
+        let edit = SetAgentModelShortcuts(pane: pane, hidden: .init(models: ["hidden"]))
+        let saved = try store.update(edit, current: pane)
+        let invalidations = LockIsolated(0)
+        withObservationTracking { _ = store.shared(identities: [pane]) } onChange: { invalidations.withValue { $0 += 1 } }
+        #expect(try store.update(edit, current: pane) == saved)
+        store.prune(hostID: "local", identities: [pane])
+        #expect(invalidations.value == 0)
+    }
+
     @Test("Repeated workspace updates do not republish restored shortcut preferences", arguments: [false, true])
     func restoredPreferencesDoNotPublish(hasDefaults: Bool) {
         let store = AgentModelPreferences(), id = UUID()

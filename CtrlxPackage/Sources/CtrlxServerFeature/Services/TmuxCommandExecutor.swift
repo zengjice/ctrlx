@@ -119,6 +119,7 @@ public actor TmuxCommandExecutor {
                  .prepareSessionWorktree,
                  .trustAgentHooks,
                  .agentModelControls,
+                 .setAgentModelShortcuts,
                  .readDashboard,
                  .checkCtrlXAppUpdate,
                  .installCtrlXAppUpdate,

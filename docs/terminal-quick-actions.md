@@ -128,12 +128,16 @@ change several checkboxes without reopening it. Changes apply immediately; Done,
 Escape or clicking outside closes the popover. It scrolls vertically when needed.
 The current choices are labelled Current and cannot be hidden. Display settings
 remain editable while the Agent is working. These display preferences are
-per-client and per-stable-window, survive split/detach, and expire when the tab
-closes. With workspace recovery enabled, Mac Host and Viewer save the current
-hidden IDs and the tab's creation-time defaults in their own presentation snapshots.
-Recovery maps the persistent window identity to the current tmux server, including
-partial discovery, without overwriting edits to already restored tabs. Offline
-Viewer records remain scoped to their pairing and persistent Host identity.
+shared per persistent window: the Host saves the authoritative configuration and
+pushes edits to connected Mac Viewers through existing session-state updates.
+The last edit accepted by the Host wins; revisions prevent delayed replies from
+rolling back a newer configuration. No extra polling is added.
+With workspace recovery enabled, the Host saves hidden IDs, creation-time defaults
+and revision in its presentation snapshot. Recovery maps persistent window IDs to
+the current tmux server without overwriting edits to already restored tabs.
+On upgrade, the Host's saved configuration is authoritative; existing Viewer-local
+settings are not uploaded automatically. A Viewer connected to an older Host
+continues to save its own configuration locally, scoped to pairing and Host identity.
 Successful refresh prunes closed tabs without publishing an observation
 change when no entries were removed. The current choice always remains visible.
 
@@ -153,9 +157,8 @@ Workspace recovery restores the saved tab settings rather than reading today's
 Provider defaults. Older snapshots without display settings retain the existing
 all-buttons behavior; recovery does not change the Agent's active model or effort.
 The Host applies defaults locally and includes an optional, stable-pane-scoped
-snapshot in the creation response for the creating Mac Viewer. Preferences are
-never polled or broadcast with terminal state; other clients retain their own tab
-preferences. Old Hosts/clients omit or ignore the snapshot and show all buttons.
+snapshot in the creation response for compatibility with older Mac Viewers. New
+Viewers use the shared Host preferences; older clients retain their local behavior.
 Restore Defaults never changes the Agent's model.
 
 The optional `AgentModelProviding` plugin capability owns discovery, native input

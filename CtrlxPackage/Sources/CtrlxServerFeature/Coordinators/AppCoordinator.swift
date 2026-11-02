@@ -3474,6 +3474,13 @@
                         )
                     } catch { return .failure(for: command.id, error: error.localizedDescription) }
                 }
+                if case let .setAgentModelShortcuts(spec) = command.command {
+                    guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
+                    do {
+                        let value = try await self.handleSetAgentModelShortcuts(spec, paneID: command.paneId)
+                        return CommandResponseMessage(commandId: command.id, success: true, agentModelShortcutPreferences: value)
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                }
                 if case let .agentModelControls(spec) = command.command {
                     guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
                     do {
@@ -3632,7 +3639,7 @@
                             worktree: spec.worktree,
                             providerID: spec.providerID
                         )
-                        return await Self.handleCreateSession(
+                        let response = await Self.handleCreateSession(
                             command: command,
                             spec: spec,
                             preparation: preparation,
@@ -3642,6 +3649,10 @@
                             hostID: self?.workspaceRecovery?.hostID,
                             tmuxService: tmux
                         )
+                        if response.success {
+                            await self?.connectedViewerManager?.pushSessionStateToAll()
+                        }
+                        return response
                     } catch {
                         return .failure(for: command.id, error: error.localizedDescription)
                     }
@@ -4002,6 +4013,7 @@
                     supportsSimulatorClosing: await self?.agentSimulator.supportsSimulatorViewing,
                     supportsAgentHookTrust: true,
                     supportsAgentModelControls: true,
+                    agentModelShortcuts: workspaceIdentity == nil ? nil : await self?.agentModelPreferences.shared(identities: paneStates.values.compactMap(\.workspaceIdentity)),
                     supportsDashboard: true,
                     agentWorkflowVersion: workflowVersion,
                     workflowAgentPluginIDs: workflowVersion == nil ? nil : await self?.workflowAgentPluginIDs(),
@@ -4439,8 +4451,6 @@
                         try? await Task.sleep(for: PaneSurfaceRetry.delay)
                     }
                 }
-                await connectionManager?.pushSessionStateToAll()
-
                 var initialization: AgentModelShortcutInitialization?
                 if let modelShortcutDefaults, let captured = try? await tmuxService.captureWorkspacePane(target: paneId) {
                     initialization = .init(pane: captured.identity, defaults: modelShortcutDefaults)
@@ -4448,6 +4458,7 @@
                 if let initialization {
                     modelPreferences?.initialize(initialization, hostID: "local")
                 }
+                await connectionManager?.pushSessionStateToAll()
                 return CommandResponseMessage(commandId: command.id, success: true, paneId: paneId, agentModelShortcuts: initialization)
             } catch {
                 return .failure(for: command.id, error: error.localizedDescription)
