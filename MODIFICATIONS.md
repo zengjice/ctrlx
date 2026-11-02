@@ -7,6 +7,33 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.133 — Developer ID signing and notarized Mac releases
+
+- Add a formal Mac release path with Developer ID signatures, secure timestamps
+  and Hardened Runtime checks for every embedded native component. Sign CEF
+  libraries, helpers, the automation engine and the enclosing App in order;
+  grant JIT only to Renderer/GPU helpers and preserve the customized CEF SDK.
+- Require separate accepted notarizations, stapled tickets and Gatekeeper
+  acceptance for the App and DMG before local package replacement or public
+  installer promotion. Retain failed inputs, logs and submission IDs; resume
+  notarization waits without submitting the same input again.
+- Reuse Mac compilation caches for formal archives and keep signing credentials
+  in Keychain. Continue to support explicit local development packages.
+- Retain the original upstream engine hash for development builds. Formally
+  signed engines must carry the fixed upstream hash in their signing identifier
+  and pass strict Developer ID validation against the running CLI's team.
+- Make the isolated browser fixture use its own explicit API socket and wait
+  for the restored page's presentation before testing restart persistence.
+- Validation: 95 repository script tests, 43 CLI tests and 118 private publisher/COS/installer
+  tests passed. A Developer ID-signed isolated App with the updated CLI passed native page actions,
+  multi-session routing, ownership checks, graceful restart, profile persistence
+  and stale-grant rejection without new crash reports. Both browser engines
+  passed the complete managed-engine acceptance; separate native signature
+  probes accepted the pinned build and rejected tampering, unrelated identifiers
+  and forged ad-hoc attestations. Full Swift and iOS
+  regression were not rerun. Formal notarization
+  and final package checks are enforced by the release workflow.
+
 ## 3.0.132 — Workflow input checks during terminal redraw
 
 - Avoid pausing workflows when switching tabs briefly moves Codex's cursor
