@@ -154,7 +154,7 @@ extension AppCoordinator {
             live.readiness = .draft
         } else {
             live.readiness = try AgentWorkflowComposerInspection.readiness(
-                await tmuxService.captureWorkflowTerminal(instance), composer: provider.workflowComposer
+                await tmuxService.captureWorkflowTerminal(instance, composer: provider.workflowComposer), composer: provider.workflowComposer
             )
         }
         return live
