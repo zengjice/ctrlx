@@ -56,7 +56,7 @@ extension AgentWorkflowObservation {
 }
 
 struct AgentWorkflowArchive: Codable, Equatable, Sendable {
-    var schemaVersion = 1
+    var schemaVersion = 4
     let hostID: UUID
     var definitions: [AgentWorkflowDefinition] = []
     var instances: [AgentWorkflowInstance] = []
@@ -278,7 +278,7 @@ actor AgentWorkflowStore {
         }
         var loaded = try JSONDecoder().decode(AgentWorkflowArchive.self, from: Data(contentsOf: fileURL))
         guard
-            [1, 2, 3].contains(loaded.schemaVersion), loaded.hostID == hostID,
+            [1, 2, 3, 4].contains(loaded.schemaVersion), loaded.hostID == hostID,
             Set(loaded.definitions.map(\.id)).count == loaded.definitions.count,
             Set(loaded.runs.map(\.id)).count == loaded.runs.count,
             Set(loaded.instances.map(\.id)).count == loaded.instances.count else {
@@ -299,22 +299,30 @@ actor AgentWorkflowStore {
         }
         for index in loaded.runs.indices {
             guard loaded.runs[index].definition.hostID == hostID else { throw AgentWorkflowError("A saved run belongs to another Host.") }
+            if loaded.schemaVersion < 4 {
+                // Agent output sharing was removed. Discard its old references,
+                // preserving input images, content outputs and native turn evidence.
+                for invocationIndex in loaded.runs[index].invocations.indices {
+                    let invocation = loaded.runs[index].invocations[invocationIndex]
+                    guard
+                        loaded.runs[index].definition.nodes.first(where: { $0.id == invocation.nodeID })?.kind == .agent,
+                        let result = invocation.result, !result.attachmentIDs.isEmpty else { continue }
+                    loaded.runs[index].invocations[invocationIndex].result = .init(
+                        id: result.id, invocationID: result.invocationID, nativeTurnID: result.nativeTurnID,
+                        text: result.text, completedAt: result.completedAt
+                    )
+                }
+            }
             loaded.runs[index] = try AgentWorkflowExecution(restoring: loaded.runs[index]).run
         }
+        loaded.schemaVersion = 4
         try commit(loaded)
         return loaded
     }
 
     func commit(_ updated: AgentWorkflowArchive) throws {
         var updated = updated
-        if (updated.definitions + updated.runs.map(\.definition)).contains(where: \.usesSteps) {
-            updated.schemaVersion = 3
-        } else if
-            updated.schemaVersion < 2,
-            updated.definitions.contains(where: { $0.nodes.contains { $0.kind == .content } })
-            || updated.runs.contains(where: { $0.definition.nodes.contains { $0.kind == .content } }) {
-            updated.schemaVersion = 2
-        }
+        updated.schemaVersion = 4
         guard updated != archive else { return }
         let data = try JSONEncoder().encode(updated)
         try FileManager.default.createDirectory(

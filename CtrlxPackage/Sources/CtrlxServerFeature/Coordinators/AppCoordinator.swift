@@ -157,6 +157,8 @@
 
         var agentWorkflowService: AgentWorkflowService?
 
+        var agentWorkflowStartupError: String?
+
         @ObservationIgnored var agentWorkflowAgentService: AgentWorkflowAgentService?
 
         @ObservationIgnored var agentWorkflowRunner: AgentWorkflowRunner?
@@ -3455,11 +3457,9 @@
                     } catch { return .failure(for: command.id, error: error.localizedDescription) }
                 }
                 if case let .manageAgentWorkflows(spec) = command.command {
-                    guard let service = self?.agentWorkflowService else {
-                        return .failure(for: command.id, error: "Workflows are unavailable on this Host.")
-                    }
+                    guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
                     do {
-                        return try await CommandResponseMessage(commandId: command.id, success: true, agentWorkflow: service.handle(spec))
+                        return try await CommandResponseMessage(commandId: command.id, success: true, agentWorkflow: handleAgentWorkflowRequest(spec))
                     } catch { return .failure(for: command.id, error: error.localizedDescription) }
                 }
                 if case let .trustAgentHooks(spec) = command.command {
@@ -3967,7 +3967,6 @@
                 let usageOverview = await self?.currentUsageOverview()
                 let sharedTerminalLayouts = await windowManager.sharedTerminalLayouts
                 let recoveryHostID = await self?.workspaceRecovery?.hostID
-                let workflowVersion: Int? = await self?.agentWorkflowService == nil ? nil : AgentWorkflowWire.version
                 let workspaceIdentity = HostSessionStateSnapshot.workspaceIdentity(hostID: recoveryHostID, panes: paneStates)
 
                 // Open response forms ride `AgentSession.state` in `paneStates`, so a
@@ -4015,8 +4014,8 @@
                     supportsAgentModelControls: true,
                     agentModelShortcuts: workspaceIdentity == nil ? nil : await self?.agentModelPreferences.shared(identities: paneStates.values.compactMap(\.workspaceIdentity)),
                     supportsDashboard: true,
-                    agentWorkflowVersion: workflowVersion,
-                    workflowAgentPluginIDs: workflowVersion == nil ? nil : await self?.workflowAgentPluginIDs(),
+                    agentWorkflowVersion: AgentWorkflowWire.version,
+                    workflowAgentPluginIDs: await self?.workflowAgentPluginIDs(),
                     simulatorTabs: await self?.agentSimulator.sharedSimulatorTabs.filter { $0.resourceSessionID == nil },
                     supportsPaneFiles: true, fileTabs: await self?.hostFileTabs.tabs.filter { $0.resourceSessionID == nil },
                     workspaceIdentity: workspaceIdentity,
