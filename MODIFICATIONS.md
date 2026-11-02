@@ -7,6 +7,23 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.132 — Workflow input checks during terminal redraw
+
+- Avoid pausing workflows when switching tabs briefly moves Codex's cursor
+  during a terminal redraw. Recheck unrecognized input at 100 ms intervals,
+  at most four times, before inspection or submission. Drafts, questions,
+  copy mode, identity changes and cancellation still block sending.
+- Identify the affected Agent and the specific reason when input is blocked:
+  busy, unsent draft, awaiting a response or unverifiable terminal input.
+- Bump the bundled Claude Code plugin to 1.3.17 and Codex plugin to 1.1.16 so
+  installed older plugin caches can be recognized as needing an update.
+- Release validation: focused workflow regressions passed, including bounded
+  redraw retries, recognized input states, cancellation, identity failures and
+  per-Agent pause reasons. All 117 publisher/COS/installer tests, six Swift
+  format checks and both boundary checks passed. Full Swift regression, opt-in
+  native Agent/clipboard probes and live tab-switch acceptance were not rerun;
+  this release builds macOS only.
+
 ## 3.0.131 — Workflow history recovery and deletion
 
 - Restore older workflow ledgers that still reference removed Agent output
