@@ -31,6 +31,120 @@ struct WorkspaceAgentRecoveryTests {
         #expect(failure.reason.contains("Last capture:"))
     }
 
+    @Test("A separately saved identity offers durable manual Resume, including linked windows")
+    func savedIdentityRecovery() async throws {
+        let fixture = Fixture()
+        let saved = try fixture.loseDescriptor()
+        var linked = fixture.snapshot.sessions[0]
+        linked.id = UUID()
+        linked.runtimeID = "$2"
+        linked.name = "linked"
+        linked.windows[0].index = 7
+        fixture.snapshot.sessions.append(linked)
+        fixture.recoverySource = { sessions, window, pane in
+            #expect(sessions == Set(fixture.snapshot.sessions.map(\.id)))
+            #expect(window == linked.windows[0].id && pane == saved.workspaceIdentity?.paneID)
+            return saved
+        }
+        let failure = try #require(try await fixture.run(.automatic).first)
+        #expect(failure.canResume && failure.canUseShell && failure.blocksInput)
+        #expect(failure.reason.contains("startup options and Provider selection were not saved"))
+        #expect(fixture.launches.isEmpty)
+        #expect(fixture.pane.agent?.sessionID == saved.sessionID)
+        #expect(fixture.pane.agent?.executable == nil && fixture.pane.agent?.arguments == [])
+        try fixture.snapshot.validate()
+        // Reload the persisted descriptor and prove it never gains automatic permission.
+        fixture.snapshot = try JSONDecoder().decode(WorkspaceRecoverySnapshot.self, from: JSONEncoder().encode(fixture.durable))
+        fixture.recoverySource = { _, _, _ in
+            Issue.record("A recovered descriptor must not rediscover a different history root")
+            return nil
+        }
+        for intent in [WorkspaceAgentRecoveryIntent.automatic, .reconcile] {
+            #expect(try await fixture.run(intent).first?.reason == failure.reason)
+            #expect(fixture.launches.isEmpty)
+        }
+        _ = try await fixture.run(.resume(fixture.pane.id))
+        #expect(fixture.launches.count == 1)
+        #expect(fixture.commands.first??.command.args == ["resume", saved.sessionID])
+        try fixture.identify()
+        #expect(try await fixture.run(.reconcile).isEmpty)
+    }
+
+    @Test("Missing native history remains retryable and periodic reconciliation does not rescan it")
+    func missingSavedHistory() async throws {
+        let fixture = Fixture()
+        let saved = try fixture.loseDescriptor()
+        var lookups = 0
+        fixture.recoverySource = { _, _, _ in lookups += 1
+            return saved
+        }
+        await fixture.core.setHistoryAvailable(false)
+        let recovery = fixture.recovery
+        let (updated, failures) = try await recovery.recover(fixture.snapshot, result: fixture.result, intent: .automatic, save: { $0 })
+        let failure = try #require(failures.first)
+        #expect(!failure.canResume && failure.canUseShell && failure.canRetry)
+        #expect(failure.reason == "History unavailable")
+        #expect(updated.sessions[0].windows[0].panes[0].agent == nil && fixture.launches.isEmpty)
+        let (_, reconciled) = try await recovery.recover(updated, result: fixture.result, intent: .reconcile, save: { $0 })
+        #expect(reconciled.first?.reason == failure.reason)
+        #expect(lookups == 1)
+        await fixture.core.setHistoryAvailable(true)
+        let (_, retried) = try await recovery.recover(updated, result: fixture.result, intent: .automatic, save: { $0 })
+        #expect(retried.first?.canResume == true)
+        #expect(lookups == 2 && fixture.launches.isEmpty)
+    }
+
+    @Test("Failed persistence never exposes or launches a reconstructed descriptor")
+    func savedIdentityWriteFailure() async throws {
+        let fixture = Fixture()
+        let saved = try fixture.loseDescriptor()
+        fixture.recoverySource = { _, _, _ in saved }
+        fixture.failSave = true
+        let failure = try #require(try await fixture.run(.resume(fixture.pane.id)).first)
+        #expect(failure.reason == "Disk full" && !failure.canResume)
+        #expect(fixture.pane.agent == nil && fixture.durable.sessions[0].windows[0].panes[0].agent == nil)
+        #expect(fixture.launches.isEmpty)
+    }
+
+    @Test("Live panes, plain shells and explicit Use Shell never resurrect a saved identity", arguments: ["live", "shell", "use-shell", "existing-descriptor"])
+    func skipSavedIdentity(scenario: String) async throws {
+        let fixture = Fixture()
+        if scenario != "existing-descriptor" {
+            _ = try fixture.loseDescriptor()
+        }
+        if scenario == "live" {
+            fixture.state.isDead = false
+        }
+        if scenario == "shell" {
+            fixture.snapshot.sessions[0].windows[0].panes[0].unavailableAgentReason = nil
+        }
+        fixture.recoverySource = { _, _, _ in
+            Issue.record("This pane must not consult saved identities")
+            return nil
+        }
+        _ = try await fixture.run(scenario == "use-shell" ? .useShell(fixture.pane.id) : .automatic)
+        if scenario == "live" {
+            #expect(fixture.launches.isEmpty)
+        }
+        if scenario == "shell" || scenario == "use-shell" {
+            #expect(fixture.commands.count == 1 && fixture.commands[0] == nil)
+        }
+    }
+
+    @Test("A terminal started during history lookup is kept without recording or launching stale recovery")
+    func changedDuringHistoryLookup() async throws {
+        let fixture = Fixture()
+        let saved = try fixture.loseDescriptor()
+        fixture.recoverySource = { _, _, _ in
+            fixture.state.isDead = false
+            return saved
+        }
+        let failure = try #require(try await fixture.run(.automatic).first)
+        #expect(!failure.canResume && !failure.blocksInput)
+        #expect(failure.reason.contains("terminal changed"))
+        #expect(fixture.pane.agent == nil && fixture.launches.isEmpty)
+    }
+
     @Test("Automatic recovery reevaluates old warnings against the selected launch executable")
     func rechecksCurrentExecutable() async throws {
         let fixture = Fixture(verified: false)
@@ -129,6 +243,11 @@ struct WorkspaceAgentRecoveryTests {
 
     private actor Core: AgentSessionResuming {
         var currentVersionPolicy = false
+        var historyAvailable = true
+        func setHistoryAvailable(_ available: Bool) {
+            historyAvailable = available
+        }
+
         func useCurrentVersionPolicy() {
             currentVersionPolicy = true
         }
@@ -144,7 +263,9 @@ struct WorkspaceAgentRecoveryTests {
         }
 
         func recoveryDescriptor(sessionID: String, projectPath: String, invocation: AgentResumeInvocation?) throws -> AgentResumeDescriptor {
-            throw WorkspaceRecoveryError("Not used")
+            #expect(invocation == nil)
+            guard historyAvailable else { throw WorkspaceRecoveryError("History unavailable") }
+            return AgentResumeDescriptor(pluginID: "codex", sessionID: sessionID, projectPath: projectPath, configurationRoot: "/fixture/config", usesDefaultConfiguration: false)
         }
 
         func commandForResume(_ descriptor: AgentResumeDescriptor) -> AgentForkLaunch {
@@ -192,6 +313,7 @@ struct WorkspaceAgentRecoveryTests {
         var state: WorkspaceRecoveryAgentPane
         var durable: WorkspaceRecoverySnapshot
         let core = Core()
+        var recoverySource: (Set<UUID>, UUID, UUID) async throws -> AgentForkSource? = { _, _, _ in nil }
 
         init(verified: Bool = true) {
             let paneID = snapshot.sessions[0].windows[0].panes[0].id
@@ -214,7 +336,7 @@ struct WorkspaceAgentRecoveryTests {
         }
 
         var recovery: WorkspaceAgentRecovery {
-            WorkspaceAgentRecovery(core: { _ in self.enabled ? self.core : nil }, mode: { self.mode }, refresh: { }, version: { _ in self.version }, directoryExists: { _ in self.directoryAvailable }, inspect: { _ in self.state }, launch: { runtime, pane, record, command in
+            WorkspaceAgentRecovery(core: { _ in self.enabled ? self.core : nil }, mode: { self.mode }, refresh: { }, version: { _ in self.version }, directoryExists: { _ in self.directoryAvailable }, inspect: { _ in self.state }, recoverySource: recoverySource, launch: { runtime, pane, record, command in
                 #expect(self.durable.recovery?.agentLaunches[pane.id] == record, "A launch must already be durable")
                 #expect(record.runtimePaneID == runtime)
                 self.launches.append(record)
@@ -242,6 +364,18 @@ struct WorkspaceAgentRecoveryTests {
         func identify() throws {
             let agent = try #require(pane.agent)
             state.source = try #require(AgentForkSource(pane: PaneState(paneId: pane.runtimeID, sessionName: "project", tmuxWindowId: "@1", currentPath: agent.projectPath, agentSession: .init(paneId: pane.runtimeID, pluginID: agent.pluginID), claudeSessionID: agent.sessionID)))
+        }
+
+        func loseDescriptor() throws -> AgentForkSource {
+            let session = snapshot.sessions[0]
+            let window = session.windows[0]
+            var state = PaneState(paneId: "%old", sessionName: "old-name", tmuxWindowId: "@old", currentPath: pane.directory, agentSession: .init(paneId: "%old", pluginID: "codex"), claudeSessionID: pane.agent?.sessionID)
+            state.workspaceIdentity = .init(serverID: "old-server", sessionID: session.id, windowID: window.id, paneID: pane.id)
+            let saved = try #require(AgentForkSource(pane: state))
+            snapshot.sessions[0].windows[0].panes[0].agent = nil
+            snapshot.sessions[0].windows[0].panes[0].unavailableAgentReason = "The old CLI was removed."
+            durable = snapshot
+            return saved
         }
     }
 

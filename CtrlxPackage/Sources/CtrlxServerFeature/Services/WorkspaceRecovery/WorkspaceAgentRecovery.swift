@@ -31,13 +31,16 @@ final class WorkspaceAgentRecovery {
     let version: (String) async -> String?
     let directoryExists: (String) -> Bool
     let inspect: (String) async throws -> WorkspaceRecoveryAgentPane
+    let recoverySource: (Set<UUID>, UUID, UUID) async throws -> AgentForkSource?
     let launch: (String, WorkspaceRecoveryPane, WorkspaceRecoveryAgentLaunch, AgentForkLaunch?) async throws -> Void
+    private var savedIdentityErrors: [UUID: String] = [:]
 
     init(
         core: @escaping (String) -> (any AgentSessionResuming)?, mode: @escaping () -> WorkspaceRecoveryMode,
         refresh: @escaping () async -> Void, version: @escaping (String) async -> String?,
         directoryExists: @escaping (String) -> Bool,
         inspect: @escaping (String) async throws -> WorkspaceRecoveryAgentPane,
+        recoverySource: @escaping (Set<UUID>, UUID, UUID) async throws -> AgentForkSource? = { _, _, _ in nil },
         launch: @escaping (String, WorkspaceRecoveryPane, WorkspaceRecoveryAgentLaunch, AgentForkLaunch?) async throws -> Void
     ) {
         self.core = core
@@ -46,6 +49,7 @@ final class WorkspaceAgentRecovery {
         self.version = version
         self.directoryExists = directoryExists
         self.inspect = inspect
+        self.recoverySource = recoverySource
         self.launch = launch
     }
 
@@ -68,6 +72,7 @@ final class WorkspaceAgentRecovery {
             var keepCurrentTerminal = false
             var blocksInput = false
             var canRetry = false
+            var checkingSavedIdentity = false
             let isShell = pane.agent == nil && pane.unavailableAgentReason == nil
             do {
                 let state = try await inspect(live.runtimeID)
@@ -131,11 +136,52 @@ final class WorkspaceAgentRecovery {
                 if isShell {
                     throw WorkspaceRecoveryError("The original terminal is saved. Choose Retry to reopen it.")
                 }
-                guard let descriptor = pane.agent else {
+                var descriptor = pane.agent
+                if descriptor == nil, pane.savedAgentIdentityInvalidated == true {
+                    throw WorkspaceRecoveryError("The previous Agent conversation is no longer associated with this terminal. Use Shell, then select the intended conversation from the Agent's history.")
+                }
+                canRetry = descriptor == nil
+                // Only startup/retry checks native history. The two-second
+                // reconciliation must not repeatedly scan missing histories.
+                if descriptor == nil, intent == .automatic || intent == .resume(pane.id) {
+                    checkingSavedIdentity = true
+                    savedIdentityErrors[pane.id] = nil
+                    let sessionIDs = Set(source.sessions.filter { $0.windows.contains { $0.id == window.id } }.map(\.id))
+                    if let saved = try await recoverySource(sessionIDs, window.id, pane.id) {
+                        guard let agent = core(saved.pluginID) else { throw WorkspaceRecoveryError("The Agent plugin is disabled or unavailable. Enable it before resuming.") }
+                        let recovered = try await agent.recoveryDescriptor(sessionID: saved.sessionID, projectPath: pane.directory, invocation: nil)
+                        try Task.checkCancellation()
+                        let latest = try await inspect(live.runtimeID)
+                        guard latest.identity == pane.id, latest.isDead, latest.isPlaceholder else {
+                            blocksInput = false
+                            throw WorkspaceRecoveryError("The recovery terminal changed while checking Agent history. Retry to inspect its current state.")
+                        }
+                        var proposed = snapshot
+                        for sessionIndex in proposed.sessions.indices {
+                            for windowIndex in proposed.sessions[sessionIndex].windows.indices {
+                                for paneIndex in proposed.sessions[sessionIndex].windows[windowIndex].panes.indices where proposed.sessions[sessionIndex].windows[windowIndex].panes[paneIndex].id == pane.id {
+                                    proposed.sessions[sessionIndex].windows[windowIndex].panes[paneIndex].agent = recovered
+                                }
+                            }
+                        }
+                        snapshot = try await save(proposed)
+                        descriptor = recovered
+                        canResume = true
+                        canRetry = false
+                    }
+                    checkingSavedIdentity = false
+                }
+                guard let descriptor else {
+                    if let reason = savedIdentityErrors[pane.id] {
+                        throw WorkspaceRecoveryError(reason)
+                    }
                     throw WorkspaceRecoveryError("No verified conversation was saved before this terminal stopped. Use Shell, then select the original conversation from the Agent's history.\n\nLast capture: \(pane.unavailableAgentReason ?? "The conversation could not be identified.")")
                 }
                 guard let agent = core(descriptor.pluginID) else { throw WorkspaceRecoveryError("The Agent plugin is disabled or unavailable. Enable it before resuming.") }
                 let manual = intent == .resume(pane.id)
+                if !manual, descriptor.executable == nil {
+                    throw WorkspaceRecoveryError("The original conversation was found in Agent history. Its startup options and Provider selection were not saved. Choose Resume to reopen it using the current CLI defaults for that history configuration.")
+                }
                 guard manual || (intent == .automatic && mode() == .layoutAndAgents) else {
                     throw WorkspaceRecoveryError("Conversation is saved. Choose Resume to reopen it.")
                 }
@@ -160,6 +206,9 @@ final class WorkspaceAgentRecovery {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
+                if checkingSavedIdentity {
+                    savedIdentityErrors[pane.id] = error.localizedDescription
+                }
                 failures.append(.init(id: pane.id, name: name, reason: error.localizedDescription, canResume: canResume, canUseShell: canUseShell, keepCurrentTerminal: keepCurrentTerminal, blocksInput: blocksInput, canRetry: canRetry))
             }
         }
@@ -207,6 +256,7 @@ final class WorkspaceAgentRecovery {
                 for pane in snapshot.sessions[session].windows[window].panes.indices where snapshot.sessions[session].windows[window].panes[pane].id == id {
                     snapshot.sessions[session].windows[window].panes[pane].agent = nil
                     snapshot.sessions[session].windows[window].panes[pane].agentIdentity = nil
+                    snapshot.sessions[session].windows[window].panes[pane].savedAgentIdentityInvalidated = true
                     snapshot.sessions[session].windows[window].panes[pane].unavailableAgentReason = nil
                 }
             }

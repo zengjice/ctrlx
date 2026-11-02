@@ -9,6 +9,7 @@ extension AppCoordinator {
         @Dependency(WorkspaceRecoveryStore.self) var store
         @Dependency(WorkspaceRecoverySystem.self) var system
         @Dependency(HostIdentityClient.self) var identity
+        @Dependency(AgentSessionIdentityClient.self) var agentIdentities
         let agents = WorkspaceAgentRecovery(
             core: { [weak self] in self?.pluginRegistry?.core($0) as? any AgentSessionResuming },
             mode: { [settings] in settings.workspaceRecoveryMode },
@@ -24,6 +25,7 @@ extension AppCoordinator {
                 state.source = windowManager.paneStates[runtime].flatMap(AgentForkSource.init(pane:))
                 return state
             },
+            recoverySource: agentIdentities.recoverySource,
             launch: { [tmuxService] runtime, pane, record, command in
                 try await tmuxService.launchWorkspaceAgent(runtimeID: runtime, pane: pane, record: record, command: command)
             }
@@ -141,6 +143,7 @@ extension AppCoordinator {
                                 proof.matches(pane: state, detected: detected, runtimeID: identities.runtimeID(proof.processID)) else {
                                 throw WorkspaceRecoveryError("The Agent process ownership could not be verified at the last capture.")
                             }
+                            WorkspaceAgentCapture.recordIdentity(proof, in: &pane)
                             if let cached = recoveryAgentDescriptors[pane.id], cached.source == identity, cached.runtimeID == proof.runtimeID {
                                 WorkspaceAgentCapture.record(cached.descriptor, identity: proof, in: &pane)
                             } else {

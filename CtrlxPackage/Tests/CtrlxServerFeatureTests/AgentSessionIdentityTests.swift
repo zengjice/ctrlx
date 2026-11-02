@@ -52,7 +52,7 @@ struct AgentSessionIdentityTests {
         let probes = LockIsolated(0)
         let writes = LockIsolated(0)
         let id = UUID().uuidString
-        let client = AgentSessionIdentityClient(load: { _ in stored.value }, save: {
+        let client = AgentSessionIdentityClient(load: { _ in stored.value }, recoverySource: { _, _, _ in nil }, save: {
             stored.setValue($0)
             writes.withValue { $0 += 1 }
             return true
@@ -86,7 +86,7 @@ struct AgentSessionIdentityTests {
         let rows = LockIsolated("100 1 zsh\n101 100 \(command)\n" + (scenario == "multiple" ? "102 100 codex\n" : ""))
         let probes = LockIsolated(0)
         let writes = LockIsolated(0)
-        let client = AgentSessionIdentityClient(load: { _ in nil }, save: { _ in
+        let client = AgentSessionIdentityClient(load: { _ in nil }, recoverySource: { _, _, _ in nil }, save: { _ in
             writes.withValue { $0 += 1 }
             return true
         }, runtimeID: { scenario == "missing-runtime" ? nil : "\($0):start-1" }, codexSessionID: { _, _ in
@@ -117,7 +117,7 @@ struct AgentSessionIdentityTests {
         defer { start.finish()
             resume.finish()
         }
-        let client = AgentSessionIdentityClient(load: { _ in nil }, save: { _ in
+        let client = AgentSessionIdentityClient(load: { _ in nil }, recoverySource: { _, _, _ in nil }, save: { _ in
             writes.withValue { $0 += 1 }
             return true
         }, runtimeID: { _ in runtime.value }, codexSessionID: { _, _ in
@@ -158,7 +158,7 @@ struct AgentSessionIdentityTests {
         defer { start.finish()
             resume.finish()
         }
-        let client = AgentSessionIdentityClient(load: { _ in stored.value }, save: { identity in
+        let client = AgentSessionIdentityClient(load: { _ in stored.value }, recoverySource: { _, _, _ in nil }, save: { identity in
             if identity.source.sessionID == oldID {
                 start.yield(())
                 var iterator = release.makeAsyncIterator()
@@ -259,7 +259,7 @@ struct AgentSessionIdentityTests {
         let data = try String(decoding: JSONEncoder().encode(valid), as: UTF8.self)
         let identity = try JSONDecoder().decode(AgentSessionIdentity.self, from: Data((scenario == "invalid-id"
                 ? data.replacingOccurrences(of: valid.source.sessionID, with: "--last") : data).utf8))
-        let client = AgentSessionIdentityClient(load: { _ in identity }, save: { _ in false }, runtimeID: {
+        let client = AgentSessionIdentityClient(load: { _ in identity }, recoverySource: { _, _, _ in nil }, save: { _ in false }, runtimeID: {
             if scenario == "missing-process" {
                 return nil
             }
@@ -292,7 +292,7 @@ struct AgentSessionIdentityTests {
         let command = pluginID == "codex" ? "codex" : "claude"
         let rows = LockIsolated("100 1 zsh\n101 100 \(command)\n202 100 \(command)\n")
         let writes = LockIsolated(0)
-        let client = AgentSessionIdentityClient(load: { _ in nil }, save: { _ in
+        let client = AgentSessionIdentityClient(load: { _ in nil }, recoverySource: { _, _, _ in nil }, save: { _ in
             writes.withValue { $0 += 1 }
             return true
         }, runtimeID: { "\($0):start-1" }, codexSessionID: { _, _ in nil })
@@ -349,7 +349,7 @@ struct AgentSessionIdentityTests {
             var iterator = release.makeAsyncIterator()
             _ = await iterator.next()
             return identity
-        }, save: { _ in false }, runtimeID: { _ in "101:start-1" }, codexSessionID: { _, _ in nil })
+        }, recoverySource: { _, _, _ in nil }, save: { _ in false }, runtimeID: { _ in "101:start-1" }, codexSessionID: { _, _ in nil })
         await withDependencies {
             defaults(&$0, rows: rows, client: client)
         } operation: {
@@ -372,7 +372,7 @@ struct AgentSessionIdentityTests {
     func writeRetry() async {
         let rows = LockIsolated("100 1 zsh\n101 100 codex\n")
         let writes = LockIsolated(0)
-        let client = AgentSessionIdentityClient(load: { _ in nil }, save: { _ in
+        let client = AgentSessionIdentityClient(load: { _ in nil }, recoverySource: { _, _, _ in nil }, save: { _ in
             writes.withValue { $0 += 1 }
             return writes.value > 1
         }, runtimeID: { _ in "101:start-1" }, codexSessionID: { _, _ in nil })
@@ -396,7 +396,7 @@ struct AgentSessionIdentityTests {
         let rows = LockIsolated("100 1 zsh\n101 100 claude\n")
         let stored = LockIsolated<AgentSessionIdentity?>(nil)
         let runtimes = LockIsolated(["101": "101:start-1"])
-        let client = AgentSessionIdentityClient(load: { _ in stored.value }, save: {
+        let client = AgentSessionIdentityClient(load: { _ in stored.value }, recoverySource: { _, _, _ in nil }, save: {
             stored.setValue($0)
             return true
         }, runtimeID: { runtimes.value[$0] }, codexSessionID: { _, _ in nil })
@@ -449,7 +449,7 @@ struct AgentSessionIdentityTests {
             defer { start.finish()
                 resume.finish()
             }
-            let client = AgentSessionIdentityClient(load: { _ in stored.value }, save: { identity in
+            let client = AgentSessionIdentityClient(load: { _ in stored.value }, recoverySource: { _, _, _ in nil }, save: { identity in
                 if
                     writes.withValue({ $0 += 1
                         return $0 }) == 1 {
@@ -498,7 +498,7 @@ struct AgentSessionIdentityTests {
         let (release, resume) = AsyncStream<Void>.makeStream()
         let oldID = UUID().uuidString
         let newID = UUID().uuidString
-        let client = AgentSessionIdentityClient(load: { _ in nil }, save: { identity in
+        let client = AgentSessionIdentityClient(load: { _ in nil }, recoverySource: { _, _, _ in nil }, save: { identity in
             if identity.source.sessionID == oldID {
                 start.yield(oldID)
                 var iterator = release.makeAsyncIterator()
