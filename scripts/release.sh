@@ -114,6 +114,7 @@ xcodebuild archive \
     -workspace "$WORKSPACE" \
     -scheme "$SCHEME" \
     -configuration Release \
+    -destination 'generic/platform=macOS' \
     -archivePath "$ARCHIVE_PATH" \
     -derivedDataPath "$DERIVED_DATA" \
     -clonedSourcePackagesDirPath "$SOURCE_PACKAGES" \
@@ -124,6 +125,7 @@ xcodebuild archive \
     INDEX_ENABLE_DATA_STORE=NO \
     CTRLX_BUILD_STAMP="$BUILD_STAMP" \
     CTRLX_SOURCE_REVISION="$SOURCE_REVISION" \
+    ARCHS=arm64 \
     DEVELOPMENT_TEAM="$CTRLX_MAC_DEVELOPMENT_TEAM" \
     CODE_SIGN_STYLE=Manual \
     CODE_SIGN_IDENTITY="$CTRLX_MAC_SIGNING_IDENTITY" \

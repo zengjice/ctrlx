@@ -7,7 +7,9 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
-## 3.0.133 — Developer ID signing and notarized Mac releases
+## 3.0.134 — Developer ID signing and notarized Mac releases
+
+3.0.133 remained an internal candidate and was not distributed.
 
 - Restore model/effort shortcuts on tmux 3.6a using a guarded single-line native
   paste when the paste-mode field is unavailable. Preserve foreground process,
@@ -22,7 +24,8 @@
   acceptance for the App and DMG before local package replacement or public
   installer promotion. Retain failed inputs, logs and submission IDs; resume
   notarization waits without submitting the same input again.
-- Reuse Mac compilation caches for formal archives and keep signing credentials
+- Build formal archives for Apple Silicon, matching the bundled CEF SDK.
+  Reuse Mac compilation caches for formal archives and keep signing credentials
   in Keychain. Continue to support explicit local development packages.
 - Retain the original upstream engine hash for development builds. Formally
   signed engines must carry the fixed upstream hash in their signing identifier

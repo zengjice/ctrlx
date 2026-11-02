@@ -66,6 +66,7 @@ not check the installer merely because Settings → General opened; startup, the
 daily maintenance loop and the explicit **Check Again** action trigger a check.
 
 Formal archives reuse this worktree's Mac DerivedData and package downloads.
+They target arm64, matching the Apple Silicon-only CEF distribution.
 They keep compilation caches. Failed releases retain their staging directory and
 notarization reports under `dist/qcloud-release/<version>/`; do not rebuild just
 because a notarization wait timed out. Resume the whole workflow using the exact
