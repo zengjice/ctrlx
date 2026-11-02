@@ -34,7 +34,7 @@ struct AgentWorkflowRunView: View {
                         Text("Host offline · showing the last received state").foregroundStyle(.secondary)
                     }
                 }
-                Section("Nodes · current round") {
+                Section("Steps · current round") {
                     ForEach(state.nodes) { node in
                         if let instance = node.instance {
                             Button { openAgent(instance) } label: { nodeLabel(node, state: state) }
@@ -130,15 +130,15 @@ struct AgentWorkflowRunView: View {
             HStack {
                 Label(node.name, symbol: node.kind == .content ? .docTextFill : .terminal).font(.headline)
                 Spacer()
-                Text(node.invocation?.status.title ?? (state.summary.status.isTerminal ? "Not run" : "Waiting"))
+                Text(node.isSkipped ? "First round only" : (node.invocation?.status.title ?? (state.summary.status.isTerminal ? "Not run" : "Waiting")))
                     .font(.caption).foregroundStyle(.secondary)
             }
             if let instance = node.instance {
-                Text(instance.displayName).font(.caption).foregroundStyle(.secondary)
+                Text("\(node.participantName ?? instance.displayName) · \(instance.displayName)").font(.caption).foregroundStyle(.secondary)
             } else if node.kind == .content {
                 Text("Content node").font(.caption).foregroundStyle(.secondary)
             }
-            if node.invocation == nil, !state.summary.status.isTerminal, !node.upstreamIDs.isEmpty {
+            if !node.isSkipped, node.invocation == nil, !state.summary.status.isTerminal, !node.upstreamIDs.isEmpty {
                 let names = state.nodes.filter { node.upstreamIDs.contains($0.id) }.map(\.name)
                 Text("Waiting for: \(names.joined(separator: ", "))").font(.caption).foregroundStyle(.secondary)
             }

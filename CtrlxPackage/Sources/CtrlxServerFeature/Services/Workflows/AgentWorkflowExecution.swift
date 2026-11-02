@@ -18,7 +18,7 @@ struct AgentWorkflowExecution: Sendable {
         guard
             instances.count == definition.agentInstanceIDs.count,
             Set(instances.map(\.id)) == definition.agentInstanceIDs else {
-            throw AgentWorkflowError("Every Agent node must have a distinct live Agent binding.")
+            throw AgentWorkflowError("Every participating Agent must have a live binding.")
         }
         for instance in instances {
             guard
@@ -53,6 +53,7 @@ struct AgentWorkflowExecution: Sendable {
             let shared = invocation.sharedAttachmentIDs ?? []
             guard
                 let node, invocation.round > 0, invocation.round <= run.round,
+                run.definition.activeNodeIDs(round: invocation.round).contains(node.id),
                 slots.insert("\(invocation.round):\(invocation.nodeID)").inserted,
                 invocation.delivery.invocationID == invocation.id,
                 invocation.delivery.runID == run.id,
@@ -107,9 +108,10 @@ struct AgentWorkflowExecution: Sendable {
 
     var readyNodeIDs: [UUID] {
         guard run.status == .running, run.finishRequest == nil else { return [] }
+        let active = run.definition.activeNodeIDs(round: run.round)
         return run.definition.nodes.compactMap { node in
-            guard invocation(nodeID: node.id, round: run.round) == nil else { return nil }
-            if node.id == run.definition.entryNodeID {
+            guard active.contains(node.id), invocation(nodeID: node.id, round: run.round) == nil else { return nil }
+            if node.id == run.definition.entryNodeID(round: run.round) {
                 if run.round == 1 {
                     return node.id
                 }
@@ -135,7 +137,7 @@ struct AgentWorkflowExecution: Sendable {
         }
         let invocationID = UUID()
         let upstream: [AgentWorkflowInvocation]
-        if nodeID == run.definition.entryNodeID, run.round > 1, let finalID = run.definition.loop?.finalNodeID {
+        if nodeID == run.definition.entryNodeID(round: run.round), run.round > 1, let finalID = run.definition.loop?.finalNodeID {
             upstream = run.invocations.filter { $0.nodeID == finalID && $0.round == run.round - 1 }
         } else {
             upstream = run.definition.upstream(of: nodeID).compactMap { invocation(nodeID: $0.id, round: run.round) }
@@ -146,7 +148,12 @@ struct AgentWorkflowExecution: Sendable {
             guard let result = source.result, let sourceNode = run.definition.nodes.first(where: { $0.id == source.nodeID }) else {
                 throw AgentWorkflowError("An upstream result is missing.")
             }
-            answers.append(.init(role: sourceNode.name, round: source.round, text: result.text, attachmentIDs: result.attachmentIDs, kind: sourceNode.kind))
+            let includesResult = source.round < run.round
+                ? run.definition.loop?.includesResult == true
+                : run.definition.edges.contains { $0.source == sourceNode.id && $0.target == nodeID && $0.includesResult }
+            if includesResult {
+                answers.append(.init(role: sourceNode.name, round: source.round, text: result.text, attachmentIDs: result.attachmentIDs, kind: sourceNode.kind))
+            }
             sources.append(.init(nodeID: sourceNode.id, agentInstanceID: sourceNode.agentInstanceID, resultID: result.id))
         }
         // Public correlation marker, not a credential. The adapter verifies the
@@ -204,6 +211,11 @@ struct AgentWorkflowExecution: Sendable {
         guard run.invocations[index].status == .pending, instance.readiness == .ready else {
             throw AgentWorkflowError("The Agent is not ready, or this input has already been written.")
         }
+        guard
+            !run.invocations.contains(where: {
+                $0.id != invocationID && $0.delivery.toAgentID == instance.id
+                    && [.writing, .awaitingAcceptance, .running, .uncertain].contains($0.status)
+            }) else { throw AgentWorkflowError("Another step is still using this Agent. Resolve it before sending more input.") }
         run.invocations[index].status = .writing
         changed()
     }
@@ -441,7 +453,7 @@ struct AgentWorkflowExecution: Sendable {
     }
 
     private var roundSucceeded: Bool {
-        run.definition.nodes.allSatisfy { invocation(nodeID: $0.id, round: run.round)?.status == .succeeded }
+        run.definition.activeNodeIDs(round: run.round).allSatisfy { invocation(nodeID: $0, round: run.round)?.status == .succeeded }
     }
 
     private mutating func settle(now: Date) {

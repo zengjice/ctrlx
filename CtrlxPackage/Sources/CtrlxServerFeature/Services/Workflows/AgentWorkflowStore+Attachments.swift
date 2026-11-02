@@ -86,7 +86,7 @@ extension AgentWorkflowStore {
             guard node.kind == .content || instance != nil else {
                 throw AgentWorkflowError("An Agent is no longer available.")
             }
-            let ids = node.input.attachmentIDs + (node.id == definition.entryNodeID ? definition.initialInput.attachmentIDs : [])
+            let ids = node.input.attachmentIDs + (definition.initialTask(for: node) == .textAndAttachments ? definition.initialInput.attachmentIDs : [])
             files += try attachmentFiles(Array(Set(ids)), instance: instance)
         }
         var seen: Set<UUID> = []

@@ -1,7 +1,7 @@
 import Foundation
 
 public enum AgentWorkflowWire {
-    public static let version = 2
+    public static let version = 3
     public static let maximumEncodedBytes = 256 * 1_024
     public static let maximumDefinitionBytes = 128 * 1_024
     public static let maximumNodes = 32
@@ -16,8 +16,10 @@ public enum AgentWorkflowWire {
         try definition.validate()
         guard
             definition.nodes.count <= maximumNodes,
+            definition.agents.count <= maximumNodes,
             definition.name.utf8.count <= 256,
             definition.nodes.allSatisfy({ $0.name.utf8.count <= 256 }),
+            definition.agents.allSatisfy({ $0.name.utf8.count <= 256 }),
             try JSONEncoder().encode(definition).count <= maximumDefinitionBytes else {
             throw AgentWorkflowError("Use at most 32 nodes, names up to 256 UTF-8 bytes, and a configuration up to 128 KiB. Import large content as attachments.")
         }
@@ -166,6 +168,8 @@ public struct AgentWorkflowRunState: Codable, Equatable, Sendable {
         public let instance: AgentWorkflowInstance?
         public let upstreamIDs: [UUID]
         public let invocation: AgentWorkflowInvocationSummary?
+        public let isSkipped: Bool
+        public let participantName: String?
     }
 
     public let summary: AgentWorkflowRunSummary
@@ -180,8 +184,10 @@ public struct AgentWorkflowRunState: Codable, Equatable, Sendable {
             let current = bound.flatMap { binding in currentInstances.first { binding.matchesBinding($0) } }
             return Node(
                 id: node.id, kind: node.kind, name: node.name, instance: current ?? bound,
-                upstreamIDs: run.definition.upstream(of: node.id).map(\.id),
-                invocation: run.invocations.first { $0.nodeID == node.id && $0.round == run.round }.map(AgentWorkflowInvocationSummary.init)
+                upstreamIDs: node.id == run.definition.entryNodeID(round: run.round) ? [] : run.definition.upstream(of: node.id).map(\.id),
+                invocation: run.invocations.first { $0.nodeID == node.id && $0.round == run.round }.map(AgentWorkflowInvocationSummary.init),
+                isSkipped: !run.definition.activeNodeIDs(round: run.round).contains(node.id),
+                participantName: run.definition.agents.first { $0.id == node.agentInstanceID }?.name
             )
         }
     }

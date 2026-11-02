@@ -55,8 +55,10 @@ struct AgentWorkflowRequestTests {
                 try await f.service.handle(.init(.deleteDefinition(f.definition.id, expectedRevision: 1), expectedHostID: hostID))
             }
         }
-        await #expect(throws: AgentWorkflowError.self) {
-            try await f.service.handle(.init(.deleteDefinition(f.definition.id, expectedRevision: 1), expectedHostID: f.hostID, version: 1))
+        for version in [1, 2] {
+            await #expect(throws: AgentWorkflowError.self) {
+                try await f.service.handle(.init(.deleteDefinition(f.definition.id, expectedRevision: 1), expectedHostID: f.hostID, version: version))
+            }
         }
         #expect(try await f.service.snapshot() == before)
     }

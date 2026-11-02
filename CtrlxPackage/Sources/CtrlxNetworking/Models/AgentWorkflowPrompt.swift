@@ -26,9 +26,13 @@ public enum AgentWorkflowPrompt {
         if node.kind == .content {
             return contentOutput(definition: definition, node: node, answers: answers)
         }
-        var sections = [node.input.text, "Initial task:\n\(definition.initialInput.text)"]
+        let initial = definition.initialTask(for: node)
+        var sections = [node.input.text]
         var attachments = node.input.attachmentIDs
-        if node.id == definition.entryNodeID {
+        if initial != .omit {
+            sections.append("Initial task:\n\(definition.initialInput.text)")
+        }
+        if initial == .textAndAttachments {
             attachments += definition.initialInput.attachmentIDs
         }
         for answer in answers {
@@ -57,10 +61,13 @@ public enum AgentWorkflowPrompt {
     ) -> AgentWorkflowInput {
         var sections = [node.input.text]
         var attachments = node.input.attachmentIDs
-        if node.id == definition.entryNodeID {
+        let initial = definition.initialTask(for: node)
+        if initial != .omit {
             if !definition.initialInput.text.isEmpty {
                 sections.append("Initial task:\n\(definition.initialInput.text)")
             }
+        }
+        if initial == .textAndAttachments {
             attachments += definition.initialInput.attachmentIDs
         }
         for answer in answers {
@@ -74,13 +81,15 @@ public enum AgentWorkflowPrompt {
     /// Before execution, upstream answers and the correlation UUID do not yet
     /// exist. The UI labels these placeholders instead of claiming an exact task.
     public static func preview(definition: AgentWorkflowDefinition, node: AgentWorkflowNode, round: Int) -> AgentWorkflowInput {
+        guard definition.activeNodeIDs(round: round).contains(node.id) else { return .init() }
         let sources: [AgentWorkflowNode]
         let sourceRound: Int
-        if node.id == definition.entryNodeID, round > 1, let loop = definition.loop {
-            sources = definition.nodes.filter { $0.id == loop.finalNodeID }
+        if node.id == definition.entryNodeID(round: round), round > 1, let loop = definition.loop {
+            sources = definition.nodes.filter { $0.id == loop.finalNodeID && loop.includesResult }
             sourceRound = round - 1
         } else {
-            sources = definition.upstream(of: node.id)
+            let sourceIDs = Set(definition.edges.filter { $0.target == node.id && $0.includesResult }.map(\.source))
+            sources = definition.nodes.filter { sourceIDs.contains($0.id) }
             sourceRound = round
         }
         return compose(

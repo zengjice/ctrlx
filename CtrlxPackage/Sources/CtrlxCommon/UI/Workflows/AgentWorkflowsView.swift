@@ -94,7 +94,7 @@ private struct AgentWorkflowHostView: View {
                         NavigationLink(value: AgentWorkflowNavigation.Destination.configuration(route: endpoint.id, hostID: overview.hostID, id: definition.id)) {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(definition.name)
-                                Text("\(definition.nodeCount) nodes").font(.caption).foregroundStyle(.secondary)
+                                Text("\(definition.nodeCount) steps").font(.caption).foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -187,8 +187,20 @@ struct AgentWorkflowConfigurationView: View {
     var body: some View {
         Form {
             if let definition {
-                Section("Initial task") { Text(verbatim: definition.initialInput.text).textSelection(.enabled) }
-                Section("Nodes") {
+                Section("Initial task") {
+                    Text(verbatim: definition.initialInput.text).textSelection(.enabled)
+                    ForEach(definition.initialInput.attachmentIDs, id: \.self) { AgentWorkflowAttachmentLabel(attachment: attachments[$0]) }
+                }
+                Section("Participating Agents") {
+                    ForEach(definition.agents) { participant in
+                        VStack(alignment: .leading) {
+                            Text(participant.name).font(.headline)
+                            Text(instances.first { $0.id == participant.id }?.displayName ?? "Agent unavailable")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                Section("Steps") {
                     ForEach(definition.nodes) { node in
                         if node.kind == .content {
                             NavigationLink {
@@ -213,7 +225,9 @@ struct AgentWorkflowConfigurationView: View {
                 Section {
                     if let loop = definition.loop {
                         LabeledContent("Loop", value: "Up to \(loop.maximumRounds) rounds")
-                        Text("The final node’s output returns to the entry unless an authorized Agent requests completion.").foregroundStyle(.secondary)
+                        LabeledContent("Repeat from", value: definition.nodes.first { $0.id == (loop.entryNodeID ?? definition.entryNodeID) }?.name ?? "Unavailable")
+                        Text(loop.includesResult ? "The final step's output is passed to the repeat entry." : "Repeating waits for the final step without passing its output.")
+                            .font(.caption).foregroundStyle(.secondary)
                     } else {
                         Text("Run once after all dependencies finish.")
                     }
@@ -272,12 +286,19 @@ struct AgentWorkflowConfigurationView: View {
             if node.kind == .content {
                 Text("Content node").font(.caption).foregroundStyle(.secondary)
             } else if let instance = instances.first(where: { $0.id == node.agentInstanceID }) {
-                Text("\(instance.displayName) · \(instance.readiness.title)").font(.caption).foregroundStyle(.secondary)
+                Text("\(definition.agents.first { $0.id == instance.id }?.name ?? instance.displayName) · \(instance.displayName) · \(instance.readiness.title)")
+                    .font(.caption).foregroundStyle(.secondary)
             } else {
                 Text("Agent unavailable").font(.caption).foregroundStyle(.secondary)
             }
             Text(node.id == definition.entryNodeID ? "Entry" : "Waits for: " + definition.upstream(of: node.id).map(\.name).joined(separator: ", "))
                 .font(.caption).foregroundStyle(.secondary)
+            ForEach(definition.edges.filter { $0.target == node.id }, id: \.source) { edge in
+                let source = definition.nodes.first { $0.id == edge.source }?.name ?? "Unavailable"
+                Text("\(source): \(edge.includesResult ? "output and attachments" : "completion only")")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Text("Original task: \(definition.initialTask(for: node).title)").font(.caption).foregroundStyle(.secondary)
             if !node.input.text.isEmpty {
                 Text(verbatim: node.input.text)
             }
