@@ -79,7 +79,14 @@
                 fileWorkspaces.retainHosts(Set(settings.pairedHosts.map(\.id)))
                 await initializeConnectionManager()
                 setupConnectionManagerHandlers()
+                if settings.isPaired {
+                    await requestPushNotificationPermissions()
+                }
                 await autoConnectIfNeeded()
+            }
+            .task(id: pushService.tokenString) {
+                guard let token = pushService.tokenString, let connectionManager else { return }
+                await connectionManager.sendPushTokenToAll(token)
             }
             .task(id: dashboardMonitorHosts) {
                 guard scenePhase == .active else { return }
@@ -348,16 +355,6 @@
                 deviceId: settings.deviceId,
                 deviceName: settings.deviceName
             )
-
-            // Request push permissions if not already authorized
-            if pushService.permissionStatus != .authorized {
-                await requestPushNotificationPermissions()
-            }
-
-            // Send push token to all connected hosts
-            if let token = pushService.tokenString {
-                await connectionManager.sendPushTokenToAll(token)
-            }
         }
 
         // MARK: - Connection Manager Initialization
@@ -369,6 +366,9 @@
                 let manager = try await ViewerConnectionManager()
                 manager.configureQuickPhraseSync(store: settings.quickPhrases)
                 connectionManager = manager
+                if let token = pushService.tokenString {
+                    await manager.sendPushTokenToAll(token)
+                }
             } catch {
                 initializationError = "Failed to initialize encryption: \(error.localizedDescription)"
             }
@@ -400,14 +400,6 @@
         private func requestPushNotificationPermissions() async {
             do {
                 try await pushService.requestAuthorization()
-
-                // Wait a brief moment for the token to be received from APNs
-                try? await Task.sleep(for: .milliseconds(500))
-
-                // If we have a token and have connections, send it to all servers
-                if let token = pushService.tokenString, let connectionManager {
-                    await connectionManager.sendPushTokenToAll(token)
-                }
             } catch {
                 // Permission denied or error - not critical, app still works without push
                 print("Push notification authorization failed: \(error)")

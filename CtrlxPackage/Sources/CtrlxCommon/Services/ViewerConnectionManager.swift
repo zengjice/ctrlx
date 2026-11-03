@@ -329,7 +329,8 @@ final public class ViewerConnectionManager {
         public func sendPushTokenToAll(_ token: String) async {
             pendingPushToken = token
 
-            for connection in connections.values where connection.isRelayConnected {
+            for connection in connections.values {
+                guard !Task.isCancelled else { return }
                 await connection.sendPushToken(token)
             }
         }

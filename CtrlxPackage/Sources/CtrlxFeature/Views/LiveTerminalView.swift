@@ -37,12 +37,11 @@
         /// Whether the navigation bar is hidden (show an overlay copy button)
         let hideNavigationBar: Bool
 
-        /// Whether to show the keyboard toggle in the bottom safe area.
+        /// Whether to show the terminal input controls in the bottom safe area.
         /// Set to false when used in multi-pane layouts where the parent manages the keyboard.
-        let showKeyboardButton: Bool
+        let showsInputControls: Bool
 
-        /// Shared settings. The body reads the control position directly so a
-        /// Settings change updates an already-open terminal without reconnecting.
+        /// Shared terminal display and input settings.
         let settings: IOSSettings
 
         /// Whether this pane owns the terminal-copy toolbar action.
@@ -161,7 +160,7 @@
             isConnected: Bool,
             isYoloMode: Bool = false,
             hideNavigationBar: Bool = false,
-            showKeyboardButton: Bool = true,
+            showsInputControls: Bool = true,
             showCopyButton: Bool = true,
             isActive: Bool = true,
             isInputSuspended: Bool = false,
@@ -200,7 +199,7 @@
             self.isConnected = isConnected
             self.isYoloMode = isYoloMode
             self.hideNavigationBar = hideNavigationBar
-            self.showKeyboardButton = showKeyboardButton
+            self.showsInputControls = showsInputControls
             self.settings = settings
             self.showCopyButton = showCopyButton
             self.isActive = isActive
@@ -264,21 +263,8 @@
                     .foregroundStyle(Color(uiColor: settings.terminalTheme.palette.foreground.nativeColor))
                     .background(Color(uiColor: settings.terminalTheme.palette.background.nativeColor))
                     .overlay(alignment: .topTrailing) {
-                        if hideNavigationBar {
-                            HStack(spacing: 8) {
-                                if showCopyButton {
-                                    copyOverlayButton
-                                }
-                                if showKeyboardButton, settings.terminalKeyboardControlPosition == .topRight {
-                                    TerminalVoiceInputButton(
-                                        session: voiceSession, context: phraseContext,
-                                        isDisabled: !canSendTerminalInput || quickActionPresentation.isPresented,
-                                        contextProvider: terminalVoiceInputContext
-                                    )
-                                    .id(phraseContext.target)
-                                    keyboardOverlayButton
-                                }
-                            }
+                        if hideNavigationBar, showCopyButton {
+                            copyOverlayButton
                         }
                     }
             }
@@ -304,7 +290,7 @@
                 }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if showKeyboardButton {
+                if showsInputControls {
                     TerminalKeyboardBar(
                         voiceSession: voiceSession,
                         relayClient: relayClient,
@@ -315,8 +301,7 @@
                         phraseContext: phraseContext,
                         quickActionPresentation: $quickActionPresentation,
                         customButtonStore: settings.customButtons,
-                        sendCustomButton: sendCustomButton,
-                        showsTerminalControls: settings.terminalKeyboardControlPosition == .bottomBar
+                        sendCustomButton: sendCustomButton
                     )
                 }
             }
@@ -324,29 +309,6 @@
                 if showCopyButton {
                     ToolbarItem(placement: .topBarTrailing) {
                         copyButton
-                    }
-                }
-
-                if showKeyboardButton, settings.terminalKeyboardControlPosition == .topRight, !hideNavigationBar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        TerminalVoiceInputButton(
-                            session: voiceSession, context: phraseContext,
-                            isDisabled: !canSendTerminalInput || quickActionPresentation.isPresented,
-                            contextProvider: terminalVoiceInputContext
-                        )
-                        .id(phraseContext.target)
-                    }
-
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            isInteractive.toggle()
-                        } label: {
-                            Label(
-                                isInteractive ? "Hide Keyboard" : "Show Keyboard",
-                                symbol: isInteractive ? .keyboardChevronCompactDown : .keyboard
-                            )
-                        }
-                        .disabled(!isConnected || coordinator.streamState != .streaming)
                     }
                 }
             }
@@ -496,23 +458,6 @@
             .disabled(coordinator.streamState != .streaming)
         }
 
-        /// Keyboard toggle used when the navigation bar is hidden.
-        private var keyboardOverlayButton: some View {
-            Button {
-                isInteractive.toggle()
-            } label: {
-                (isInteractive ? Symbols.keyboardChevronCompactDown.image : Symbols.keyboard.image)
-                    .font(.system(size: 20))
-                    .foregroundStyle(.white)
-                    .padding(8)
-                    .background(.black.opacity(0.5))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-            }
-            .accessibilityLabel(isInteractive ? "Hide Keyboard" : "Show Keyboard")
-            .disabled(!isConnected || coordinator.streamState != .streaming)
-            .padding(8)
-        }
-
         private var copyOverlayButton: some View {
             Button(action: presentTextSnapshot) {
                 Symbols.docOnClipboard.image
@@ -535,7 +480,7 @@
             }
 
             let presentation = terminalInputPresentation(isCopyPresented: false)
-            restoresTerminalInputAfterCopy = showKeyboardButton && presentation.keyboardRequested
+            restoresTerminalInputAfterCopy = showsInputControls && presentation.keyboardRequested
             isInteractive = false
 
             // Sheet presentation does not reliably release the terminal's
@@ -624,7 +569,7 @@
                         inputEnabled: inputPresentation.inputEnabled,
                         mouseReportingEnabled: mouseReportingEnabled,
                         keyboardRequested: inputPresentation.keyboardRequested,
-                        onKeyboardRequest: settings.terminalKeyboardControlPosition == .bottomBar ? setKeyboardRequested : nil,
+                        onKeyboardRequest: setKeyboardRequested,
                         keyboardIsTransitioning: keyboardIsTransitioning,
                         questionExpansionEnabled: scenePhase == .active && isConnected && !inputSuspension.suspendsInput
                             && relayClient.hostSupportsCodexQuestionAcknowledgement
@@ -709,19 +654,19 @@
         }
 
         private var terminalImagePasteAction: (@MainActor (ClipboardImage?) -> Void)? {
-            guard onPasteImage != nil || showKeyboardButton else { return nil }
+            guard onPasteImage != nil || showsInputControls else { return nil }
             return { image in
                 guard canSendTerminalInput, coordinator.isReadyForToolbarInput else { return }
                 if let onPasteImage {
                     onPasteImage(image)
-                } else if showKeyboardButton {
+                } else if showsInputControls {
                     clipboardImagePaste = TerminalImagePasteRequest(paneId: paneId, image: image)
                 }
             }
         }
 
         private func setKeyboardRequested(_ requested: Bool) {
-            if showKeyboardButton {
+            if showsInputControls {
                 isInteractive = requested
             } else {
                 onKeyboardRequest?(requested)
@@ -743,7 +688,7 @@
             isCopyPresented: Bool
         ) -> TerminalInputPresentation.State {
             TerminalInputPresentation.resolve(
-                keyboardRequested: showKeyboardButton ? isInteractive : parentKeyboardRequested,
+                keyboardRequested: showsInputControls ? isInteractive : parentKeyboardRequested,
                 isActive: isActive,
                 isCopyPresented: isCopyPresented,
                 isInputSuspended: inputSuspension.suspendsInput

@@ -116,6 +116,8 @@
         /// The device token as a hex string, suitable for sending to server
         public private(set) var tokenString: String?
 
+        public private(set) var registrationError: String?
+
         /// Current notification permission status
         public private(set) var permissionStatus: UNAuthorizationStatus = .notDetermined
 
@@ -171,6 +173,7 @@
                 return
             }
 
+            registrationError = nil
             let granted = try await client.requestAuthorization()
 
             await updatePermissionStatus()
@@ -201,12 +204,14 @@
 
         /// Called from AppDelegate when device token is received
         public func didRegisterForRemoteNotifications(deviceToken: Data) {
+            registrationError = nil
             self.deviceToken = deviceToken
             tokenString = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
         }
 
         /// Called from AppDelegate on registration failure
         public func didFailToRegisterForRemoteNotifications(error: Error) {
+            registrationError = error.localizedDescription
             print("Failed to register for remote notifications: \(error.localizedDescription)")
             deviceToken = nil
             tokenString = nil
@@ -214,6 +219,7 @@
 
         /// Clear token data (e.g., on unpair)
         public func clearToken() {
+            registrationError = nil
             deviceToken = nil
             tokenString = nil
         }

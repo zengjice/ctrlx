@@ -7,6 +7,27 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.137 — Reliable iOS push token registration
+
+- Keep the complete iOS terminal input toolbar at the bottom. Remove the
+  Top Right layout and its setting; older position preferences no longer hide
+  controls or disable tapping an empty input area to toggle the keyboard.
+  All 29 focused input tests and the Release device build/signing checks pass;
+  the updated toolbar still requires physical-device UI acceptance.
+- Register paired iOS devices with APNs on launch even when automatic Host
+  connection is disabled. Forward tokens when the APNs callback arrives instead
+  of taking a single snapshot after a fixed delay.
+- Retain the latest token while a Relay connection is unavailable, send it after
+  Viewer registration is acknowledged, and re-register it after reconnection.
+  Debug Mode shows notification permission, token availability and registration
+  errors without displaying the token itself.
+- Update the existing `com.gravtice.ctrlx` iOS installation in place. Background
+  delivery requires the Relay's production APNs environment and matching topic.
+  Seven focused token/transport tests, the Release device build and Ad Hoc
+  signing checks pass. The user confirmed a production APNs notification on the
+  locked iPhone with both Viewer connections disconnected and the full encrypted
+  message successfully decrypted.
+
 ## 3.0.136 — Gravtice identity migration and production iOS signing
 
 - Move the Mac bundle ID to `com.gravtice.ctrlx.macos`. Before app services

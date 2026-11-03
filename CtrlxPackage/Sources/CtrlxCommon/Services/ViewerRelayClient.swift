@@ -207,6 +207,9 @@ final public class ViewerRelayClient {
     /// Server URL for reconnection
     private var serverURL: URL?
 
+    @ObservationIgnored private var pendingPushToken: String?
+    @ObservationIgnored private var viewerRegistrationConfirmed = false
+
     /// Whether we should attempt reconnection
     private var shouldReconnect = false
 
@@ -953,10 +956,8 @@ final public class ViewerRelayClient {
     ///
     /// - Parameter token: The APNs device token as a hex string
     public func sendPushToken(_ token: String) async {
-        guard state.isConnected else {
-            logger.debug("Not connected, cannot send push token")
-            return
-        }
+        pendingPushToken = token
+        guard state.isConnected, viewerRegistrationConfirmed else { return }
 
         logger.info("Sending push token to relay server")
         let message = WebSocketMessage.registerPushToken(RegisterPushTokenMessage(deviceToken: token))
@@ -1206,8 +1207,13 @@ final public class ViewerRelayClient {
             if response.success {
                 logger.info("Successfully registered with relay server as viewer")
 
+                viewerRegistrationConfirmed = true
                 setState(.connected)
                 connectedHostName = response.hostDeviceName
+                if let token = pendingPushToken {
+                    await sendPushToken(token)
+                    guard connectionGeneration.isCurrent(generation), webSocketTask === task else { return }
+                }
                 // `isHostConnected` is deliberately NOT set here — a mismatched host
                 // would otherwise surface as "Connected" in the UI until peerHello
                 // validation completes and flips state to `.error`. The flag is
@@ -1740,6 +1746,7 @@ final public class ViewerRelayClient {
     }
 
     private func cleanupConnection() async {
+        viewerRegistrationConfirmed = false
         resetFileUploads()
         resetBrowserState()
         resetCtrlXAppUpdate()

@@ -84,7 +84,9 @@ a close frame is forcibly disconnected after 5 seconds.
 For push notifications, mount a `.p8` key read-only at `/secrets/AuthKey.p8`
 and configure `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_BUNDLE_ID` and
 `APNS_ENVIRONMENT`. `APNS_BUNDLE_ID` must match the installed CtrlX iOS build;
-the official distribution identity is `com.jicezeng.ctrlx`.
+the current iOS distribution identity is `com.gravtice.ctrlx`. Ad Hoc and
+TestFlight/App Store builds use `APNS_ENVIRONMENT=production`; development-signed
+builds use the development environment.
 
 If APNs values are absent, the Relay continues to provide pairing and live WSS
 transport without background push.

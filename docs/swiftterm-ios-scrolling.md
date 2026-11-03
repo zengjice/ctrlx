@@ -321,13 +321,14 @@ show/hide, the copy page and exit/re-entry; check for new AttributeGraph cycles.
 
 ## Input toolbar layout
 
-In **Bottom Bar** mode the first control is **+ / Attachments**, replacing the
-keyboard button. It opens the existing Photo Library, image files, Camera and
-Paste Image menu, including the same preview and captured-pane upload flow.
-The image button is removed from the navigation bar in both layout modes.
-The keyboard **Button Position** setting under **Settings → Keyboard & Input**
-is retained: **Top Right** keeps its keyboard/voice controls and shows only Attachments in the bottom row; **Bottom
-Bar** shows the complete input toolbar. The keyboard-on-entry setting is unchanged.
+The bottom input toolbar always shows the complete control row. Its first
+control is **+ / Attachments**, opening Photo Library, image files, Camera and
+Paste Image with the same preview and captured-pane upload flow. Voice input
+lives in this row, and tapping an empty terminal input area toggles the software
+keyboard through the existing tap routing. The native shortcut accessory keeps
+its keyboard switch. There is no **Top Right** mode or **Button Position** setting;
+previously stored position preferences are ignored. The keyboard-on-entry
+setting is unchanged.
 
 The first-row input controls and SwiftTerm's second-row shortcut accessory share
 the 32-point `TerminalInputControlMetrics.buttonHeight`. Voice is microphone-only
@@ -534,12 +535,12 @@ Completed single taps now have exactly one owner:
 
 - Existing selection consumes the tap; it cannot click through. Links still
   open locally, without also sending a terminal click.
-- In **Bottom Bar** mode, ordinary terminal tabs toggle the keyboard when tapping
+- Ordinary terminal tabs toggle the keyboard when tapping
   the live terminal content, including output and blank cells. This does not
   depend on shell prompt punctuation and emits no input, even with a draft.
   Agent tabs retain the input-area behavior below. Alternate-screen and
   mouse-reporting programs retain their terminal interactions.
-- In **Bottom Bar** mode, an empty live input surface toggles the software
+- An empty live input surface toggles the software
   keyboard through the existing parent/standalone keyboard intent. It emits no
   terminal keys or mouse packets. The known Codex `Ask Codex to do anything`
   placeholder counts as empty; grey color alone and the local keyboard's shadow

@@ -1596,6 +1596,13 @@ Current entry points:
   notification content and attaches supported actions.
 - `CtrlxFeature/Services/NotificationActionService.swift`: submits iOS notification responses.
 
+Paired iOS devices register with APNs on launch independently of automatic Host
+connection. `ContentView` observes token callbacks and seeds newly initialized
+connection managers. Each Relay client retains the latest token while offline
+and sends it after Viewer registration is acknowledged, including reconnection.
+Debug Mode in iOS Settings displays notification permission, token availability
+and the most recent APNs registration failure, without exposing the device token.
+
 APNs bundle/topic, signing entitlements and environment must match the installed
 build. Do not copy a maintainer's keys into Git. Stale permission/question replies
 must fail the Host's current-request check, not inject input into a newer form.

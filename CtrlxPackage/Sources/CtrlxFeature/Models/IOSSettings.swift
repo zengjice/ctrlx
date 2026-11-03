@@ -68,7 +68,6 @@
             case terminalTheme
             case terminalFontName
             case terminalFontSize
-            case terminalKeyboardControlPosition
             case showTerminalKeyboardOnEntry
             case confirmImageUploads
             case agentQuickInputEnabled
@@ -149,16 +148,6 @@
         /// Font size for terminal snapshot display
         public var terminalFontSize: Double = 10 {
             didSet { preferences.setDouble(terminalFontSize, Keys.terminalFontSize) }
-        }
-
-        /// Where the terminal keyboard show/hide control is displayed.
-        public var terminalKeyboardControlPosition: TerminalKeyboardControlPosition = .topRight {
-            didSet {
-                preferences.setString(
-                    terminalKeyboardControlPosition.rawValue,
-                    Keys.terminalKeyboardControlPosition
-                )
-            }
         }
 
         /// Whether a newly opened terminal session starts with keyboard input active.
@@ -262,9 +251,6 @@
             self.terminalTheme = TerminalTheme(rawValue: preferences.string(Keys.terminalTheme) ?? "") ?? .defaultDark
             self.terminalFontName = preferences.string(Keys.terminalFontName) ?? "Menlo"
             self.terminalFontSize = preferences.optionalDouble(Keys.terminalFontSize) ?? 10
-            self.terminalKeyboardControlPosition = TerminalKeyboardControlPosition(
-                storedValue: preferences.string(Keys.terminalKeyboardControlPosition)
-            )
             self.showTerminalKeyboardOnEntry = preferences.optionalBool(Keys.showTerminalKeyboardOnEntry) ?? false
             self.confirmImageUploads = preferences.optionalBool(Keys.confirmImageUploads) ?? false
             self.agentQuickInputEnabled = preferences.optionalBool(Keys.agentQuickInputEnabled) ?? false

@@ -348,12 +348,12 @@ button cancellation, overflow scrolling, held buttons, actual keyboard dismissal
 draft preservation and the excluded regions/presentation states. This was not
 a paired-Host or physical-iPhone acceptance run.
 
-In Bottom Bar mode, a single tap in an empty terminal input surface
+A single tap in an empty terminal input surface
 shows/hides the keyboard; with draft text, it places the cursor and opens the
 keyboard (or keeps it open), so editing can resume after hiding it. Native
 Codex placeholder text is recognized as empty without adding a CtrlX placeholder.
-Double-tap copy/paste remains unchanged. The legacy Top Right keyboard layout
-is still selectable and keeps its explicit keyboard button.
+Double-tap copy/paste remains unchanged. Terminal input controls always use the
+bottom bar; the legacy Top Right layout and its position setting are removed.
 
 The Quick Phrases and Commands buttons open a shared **in-page overlay**, not a system
 sheet. The overlay covers terminal content without contributing to its layout:
