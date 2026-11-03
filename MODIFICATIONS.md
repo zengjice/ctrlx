@@ -7,13 +7,32 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
-## 3.0.137 — Reliable iOS push token registration
+## 3.0.139 — Browser audio and Agent workflow reliability
+
+- Keep remote browser audio within bounded Host/Viewer frame budgets, prebuffer
+  playback and recover after underruns or sequence gaps. Delayed capture reads
+  drain the native ring without changing playback speed or the Relay protocol.
+- Confirm newly started Codex conversations from their first native receipts
+  before binding workflow execution. Preserve invocation ownership across
+  discovery and pause uncertain handoffs instead of replaying input.
+- Opening an IPA on Mac no longer creates an extra workspace window.
+- iOS notification source now uses APNs independently of Viewer presence and
+  removes background monitoring tasks. This policy requires updated iOS and
+  Relay builds; Mac-only publication does not deploy either component.
+- Validation: 90 focused Swift regressions, 120 private publisher/installer/COS
+  checks, the native audio ring regression and isolated signed browser audio
+  acceptance passed. Apple Intelligence evaluations were not run.
+
+## 3.0.138 — Unified iOS terminal input controls
 
 - Keep the complete iOS terminal input toolbar at the bottom. Remove the
   Top Right layout and its setting; older position preferences no longer hide
   controls or disable tapping an empty input area to toggle the keyboard.
   All 29 focused input tests and the Release device build/signing checks pass;
   the updated toolbar still requires physical-device UI acceptance.
+
+## 3.0.137 — Reliable iOS push token registration
+
 - Register paired iOS devices with APNs on launch even when automatic Host
   connection is disabled. Forward tokens when the APNs callback arrives instead
   of taking a single snapshot after a fixed delay.
