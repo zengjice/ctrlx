@@ -56,13 +56,13 @@ struct AgentWorkflowBridgeTests {
     }
 
     @Test
-    func differentProcessConversationOrPluginCannotInheritEvidence() async throws {
+    func differentProcessPaneOrPluginCannotInheritEvidence() async throws {
         let f = try fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
         #expect(try await f.record(f.event()))
-        var conversation = f.instance
-        conversation.conversationID = UUID().uuidString
-        #expect(try await f.store.bridgeIssue(for: conversation) != nil)
+        var otherPane = f.instance
+        otherPane.paneID = "%99"
+        #expect(try await f.store.bridgeIssue(for: otherPane) != nil)
         let observation = AgentWorkflowObservation(f.instance)
         var replaced = observation
         replaced.processRuntimeID = "501:10:200:0"
@@ -73,6 +73,35 @@ struct AgentWorkflowBridgeTests {
         #expect(try await !f.store.recordBridge(f.event(), processID: 99, runtimeID: "501:99:100:0", peer: f.peer))
         #expect(try await !f.store.recordBridge(f.event(), processID: 10, runtimeID: "501:10:200:0", peer: f.peer))
         #expect(try await f.store.bridgeIssue(for: f.instance) == nil)
+    }
+
+    @Test
+    func sameProcessMayReuseProtocolSupportButNotAnOldRunsAuthority() async throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        #expect(try await f.record(f.event()))
+        var original = AgentWorkflowObservation(f.instance)
+        original.capabilities = .init(maximumInputBytes: 100_000)
+        original.readiness = .ready
+        let bound = try #require(await f.store.reconcile([original]).first)
+        let node = AgentWorkflowNode(name: "Developer", agentInstanceID: bound.id)
+        let definition = try await f.store.saveDefinition(
+            .init(name: "Test", hostID: bound.hostID, nodes: [node], edges: [], entryNodeID: node.id), expectedRevision: nil
+        )
+        let now = Date()
+        let run = try await f.store.start(definitionID: definition.id, expectedRevision: definition.revision, requestID: UUID(), now: now, authorizationExpiresAt: now.addingTimeInterval(60))
+        var switched = original
+        switched.conversationID = UUID().uuidString
+        let current = try #require(await f.store.reconcile([switched]).first)
+        #expect(current.id == bound.id)
+        #expect(try await f.store.bridgeIssue(for: current) == nil)
+        #expect(try await f.store.snapshot().runs[0].status == .paused)
+        await #expect(throws: AgentWorkflowError.self) {
+            try await f.store.update(runID: run.id) { try $0.resume(instances: [current], now: now) }
+        }
+        try await f.store.update(runID: run.id) { $0.end() }
+        let fresh = try await f.store.start(definitionID: definition.id, expectedRevision: definition.revision, requestID: UUID(), now: now, authorizationExpiresAt: now.addingTimeInterval(60))
+        #expect(fresh.instances[0].conversationID == current.conversationID)
     }
 
     @Test(arguments: [0, 2])

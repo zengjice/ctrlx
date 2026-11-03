@@ -54,10 +54,8 @@ actor AgentWorkflowRunner {
         pumps[runID] = Task { await self.pump(runID: runID) }
     }
 
-    func accepted(runID: UUID, invocationID: UUID, instance: AgentWorkflowInstance, nativeTurnID: String, transcriptPath: String? = nil) async throws {
-        try await store.update(runID: runID) {
-            try $0.accept(invocationID: invocationID, instance: instance, nativeTurnID: nativeTurnID, transcriptPath: transcriptPath)
-        }
+    func accepted(runID: UUID, invocationID: UUID, instance: AgentWorkflowInstance, nativeTurnID: String, transcriptPath: String? = nil, bindFirstConversation: Bool = false) async throws {
+        try await store.accept(runID: runID, invocationID: invocationID, instance: instance, nativeTurnID: nativeTurnID, transcriptPath: transcriptPath, bindFirstConversation: bindFirstConversation)
         acknowledgements.removeValue(forKey: invocationID)?.cancel()
     }
 

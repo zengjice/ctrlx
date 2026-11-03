@@ -252,10 +252,24 @@ struct AgentWorkflowExecution: Sendable {
         changed()
     }
 
-    mutating func accept(invocationID: UUID, instance: AgentWorkflowInstance, nativeTurnID: String, transcriptPath: String? = nil) throws {
+    func canBindFirstConversation(_ instance: AgentWorkflowInstance, invocationID: UUID? = nil) -> Bool {
+        guard
+            !run.status.isTerminal, instance.pluginID == "codex", UUID(uuidString: instance.conversationID) != nil,
+            let bound = run.instances.first(where: { $0.id == instance.id }),
+            bound.matchesProcess(instance), !bound.matchesBinding(instance) else { return false }
+        let calls = run.invocations.filter { $0.delivery.toAgentID == instance.id }
+        let written = calls.filter { [.writing, .awaitingAcceptance, .uncertain].contains($0.status) }
+        return written.count == 1 && (invocationID == nil || written[0].id == invocationID)
+            && calls.allSatisfy { $0.nativeTurnID == nil && $0.result == nil }
+    }
+
+    mutating func accept(invocationID: UUID, instance: AgentWorkflowInstance, nativeTurnID: String, transcriptPath: String? = nil, bindFirstConversation: Bool = false) throws {
         let index = try index(of: invocationID)
         let invocation = run.invocations[index]
-        try validate(instance, for: invocation)
+        let bindsConversation = bindFirstConversation && canBindFirstConversation(instance, invocationID: invocationID)
+        if !bindsConversation {
+            try validate(instance, for: invocation)
+        }
         guard
             !nativeTurnID.isEmpty,
             invocation.nativeTurnID == nil || invocation.nativeTurnID == nativeTurnID,
@@ -267,6 +281,9 @@ struct AgentWorkflowExecution: Sendable {
         }
         guard [.writing, .awaitingAcceptance, .uncertain].contains(invocation.status) else {
             throw AgentWorkflowError("No written workflow task is awaiting this acceptance.")
+        }
+        if bindsConversation, let participant = run.instances.firstIndex(where: { $0.id == instance.id }) {
+            run.instances[participant].conversationID = instance.conversationID
         }
         run.invocations[index].nativeTurnID = nativeTurnID
         run.invocations[index].nativeTranscriptPath = transcriptPath

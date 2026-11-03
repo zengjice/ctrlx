@@ -16,6 +16,7 @@ actor AgentWorkflowEventRouter {
     private let runner: AgentWorkflowRunner
     private struct PendingSubmission {
         let context: AgentWorkflowTurnContext
+        let bindFirstConversation: Bool
         var following: PluginWorkflowEvent?
         var retry: Task<Void, Never>?
     }
@@ -59,11 +60,12 @@ actor AgentWorkflowEventRouter {
         let archive = try await store.snapshot()
         guard
             !stopped,
-            let observed = archive.instances.first(where: {
-                $0.pluginID == event.pluginID && $0.conversationID == event.sessionID
-                    && $0.paneID == event.tmuxPane
+            let process = archive.instances.first(where: {
+                $0.pluginID == event.pluginID && $0.paneID == event.tmuxPane
                     && peer.contains(processID: $0.processID, runtimeID: $0.processRuntimeID)
             }) else { return nil }
+        var observed = process
+        observed.conversationID = event.sessionID
         if
             native.kind != .submitted,
             let id = pending.first(where: {
@@ -76,12 +78,15 @@ actor AgentWorkflowEventRouter {
             }
             return nil
         }
+        guard native.kind == .submitted || process.matchesBinding(observed) else { return nil }
         // Submission identity is checked by verifySubmission, which retains
         // authenticated evidence through temporary process-scan outages.
         let instance = native.kind == .failed ? try await inspect(observed) : observed
         guard observed.matchesBinding(instance) else { return nil }
 
-        for run in archive.runs where run.instances.contains(where: { $0.matchesBinding(instance) }) {
+        for run in archive.runs where run.instances.contains(where: {
+            native.kind == .submitted ? $0.matchesProcess(instance) : $0.matchesBinding(instance)
+        }) {
             let invocations = run.invocations.filter { $0.delivery.toAgentID == instance.id }
             switch native.kind {
             case .submitted:
@@ -91,8 +96,15 @@ actor AgentWorkflowEventRouter {
                             && [.writing, .awaitingAcceptance, .uncertain, .running, .succeeded, .failed].contains($0.status)
                     }) {
                     guard pending[invocation.id] == nil else { return nil }
+                    let bindsConversation = !run.instances.contains { $0.matchesBinding(instance) }
+                    if bindsConversation, try !AgentWorkflowExecution(validating: run).canBindFirstConversation(instance, invocationID: invocation.id) {
+                        if !run.status.isTerminal {
+                            try await store.update(runID: run.id) { $0.pause(reason: "The Agent's conversation changed after its first accepted task. Start a new run.") }
+                        }
+                        continue
+                    }
                     let context = AgentWorkflowTurnContext(runID: run.id, invocation: invocation, instance: instance, candidate: native)
-                    pending[invocation.id] = .init(context: context)
+                    pending[invocation.id] = .init(context: context, bindFirstConversation: bindsConversation)
                     do { return try await verifySubmission(invocation.id) }
                     catch {
                         pending.removeValue(forKey: invocation.id)?.retry?.cancel()
@@ -118,12 +130,15 @@ actor AgentWorkflowEventRouter {
     }
 
     private func verifySubmission(_ id: UUID) async throws -> AgentWorkflowTurnContext? {
-        guard let candidate = pending[id]?.context else { return nil }
+        guard let submission = pending[id] else { return nil }
+        let candidate = submission.context
         let live: AgentWorkflowInstance
         do { live = try await inspect(candidate.instance) }
         catch is AgentWorkflowInspectionUnavailable {
-            try await store.update(runID: candidate.runID) {
-                $0.pause(reason: "The Agent cannot currently be inspected. Its submission receipt is awaiting verification; nothing will be resent.")
+            if !submission.bindFirstConversation {
+                try await store.update(runID: candidate.runID) {
+                    $0.pause(reason: "The Agent cannot currently be inspected. Its submission receipt is awaiting verification; nothing will be resent.")
+                }
             }
             if pending[id]?.retry == nil {
                 pending[id]?.retry = Task { await self.retrySubmission(id) }
@@ -137,7 +152,8 @@ actor AgentWorkflowEventRouter {
         }
         try await runner.accepted(
             runID: candidate.runID, invocationID: id, instance: live,
-            nativeTurnID: candidate.candidate.nativeTurnID, transcriptPath: candidate.candidate.transcriptPath
+            nativeTurnID: candidate.candidate.nativeTurnID, transcriptPath: candidate.candidate.transcriptPath,
+            bindFirstConversation: submission.bindFirstConversation
         )
         guard let resolved = pending.removeValue(forKey: id) else { return nil }
         if let following = resolved.following {

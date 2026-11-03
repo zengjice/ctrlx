@@ -129,8 +129,11 @@ actor AgentWorkflowStore {
         }
         for index in updated.runs.indices where !updated.runs[index].status.isTerminal {
             let run = updated.runs[index]
+            let execution = try AgentWorkflowExecution(validating: run)
             let changed = run.instances.contains { bound in
-                !updated.instances.contains { bound.matchesBinding($0) && $0.readiness != .unavailable }
+                !updated.instances.contains {
+                    (bound.matchesBinding($0) || execution.canBindFirstConversation($0)) && $0.readiness != .unavailable
+                }
             }
             if changed {
                 var execution = try AgentWorkflowExecution(validating: run)
@@ -265,6 +268,28 @@ actor AgentWorkflowStore {
         let removed = updated.runs.remove(at: index)
         try commit(updated)
         cleanUnreferencedAttachments(removed.attachmentIDs)
+    }
+
+    func allowsInitialConversationBinding(for instance: AgentWorkflowInstance) throws -> Bool {
+        try !load().runs.contains { run in
+            !run.status.isTerminal && run.instances.contains(where: { $0.matchesProcess(instance) })
+                && run.invocations.contains { $0.delivery.toAgentID == instance.id && $0.nativeTurnID != nil }
+        }
+    }
+
+    /// Commit the verified first receipt and its catalog join key together.
+    func accept(runID: UUID, invocationID: UUID, instance: AgentWorkflowInstance, nativeTurnID: String, transcriptPath: String?, bindFirstConversation: Bool) throws {
+        var updated = try load()
+        guard let index = updated.runs.firstIndex(where: { $0.id == runID }) else {
+            throw AgentWorkflowError("The workflow run does not exist.")
+        }
+        var execution = try AgentWorkflowExecution(validating: updated.runs[index])
+        try execution.accept(invocationID: invocationID, instance: instance, nativeTurnID: nativeTurnID, transcriptPath: transcriptPath, bindFirstConversation: bindFirstConversation)
+        updated.runs[index] = execution.run
+        if bindFirstConversation, let catalog = updated.instances.firstIndex(where: { $0.matchesProcess(instance) }) {
+            updated.instances[catalog].conversationID = instance.conversationID
+        }
+        try commit(updated)
     }
 
     func load() throws -> AgentWorkflowArchive {
