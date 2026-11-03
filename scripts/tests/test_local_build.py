@@ -37,7 +37,7 @@ class LocalBuildTests(unittest.TestCase):
         cache = self.root / ".build-local/DerivedData/iOS/Build/Intermediates.noindex"
         cache.mkdir(parents=True)
         with build.worktree_lock(self.root):
-            for mode in ("idle", "deep", "retained", "tests"):
+            for mode in ("idle", "deep", "retained", "tests", "ios-simulator"):
                 result = self.invoke(sys.executable, self.cleaner, mode, "--yes")
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("Another build", result.stderr)
@@ -104,6 +104,42 @@ prune_local_artifacts "" iOS true
             self.assertEqual(result.returncode, 7)
             with build.worktree_lock(self.root):
                 pass
+
+    def test_simulator_cleanup_follows_success_and_is_explicit(self):
+        cache = self.root / ".build-local/DerivedData/iOS-Simulator/ModuleCache.noindex/module.pcm"
+        product = self.root / ".build-local/DerivedData/iOS-Simulator/Build/Products/CtrlX.app/executable"
+        preserved = [self.root / name for name in (
+            ".build-local/DerivedData/macOS/CompilationCache.noindex/fixture",
+            ".build-local/DerivedData/iOS/Build/Intermediates.noindex/object.o",
+            ".build-local/SourcePackages/checkouts/dependency.swift",
+        )]
+        for path in preserved:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("preserved")
+        command = '''import os, pathlib, subprocess, sys
+subprocess.run([sys.executable, sys.argv[4], 'lock-held'], check=True,
+               pass_fds=(int(os.environ['CTRLX_BUILD_LOCK_FD']),))
+assert pathlib.Path(sys.argv[1]).is_file(), 'cleaned before command completed'
+product = pathlib.Path(sys.argv[2])
+product.parent.mkdir(parents=True, exist_ok=True)
+product.write_text('built product')
+sys.exit(int(sys.argv[3]))
+'''
+        for cleanup, status in ((True, 0), (True, 7), (False, 0)):
+            with self.subTest(cleanup=cleanup, status=status):
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                cache.write_text("compile cache")
+                args = [sys.executable, self.helper, "run"]
+                if cleanup:
+                    args.append("--cleanup-ios-simulator")
+                args += ["--", sys.executable, "-c", command, cache, product, status, self.helper]
+                result = self.invoke(*args)
+                self.assertEqual(result.returncode, status, result.stderr)
+                self.assertEqual(cache.exists(), not (cleanup and status == 0))
+                self.assertEqual(product.read_text(), "built product")
+                self.assertTrue(all(path.read_text() == "preserved" for path in preserved))
+                with build.worktree_lock(self.root):
+                    pass
 
     def test_foreign_inherited_descriptor_is_rejected(self):
         (self.root / ".build-local").mkdir()

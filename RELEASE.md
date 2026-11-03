@@ -100,8 +100,9 @@ For the existing Qcloud private-distribution channel, follow the sibling
 ../publish-ctrlx-macos.py --yes
 ```
 
-For macOS-only packaging/publication, build macOS only by default. Do not add an
-iOS Simulator build unless the user explicitly requests iOS validation.
+For macOS-only packaging/publication, build macOS only. IPA packaging and iPhone
+installation build only the iOS device target. Do not add a Simulator validation
+build to either workflow; Simulator checks require an explicit request.
 
 Prepare a tested, clean commit published as remote `main` and matching
 `v<version>` tag first. A linked worktree and its local branch are supported;
@@ -353,6 +354,7 @@ scan another worktree; `system-temp` has a separate current-user scope and lock.
 | `retained` | Older completed verification copies and install backups | Two completed inactive copies per kind; active, failed and unmarked copies |
 | `receipts` | Public-download copies with a successful receipt and matching hash | Distribution packages, reports and unmatched copies |
 | `idle` | Compilation caches, indexes, redundant dependencies, older managed copies and verified downloads | Signed apps, Swift Build products, packages and shared downloads |
+| `ios-simulator` | Compilation caches, indexes and redundant dependencies in the standard `.build-local/DerivedData/iOS-Simulator` | Mac/device caches, built apps, packages, shared downloads and other DerivedData paths |
 | `deep` | Known worktree build/cache directories, including built apps and downloaded build dependencies | `dist/`, signing config, installed apps, browser profiles and `.build-local/cef-sdk/` |
 | `system-temp` | Allowlisted stale macOS signing clones and legacy E2E compilation caches | Active/recent clones, two inactive clones per bundle ID, products and unrelated temporary data |
 
@@ -381,7 +383,8 @@ Mac keeps build intermediates and compilation/module caches by default. iOS
 removes its compilation caches after successful packaging or installation;
 `--keep-build-cache` opts out for repeated device builds. Signed installable apps,
 IPA/DMG files and shared downloads are kept in either case. Mac publication does
-not build an iOS Simulator unless the user explicitly requests iOS validation.
+not build an iOS Simulator. Simulator validation is separate and requires
+an explicit user request.
 Do not run concurrent builds or installs against the same DerivedData directory.
 
 Successful packaging also prunes **managed, completed** local verification copies
@@ -436,6 +439,17 @@ platforms/worktrees and the separate Swift package test cache are untouched.
 `--save-space` does not solve insufficient space for the current build.
 Formal releases already remove their temporary DerivedData on exit and remain
 zero-parameter.
+
+For an explicitly requested Simulator compile check, use
+`python3 scripts/local_build.py run --cleanup-ios-simulator -- <command>` and
+set `-derivedDataPath .build-local/DerivedData/iOS-Simulator`. The runner holds
+the operation lock through the command and its successful cache cleanup; failed
+or interrupted commands keep their caches. Cleanup removes only that standard
+directory's compilation caches, indexes and redundant dependencies. Built apps
+remain available for later installation/testing. It does not clean a custom
+DerivedData path or the full E2E suite's cache. Omit the cleanup option only for
+an intentionally repeated Simulator debugging session. The full compile command
+is in [AGENTS.md](AGENTS.md#ios-builds-and-signing).
 
 Use `./scripts/unit-tests.sh` for package tests, passing test filters after `--`.
 The script fixes the `swiftbuild` backend and disables indexes, so repeated runs
