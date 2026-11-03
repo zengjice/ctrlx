@@ -1,5 +1,9 @@
 # iOS Agent 监控自恢复 Stage 6 TODO
 
+> Historical record: Background Agent Monitoring has been removed. iOS alerts
+> now use APNs exclusively. See [current notification delivery](../../services-reference.md#push-notifications).
+
+
 ## Stage Status
 
 - **Status**: ✅ Completed

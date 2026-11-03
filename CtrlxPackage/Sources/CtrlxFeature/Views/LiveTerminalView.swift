@@ -64,9 +64,7 @@
         /// Submits a structured `AgentResponse` for the open response form.
         let submitResponse: ResponseSender
 
-        /// Observes keyboard input after it has been sent in FIFO order.
-        /// The parent uses this only to detect user-submitted Agent turns.
-        let onTerminalInput: @MainActor ([TmuxKey]) -> Void
+        /// Invalidates parent command/phrase contexts as soon as input is queued.
         let onTerminalInputQueued: @MainActor () -> Void
         let onCancelVoiceInput: @MainActor () -> Bool
 
@@ -80,7 +78,7 @@
 
         /// Parent controls use this pane's existing FIFO, not a second queue
         /// that could overtake a native keyboard edit or caret movement.
-        let onExternalInputSenderChange: @MainActor ((@MainActor ([TmuxKey], Bool, @escaping @MainActor () -> Void) -> Bool)?) -> Void
+        let onExternalInputSenderChange: @MainActor ((@MainActor ([TmuxKey], Bool) -> Bool)?) -> Void
 
         /// Lets a parent-owned command menu fail closed while this pane is
         /// bootstrapping or reconnecting, without reading terminal pixels.
@@ -88,7 +86,6 @@
         /// Parent toolbars can place Copy without moving the pane-owned snapshot sheet.
         let onCopyActionChange: @MainActor ((@MainActor () -> Void)?) -> Void
         let onViewportGridChange: @MainActor (TerminalViewportSizing.Grid?) -> Void
-        let onTerminalPaste: @MainActor (String) -> Void
         let onPasteImage: (@MainActor (ClipboardImage?) -> Void)?
         let onSwitchWindow: (@MainActor (TerminalWindowSwipePolicy.Direction) -> Void)?
         let preparationID: UUID?
@@ -171,16 +168,14 @@
             settings: IOSSettings,
             telemetry: SessionTelemetry? = nil,
             submitResponse: @escaping ResponseSender,
-            onTerminalInput: @escaping @MainActor ([TmuxKey]) -> Void = { _ in },
             onTerminalInputQueued: @escaping @MainActor () -> Void = { },
             onCancelVoiceInput: @escaping @MainActor () -> Bool = { false },
-            onTerminalPaste: @escaping @MainActor (String) -> Void = { _ in },
             onPasteImage: (@MainActor (ClipboardImage?) -> Void)? = nil,
             onVoiceInputContextProviderChange: @escaping @MainActor (
                 TerminalVoiceInputContextProvider?
             ) -> Void = { _ in },
             onCursorNavigationCancellationChange: @escaping @MainActor ((@MainActor () -> Void)?) -> Void = { _ in },
-            onExternalInputSenderChange: @escaping @MainActor ((@MainActor ([TmuxKey], Bool, @escaping @MainActor () -> Void) -> Bool)?) -> Void = { _ in },
+            onExternalInputSenderChange: @escaping @MainActor ((@MainActor ([TmuxKey], Bool) -> Bool)?) -> Void = { _ in },
             onTerminalInputReadinessChange: @escaping @MainActor ((@MainActor () -> Bool)?) -> Void = { _ in },
             onCopyActionChange: @escaping @MainActor ((@MainActor () -> Void)?) -> Void = { _ in },
             onViewportGridChange: @escaping @MainActor (TerminalViewportSizing.Grid?) -> Void = { _ in },
@@ -210,7 +205,6 @@
             self.onKeyboardRequest = onKeyboardRequest
             self.telemetry = telemetry
             self.submitResponse = submitResponse
-            self.onTerminalInput = onTerminalInput
             self.onTerminalInputQueued = onTerminalInputQueued
             self.onCancelVoiceInput = onCancelVoiceInput
             self.onVoiceInputContextProviderChange = onVoiceInputContextProviderChange
@@ -222,7 +216,6 @@
             self.onSwitchWindow = onSwitchWindow
             self.preparationID = preparationID
             self.onPresentationChange = onPresentationChange
-            self.onTerminalPaste = onTerminalPaste
             self.onPasteImage = onPasteImage
             self.coordinator = StreamCoordinator(
                 paneId: paneId,
@@ -365,12 +358,12 @@
                 onCursorNavigationCancellationChange { [weak coordinator] in
                     coordinator?.terminalState?.cancelCursorNavigation?()
                 }
-                onExternalInputSenderChange { [weak coordinator, relayClient] keys, immediately, onSent in
+                onExternalInputSenderChange { [weak coordinator, relayClient] keys, immediately in
                     guard
                         let coordinator, coordinator.isReadyForToolbarInput,
                         relayClient.isHostConnected, !keys.isEmpty else { return false }
                     coordinator.terminalState?.prepareForExternalInput?()
-                    coordinator.enqueueKeySend(keys: keys, relayClient: relayClient, immediately: immediately, onSent: onSent)
+                    coordinator.enqueueKeySend(keys: keys, relayClient: relayClient, immediately: immediately)
                     return true
                 }
                 onTerminalInputReadinessChange { [weak coordinator] in
@@ -599,9 +592,7 @@
                             }
                             phraseInputRevision &+= 1
                             onTerminalInputQueued()
-                            coordinator.enqueuePasteText(text, relayClient: relayClient) {
-                                onTerminalPaste(text)
-                            }
+                            coordinator.enqueuePasteText(text, relayClient: relayClient)
                         },
                         onPasteImage: terminalImagePasteAction,
                         onViewportGridChange: onViewportGridChange,
@@ -718,9 +709,7 @@
             guard canSendTerminalInput, !keys.isEmpty else { return }
             phraseInputRevision &+= 1
             onTerminalInputQueued()
-            coordinator.enqueueKeySend(keys: keys, relayClient: relayClient) {
-                onTerminalInput(keys)
-            }
+            coordinator.enqueueKeySend(keys: keys, relayClient: relayClient)
         }
 
         private var phraseContext: TerminalPhraseContext {
@@ -737,9 +726,7 @@
             coordinator.terminalState?.prepareForExternalInput?()
             phraseInputRevision &+= 1
             onTerminalInputQueued()
-            coordinator.enqueueKeySend(keys: request.phrase.keys, relayClient: relayClient, immediately: true) {
-                onTerminalInput(request.phrase.keys)
-            }
+            coordinator.enqueueKeySend(keys: request.phrase.keys, relayClient: relayClient, immediately: true)
             return true
         }
 
@@ -751,9 +738,7 @@
             let keys = request.button.action.keys
             phraseInputRevision &+= 1
             onTerminalInputQueued()
-            coordinator.enqueueKeySend(keys: keys, relayClient: relayClient, immediately: true) {
-                onTerminalInput(keys)
-            }
+            coordinator.enqueueKeySend(keys: keys, relayClient: relayClient, immediately: true)
             return true
         }
 
@@ -1061,8 +1046,7 @@
 
         /// Accumulates rapid keystrokes and flushes them as a single command after a short delay.
         func enqueueKeySend(
-            keys: [TmuxKey], relayClient: ViewerRelayClient, immediately: Bool = false,
-            onSent: @escaping @MainActor () -> Void
+            keys: [TmuxKey], relayClient: ViewerRelayClient, immediately: Bool = false
         ) {
             terminalState?.cancelCursorNavigation?()
             terminalState?.cancelQuestionCheck?()
@@ -1070,9 +1054,9 @@
                 keystrokeDebouncer = makeInputQueue(relayClient: relayClient)
             }
             if immediately {
-                keystrokeDebouncer?.enqueueImmediately(keys, onSent: onSent)
+                keystrokeDebouncer?.enqueueImmediately(keys)
             } else {
-                keystrokeDebouncer?.enqueue(keys, onSent: onSent)
+                keystrokeDebouncer?.enqueue(keys)
             }
         }
 
@@ -1097,13 +1081,13 @@
             return true
         }
 
-        func enqueuePasteText(_ text: String, relayClient: ViewerRelayClient, onSent: @escaping @MainActor () -> Void) {
+        func enqueuePasteText(_ text: String, relayClient: ViewerRelayClient) {
             terminalState?.cancelCursorNavigation?()
             terminalState?.cancelQuestionCheck?()
             if keystrokeDebouncer == nil {
                 keystrokeDebouncer = makeInputQueue(relayClient: relayClient)
             }
-            keystrokeDebouncer?.enqueuePasteText(text, onSent: onSent)
+            keystrokeDebouncer?.enqueuePasteText(text)
         }
 
         private func makeInputQueue(relayClient: ViewerRelayClient) -> KeystrokeDebouncer {
@@ -1747,7 +1731,7 @@
 
             // A UIViewRepresentable may outlive many value-type SwiftUI views.
             // Refresh callbacks on every update so the native terminal never
-            // sends through the host, pane, or monitoring state captured by its
+            // sends through the host or pane state captured by its
             // first render.
             terminalView.onInput = onInput
             terminalView.onKeyboardRequest = onKeyboardRequest

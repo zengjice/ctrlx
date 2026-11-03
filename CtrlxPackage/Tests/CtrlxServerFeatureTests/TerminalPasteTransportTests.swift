@@ -1,7 +1,7 @@
+import ConcurrencyExtras
 import CtrlxCommon
 import CtrlxEncryption
 import CtrlxNetworking
-import ConcurrencyExtras
 import Dependencies
 import Foundation
 import Testing
@@ -31,9 +31,12 @@ struct TerminalPasteTransportTests {
             let url = try #require(URL(string: "ws://127.0.0.1:\(port)"))
             let hostEncryption = try await encryption(), viewerEncryption = try await encryption()
             let host = ConnectedViewer(
-                pairedViewer: .init(id: "pair", deviceName: "Viewer",
-                                    partnerPublicKey: viewerEncryption.publicKey.base64EncodedString(),
-                                    partnerPublicKeyId: viewerEncryption.keyId),
+                pairedViewer: .init(
+                    id: "pair",
+                    deviceName: "Viewer",
+                    partnerPublicKey: viewerEncryption.publicKey.base64EncodedString(),
+                    partnerPublicKeyId: viewerEncryption.keyId
+                ),
                 e2eeService: hostEncryption
             )
             let viewer = ViewerRelayClient()
@@ -50,7 +53,9 @@ struct TerminalPasteTransportTests {
                 switch command.command {
                 case .sendKeystroke(.init([.text("before")])):
                     events.append("keys-start")
-                    for await _ in keyGate { break }
+                    for await _ in keyGate {
+                        break
+                    }
                     events.append("keys-end")
                 case .pasteTerminalText,
                      .expandCodexQuestions:
@@ -72,12 +77,25 @@ struct TerminalPasteTransportTests {
                 }
                 return CommandResponseMessage(commandId: command.id, success: true, codexQuestionsHandled: true)
             }
-            await host.connect(serverURL: url, deviceId: "host", deviceName: "Host", username: "test",
-                               publicKey: hostEncryption.publicKey.base64EncodedString(), publicKeyId: hostEncryption.keyId)
-            await viewer.connect(serverURL: url, pairId: "pair", deviceId: "viewer", deviceName: "Viewer",
-                                 publicKey: viewerEncryption.publicKey.base64EncodedString(), publicKeyId: viewerEncryption.keyId,
-                                 e2eeService: viewerEncryption, partnerPublicKey: hostEncryption.publicKey.base64EncodedString(),
-                                 partnerPublicKeyId: hostEncryption.keyId)
+            await host.connect(
+                serverURL: url,
+                deviceId: "host",
+                deviceName: "Host",
+                username: "test",
+                publicKey: hostEncryption.publicKey.base64EncodedString(),
+                publicKeyId: hostEncryption.keyId
+            )
+            await viewer.connect(
+                serverURL: url,
+                pairId: "pair",
+                deviceId: "viewer",
+                deviceName: "Viewer",
+                publicKey: viewerEncryption.publicKey.base64EncodedString(),
+                publicKeyId: viewerEncryption.keyId,
+                e2eeService: viewerEncryption,
+                partnerPublicKey: hostEncryption.publicKey.base64EncodedString(),
+                partnerPublicKeyId: hostEncryption.keyId
+            )
             do {
                 try await waitUntil { host.isViewerConnected && viewer.isHostConnected }
                 try await waitUntil { viewer.hostSupportsTerminalPaste && viewer.hostSupportsCodexQuestionAcknowledgement }
@@ -111,17 +129,14 @@ struct TerminalPasteTransportTests {
                 events.removeAll()
                 let debouncer = KeystrokeDebouncer(paneId: "%7", relayClient: viewer)
                 defer { debouncer.cancelAll() }
-                debouncer.enqueuePasteText("first\nsecond\n") { events.append("draft") }
-                debouncer.enqueueImmediately([.enter]) { events.append("observed-send") }
+                debouncer.enqueuePasteText("first\nsecond\n")
+                debouncer.enqueueImmediately([.enter])
                 try await waitUntil { events == ["input-start"] }
                 try await Task.sleep(for: .milliseconds(50))
                 #expect(events == ["input-start"])
                 releaseInput.yield()
-                try await waitUntil { events.contains("observed-send") && events.contains("send") }
-                #expect(Array(events.prefix(3)) == ["input-start", "input-end", "draft"])
-                let draftIndex = try #require(events.firstIndex(of: "draft"))
-                let sendIndex = try #require(events.firstIndex(of: "observed-send"))
-                #expect(draftIndex < sendIndex)
+                try await waitUntil { events.last == "send" }
+                #expect(events == ["input-start", "input-end", "send"])
                 // A deliberately slow file read must not hold the socket receive
                 // loop, otherwise subsequent keystrokes cannot even reach the FIFO.
                 try await waitUntil { viewer.hostSupportsFileBrowsing }
@@ -134,7 +149,9 @@ struct TerminalPasteTransportTests {
                          .prepareSessionWorktree,
                          .createTmuxSession:
                         events.append("file-start")
-                        for await _ in fileGate { break }
+                        for await _ in fileGate {
+                            break
+                        }
                         events.append("file-end")
                     default: events.append("key")
                     }
@@ -145,7 +162,7 @@ struct TerminalPasteTransportTests {
                     width: 80,
                     height: 24,
                     workingDirectory: "/Host",
-                    worktree: .init(name: "new", expectedHead: "abc"),
+                    worktree: .init(name: "new", expectedHead: "abc")
                 )
                 for command in [BrowseFiles(.info(path: "/Host")).commandType, PrepareSessionWorktree(path: "/Host").commandType, worktreeSession.commandType] {
                     events.removeAll()
@@ -356,8 +373,10 @@ struct TerminalPasteTransportTests {
         try await app.asyncShutdown()
     }
 
-    @Test("Absent or false Host capabilities fail before sending and do not block following keys",
-          arguments: [Optional<Bool>.none, false])
+    @Test(
+        "Absent or false Host capabilities fail before sending and do not block following keys",
+        arguments: [Bool?.none, false]
+    )
     func legacyHost(capability: Bool?) async throws {
         let originalVersion = VersionCompatibility.appVersionOverride
         VersionCompatibility.appVersionOverride = "3.0.43"
@@ -377,9 +396,12 @@ struct TerminalPasteTransportTests {
             let url = try #require(URL(string: "ws://127.0.0.1:\(port)"))
             let hostEncryption = try await encryption(), viewerEncryption = try await encryption()
             let host = ConnectedViewer(
-                pairedViewer: .init(id: "pair", deviceName: "Viewer",
-                                    partnerPublicKey: viewerEncryption.publicKey.base64EncodedString(),
-                                    partnerPublicKeyId: viewerEncryption.keyId),
+                pairedViewer: .init(
+                    id: "pair",
+                    deviceName: "Viewer",
+                    partnerPublicKey: viewerEncryption.publicKey.base64EncodedString(),
+                    partnerPublicKeyId: viewerEncryption.keyId
+                ),
                 e2eeService: hostEncryption
             )
             let viewer = ViewerRelayClient()
@@ -398,12 +420,25 @@ struct TerminalPasteTransportTests {
                 commands.append(command.command)
                 return .success(for: command.id)
             }
-            await host.connect(serverURL: url, deviceId: "host", deviceName: "Host", username: "test",
-                               publicKey: hostEncryption.publicKey.base64EncodedString(), publicKeyId: hostEncryption.keyId)
-            await viewer.connect(serverURL: url, pairId: "pair", deviceId: "viewer", deviceName: "Viewer",
-                                 publicKey: viewerEncryption.publicKey.base64EncodedString(), publicKeyId: viewerEncryption.keyId,
-                                 e2eeService: viewerEncryption, partnerPublicKey: hostEncryption.publicKey.base64EncodedString(),
-                                 partnerPublicKeyId: hostEncryption.keyId)
+            await host.connect(
+                serverURL: url,
+                deviceId: "host",
+                deviceName: "Host",
+                username: "test",
+                publicKey: hostEncryption.publicKey.base64EncodedString(),
+                publicKeyId: hostEncryption.keyId
+            )
+            await viewer.connect(
+                serverURL: url,
+                pairId: "pair",
+                deviceId: "viewer",
+                deviceName: "Viewer",
+                publicKey: viewerEncryption.publicKey.base64EncodedString(),
+                publicKeyId: viewerEncryption.keyId,
+                e2eeService: viewerEncryption,
+                partnerPublicKey: hostEncryption.publicKey.base64EncodedString(),
+                partnerPublicKeyId: hostEncryption.keyId
+            )
             do {
                 try await waitUntil { host.isViewerConnected && viewer.isHostConnected && receivedState.value }
                 let frameCount = await relay.encryptedFrames
@@ -418,33 +453,39 @@ struct TerminalPasteTransportTests {
                 }
                 let started = ContinuousClock.now
                 let fit = await viewer.sendCommand(ResizeTmuxPane(width: 64, height: 44, userInitiated: true), paneId: "@1")
-                if case .success = fit { Issue.record("Old Host accepted Fit") }
+                if case .success = fit {
+                    Issue.record("Old Host accepted Fit")
+                }
                 let paste = await viewer.sendCommand(PasteTerminalText(text: "one\ntwo"), paneId: "%7")
-                if case .success = paste { Issue.record("Old Host accepted paste") }
+                if case .success = paste {
+                    Issue.record("Old Host accepted paste")
+                }
                 let create = await viewer.sendCommand(CreateSessionDirectory(parentDirectory: "/Host", name: "child"), paneId: "")
-                if case .success = create { Issue.record("Old Host accepted directory creation") }
+                if case .success = create {
+                    Issue.record("Old Host accepted directory creation")
+                }
                 let worktreeSession = CreateTmuxSession(
                     sessionName: "new",
                     width: 80,
                     height: 24,
                     workingDirectory: "/Host",
-                    worktree: .init(name: "new", expectedHead: "abc"),
+                    worktree: .init(name: "new", expectedHead: "abc")
                 )
                 #expect(await !(viewer.send(PrepareSessionWorktree(path: "/Host").commandType, paneId: "")))
                 #expect(await !(viewer.send(worktreeSession.commandType, paneId: "")))
                 let browse = await viewer.sendCommand(BrowseFiles(.list(path: nil, offset: 0, includeHidden: false)), paneId: "%7")
-                if case .success = browse { Issue.record("Old Host accepted file browsing") }
+                if case .success = browse {
+                    Issue.record("Old Host accepted file browsing")
+                }
                 #expect(ContinuousClock.now - started < .seconds(1))
                 #expect(await relay.encryptedFrames == frameCount)
                 var failures: [String] = []
-                var observed: [String] = []
                 let debouncer = KeystrokeDebouncer(paneId: "%7", relayClient: viewer) { failures.append($0) }
                 defer { debouncer.cancelAll() }
-                debouncer.enqueuePasteText("one\ntwo") { observed.append("rejected-paste") }
-                debouncer.enqueueImmediately([.enter]) { observed.append("empty-enter") }
-                debouncer.enqueueImmediately([.text("after")]) { observed.append("after") }
+                debouncer.enqueuePasteText("one\ntwo")
+                debouncer.enqueueImmediately([.enter])
+                debouncer.enqueueImmediately([.text("after")])
                 try await waitUntil { commands == [SendKeystroke([.enter]).commandType, SendKeystroke([.text("after")]).commandType] }
-                #expect(observed == ["empty-enter", "after"])
                 #expect(failures.count == 1)
                 #expect(failures.first?.contains("Update the Host Mac") == true)
                 // A later capability offer enables the operation, but is never
@@ -459,12 +500,18 @@ struct TerminalPasteTransportTests {
                 #expect(await viewer.send(worktreeSession.commandType, paneId: ""))
                 #expect(commands.last == worktreeSession.commandType)
                 let modernBrowse = await viewer.sendCommand(BrowseFiles(.info(path: "/Host/file")), paneId: "%7")
-                if case .failure(let error) = modernBrowse { Issue.record("Modern file browsing rejected: \(error)") }
+                if case let .failure(error) = modernBrowse {
+                    Issue.record("Modern file browsing rejected: \(error)")
+                }
                 let modernCreate = await viewer.sendCommand(CreateSessionDirectory(parentDirectory: "/Host", name: "child"), paneId: "")
-                if case .failure(let error) = modernCreate { Issue.record("Modern directory creation rejected: \(error)") }
+                if case let .failure(error) = modernCreate {
+                    Issue.record("Modern directory creation rejected: \(error)")
+                }
                 #expect(commands.last == CreateSessionDirectory(parentDirectory: "/Host", name: "child").commandType)
                 let modern = await viewer.sendCommand(PasteTerminalText(text: "one\ntwo"), paneId: "%7")
-                if case .failure(let error) = modern { Issue.record("Modern paste rejected: \(error)") }
+                if case let .failure(error) = modern {
+                    Issue.record("Modern paste rejected: \(error)")
+                }
                 #expect(commands.last == PasteTerminalText(text: "one\ntwo").commandType)
                 host.onCommand = { command in
                     commands.append(command.command)
@@ -482,10 +529,11 @@ struct TerminalPasteTransportTests {
                 }
                 try await waitUntil { questionResults.count == 3 }
                 #expect(questionResults == [false, true, false])
-                observed.removeAll()
-                debouncer.enqueuePasteText("host-rejected") { observed.append("rejected-paste") }
-                debouncer.enqueueImmediately([.enter]) { observed.append("empty-enter") }
-                try await waitUntil { failures.count == 2 && observed == ["empty-enter"] }
+                commands.removeAll()
+                debouncer.enqueuePasteText("host-rejected")
+                debouncer.enqueueImmediately([.enter])
+                try await waitUntil { failures.count == 2 && commands.count == 2 }
+                #expect(commands == [PasteTerminalText(text: "host-rejected").commandType, SendKeystroke([.enter]).commandType])
                 #expect(failures.last?.contains("Paste rejected by tmux") == true)
                 await viewer.disconnect()
                 #expect(!viewer.hostSupportsCodexQuestionAcknowledgement && !viewer.hostSupportsTerminalPaste && !viewer.hostSupportsTerminalFit && !viewer.hostSupportsDirectoryCreation && !viewer.hostSupportsSessionWorktrees)
@@ -511,7 +559,9 @@ struct TerminalPasteTransportTests {
 
     private func waitUntil(_ condition: () async -> Bool) async throws {
         let deadline = ContinuousClock.now + .seconds(5)
-        while !(await condition()), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        while !(await condition()), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
         let met = await condition()
         try #require(met, "Terminal input queue did not converge")
     }

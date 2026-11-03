@@ -1,4 +1,5 @@
 #if os(iOS)
+    import CtrlxNetworking
     import Foundation
     import UIKit
     import UserNotifications
@@ -91,16 +92,14 @@
             willPresent notification: UNNotification,
             withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
         ) {
-            if
-                notification.request.content.userInfo[
-                    PushNotificationService.backgroundOnlyUserInfoKey
-                ] as? String == "true",
-                UIApplication.shared.applicationState == .active
-            {
+            guard
+                NotificationDelivery.shouldPresentInForeground(
+                    isRemote: notification.request.trigger is UNPushNotificationTrigger,
+                    userInfo: notification.request.content.userInfo
+                ) else {
                 completionHandler([])
                 return
             }
-            // Show the notification even when app is in foreground (banner + sound)
             completionHandler([.banner, .sound])
         }
     }

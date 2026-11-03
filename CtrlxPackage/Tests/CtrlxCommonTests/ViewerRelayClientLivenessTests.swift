@@ -44,8 +44,8 @@ struct ViewerRelayClientLivenessTests {
         // then the backoff reconnect (~1s) opens the second socket.
         let client = ViewerRelayClient(pingIntervalSeconds: 1, pongTimeoutSeconds: 1)
 
-        await client.connect(
-            serverURL: URL(string: "ws://127.0.0.1:\(server.port)")!,
+        try await client.connect(
+            serverURL: #require(URL(string: "ws://127.0.0.1:\(server.port)")),
             pairId: "test-pair",
             deviceId: "viewer-device",
             deviceName: "Test Viewer",
@@ -71,57 +71,6 @@ struct ViewerRelayClientLivenessTests {
         )
     }
 
-    @Test("A continued-processing probe replaces a stale socket without reporting Host offline")
-    func backgroundProbeSeparatesTransportFromHostDisconnect() async throws {
-        let upgrades = UpgradeCounter()
-        let server = try await MuteRelay.start(countingUpgradesInto: upgrades)
-        defer { server.stop() }
-
-        let e2eeService = try await withDependencies {
-            $0[SecretsService.self] = .inMemory()
-        } operation: {
-            try await E2EEService()
-        }
-
-        // Keep the normal watchdog out of this test; the explicit probe owns
-        // the stale-connection decision.
-        let client = ViewerRelayClient(pingIntervalSeconds: 60, pongTimeoutSeconds: 10)
-        var transportInterruptions = 0
-        var hostDisconnects = 0
-        client.onTransportInterrupted = {
-            transportInterruptions += 1
-        }
-        client.onHostDisconnected = {
-            hostDisconnects += 1
-        }
-
-        await client.connect(
-            serverURL: URL(string: "ws://127.0.0.1:\(server.port)")!,
-            pairId: "probe-pair",
-            deviceId: "viewer-device",
-            deviceName: "Test Viewer",
-            publicKey: "dGVzdC1wdWJsaWMta2V5LTAxMjM0NTY3ODkwMTIzNDU2Nw==",
-            publicKeyId: "viewer-key-id",
-            e2eeService: e2eeService,
-            partnerPublicKey: nil,
-            partnerPublicKeyId: nil
-        )
-        defer { Task { await client.disconnect() } }
-
-        #expect(await waitUntil { client.state.isConnected })
-        #expect(await waitUntil { upgrades.value >= 1 })
-
-        let result = await client.probeConnection(
-            staleAfter: .zero,
-            responseTimeout: .milliseconds(100)
-        )
-
-        #expect(result == .restarted)
-        #expect(await waitUntil { upgrades.value >= 2 })
-        #expect(transportInterruptions == 1)
-        #expect(hostDisconnects == 0)
-    }
-
     @Test("Foreground recovery refreshes Host presence without replacing a live Relay socket")
     func foregroundRecoveryRefreshesMissingHostPresence() async throws {
         let upgrades = UpgradeCounter()
@@ -135,8 +84,8 @@ struct ViewerRelayClientLivenessTests {
         }
 
         let client = ViewerRelayClient(pingIntervalSeconds: 60, pongTimeoutSeconds: 10)
-        await client.connect(
-            serverURL: URL(string: "ws://127.0.0.1:\(server.port)")!,
+        try await client.connect(
+            serverURL: #require(URL(string: "ws://127.0.0.1:\(server.port)")),
             pairId: "presence-pair",
             deviceId: "viewer-device",
             deviceName: "Test Viewer",
@@ -167,7 +116,9 @@ struct ViewerRelayClientLivenessTests {
     ) async -> Bool {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {
-            if await condition() { return true }
+            if await condition() {
+                return true
+            }
             try? await Task.sleep(for: .milliseconds(25))
         }
         return await condition()

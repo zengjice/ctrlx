@@ -398,13 +398,13 @@ Return to Source and Close controls and use the same five-item creation menu.
 
 ## iOS settings organization
 
-The Settings home groups connection, preferences, background activity and other
+The Settings home groups connection, preferences and other
 settings. **Hosts & Connection** contains connection controls, automatic connection,
 device name, paired Hosts and the Relay address. **Appearance & Terminal** keeps
 app appearance separate from terminal colors/font. **Keyboard & Input** contains
 keyboard placement/entry, Agent Quick Input and image-upload confirmation.
 **Voice Input**, **Quick Phrase Sync** and **New Session Defaults** have dedicated
-pages. Background Agent Monitoring and the global Debug Mode remain on the home
+pages. The global Debug Mode remains on the home
 page. **About CtrlX** groups version/device information, provenance and licenses.
 
 On iOS, Voice Input shows language and correction availability before provider

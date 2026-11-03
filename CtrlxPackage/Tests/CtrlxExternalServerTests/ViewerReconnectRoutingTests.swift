@@ -56,7 +56,7 @@ extension EnvSerializedSuites {
             )
             #expect(await waitUntil { count(of: "hostConnected", in: viewer.all()) == 1 })
             let frame = try opaqueFrame(Data(repeating: 42, count: 600_000))
-            let chunkSize = 256 * 1024
+            let chunkSize = 256 * 1_024
             for offset in stride(from: 0, to: frame.count, by: chunkSize) {
                 let end = min(offset + chunkSize, frame.count)
                 try await hostWS.send(
@@ -83,7 +83,7 @@ extension EnvSerializedSuites {
                 port: port, query: "pairId=\(pairId)&deviceType=host&deviceId=host-overflow", collector: TextCollector()
             )
             #expect(await waitUntil { await app.connectionHub.isHostConnected(pairId: pairId) })
-            let fragment = Data(repeating: 42, count: 256 * 1024)
+            let fragment = Data(repeating: 42, count: 256 * 1_024)
             for index in 0..<4 {
                 try await hostWS.send(raw: fragment, opcode: index == 0 ? .binary : .continuation, fin: false)
             }
@@ -125,7 +125,7 @@ extension EnvSerializedSuites {
                 )
                 #expect(await waitUntil { await app.connectionHub.isViewerConnected(pairId: pairId) })
                 let frames = try (0..<48).map { index in
-                    try opaqueFrame(Data(("\(index):" + String(repeating: "x", count: index.isMultiple(of: 3) ? 9000 : 20)).utf8))
+                    try opaqueFrame(Data(("\(index):" + String(repeating: "x", count: index.isMultiple(of: 3) ? 9_000 : 20)).utf8))
                 }
                 let hostWS = try await connectClient(
                     port: port, query: "pairId=\(pairId)&deviceType=host&deviceId=host-early",
@@ -156,16 +156,16 @@ extension EnvSerializedSuites {
                     )
                     #expect(await waitUntil { count(of: "viewerConnected", in: host.all()) == 1 })
 
-                    let history = (0..<3000).map { "历史 \($0): 中文和 emoji 🐈\r\n" }.joined()
+                    let history = (0..<3_000).map { "历史 \($0): 中文和 emoji 🐈\r\n" }.joined()
                     let snapshot = Data((history + "\u{1b}[2J\u{1b}[Hsnapshot\u{1b}[64;1H> OLD INPUT\u{1b}[66;1HSTATUS").utf8)
                     let initial = TerminalStreamMessage.InitialState(
-                        width: 241, height: 66, content: Data(), scrollbackLineLimit: 4000,
+                        width: 241, height: 66, content: Data(), scrollbackLineLimit: 4_000,
                         contentByteCount: snapshot.count
                     )
                     var messages = [TerminalStreamMessage(
                         paneId: "%6", updateType: reset ? .resetState(initial) : .initialState(initial)
                     )]
-                    let chunkSizes = [16384, 1, 3, 19, 64, 4096]
+                    let chunkSizes = [16_384, 1, 3, 19, 64, 4_096]
                     var offset = 0
                     var chunkIndex = 0
                     while offset < snapshot.count {
@@ -215,11 +215,14 @@ extension EnvSerializedSuites {
                 let terminal = SwiftTerm.Terminal(delegate: delegate)
                 terminal.resize(cols: 241, rows: 66)
                 var snapshot = TerminalStreamSnapshotAccumulator()
-                func feed(_ data: Data) { terminal.feed(buffer: Array(data)[...]) }
+                func feed(_ data: Data) {
+                    terminal.feed(buffer: Array(data)[...])
+                }
                 for payload in payloads {
                     let message = try JSONDecoder().decode(TerminalStreamMessage.self, from: payload)
                     switch message.updateType {
-                    case let .initialState(initial), let .resetState(initial):
+                    case let .initialState(initial),
+                         let .resetState(initial):
                         _ = snapshot.begin(expectedByteCount: initial.contentByteCount ?? 0)
                     case let .dataChunk(chunk):
                         let data = try #require(chunk.data)
@@ -262,7 +265,7 @@ extension EnvSerializedSuites {
                 let total = 600
                 var expected: [String] = []
                 for index in 0..<total {
-                    let payload = Data(("\(index):" + String(repeating: "x", count: index.isMultiple(of: 3) ? 9000 : 20)).utf8)
+                    let payload = Data(("\(index):" + String(repeating: "x", count: index.isMultiple(of: 3) ? 9_000 : 20)).utf8)
                     let frame = try opaqueFrame(payload)
                     expected.append(String(decoding: frame, as: UTF8.self))
                     let binary = framing == 1 || (framing == 2 && index.isMultiple(of: 2))
@@ -406,8 +409,8 @@ extension EnvSerializedSuites {
 
             // Also model an old frame suspended AFTER the controller's ownership
             // check: the final send boundary must reject it after replacement.
-            await app.relayService.handleEncryptedFrame(
-                try opaqueFrame(Data("stale in-flight frame".utf8)), kind: .binary,
+            try await app.relayService.handleEncryptedFrame(
+                opaqueFrame(Data("stale in-flight frame".utf8)), kind: .binary,
                 pairId: pairId, sender: .host, sourceWebSocket: oldHostConnection.webSocket
             )
             #expect(count(of: "encrypted", in: viewer.all()) == 0)
@@ -432,11 +435,115 @@ extension EnvSerializedSuites {
             try await hostBWS.close()
         }
 
+        @Test("Slow APNs delivery does not block encrypted traffic or heartbeats")
+        func slowPushDoesNotBlockRelay() async throws {
+            let release = AsyncStream<Void>.makeStream()
+            defer { release.continuation.finish() }
+            let sends = TextCollector()
+            let queue = APNsSendQueue { payload, _ in
+                sends.append("start:\(payload.badge ?? -1)")
+                if payload.badge == 1 {
+                    for await _ in release.stream {
+                        break
+                    }
+                }
+                sends.append("end:\(payload.badge ?? -1)")
+            }
+            try await withRunningRelay { app, port in
+                let apns = app.apnsService
+                let relay = RelayService(
+                    pairingService: app.pairingService, connectionHub: app.connectionHub,
+                    pushQueue: queue, metricsService: app.metricsService
+                )
+                await app.storage.setWithAsyncShutdown(RelayServiceKey.self, to: relay) { service in
+                    await service.shutdown()
+                    await apns?.shutdown()
+                }
+                let pairId = try await makePair(app)
+                let viewer = TextCollector()
+                let host = TextCollector()
+                let viewerWS = try await connectClient(
+                    port: port, query: "pairId=\(pairId)&deviceType=viewer&deviceId=viewer", collector: viewer
+                )
+                let hostWS = try await connectClient(
+                    port: port, query: "pairId=\(pairId)&deviceType=host&deviceId=host", collector: host
+                )
+                defer {
+                    viewerWS.close(promise: nil)
+                    hostWS.close(promise: nil)
+                }
+                #expect(await waitUntil { count(of: "hostConnected", in: viewer.all()) == 1 })
+                for badge in [1, 0] {
+                    let push = WebSocketMessage.encryptedPush(.init(
+                        encryptedContent: .init(ciphertext: Data("push".utf8), senderKeyId: "test"),
+                        pairId: pairId, badge: badge, silent: badge == 0
+                    ))
+                    try await hostWS.send(raw: JSONEncoder().encode(push), opcode: .text)
+                }
+                #expect(await waitUntil { sends.all() == ["start:1"] })
+                let frame = try opaqueFrame(Data("terminal output and command response".utf8))
+                try await hostWS.send(raw: frame, opcode: .binary)
+                try await hostWS.send(raw: JSONEncoder().encode(WebSocketMessage.ping), opcode: .text)
+                #expect(await waitUntil { viewer.all().contains(String(decoding: frame, as: UTF8.self)) })
+                #expect(await waitUntil { count(of: "pong", in: host.all()) == 1 })
+                #expect(sends.all() == ["start:1"], "The second push must wait while terminal traffic continues")
+                release.continuation.finish()
+                #expect(await waitUntil { sends.all() == ["start:1", "end:1", "start:0", "end:0"] })
+                try await viewerWS.close()
+                try await hostWS.close()
+            }
+        }
+
+        @Test("APNs alerts and badge clears are delivered regardless of Viewer connection", arguments: [true, false])
+        func pushDeliveryIgnoresSocketPresence(connected: Bool) async throws {
+            let log = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-apns-\(UUID()).jsonl")
+            defer { try? FileManager.default.removeItem(at: log) }
+            try await withRunningRelay(apnsLogPath: log.path) { app, port in
+                let first = try await makePair(app)
+                let second = try await makePair(app)
+                let withoutToken = try await makePair(app)
+                await app.pairingService.registerPushToken("test-device-token", for: first)
+                await app.pairingService.registerPushToken("test-device-token", for: second)
+                let socket: WebSocket? = if connected {
+                    try await connectClient(
+                        port: port, query: "pairId=\(first)&deviceType=viewer&deviceId=viewer-device",
+                        collector: TextCollector()
+                    )
+                } else {
+                    nil
+                }
+                defer { socket?.close(promise: nil) }
+                #expect(await waitUntil { await app.connectionHub.isViewerConnected(pairId: first) == connected })
+
+                for (pairId, badge, silent) in [(first, 2, false), (second, 3, false), (first, 0, true), (withoutToken, 9, false)] {
+                    await app.relayService.handleHostMessage(.encryptedPush(.init(
+                        encryptedContent: .init(ciphertext: Data("opaque test payload".utf8), senderKeyId: "test-key"),
+                        pairId: pairId, badge: badge, silent: silent
+                    )), pairId: pairId)
+                }
+                #expect(await waitUntil {
+                    let contents = try? String(contentsOf: log, encoding: .utf8)
+                    return contents?.split(separator: "\n").count == 3
+                })
+                let records = try String(contentsOf: log, encoding: .utf8).split(separator: "\n").map {
+                    try JSONDecoder().decode(APNsPushLogEntry.self, from: Data($0.utf8))
+                }
+                #expect(records.map(\.pairId) == [first, second, first])
+                #expect(records.map(\.aggregatedBadge) == [2, 5, 3])
+                #expect(records.map(\.pushType) == ["alert", "alert", "background"])
+                #expect(records.map(\.silent) == [false, false, true])
+                if let socket {
+                    try await socket.close()
+                }
+            }
+        }
+
         // MARK: - Relay lifecycle
 
         /// Boots the real relay on an ephemeral port, runs the body, and tears down
         /// both the HTTP server and the application.
         private func withRunningRelay(
+            apnsLogPath: String? = nil,
             _ body: (Application, Int) async throws -> Void
         ) async throws {
             // Isolate each run's `pairs.json` into a fresh temp dir. Config is
@@ -448,7 +555,9 @@ extension EnvSerializedSuites {
 
             let app = try await Application.make(.testing)
             do {
-                try await configure(app, env: ["DATA_DIRECTORY": tempDir.path])
+                var env = ["DATA_DIRECTORY": tempDir.path]
+                env["APNS_E2E_LOG_PATH"] = apnsLogPath
+                try await configure(app, env: env)
                 // Match the framework's own test flow (`testing()` calls `boot()` before
                 // starting a live server): run lifecycle handlers before binding.
                 try await app.asyncBoot()
@@ -526,9 +635,13 @@ extension EnvSerializedSuites {
                     for (index, frame) in earlyFrames.enumerated() {
                         ws.send(raw: frame, opcode: index.isMultiple(of: 2) ? .binary : .text, promise: nil)
                     }
-                    if gate.claim() { continuation.resume(returning: ws) }
+                    if gate.claim() {
+                        continuation.resume(returning: ws)
+                    }
                 }.whenFailure { error in
-                    if gate.claim() { continuation.resume(throwing: error) }
+                    if gate.claim() {
+                        continuation.resume(throwing: error)
+                    }
                 }
             }
         }
@@ -544,7 +657,9 @@ extension EnvSerializedSuites {
         ) async -> Bool {
             let deadline = ContinuousClock.now + timeout
             while ContinuousClock.now < deadline {
-                if await condition() { return true }
+                if await condition() {
+                    return true
+                }
                 try? await Task.sleep(for: .milliseconds(25))
             }
             return await condition()
@@ -560,14 +675,16 @@ extension EnvSerializedSuites {
             texts.reduce(into: 0) { total, text in
                 guard let envelope = try? JSONDecoder().decode(Envelope.self, from: Data(text.utf8))
                 else { return }
-                if envelope.type == type { total += 1 }
+                if envelope.type == type {
+                    total += 1
+                }
             }
         }
     }
 }
 
 #if os(macOS)
-    private final class RenderingDelegate: TerminalDelegate {
+    final private class RenderingDelegate: TerminalDelegate {
         func send(source _: SwiftTerm.Terminal, data _: ArraySlice<UInt8>) { }
         func showCursor(source _: SwiftTerm.Terminal) { }
         func hideCursor(source _: SwiftTerm.Terminal) { }
@@ -616,7 +733,9 @@ final private class ResumeGate: @unchecked Sendable {
     func claim() -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        if claimed { return false }
+        if claimed {
+            return false
+        }
         claimed = true
         return true
     }

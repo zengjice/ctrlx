@@ -22,7 +22,6 @@
         @Environment(SessionStore.self) private var sessionStore
         @Environment(IOSFileBrowserWorkspaceStore.self) private var fileWorkspaces
         @Environment(ViewerConnectionManager.self) private var connectionManager
-        @Environment(AgentBackgroundMonitoringService.self) private var backgroundMonitoring
         @Environment(\.dismiss) private var dismiss
         @Environment(\.agentWorkflowNavigation) private var workflowNavigation
 
@@ -82,7 +81,7 @@
         @State private var isKeyboardActive: Bool
 
         /// Ordered sender shared by keyboard and one-shot toolbar input.
-        @State private var externalInputSenders: [String: @MainActor ([TmuxKey], Bool, @escaping @MainActor () -> Void) -> Bool] = [:]
+        @State private var externalInputSenders: [String: @MainActor ([TmuxKey], Bool) -> Bool] = [:]
         @State private var voiceInputContextProviders: [String: TerminalVoiceInputContextProvider] = [:]
         @State private var cursorNavigationCancellations: [String: @MainActor () -> Void] = [:]
         @State private var terminalInputReadiness: [String: @MainActor () -> Bool] = [:]
@@ -1808,28 +1807,11 @@
                     responseState.request.responseView(
                         isConnected: relayClient.isHostConnected,
                         submit: { response in
-                            let shouldMonitor = settings.agentBackgroundMonitoringEnabled
-                                && AgentBackgroundMonitoringPolicy.shouldStart(for: response)
-                            if shouldMonitor {
-                                backgroundMonitoring.startIfNeeded(
-                                    for: response,
-                                    hostId: hostId,
-                                    paneId: activeService.paneId,
-                                    sessionName: sessionName,
-                                    windowName: window.windowName
-                                )
-                            }
                             let succeeded = await activeService.submitResponse(
                                 response,
                                 pluginID: responseState.pluginID,
                                 requestID: responseState.requestID
                             )
-                            if !succeeded, shouldMonitor {
-                                backgroundMonitoring.removePane(
-                                    hostId: hostId,
-                                    paneId: activeService.paneId
-                                )
-                            }
                             if !succeeded {
                                 commandError = "Couldn't send the response. Check the current request and try again."
                             }
@@ -1989,21 +1971,10 @@
                 // Tiled panes pass `responseState: .constant(nil)`, so no response
                 // form is shown here and the submit closure is never invoked.
                 submitResponse: { _ in false },
-                onTerminalInput: { keys in
-                    observeTerminalInput(
-                        keys,
-                        paneId: pane.paneId,
-                        windowName: windowName
-                    )
-                },
                 onTerminalInputQueued: { terminalInputRevision &+= 1 },
                 onCancelVoiceInput: {
                     guard terminalIsVisible, pane.paneId == activePaneId else { return false }
                     return voiceSession.cancelIfPresented()
-                },
-                onTerminalPaste: { text in
-                    guard settings.agentBackgroundMonitoringEnabled, relayClient.isHostConnected else { return }
-                    backgroundMonitoring.handleTerminalPaste(text, hostId: hostId, paneId: pane.paneId)
                 },
                 onPasteImage: { image in
                     guard terminalIsVisible, activePaneId == pane.paneId else { return }
@@ -2042,32 +2013,6 @@
                 }
             )
             .environment(relayClient)
-        }
-
-        private func observeTerminalInput(
-            _ keys: [TmuxKey],
-            paneId: String,
-            windowName: String
-        ) {
-            guard
-                settings.agentBackgroundMonitoringEnabled,
-                relayClient.isHostConnected
-            else {
-                backgroundMonitoring.resetTerminalInput(
-                    hostId: hostId,
-                    paneId: paneId
-                )
-                return
-            }
-
-            backgroundMonitoring.handleTerminalInput(
-                keys,
-                hostId: hostId,
-                paneId: paneId,
-                sessionName: sessionName,
-                windowName: windowName,
-                currentState: sessionStore.session(for: paneId, hostId: hostId)?.state
-            )
         }
 
         // MARK: - Status Bar
@@ -2267,13 +2212,7 @@
                 request.isValid(in: activePhraseContext, savedPhrases: settings.quickPhrases.phrases),
                 let paneId = request.context.target.paneID
             else { return false }
-            let windowName = window?.windowName ?? ""
-            guard
-                enqueueToolbarKeys(request.phrase.keys, paneId: paneId, immediately: true, onSent: {
-                    // Phrases are ordinary user input; retain normal prompt monitoring.
-                    observeTerminalInput(request.phrase.keys, paneId: paneId, windowName: windowName)
-                }) else { return false }
-            return true
+            return enqueueToolbarKeys(request.phrase.keys, paneId: paneId, immediately: true)
         }
 
         private func sendCustomButton(_ request: TerminalCustomButtonRequest) -> Bool {
@@ -2282,10 +2221,7 @@
                 request.isValid(in: activePhraseContext, savedButtons: settings.customButtons.buttons),
                 let paneId = request.context.target.paneID else { return false }
             let keys = request.button.action.keys
-            let windowName = window?.windowName ?? ""
-            return enqueueToolbarKeys(keys, paneId: paneId, immediately: true, onSent: {
-                observeTerminalInput(keys, paneId: paneId, windowName: windowName)
-            })
+            return enqueueToolbarKeys(keys, paneId: paneId, immediately: true)
         }
 
         private var activeAgentCommandContext: AgentCommandContext? {
@@ -2305,19 +2241,7 @@
         private func sendAgentCommand(_ request: AgentCommandRequest) -> Bool {
             guard request.isValid(in: activeAgentCommandContext) else { return false }
 
-            // Update the draft only after the ordered input succeeds. Executing
-            // a bare command does not arm the background-turn monitor.
-            let windowName = window?.windowName ?? ""
-            guard
-                enqueueToolbarKeys(request.keys, paneId: request.context.target.paneID, immediately: true, onSent: {
-                    if request.submission == .execute {
-                        backgroundMonitoring.resetTerminalInput(hostId: hostId, paneId: request.context.target.paneID)
-                    } else {
-                        observeTerminalInput(request.keys, paneId: request.context.target.paneID, windowName: windowName)
-                    }
-                })
-            else { return false }
-            return true
+            return enqueueToolbarKeys(request.keys, paneId: request.context.target.paneID, immediately: true)
         }
 
         private func sendCommand(_ command: CommandType, paneId: String, inputBinding: ViewerWorkspaceInputBinding? = nil) async {
@@ -2335,10 +2259,7 @@
                 let activePaneId
             else { return }
 
-            let windowName = window?.windowName ?? ""
-            enqueueToolbarKeys(keys, paneId: activePaneId, onSent: {
-                observeTerminalInput(keys, paneId: activePaneId, windowName: windowName)
-            })
+            enqueueToolbarKeys(keys, paneId: activePaneId)
         }
 
         private func insertVoiceTranscript(_ text: String) -> Bool {
@@ -2346,18 +2267,14 @@
                 terminalIsVisible, !quickActionPresentation.isPresented,
                 activePhraseContext.canSend, let activePaneId else { return false }
             let keys: [TmuxKey] = [.text(text)]
-            let windowName = window?.windowName ?? ""
-            return enqueueToolbarKeys(keys, paneId: activePaneId, immediately: true, onSent: {
-                observeTerminalInput(keys, paneId: activePaneId, windowName: windowName)
-            })
+            return enqueueToolbarKeys(keys, paneId: activePaneId, immediately: true)
         }
 
         @discardableResult
         private func enqueueToolbarKeys(
-            _ keys: [TmuxKey], paneId: String, immediately: Bool = false,
-            onSent: @escaping @MainActor () -> Void = { }
+            _ keys: [TmuxKey], paneId: String, immediately: Bool = false
         ) -> Bool {
-            guard externalInputSenders[paneId]?(keys, immediately, onSent) == true else { return false }
+            guard externalInputSenders[paneId]?(keys, immediately) == true else { return false }
             terminalInputRevision &+= 1
             return true
         }

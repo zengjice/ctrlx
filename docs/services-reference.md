@@ -1554,7 +1554,7 @@ title is `session · tab`, the native subtitle carries the event status (`Sessio
 Idle` becomes `Finished`), and the body carries the event details without a
 repeated project prefix. Main and detached windows share this path. The Host
 formats the context before local delivery, encrypted live messages and APNs;
-Mac/iOS live receivers preserve the subtitle and can add context for older Hosts
+Mac live receivers preserve the subtitle and can add context for older Hosts
 when pane metadata is available. Missing metadata preserves the original copy.
 Locally generated CLI notifications and terminal OSC copy keep their existing semantics.
 
@@ -1566,15 +1566,32 @@ Agent. This uses the existing wildcard hook bridge, not terminal polling or
 question auto-expansion. The hook fields and both tools were checked against
 [Codex 0.162.1](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/hook_runtime.rs).
 
-Notifications carry a bounded question preview through the existing Mac local,
-Mac Viewer and encrypted iOS delivery paths. The additive `isQuestion` marker
-allows the iOS live notification to alert even while the app is active and
-prevents an unrelated recent pane alert from swallowing it. Older structured
-question notifications are recognized through their action context as well.
-Background APNs and tap-to-open routing are retained. Codex tool-hook questions
-offer tap-to-open rather than fabricated answer buttons; actual structured forms
-retain their existing answer actions. Update the Host for new question detection
-and iOS for foreground alerts; Relay changes are unnecessary.
+iOS system alerts use APNs exclusively, independent of Viewer WebSocket presence.
+The Relay queues encrypted alert and badge pushes separately from WebSocket
+forwarding, with one ordered sender so slow APNs responses cannot block terminal
+traffic or reorder badge updates. Pending pushes are bounded to 256 entries and
+1 MiB; overflow rejects the new push with an error log. Each send has a 15-second
+total timeout. On timeout, the active request is cancelled and joined before the
+next push starts; the failure is logged without retrying. Shutdown cancels the
+sender and discards pending pushes. Delivery requires a registered token.
+The Notification Service Extension decrypts alerts and scopes
+replacement to `(pairId, paneId)`. Foreground remote alerts are shown only for
+`agent.question` or a structured `askUserQuestion` action from older Hosts;
+ordinary remote activity remains in the session UI. Local
+follow-up questions, reply failures and on-device alerts retain their presentation.
+Codex tool-hook questions offer tap-to-open rather than fabricated answer buttons;
+actual structured forms retain their existing answer actions.
+
+Background Agent Monitoring, its iOS 26 continued-processing tasks, the short
+WebSocket lease, input-derived turn tracking and snapshot-generated notifications
+have been removed. Ordinary foreground connections, their liveness watchdog and
+return-to-foreground recovery remain. Notification-action replies retain their
+own short background task and current-request validation. The DEBUG action E2E
+harness may capture live-message context but never displays it as an iOS alert.
+
+Update both iOS and Relay for this delivery policy: an older Relay still suppresses
+APNs while the Viewer is connected. No background-monitor compatibility mode or
+local-notification fallback is provided when APNs is unavailable.
 
 On Mac, notification taps resolve `(hostId, paneId)` against current pane metadata
 and this Mac's window ownership. A detached terminal selects its tab and restores

@@ -7,23 +7,27 @@ import Vapor
 actor RelayService {
     private let pairingService: PairingService
     private let connectionHub: ConnectionHub
-    private let apnsService: APNsService?
+    private let pushQueue: APNsSendQueue?
     private let metricsService: MetricsService
     private let logger = Logger(label: "relay-service")
 
     init(
         pairingService: PairingService,
         connectionHub: ConnectionHub,
-        apnsService: APNsService?,
+        pushQueue: APNsSendQueue?,
         metricsService: MetricsService
     ) {
         self.pairingService = pairingService
         self.connectionHub = connectionHub
-        self.apnsService = apnsService
+        self.pushQueue = pushQueue
         self.metricsService = metricsService
     }
 
     // MARK: - Connection Notifications
+
+    func shutdown() async {
+        await pushQueue?.shutdown()
+    }
 
     /// Notify paired device of connection/disconnection
     func notifyConnection(pairId: String, deviceType: DeviceType, connected: Bool) async {
@@ -128,9 +132,9 @@ actor RelayService {
             }
 
         case let .encryptedPush(payload):
-            // Encrypted push notification - forward to APNs if viewer is not connected
+            // iOS alerts use APNs even while the Viewer socket is connected.
             logger.info("Received encrypted push payload")
-            await apnsService?.sendEncryptedNotificationIfNeeded(payload: payload, pairId: pairId)
+            await pushQueue?.enqueue(payload: payload, pairId: pairId)
 
         case .ping:
             await connectionHub.send(.pong, to: pairId, deviceType: .host)

@@ -11,7 +11,6 @@ import NIOPosix
 actor APNsService {
     private let client: APNSClient<JSONDecoder, JSONEncoder>?
     private let pairingService: PairingService
-    private let connectionHub: ConnectionHub
     private let metricsService: MetricsService
     private let logger = Logger(label: "apns-service")
     private let bundleId: String
@@ -39,7 +38,6 @@ actor APNsService {
 
     init(
         pairingService: PairingService,
-        connectionHub: ConnectionHub,
         metricsService: MetricsService,
         keyPath: String? = nil,
         keyId: String? = nil,
@@ -50,7 +48,6 @@ actor APNsService {
         processEnvironment: [String: String] = ProcessInfo.processInfo.environment
     ) async {
         self.pairingService = pairingService
-        self.connectionHub = connectionHub
         self.metricsService = metricsService
         self.bundleId = bundleId
             ?? processEnvironment["APNS_BUNDLE_ID"]
@@ -109,7 +106,7 @@ actor APNsService {
     }
 
     /// Send an encrypted push notification.
-    /// Only sends if iOS is not currently connected via WebSocket.
+    /// Delivery depends on the registered APNs token, never Viewer socket presence.
     ///
     /// The notification is sent with `mutable-content: 1` so the iOS Notification
     /// Service Extension can intercept it, decrypt the payload, and update the
@@ -118,14 +115,7 @@ actor APNsService {
     /// - Parameters:
     ///   - payload: The encrypted push payload from Mac
     ///   - pairId: The pair ID for token lookup
-    func sendEncryptedNotificationIfNeeded(payload: EncryptedPushPayload, pairId: String) async {
-        // Only send if viewer is not connected via WebSocket
-        let isViewerConnected = await connectionHub.isViewerConnected(pairId: pairId)
-        if isViewerConnected {
-            logger.debug("Viewer is connected via WebSocket, skipping encrypted push notification")
-            return
-        }
-
+    func sendEncryptedNotification(payload: EncryptedPushPayload, pairId: String) async {
         guard let deviceToken = await pairingService.getPushToken(for: pairId) else {
             logger.debug("No push token for pair", metadata: ["pairId": "\(pairId)"])
             return
@@ -290,8 +280,12 @@ actor APNsService {
 
     /// Graceful shutdown
     func shutdown() async {
-        // APNSClient handles its own cleanup
         logger.info("APNs service shutting down")
+        do {
+            try await client?.shutdown()
+        } catch {
+            logger.error("Failed to shut down APNs client: \(error)")
+        }
     }
 
     // MARK: - Private Helpers

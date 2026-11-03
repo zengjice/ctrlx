@@ -14,7 +14,7 @@ peers. The Relay routes them without owning terminal, filesystem or browser stat
 | Module / directory | Responsibility |
 |---|---|
 | `CtrlxServerFeature` | Mac UI, Host tmux services, plugin runtime, local Files/browser ownership and Mac Viewer integration |
-| `CtrlxFeature` | iOS UI, terminal gestures/input, session navigation and background monitoring |
+| `CtrlxFeature` | iOS UI, terminal gestures/input, session navigation and APNs notification handling |
 | `CtrlxCommon` | Apple-client shared UI, Viewer connections/stores, input queues, path recognition and system-service clients |
 | `CtrlxNetworking` | Platform-independent Codable/Sendable wire models and compatibility contracts; no AppKit/UIKit |
 | `CtrlxEncryption` | Peer E2EE and key handling |

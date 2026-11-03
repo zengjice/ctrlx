@@ -108,16 +108,6 @@ final public class ViewerConnection: Identifiable {
         await relayClient.reconnectImmediately()
     }
 
-    public func probeConnection(
-        staleAfter: Duration = .seconds(30),
-        responseTimeout: Duration = .seconds(2)
-    ) async -> ViewerRelayProbeResult {
-        await relayClient.probeConnection(
-            staleAfter: staleAfter,
-            responseTimeout: responseTimeout
-        )
-    }
-
     /// Re-enable reconnection after a terminal failure (e.g. version mismatch)
     /// and immediately attempt to reconnect. Forwards to the relay client.
     public func enableReconnectAndRetry() async {

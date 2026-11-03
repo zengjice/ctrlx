@@ -572,7 +572,7 @@ ctrlx send-key escape --pane %3
 
 Send a desktop notification through CtrlX's notification system. Notifications appear identically to terminal-triggered ones. If `$TMUX_PANE` is set, the notification includes pane context so tapping it navigates to that pane.
 
-Pass `--push` to also forward the notification to every paired iOS viewer through the relay server. This reuses the same encrypted-push pipeline that Claude hook events use, so the alert falls back to APNs whenever the viewer is offline. Without `--push` the notification stays local to macOS Notification Center.
+Pass `--push` to also forward the notification to every paired iOS viewer through the relay server. This reuses the encrypted APNs pipeline used by Agent plugin events, whether or not the iOS viewer is connected. Without `--push` the notification stays local to macOS Notification Center.
 
 ```bash
 ctrlx notify --title "Deploy done" --body "Production updated successfully"

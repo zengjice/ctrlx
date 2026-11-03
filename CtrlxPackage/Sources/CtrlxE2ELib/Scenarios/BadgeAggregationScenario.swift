@@ -15,9 +15,7 @@ import Foundation
 ///   directly into `APNsService` via `serverInjectPush`, which is sufficient
 ///   to exercise badge aggregation across siblings on the same device token.
 ///
-/// To keep pushes flowing through the APNs code path (the relay skips APNs
-/// when the iOS viewer's WebSocket is connected), iOS is blocked at the
-/// connection hub for the duration of the badge phases.
+/// The Viewer stays connected throughout; APNs must not depend on socket presence.
 ///
 /// Key ordering: the Stop hook is sent *before* the Panes window opens.
 /// If the window is already open when the new session appears, SwiftUI's
@@ -65,12 +63,6 @@ public enum BadgeAggregationScenario {
         TestStep.wait(seconds: 3)
         TestStep.tmuxStorePaneId(target: "e2e-badge:0.0", storeAs: "paneId")
 
-        // Block the iOS WebSocket so the relay's APNs path runs for every
-        // outgoing push — otherwise `sendEncryptedNotificationIfNeeded` is a
-        // no-op while the viewer is connected.
-        TestStep.serverBlockDevice(.viewer)
-        TestStep.wait(seconds: 2)
-
         // The relay's push log accumulates noise from the pairing handshake.
         // Reset it so phase-by-phase assertions only see badge-test entries.
         TestStep.clearAPNSPushLog
@@ -117,7 +109,7 @@ public enum BadgeAggregationScenario {
         // MarkHandledScenario sidesteps this by routing every clear through a
         // remote `MarkHandled` command rather than the host click. For badge
         // aggregation we inject directly into the same APNs code path the
-        // real broadcast funnels through — `sendEncryptedNotificationIfNeeded`
+        // real broadcast funnels through — `sendEncryptedNotification`
         // — so the relay's `lastBadge` decrement is exercised identically.
         TestStep.serverInjectPush(pairIdKey: "viewerPairId", hostBadge: 0, silent: true)
         TestStep.waitForAPNSPushCount(4, timeout: 5)
@@ -132,9 +124,5 @@ public enum BadgeAggregationScenario {
         TestStep.serverInjectPush(pairIdKey: "mac1PairId", hostBadge: 0, silent: true)
         TestStep.waitForAPNSPushCount(6, timeout: 5)
         TestStep.verifyLastAPNSPush(aggregatedBadge: 0, silent: true, pushType: "background")
-
-        // Restore iOS connectivity so subsequent scenarios in the same run
-        // start from a clean WebSocket state.
-        TestStep.serverUnblockDevice(.viewer)
     }
 }

@@ -231,12 +231,9 @@ For text, the iOS system Paste action sends one `PasteTerminalText` operation, n
 `TmuxKey.from(bytes:)`. Both Viewer and Host serialize it with keyboard input.
 The Host loads a unique tmux buffer and uses `paste-buffer -p -r -d`: tmux checks
 the receiving app's bracketed-paste flag; LF, CRLF, Unicode and trailing line
-breaks remain intact. No extra Enter is appended. Background monitoring records
-a draft only after successful paste acknowledgement, not at enqueue time and
-not as a submitted turn. Typing, Send and slash-command draft resets follow the
-same FIFO completion callbacks; failed/cancelled operations do not update the
-draft or discard legitimate earlier typing. Input-revision guards still update
-immediately when input is queued. Ordinary typing, Send, selection and file-drop
+breaks remain intact. No extra Enter is appended. Subsequent typing and Send
+wait for paste acknowledgement in the same FIFO. Input-revision guards update
+immediately when input is queued; input is not parsed to infer Agent activity. Ordinary typing, Send, selection and file-drop
 pastes retain their existing paths.
 
 Clipboard text is limited to 64 KiB of UTF-8 to fit the encrypted relay frame.

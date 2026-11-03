@@ -71,7 +71,6 @@
             case showTerminalKeyboardOnEntry
             case confirmImageUploads
             case agentQuickInputEnabled
-            case agentBackgroundMonitoringEnabled
             case newSessionName
             case newSessionAutoFit
             case newSessionWidth
@@ -165,18 +164,6 @@
             didSet { preferences.setBool(agentQuickInputEnabled, Keys.agentQuickInputEnabled) }
         }
 
-        /// Whether the user wants Agent monitoring to resume on the next
-        /// eligible foreground input. Runtime lease state is owned separately by
-        /// `AgentBackgroundMonitoringService` and may be inactive while this is on.
-        public var agentBackgroundMonitoringEnabled = false {
-            didSet {
-                preferences.setBool(
-                    agentBackgroundMonitoringEnabled,
-                    Keys.agentBackgroundMonitoringEnabled
-                )
-            }
-        }
-
         public let voiceCorrection = VoiceCorrectionSettings()
 
         /// Base name for new tmux sessions created from iOS
@@ -254,9 +241,6 @@
             self.showTerminalKeyboardOnEntry = preferences.optionalBool(Keys.showTerminalKeyboardOnEntry) ?? false
             self.confirmImageUploads = preferences.optionalBool(Keys.confirmImageUploads) ?? false
             self.agentQuickInputEnabled = preferences.optionalBool(Keys.agentQuickInputEnabled) ?? false
-            self.agentBackgroundMonitoringEnabled = preferences.optionalBool(
-                Keys.agentBackgroundMonitoringEnabled
-            ) ?? false
             // New session settings
             self.newSessionName = NewSessionName.load(from: preferences, forKey: Keys.newSessionName.rawValue)
             self.newSessionWidth = preferences.optionalInt(Keys.newSessionWidth) ?? 120

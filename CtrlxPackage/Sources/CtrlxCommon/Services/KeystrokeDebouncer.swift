@@ -11,8 +11,6 @@ private let questionInputLogger = Logger(subsystem: "com.jicezeng.ctrlx", catego
 /// first key and never slides, so continuous typing cannot postpone transmission
 /// indefinitely. Keys do not wait for a round-trip response; clipboard pastes
 /// and question intents acknowledge completion before subsequent input drains.
-/// Optional `onSent` observers run in this same order, only after a successful
-/// write (keys) or acknowledgement (paste), and never after cancellation.
 ///
 /// ## Ordering guarantee
 ///
@@ -35,13 +33,11 @@ final public class KeystrokeDebouncer {
     @Dependency(\.continuousClock) private var clock
 
     private var keyBuffer: [TmuxKey] = []
-    private var keyCompletions: [@MainActor () -> Void] = []
     private var flushTask: Task<Void, Never>?
 
     /// FIFO queue of operations for the send task.
     private struct PendingSend {
         let operation: SendOp
-        let completions: [@MainActor () -> Void]
         let onResult: (@MainActor (Bool) -> Void)?
     }
 
@@ -114,12 +110,9 @@ final public class KeystrokeDebouncer {
     ///
     /// Only the first key schedules the flush. Later keys join that batch without
     /// moving its deadline, which keeps latency bounded during continuous typing.
-    public func enqueue(_ keys: [TmuxKey], onSent: (@MainActor () -> Void)? = nil) {
+    public func enqueue(_ keys: [TmuxKey]) {
         guard !keys.isEmpty else { return }
         keyBuffer.append(contentsOf: keys)
-        if let onSent {
-            keyCompletions.append(onSent)
-        }
 
         guard flushTask == nil else { return }
 
@@ -141,12 +134,12 @@ final public class KeystrokeDebouncer {
     /// the current runloop turn, so waiting another 10 ms here adds latency but
     /// cannot improve the batch. Pending timed keys are flushed ahead of this
     /// batch to preserve FIFO ordering.
-    public func enqueueImmediately(_ keys: [TmuxKey], onSent: (@MainActor () -> Void)? = nil) {
+    public func enqueueImmediately(_ keys: [TmuxKey]) {
         guard !keys.isEmpty else { return }
         flushTask?.cancel()
         flushTask = nil
         flushBuffer()
-        enqueueSendOp(.keys(keys), completions: onSent.map { [$0] } ?? [])
+        enqueueSendOp(.keys(keys))
     }
 
     /// Immediately flush any buffered keystrokes, then send raw bytes
@@ -164,12 +157,12 @@ final public class KeystrokeDebouncer {
 
     /// A paste follows already typed keys and precedes subsequent typing/Send.
     /// Keep the payload intact, including all hard line breaks.
-    public func enqueuePasteText(_ text: String, onSent: (@MainActor () -> Void)? = nil) {
+    public func enqueuePasteText(_ text: String) {
         guard !text.isEmpty else { return }
         flushTask?.cancel()
         flushTask = nil
         flushBuffer()
-        enqueueSendOp(.pasteText(text), completions: onSent.map { [$0] } ?? [])
+        enqueueSendOp(.pasteText(text))
     }
 
     /// The guarded opener must follow already typed keys, not race them via a
@@ -188,7 +181,6 @@ final public class KeystrokeDebouncer {
         flushTask?.cancel()
         flushTask = nil
         keyBuffer.removeAll()
-        keyCompletions.removeAll()
         sendQueue.removeAll()
         sendTask?.cancel()
         sendTask = nil
@@ -207,15 +199,13 @@ final public class KeystrokeDebouncer {
     private func flushBuffer() {
         guard !keyBuffer.isEmpty else { return }
         let keys = keyBuffer
-        let completions = keyCompletions
         keyBuffer.removeAll()
-        keyCompletions.removeAll()
-        enqueueSendOp(.keys(keys), completions: completions)
+        enqueueSendOp(.keys(keys))
     }
 
     /// Append an operation and wake the send loop.
-    private func enqueueSendOp(_ op: SendOp, completions: [@MainActor () -> Void] = [], onResult: (@MainActor (Bool) -> Void)? = nil) {
-        sendQueue.append(PendingSend(operation: op, completions: completions, onResult: onResult))
+    private func enqueueSendOp(_ op: SendOp, onResult: (@MainActor (Bool) -> Void)? = nil) {
+        sendQueue.append(PendingSend(operation: op, onResult: onResult))
         if sendTask == nil {
             startSendLoop()
             return
@@ -244,17 +234,10 @@ final public class KeystrokeDebouncer {
                 let pending = self.sendQueue.removeFirst()
                 self.inFlightResult = pending.onResult
                 let succeeded = await self.sendOp(pending.operation)
-                // Observers follow the same FIFO as the actual input. A paste
-                // must acknowledge before its draft can be consumed by Send.
                 guard !Task.isCancelled else { return }
                 let onResult = self.inFlightResult
                 self.inFlightResult = nil
                 onResult?(succeeded)
-                if succeeded {
-                    for completion in pending.completions {
-                        completion()
-                    }
-                }
             }
         }
     }
