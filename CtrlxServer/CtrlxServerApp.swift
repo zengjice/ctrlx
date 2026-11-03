@@ -418,6 +418,13 @@ struct TmuxPaneMirrorApp: App {
     }
 
     var body: some Scene {
+        // AppShutdownDelegate routes IPA files to a specific installer window.
+        // Prevent SwiftUI from also opening an unrelated or empty scene.
+        appScenes.handlesExternalEvents(matching: [])
+    }
+
+    @SceneBuilder
+    private var appScenes: some Scene {
         DetachedTerminalScene(coordinator: coordinator)
         IPAInstallerScene()
         IPADefaultApplicationPromptScene(settings: coordinator.settings)
