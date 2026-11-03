@@ -225,6 +225,7 @@ def run():
     try:
         for index, model in enumerate(models):
             agent = model.agent
+            fresh = agent == "codex" and os.environ.get("CTRLX_WORKFLOW_NATIVE_FRESH") == "1"
             config = root / agent
             config.mkdir()
             private_home = root / (agent + "-home")
@@ -247,6 +248,8 @@ def run():
                 for args in (["plugin", "marketplace", "add", str(marketplace)], ["plugin", "add", "ctrlx@ctrlx"]):
                     subprocess.run(["/opt/homebrew/bin/codex", *args], env=env, check=True, capture_output=True, timeout=30)
                 args = ["/opt/homebrew/bin/codex", "--no-daemon", "--no-alt-screen", "--dangerously-bypass-hook-trust", "-C", str(project), "-a", "never", "-s", "danger-full-access", "Say fixture ready."]
+                if fresh:
+                    args.pop()
             else:
                 env["CLAUDE_CONFIG_DIR"] = str(config)
                 (config / ".claude.json").write_text(json.dumps({"hasCompletedOnboarding": True, "projects": {str(project): {"hasTrustDialogAccepted": True}}}))
@@ -270,7 +273,11 @@ def run():
                 if "Detected a custom API key" in screen and "Do you want to use this API key?" in screen:
                     # This profile contains only the dummy key for this loopback server.
                     tmux("send-keys", "-t", pane, "Up", "Enter")
-                if session and "WORKFLOW_READY" in screen:
+                if fresh and "Ask Codex to do anything" in screen:
+                    assert not model.requests, "Fresh Codex sent a model request before the workflow"
+                    session = ""
+                    break
+                if not fresh and session and "WORKFLOW_READY" in screen:
                     break
                 time.sleep(.2)
             else:

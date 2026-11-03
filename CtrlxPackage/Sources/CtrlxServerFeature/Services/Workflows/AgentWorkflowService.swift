@@ -113,10 +113,19 @@ actor AgentWorkflowService {
             return try await refreshing.value
         }
         let task = Task { [store, scan] in
-            let previous = try await store.snapshot().instances
-            let observations = try await scan(previous)
-            try Task.checkCancellation()
-            return try await store.reconcile(observations)
+            func scanAndReconcile() async throws -> [AgentWorkflowInstance] {
+                try Task.checkCancellation()
+                let previous = try await store.snapshot().instances
+                let observations = try await scan(previous)
+                try Task.checkCancellation()
+                return try await store.reconcile(observations)
+            }
+            do { return try await scanAndReconcile() }
+            catch is AgentWorkflowCatalogChanged {
+                // A first receipt can bind the conversation while scanning.
+                // Retry once from the confirmed identity; never patch readiness.
+                return try await scanAndReconcile()
+            }
         }
         refreshing = task
         defer { refreshing = nil }

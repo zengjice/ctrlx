@@ -25,8 +25,11 @@ struct AgentWorkflowBridgeEvidence: Codable, Equatable, Sendable {
 }
 
 extension AgentWorkflowStore {
-    func bridgeIssue(for instance: AgentWorkflowInstance) throws -> String? {
+    func bridgeIssue(for instance: AgentWorkflowInstance, allowsFirstSubmission: Bool = false) throws -> String? {
         guard let evidence = try load().bridgeEvidence?.first(where: { $0.matchesProcess(instance) }) else {
+            if allowsFirstSubmission, instance.pluginID == "codex", instance.conversationID.isEmpty {
+                return nil
+            }
             return "This Agent has not confirmed its workflow hook. Update its CtrlX plugin, then restart the Agent or submit a normal prompt before starting a workflow."
         }
         return evidence.issue

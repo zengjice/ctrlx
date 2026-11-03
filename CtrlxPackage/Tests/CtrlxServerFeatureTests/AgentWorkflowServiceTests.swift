@@ -100,6 +100,38 @@ struct AgentWorkflowServiceTests {
         #expect(f.backend.scheduled.count == 1)
     }
 
+    @Test(arguments: [false, true])
+    func failedCatalogRecheckKeepsSavedStateAndDoesNotLoop(failScan: Bool) async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        _ = try await start(f)
+        let before = try await f.store.snapshot()
+        let scans = LockIsolated(0)
+        let service = AgentWorkflowService(store: f.store, scan: { previous in
+            let scan = scans.withValue { $0 += 1
+                return $0
+            }
+            #expect(scan <= 2)
+            if scan > 1, failScan {
+                throw AgentWorkflowError("Process inspection unavailable")
+            }
+            var observations = previous.map { AgentWorkflowObservation($0) }
+            observations[0].conversationID = ""
+            observations[0].readiness = .unavailable
+            observations[1].displayName = "Uncommitted scan"
+            return observations
+        }, schedule: { _ in Issue.record("A failed scan must not schedule tasks.") })
+        if failScan {
+            await #expect(throws: AgentWorkflowError.self) { try await service.refreshInstancesCatalog() }
+        } else {
+            await #expect(throws: AgentWorkflowCatalogChanged.self) { try await service.refreshInstancesCatalog() }
+        }
+        #expect(scans.value == 2)
+        #expect(try await f.store.snapshot() == before)
+        #expect(f.backend.scheduled.count == 1)
+        await service.shutdown()
+    }
+
     @Test
     func pausesResumesAndEndsWithoutCreatingAnotherRun() async throws {
         let f = try await fixture()
