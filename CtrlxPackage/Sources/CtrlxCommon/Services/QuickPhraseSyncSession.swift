@@ -3,10 +3,10 @@ import Foundation
 
 /// One per paired connection. No terminal input, snapshots or polling involved.
 @MainActor
-package final class QuickPhraseSyncSession {
+final package class QuickPhraseSyncSession {
     private let store: QuickPhraseStore
     private let pairID: String
-    private let deviceID: String?
+    private var deviceID: String?
     private let send: @MainActor (QuickPhraseSyncMessage) async -> Void
     private var epoch = UUID()
     private var peer: QuickPhraseSyncOffer?
@@ -30,6 +30,16 @@ package final class QuickPhraseSyncSession {
 
     private var enabled: Bool {
         store.loadError == nil && deviceID == store.syncDeviceID(for: pairID) && store.isSyncEnabled(for: pairID)
+    }
+
+    /// Call after E2EE establishes and the peer's real key is saved, before hello.
+    /// New pairings initially contain an empty key; a different identity needs a
+    /// fresh handshake and its own device consent, never the previous peer's.
+    package func refreshDeviceIdentity() {
+        let current = store.syncDeviceID(for: pairID)
+        guard current != deviceID else { return }
+        reset()
+        deviceID = current
     }
 
     package func didSendHello() {
@@ -61,7 +71,9 @@ package final class QuickPhraseSyncSession {
                 store.syncErrors[pairID] = error.localizedDescription
             }
         }
-        if changedConsent { schedule() }
+        if changedConsent {
+            schedule()
+        }
     }
 
     package func reset() {
@@ -69,7 +81,9 @@ package final class QuickPhraseSyncSession {
         epoch = UUID()
         worker?.cancel()
         worker = nil
-        if let observer { store.removeObserver(observer) }
+        if let observer {
+            store.removeObserver(observer)
+        }
         observer = nil
         peer = nil
         helloSent = false
@@ -100,19 +114,27 @@ package final class QuickPhraseSyncSession {
                 self.lastSent = message
                 await self.send(message)
             }
-            if self.epoch == generation { self.worker = nil }
+            if self.epoch == generation {
+                self.worker = nil
+            }
         }
     }
 
     private func updateStatus() {
         guard deviceID == store.syncDeviceID(for: pairID) else { return }
         let status: QuickPhraseSyncStatus
-        if !helloSent || !peerHelloReceived { status = .offline }
-        else if let peer { status = peer.enabled ? .ready : .waitingForPeer }
-        else { status = .unsupported }
+        if !helloSent || !peerHelloReceived {
+            status = .offline
+        } else if let peer {
+            status = peer.enabled ? .ready : .waitingForPeer
+        } else {
+            status = .unsupported
+        }
         store.updateSyncConnection(pairID: pairID, epoch: epoch, status: status)
     }
 
     /// Wait for currently queued work (also used by deterministic in-memory tests).
-    package func flush() async { await worker?.value }
+    package func flush() async {
+        await worker?.value
+    }
 }

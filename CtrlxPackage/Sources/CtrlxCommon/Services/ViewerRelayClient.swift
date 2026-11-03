@@ -1178,6 +1178,7 @@ final public class ViewerRelayClient {
                         if let onPartnerKeyReceived {
                             await onPartnerKeyReceived(hostPublicKey, hostPublicKeyId)
                         }
+                        quickPhraseSync?.refreshDeviceIdentity()
                     } catch {
                         logger.error("Failed to establish E2EE session: \(error)")
                     }
@@ -1312,6 +1313,7 @@ final public class ViewerRelayClient {
                     if let onPartnerKeyReceived {
                         await onPartnerKeyReceived(hostPublicKey, hostPublicKeyId)
                     }
+                    quickPhraseSync?.refreshDeviceIdentity()
                 } catch {
                     logger.error("Failed to establish E2EE session: \(error)")
                 }

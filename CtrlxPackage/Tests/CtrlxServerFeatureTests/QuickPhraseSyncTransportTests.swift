@@ -8,10 +8,10 @@ import Vapor
 @testable import CtrlxServerFeature
 
 @MainActor
-@Suite("Quick phrases over real encrypted WebSockets")
+@Suite("Quick phrases over real encrypted WebSockets", .serialized)
 struct QuickPhraseSyncTransportTests {
-    @Test("Host and shared iOS/Mac viewer exchange libraries without plaintext or terminal commands")
-    func transport() async throws {
+    @Test("Host and shared iOS/Mac viewer exchange libraries with saved or newly learned keys", arguments: [true, false])
+    func transport(keysKnown: Bool) async throws {
         // SPM's test runner has no CFBundleShortVersionString. Use the existing
         // E2E override so the real clients' compatibility gate remains enabled.
         let originalVersion = VersionCompatibility.appVersionOverride
@@ -33,21 +33,36 @@ struct QuickPhraseSyncTransportTests {
             let url = try #require(URL(string: "ws://127.0.0.1:\(port)"))
             let hostEncryption = try await encryption(), viewerEncryption = try await encryption()
             let hostStore = library(), viewerStore = library()
-            hostStore.updateSyncPairings([.init(pairID: "pair", name: "Viewer", publicKey: viewerEncryption.publicKey.base64EncodedString())])
-            viewerStore.updateSyncPairings([.init(pairID: "pair", name: "Host", publicKey: hostEncryption.publicKey.base64EncodedString())])
+            hostStore.updateSyncPairings([.init(pairID: "pair", name: "Viewer", publicKey: keysKnown ? viewerEncryption.publicKey.base64EncodedString() : "")])
+            viewerStore.updateSyncPairings([.init(pairID: "pair", name: "Host", publicKey: keysKnown ? hostEncryption.publicKey.base64EncodedString() : "")])
             try hostStore.add("Mac-only secret")
             try viewerStore.add("iPhone-only secret")
             let host = ConnectedViewer(
-                pairedViewer: .init(id: "pair", deviceName: "Viewer",
-                                    partnerPublicKey: viewerEncryption.publicKey.base64EncodedString(),
-                                    partnerPublicKeyId: viewerEncryption.keyId),
+                pairedViewer: .init(
+                    id: "pair",
+                    deviceName: "Viewer",
+                    partnerPublicKey: keysKnown ? viewerEncryption.publicKey.base64EncodedString() : "",
+                    partnerPublicKeyId: keysKnown ? viewerEncryption.keyId : ""
+                ),
                 e2eeService: hostEncryption
             )
             let viewer = ViewerRelayClient()
             host.configureQuickPhraseSync(store: hostStore)
             viewer.configureQuickPhraseSync(store: viewerStore, pairID: "pair")
-            await host.connect(serverURL: url, deviceId: "host", deviceName: "Host", username: "test",
-                               publicKey: hostEncryption.publicKey.base64EncodedString(), publicKeyId: hostEncryption.keyId)
+            host.onPartnerKeyReceived = { publicKey, _ in
+                hostStore.updateSyncPairings([.init(pairID: "pair", name: "Viewer", publicKey: publicKey)])
+            }
+            viewer.onPartnerKeyReceived = { publicKey, _ in
+                viewerStore.updateSyncPairings([.init(pairID: "pair", name: "Host", publicKey: publicKey)])
+            }
+            await host.connect(
+                serverURL: url,
+                deviceId: "host",
+                deviceName: "Host",
+                username: "test",
+                publicKey: hostEncryption.publicKey.base64EncodedString(),
+                publicKeyId: hostEncryption.keyId
+            )
             await connect(viewer, url: url, encryption: viewerEncryption, hostEncryption: hostEncryption)
             do {
                 try await waitUntil { host.isViewerConnected && viewer.isHostConnected }
@@ -106,15 +121,24 @@ struct QuickPhraseSyncTransportTests {
     }
 
     private func connect(_ viewer: ViewerRelayClient, url: URL, encryption: E2EEService, hostEncryption: E2EEService) async {
-        await viewer.connect(serverURL: url, pairId: "pair", deviceId: "viewer", deviceName: "Viewer",
-                             publicKey: encryption.publicKey.base64EncodedString(), publicKeyId: encryption.keyId,
-                             e2eeService: encryption, partnerPublicKey: hostEncryption.publicKey.base64EncodedString(),
-                             partnerPublicKeyId: hostEncryption.keyId)
+        await viewer.connect(
+            serverURL: url,
+            pairId: "pair",
+            deviceId: "viewer",
+            deviceName: "Viewer",
+            publicKey: encryption.publicKey.base64EncodedString(),
+            publicKeyId: encryption.keyId,
+            e2eeService: encryption,
+            partnerPublicKey: hostEncryption.publicKey.base64EncodedString(),
+            partnerPublicKeyId: hostEncryption.keyId
+        )
     }
 
     private func waitUntil(_ condition: () -> Bool) async throws {
         let deadline = ContinuousClock.now + .seconds(5)
-        while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        while !condition(), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
         try #require(condition(), "Encrypted sync did not converge")
     }
 }
@@ -165,10 +189,14 @@ actor PhraseTestRelay {
         do {
             if ws === viewer {
                 viewer = nil
-                if let host, !host.isClosed { try await send(.viewerDisconnected, to: host) }
+                if let host, !host.isClosed {
+                    try await send(.viewerDisconnected, to: host)
+                }
             } else if ws === host {
                 host = nil
-                if let viewer, !viewer.isClosed { try await send(.hostDisconnected, to: viewer) }
+                if let viewer, !viewer.isClosed {
+                    try await send(.hostDisconnected, to: viewer)
+                }
             }
         } catch { errors.append(error.localizedDescription) }
     }

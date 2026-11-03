@@ -1052,6 +1052,7 @@ final public class ConnectedViewer: Identifiable {
             if let onPartnerKeyReceived {
                 await onPartnerKeyReceived(publicKey, keyId)
             }
+            quickPhraseSync?.refreshDeviceIdentity()
             return true
         } catch {
             logger.error("Failed to establish E2EE session: \(error)")

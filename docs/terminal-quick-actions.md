@@ -892,6 +892,11 @@ message only after the version handshake. Until both sides opt in, frames contai
 consent only, no phrases. Connection epochs bind messages to the current handshake;
 disconnect clears peer consent and cancels pending work. Plaintext sync messages
 are rejected by both clients. Notification-only connections don't opt into sync.
+After E2EE establishes and the peer's public key is saved, Host and Viewer refresh
+the sync session's device identity before hello. This replaces a new pairing's
+empty-key placeholder without requiring an app restart. A changed key resets the
+sync epoch and peer consent; the replacement identity uses its own local consent.
+Repeated announcements of the same key preserve the current sync handshake.
 Sync offer v2 requires versioned-edit support on both devices. Legacy v1 and
 unknown peers receive no frames and show an update hint; local phrase management
 and ordinary terminal access remain available.
