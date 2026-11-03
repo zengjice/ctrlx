@@ -1,7 +1,7 @@
 import ClaudeCodePluginCore
 import CtrlxNetworking
-import Foundation
 import CtrlxPluginProtocol
+import Foundation
 
 // MARK: - PendingRequest
 
@@ -41,7 +41,7 @@ enum PendingRequest: Equatable {
 /// differences:
 /// - it builds the `HookEvent` with `agent: .codex` so the reused
 ///   `HookEventMessage.buildNotification()` produces Codex-flavored copy
-///   ("Codex wants answers", "Codex session started", …); and
+///   ("Codex wants answers", "Codex needs your approval", …); and
 /// - the pane is resolved by the actor (from `frame.tmuxPane`, or the pane↔
 ///   session correlation file when only a session id is present) and passed in.
 enum CodexTranslator {
@@ -199,7 +199,9 @@ enum CodexTranslator {
     /// Whether this action is a session start (used by the core to write the
     /// pane↔session correlation file — spec §12).
     static func isSessionStart(_ action: HookAction) -> Bool {
-        if case .sessionStart = action { return true }
+        if case .sessionStart = action {
+            return true
+        }
         return false
     }
 
@@ -509,9 +511,13 @@ enum MarkdownPath {
         }
         let url = URL(fileURLWithPath: path)
         let parent = url.deletingLastPathComponent().lastPathComponent.lowercased()
-        if parent == "plans" { return true }
+        if parent == "plans" {
+            return true
+        }
         let basename = url.deletingPathExtension().lastPathComponent.lowercased()
-        if basename == "plan" { return true }
+        if basename == "plan" {
+            return true
+        }
         return basename.hasPrefix("plan-") || basename.hasPrefix("plan_")
     }
 

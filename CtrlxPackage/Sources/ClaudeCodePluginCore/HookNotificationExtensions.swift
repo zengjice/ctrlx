@@ -35,8 +35,6 @@ public extension HookEvent {
         switch action {
         case .permissionRequest:
             body = "\(projectName): \(agentShortName) needs your approval"
-        case .sessionStart:
-            body = "\(projectName): \(agentDisplayName) session started"
         case let .stop(stopBody):
             if let summary = stopBody.lastAssistantMessage {
                 let truncated = summary.count > 256
@@ -53,7 +51,8 @@ public extension HookEvent {
             body = "\(projectName): \(message)"
         case let .stopFailure(failureBody):
             body = "\(projectName): Error — \(failureBody.errorType ?? "unknown failure")"
-        case .setup,
+        case .sessionStart,
+             .setup,
              .sessionEnd,
              .preToolUse,
              .postToolUse,

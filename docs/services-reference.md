@@ -1558,6 +1558,11 @@ Mac live receivers preserve the subtitle and can add context for older Hosts
 when pane metadata is available. Missing metadata preserves the original copy.
 Locally generated CLI notifications and terminal OSC copy keep their existing semantics.
 
+Codex and Claude Code `SessionStart` hooks initialize idle session state without
+emitting an alert, including startup, resume, clear and compact. The Host still
+processes session identity and initialization; no startup notification is sent
+locally, to Mac Viewers, or through APNs.
+
 Codex `PreToolUse` events for `request_user_input` and `request_user_input_async`
 produce a question notification on the Host, independently of terminal visibility
 or focus. The plugin deduplicates by `(session_id, tool_use_id)` and leaves Agent
