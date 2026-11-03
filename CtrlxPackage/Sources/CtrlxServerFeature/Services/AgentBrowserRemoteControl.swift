@@ -50,6 +50,7 @@ extension AgentBrowserService {
             isExtensionWindow: tab.isExtensionWindow ? true : nil,
             externalApplicationNotice: tab.externalApplicationNotice,
             networkPermission: tab.networkPermission,
+            downloads: tab.downloads.isEmpty ? nil : tab.downloads,
             resourceSessionID: tab.resourceSessionID,
             grant: tab.grant
         )

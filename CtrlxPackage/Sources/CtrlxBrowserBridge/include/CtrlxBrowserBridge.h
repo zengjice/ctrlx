@@ -33,6 +33,10 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)browserTab:(NSString *)identifier openWebStoreURL:(NSString *)url controlToken:(nullable NSString *)controlToken completion:(void (^)(NSString * _Nullable identifier, NSString * _Nullable error))completion;
 // Native runtime supplies a one-use, observed human activation, never page JS.
 - (void)browserTab:(NSString *)identifier openExternalURL:(NSString *)url controlToken:(nullable NSString *)controlToken;
+// One observed human activation authorizes one download. Paths are chosen by
+// the Host, never supplied by the page or a Viewer.
+- (void)browserTab:(NSString *)identifier prepareDownload:(NSString *)downloadID filename:(NSString *)filename controlToken:(nullable NSString *)controlToken completion:(void (^)(NSString * _Nullable path))completion;
+- (void)browserTab:(NSString *)identifier downloadChanged:(NSString *)downloadID state:(NSString *)state received:(int64_t)received total:(int64_t)total;
 @end
 
 @protocol CXBrowserRuntime <NSObject>

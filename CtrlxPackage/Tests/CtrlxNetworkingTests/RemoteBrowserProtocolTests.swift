@@ -62,6 +62,19 @@ struct RemoteBrowserProtocolTests {
         #expect(updated.browserTabs == [tab])
         #expect(try JSONDecoder().decode(RemoteBrowserTab.self, from: JSONEncoder().encode(tab)).sourcePaneID == nil)
         #expect(try JSONDecoder().decode(RemoteBrowserTab.self, from: JSONEncoder().encode(tab)).networkPermission == nil)
+        #expect(try JSONDecoder().decode(RemoteBrowserTab.self, from: JSONEncoder().encode(tab)).downloads == nil)
+    }
+
+    @Test
+    func downloadStateIsAdditive() throws {
+        var download = BrowserDownloadItem(id: UUID(), filename: "proof.txt")
+        download.state = .completed
+        download.path = "/Users/host/Downloads/proof.txt"
+        let tab = RemoteBrowserTab(id: UUID(), sessionName: "s", title: "page", url: "about:blank", isLoading: false, isAgentOwned: false, downloads: [download])
+        let data = try JSONEncoder().encode(tab)
+        #expect(try JSONDecoder().decode(RemoteBrowserTab.self, from: data) == tab)
+        struct LegacyTab: Decodable { let id: UUID }
+        #expect(try JSONDecoder().decode(LegacyTab.self, from: data).id == tab.id)
     }
 
     @Test

@@ -22,6 +22,7 @@ public struct RemoteBrowserTab: Codable, Sendable, Equatable, Identifiable {
     public let externalApplicationNotice: BrowserExternalApplicationNotice?
     /// Presence advertises support for responding to this exact pending request.
     public let networkPermission: BrowserNetworkPermission?
+    public let downloads: [BrowserDownloadItem]?
 
     public init(
         id: UUID,
@@ -38,6 +39,7 @@ public struct RemoteBrowserTab: Codable, Sendable, Equatable, Identifiable {
         isExtensionWindow: Bool? = nil,
         externalApplicationNotice: BrowserExternalApplicationNotice? = nil,
         networkPermission: BrowserNetworkPermission? = nil,
+        downloads: [BrowserDownloadItem]? = nil,
         resourceSessionID: UUID? = nil,
         grant: ResourceTabGrant? = nil
     ) {
@@ -57,6 +59,7 @@ public struct RemoteBrowserTab: Codable, Sendable, Equatable, Identifiable {
         self.isExtensionWindow = isExtensionWindow
         self.externalApplicationNotice = externalApplicationNotice
         self.networkPermission = networkPermission
+        self.downloads = downloads
     }
 }
 

@@ -61,6 +61,7 @@
 
         @State private var pendingSimulatorRequest: SimulatorOpenRequest?
         @State private var pendingFilesRequest: FilesOpenRequest?
+        @State private var pendingBrowserDownload: String?
         @State private var pendingResourceRequest: ResourceTabRequest?
         @State private var pendingFilesCloseID: UUID?
         @State private var pendingBrowserLink: TerminalBrowserLinkRequest?
@@ -370,7 +371,7 @@
                         .background(Color(.systemBackground))
                         .id(tab.id)
                 } else if let tab = selectedBrowser {
-                    RemoteBrowserView(tab: tab, client: relayClient) { opened in
+                    RemoteBrowserView(tab: tab, client: relayClient, onOpenFile: { pendingBrowserDownload = $0 }) { opened in
                         cancelCreationFollowUp()
                         isKeyboardActive = false
                         quickActionPresentation.dismiss()
@@ -554,6 +555,31 @@
                         pendingSimulatorRequest = nil
                         commandError = error.localizedDescription
                     }
+                }
+                .task(id: pendingBrowserDownload) {
+                    guard let path = pendingBrowserDownload else { return }
+                    defer {
+                        if pendingBrowserDownload == path {
+                            pendingBrowserDownload = nil
+                        }
+                    }
+                    guard let browser = selectedBrowser else { return }
+                    do {
+                        let request = try resourceRequest(.files, location: (path as NSString).deletingLastPathComponent)
+                        let result = try await ResourceTabClient.request(request, client: relayClient)
+                        try Task.checkCancellation()
+                        guard pendingBrowserDownload == path, selectedBrowser?.id == browser.id, let file = result.file else { return }
+                        let tab = fileWorkspace.adopt(file)
+                        tab.selectedFile = path
+                        tab.lastSelectedAt = Date()
+                        cancelCreationFollowUp()
+                        isKeyboardActive = false
+                        quickActionPresentation.dismiss()
+                        browserSelection.selectedID = nil
+                        simulatorSelection.selectedID = nil
+                        fileWorkspace.selectedID = tab.id
+                    } catch is CancellationError { }
+                    catch { commandError = error.localizedDescription }
                 }
                 .task(id: pendingResourceRequest) {
                     guard let request = pendingResourceRequest else { return }

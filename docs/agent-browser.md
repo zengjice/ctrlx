@@ -1,5 +1,29 @@
 # Agent Browser
 
+## Human downloads
+
+Clicks in the embedded Chromium page can save downloads to the source Host's
+Downloads folder, including POST responses and Blob exports. Mac Host, Mac Viewer
+and iOS show per-page progress and results in the Downloads button. On the Host,
+completed files can be revealed in Finder; Viewers open them in the Host's Files
+tab and use the existing file transfer actions. Files remain on the Host until
+explicitly transferred.
+
+The native runtime requires a one-use observed Host/Viewer input activation;
+Agent input cannot authorize this path. It retains the original Agent-command
+download grant and 6 MiB limit. Human downloads use private partial files,
+collision-safe final names and macOS quarantine metadata. Closing the source tab
+cancels active transfers. Each page retains up to 20 results in memory and allows
+four simultaneous downloads; download history and interrupted transfers are not
+restored after restarting CtrlX.
+
+`BrowserDownloadsLocation` supplies the destination, including the existing
+`--downloads-dir` isolated-test override. `RemoteBrowserTab.downloads` is optional
+display-only data; older peers continue decoding browser descriptors.
+`AgentBrowser/tests/human_downloads.py` exercises the native callbacks and real
+AppKit input in an isolated signed acceptance app with the existing probe build
+flag. It never uses the installed app or personal Downloads directory.
+
 ## Host bookmarks
 
 The browser toolbar's **Bookmarks** button opens a Mac popover or an iOS sheet.

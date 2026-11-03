@@ -54,6 +54,8 @@ static CefRefPtr<CefBrowser> browserSettings;
 static std::map<int, int> extensionWindows;
 static void ReleaseExtensionControlFor(NSString *identifier);
 static std::map<int, std::shared_ptr<ExternalApplicationActivation>> externalActivations;
+static std::map<int, std::shared_ptr<ExternalApplicationActivation>> downloadActivations;
+#include "HumanDownloads.inc"
 static NSString *BrowserDiagnosticOrigin(NSString *raw) {
   NSURLComponents *parts = [NSURLComponents componentsWithString:raw];
   if (![@[@"https", @"http"] containsObject:parts.scheme.lowercaseString] || !parts.host.length) return @"opaque";
@@ -75,6 +77,8 @@ void AgentBrowserCancelHumanInput(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
   auto found = externalActivations.find(browser->GetIdentifier());
   if (found != externalActivations.end()) { found->second->Cancel(); externalActivations.erase(found); }
+  auto download = downloadActivations.find(browser->GetIdentifier());
+  if (download != downloadActivations.end()) { download->second->Cancel(); downloadActivations.erase(download); }
 }
 
 void AgentBrowserHumanInput(CefRefPtr<CefBrowser> browser, const std::string& control) {
@@ -83,6 +87,9 @@ void AgentBrowserHumanInput(CefRefPtr<CefBrowser> browser, const std::string& co
   AgentBrowserCancelHumanInput(browser);
   if (!runtime.isReady || !identifiers.contains(id)) return;
   externalActivations[id] = std::make_shared<ExternalApplicationActivation>(identifiers.at(id).UTF8String, control);
+  auto download = std::make_shared<ExternalApplicationActivation>(identifiers.at(id).UTF8String, control);
+  download->deadline = ExternalApplicationActivation::Clock::now() + std::chrono::seconds(30);
+  downloadActivations[id] = download;
 }
 
 static void OpenExternalApplication(CefRefPtr<CefBrowser> browser, const CefString& url) {
@@ -239,15 +246,19 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
   }
   void OnResetDialogState(CefRefPtr<CefBrowser> browser) override { AgentBrowserDialogReset(browser); }
   bool OnBeforeDownload(CefRefPtr<CefBrowser> browser, CefRefPtr<CefDownloadItem> item,
-      const CefString&, CefRefPtr<CefBeforeDownloadCallback> callback) override {
+      const CefString& suggestedName, CefRefPtr<CefBeforeDownloadCallback> callback) override {
+    if (BeginHumanDownload(browser, item, suggestedName, callback)) return true;
     return AgentBrowserDownloadBegin(browser, item, callback);
   }
   void OnDownloadUpdated(CefRefPtr<CefBrowser> browser, CefRefPtr<CefDownloadItem> item,
-      CefRefPtr<CefDownloadItemCallback> callback) override { AgentBrowserDownloadUpdate(browser, item, callback); }
+      CefRefPtr<CefDownloadItemCallback> callback) override {
+    if (!UpdateHumanDownload(item, callback)) AgentBrowserDownloadUpdate(browser, item, callback);
+  }
   void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
     CEF_REQUIRE_UI_THREAD();
     browsers[browser->GetIdentifier()] = browser;
     if (popupActivation_) externalActivations[browser->GetIdentifier()] = popupActivation_;
+    if (popupDownloadActivation_) downloadActivations[browser->GetIdentifier()] = popupDownloadActivation_;
     NSView *view = (__bridge NSView *)browser->GetHost()->GetWindowHandle();
     if (!extensionWindow_) {
       view.frame = container_.bounds;
@@ -272,6 +283,7 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
   }
   void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
     CEF_REQUIRE_UI_THREAD();
+    CloseHumanDownloads(browser->GetIdentifier(), identifier_);
     audio_->Close();
     FinishNetworkPermission(CEF_PERMISSION_RESULT_IGNORE);
     AgentBrowserCancelHumanInput(browser);
@@ -298,6 +310,8 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
     auto popup = new EmbeddedClient(AgentBrowserOwner(browser), AgentBrowserConversation(browser), container, route_, identifier_, extensionWindow_);
     auto activation = externalActivations.find(browser->GetIdentifier());
     if (activation != externalActivations.end()) popup->popupActivation_ = activation->second;
+    auto download = downloadActivations.find(browser->GetIdentifier());
+    if (download != downloadActivations.end()) popup->popupDownloadActivation_ = download->second;
     client = popup;
     if (extensionWindow_) info.runtime_style = CEF_RUNTIME_STYLE_CHROME;
     else {
@@ -327,6 +341,9 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
     auto activation = externalActivations.find(browser->GetIdentifier());
     if (activation != externalActivations.end() && request->GetURL() != "about:blank")
       activation->second->Navigation(browser->GetIdentifier(), request->GetURL(), redirect);
+    auto download = downloadActivations.find(browser->GetIdentifier());
+    if (download != downloadActivations.end() && request->GetURL() != "about:blank")
+      download->second->Navigation(browser->GetIdentifier(), request->GetURL(), redirect);
     AgentBrowserNavigation(browser);
     return false;
   }
@@ -343,6 +360,8 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
     auto activation = externalActivations.find(browser->GetIdentifier());
     if (activation != externalActivations.end())
       activation->second->Loaded(browser->GetIdentifier(), frame->GetIdentifier());
+    auto download = downloadActivations.find(browser->GetIdentifier());
+    if (download != downloadActivations.end()) download->second->Loaded(browser->GetIdentifier(), frame->GetIdentifier());
   }
   void OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType) override {
 #ifdef CTRLX_UPSTREAM_BROWSER_PROBE
@@ -352,6 +371,8 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
     auto activation = externalActivations.find(browser->GetIdentifier());
     if (activation != externalActivations.end())
       activation->second->Committed(browser->GetIdentifier(), frame->GetIdentifier(), frame->GetURL());
+    auto download = downloadActivations.find(browser->GetIdentifier());
+    if (download != downloadActivations.end()) download->second->Committed(browser->GetIdentifier(), frame->GetIdentifier(), frame->GetURL());
     AgentBrowserNavigation(browser);
   }
   void OnLoadError(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, ErrorCode code,
@@ -400,6 +421,7 @@ class EmbeddedClient final : public CefClient, public CefLifeSpanHandler,
   bool extensionWindow_;
   CefRefPtr<BrowserAudio> audio_ = new BrowserAudio();
   std::shared_ptr<ExternalApplicationActivation> popupActivation_;
+  std::shared_ptr<ExternalApplicationActivation> popupDownloadActivation_;
   IMPLEMENT_REFCOUNTING(EmbeddedClient);
 };
 
