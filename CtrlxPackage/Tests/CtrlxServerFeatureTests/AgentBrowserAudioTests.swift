@@ -1,5 +1,6 @@
 #if os(macOS)
     import AppKit
+    import CtrlxCommon
     import CtrlxNetworking
     import Foundation
     import Testing
@@ -7,6 +8,53 @@
 
     @Suite("Host browser audio") @MainActor
     struct AgentBrowserAudioTests {
+        @Test(arguments: [false, true])
+        func slowSendDoesNotBlockCaptureAndBacklogStaysBounded(stopBeforeRelease: Bool) async throws {
+            let (service, runtime, tab) = try await RemoteBrowserControlTests().fixture()
+            runtime.audioPCM = Data(repeating: 0, count: 4_096 * 8)
+            var release: CheckedContinuation<Void, Never>?
+            var delivered: [UInt64] = []
+            service.sendBrowserAudio = { _, message in
+                delivered.append(message.sequence)
+                if delivered.count == 1 {
+                    await withCheckedContinuation { release = $0 }
+                }
+            }
+            defer { release?.resume() }
+            let surface = UUID(), id = UUID()
+            let control = try #require(try await service.handleBrowser(.init(sessionName: "test", tabID: tab.id, surfaceID: surface, operation: .takeControl), viewerID: "a").controlID)
+            _ = try await service.handleBrowser(.init(
+                sessionName: "test",
+                tabID: tab.id,
+                surfaceID: surface,
+                controlID: control,
+                operation: .audio(streamID: id, revision: 1, enabled: true)
+            ), viewerID: "a")
+            let stream = try #require(service.browserAudioStreams[tab.id])
+            for _ in 0..<200 where stream.droppedFrames == 0 {
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            #expect(delivered == [1])
+            #expect(stream.droppedFrames > 0)
+            #expect(stream.pendingFrames <= BrowserAudioBuffering.maximumFrames - 4_096)
+            if stopBeforeRelease {
+                service.releaseBrowserControl(tab.id)
+            }
+            release?.resume()
+            release = nil
+            try await Task.sleep(for: .milliseconds(60))
+            if stopBeforeRelease {
+                #expect(delivered == [1])
+                #expect(stream.pendingFrames == 0)
+            } else {
+                #expect(delivered.count > 1)
+                #expect(delivered.dropFirst().first.map { $0 > 2 } == true)
+                #expect(delivered == delivered.sorted())
+                #expect(stream.pendingFrames <= BrowserAudioBuffering.maximumFrames)
+            }
+            await service.shutdown()
+        }
+
         @Test
         func aLateMuteForAnotherSurfaceCannotStopTheCurrentStream() async throws {
             let (service, _, first) = try await RemoteBrowserControlTests().fixture()

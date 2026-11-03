@@ -81,8 +81,8 @@ class BrowserAudio final : public CefAudioHandler {
   NSData *Read(NSString **error) {
     { std::lock_guard guard(playerLock_); *error = error_; }
     if (*error) return nil;
-    std::vector<float> samples(4096 * 2);
-    size_t frames = buffer_->Read(samples.data(), 4096, true);
+    std::vector<float> samples(BrowserAudioBuffer::maximumReadFrames * 2);
+    size_t frames = buffer_->Read(samples.data(), BrowserAudioBuffer::maximumReadFrames, true);
     return [NSData dataWithBytes:samples.data() length:frames * 2 * sizeof(float)];
   }
   void Close() {
@@ -94,7 +94,7 @@ class BrowserAudio final : public CefAudioHandler {
   NSDictionary *Status() {
     auto state = buffer_->Status();
     std::lock_guard guard(playerLock_);
-    return @{@"captured": @(state.captured), @"local": @(state.local), @"buffered": @(state.buffered),
+    return @{@"captured": @(state.captured), @"dropped": @(state.dropped), @"local": @(state.local), @"buffered": @(state.buffered),
       @"remote": @(state.remote), @"enabled": @(state.enabled), @"error": error_ ?: @""};
   }
  private:
