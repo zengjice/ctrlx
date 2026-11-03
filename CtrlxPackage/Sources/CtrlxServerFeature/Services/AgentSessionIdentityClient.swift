@@ -27,11 +27,31 @@ struct AgentSessionIdentityClient: Sendable {
     var recoverySource: @Sendable (_ sessionIDs: Set<UUID>, _ windowID: UUID, _ paneID: UUID) async throws -> AgentForkSource? = { _, _, _ in nil }
     var save: @Sendable (_ identity: AgentSessionIdentity) async -> Bool = { _ in false }
     var runtimeID: @Sendable (_ processID: String) -> String? = { _ in nil }
+    var codexOwnsSession: @Sendable (_ processID: String, _ runtimeID: String, _ conversationID: String) async -> Bool = { _, _, _ in false }
     var codexSessionID: @Sendable (_ processID: String, _ runtimeID: String) async -> String? = { _, _ in nil }
 }
 
+extension AgentSessionIdentityClient {
+    func workflowInputIssue(for instance: AgentWorkflowInstance, allowsInitialBinding: Bool = false) async -> String? {
+        guard instance.pluginID == "codex" else { return nil }
+        let pid = String(instance.processID)
+        guard runtimeID(pid) == instance.processRuntimeID else { return "The Agent process changed." }
+        // The first task is bound by its authenticated native receipt; a new
+        // Codex thread may not have any rollout file before that submission.
+        if allowsInitialBinding {
+            return nil
+        }
+        let ownsConversation = await codexOwnsSession(pid, instance.processRuntimeID, instance.conversationID)
+        guard runtimeID(pid) == instance.processRuntimeID else { return "The Agent process changed." }
+        guard ownsConversation else {
+            return "The active Codex conversation could not be verified. Refresh the Agent list before starting."
+        }
+        return nil
+    }
+}
+
 extension AgentSessionIdentityClient: DependencyKey {
-    static let previewValue = Self(load: { _ in nil }, recoverySource: { _, _, _ in nil }, save: { _ in false }, runtimeID: { _ in nil }, codexSessionID: { _, _ in nil })
+    static let previewValue = Self(load: { _ in nil }, recoverySource: { _, _, _ in nil }, save: { _ in false }, runtimeID: { _ in nil }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in nil })
     static let testValue: Self = previewValue
 
     static let liveValue: Self = diskBacked(stateRoot: {
@@ -51,6 +71,7 @@ extension AgentSessionIdentityClient: DependencyKey {
             recoverySource: { try await storage.recoverySource(sessionIDs: $0, windowID: $1, paneID: $2) },
             save: { await storage.save($0) },
             runtimeID: { processRuntimeID($0) },
+            codexOwnsSession: { await codex.ownsSession(processID: $0, runtimeID: $1, conversationID: $2) },
             codexSessionID: { await codex.sessionID(processID: $0, runtimeID: $1) }
         )
     }

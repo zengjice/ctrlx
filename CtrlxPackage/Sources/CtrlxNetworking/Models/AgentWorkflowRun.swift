@@ -127,7 +127,7 @@ public struct AgentWorkflowFinishRequest: Codable, Equatable, Sendable {
 public struct AgentWorkflowRun: Codable, Equatable, Identifiable, Sendable {
     public let id: UUID
     public let definition: AgentWorkflowDefinition
-    public let instances: [AgentWorkflowInstance]
+    public var instances: [AgentWorkflowInstance]
     public let createdAt: Date
     public let authorizationExpiresAt: Date
     public var revision: Int

@@ -176,6 +176,12 @@ struct AgentWorkflowNativeReviewLoopTests {
             if await core.isWorking(instance.conversationID) {
                 live.readiness = .busy
             }
+            if live.readiness == .ready {
+                let allowsInitialBinding = try await store.allowsInitialConversationBinding(for: instance)
+                if let issue = await AgentSessionIdentityClient.liveValue.workflowInputIssue(for: instance, allowsInitialBinding: allowsInitialBinding) {
+                    throw AgentWorkflowError(issue)
+                }
+            }
             return live
         }
         let gate = AgentWorkflowInputGate { _ in throw AgentWorkflowError("Unexpected human input in the private fixture.") }
@@ -190,8 +196,17 @@ struct AgentWorkflowNativeReviewLoopTests {
             }
         }, onFailure: { Issue.record(Comment(rawValue: $0)) })
         let runner = AgentWorkflowRunner(store: store, transport: transport.transport, onFailure: { Issue.record(Comment(rawValue: $0)) })
-        let router = AgentWorkflowEventRouter(store: store, runner: runner, inspect: inspect)
-        let monitor = AgentWorkflowCompletionMonitor(store: store, runner: runner, inspect: inspect, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let receiptReader = CodexProcessSessionReader()
+        let inspectConversation: @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance = { instance in
+            if instance.pluginID == "codex" {
+                guard await receiptReader.ownsSession(processID: String(instance.processID), runtimeID: instance.processRuntimeID, conversationID: instance.conversationID) else {
+                    throw AgentWorkflowInspectionUnavailable()
+                }
+            }
+            return try await inspect(instance)
+        }
+        let router = AgentWorkflowEventRouter(store: store, runner: runner, inspect: inspectConversation)
+        let monitor = AgentWorkflowCompletionMonitor(store: store, runner: runner, inspect: inspectConversation, onFailure: { Issue.record(Comment(rawValue: $0)) })
         let dispatcher = PluginEventDispatcher(onWorkflow: { event, peer in
             do {
                 if let instance = instances.first(where: { $0.paneID == event.tmuxPane && $0.conversationID == event.sessionID && $0.pluginID == event.pluginID }) {
@@ -206,7 +221,7 @@ struct AgentWorkflowNativeReviewLoopTests {
         let ingress = IngressSocketServer(socketPath: root.appendingPathComponent("ingress.sock").path, coreLookup: { cores[$0] }, dispatcher: dispatcher)
         try await ingress.start()
         let api = APISocketServer.liveValue
-        let agentService = AgentWorkflowAgentService(store: store, inspect: inspect)
+        let agentService = AgentWorkflowAgentService(store: store, inspect: inspectConversation)
         await api.setRequestHandler { request, peer in await agentService.handle(request, peer: peer) }
         try await api.start(root.appendingPathComponent("api.sock").path)
         do {
@@ -233,6 +248,30 @@ struct AgentWorkflowNativeReviewLoopTests {
                 try await Task.sleep(for: .milliseconds(100))
             }
             try #require(ready, "Native hooks did not become ready.")
+            let clearsConversation = ProcessInfo.processInfo.environment["CTRLX_WORKFLOW_NATIVE_CLEAR"] == "1"
+            if clearsConversation {
+                let codex = try #require(instances.first { $0.pluginID == "codex" })
+                let core = try #require(cores["codex"])
+                _ = try tmux(fixture, ["send-keys", "-t", codex.paneID, "-l", "--", "/new"])
+                try await Task.sleep(for: .milliseconds(200))
+                _ = try tmux(fixture, ["send-keys", "-t", codex.paneID, "Enter"])
+                try await Task.sleep(for: .milliseconds(200))
+                var cleared = false
+                for _ in 0..<100 {
+                    let screen = try capture(fixture, codex)
+                    if
+                        !screen.plainLines.contains(where: { $0.contains("WORKFLOW_READY") }),
+                        AgentWorkflowComposerInspection.readiness(screen, composer: core.workflowComposer) == .ready {
+                        cleared = true
+                        break
+                    }
+                    try await Task.sleep(for: .milliseconds(50))
+                }
+                try #require(cleared, "The private Codex /new did not become ready.")
+                // /new can keep the previous writer until the first new task.
+                let writer = await receiptReader.sessionID(processID: String(codex.processID), runtimeID: codex.processRuntimeID)
+                #expect(writer == nil || writer == codex.conversationID)
+            }
             let image = try Data(contentsOf: root.appendingPathComponent("task.png")), imageID = UUID()
             _ = try await store.uploadAttachment(.begin(id: imageID, name: "task.png", mediaType: "image/png", size: image.count))
             _ = try await store.uploadAttachment(.append(id: imageID, offset: 0, data: image))
@@ -255,7 +294,13 @@ struct AgentWorkflowNativeReviewLoopTests {
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             try encoder.encode(latest).write(to: root.appendingPathComponent("native-run.json"))
             try #require(latest.status == .completed, Comment(rawValue: latest.issue ?? "Native sample did not finish."))
-            #expect(latest.round == 2 && latest.instances == run.instances && latest.invocations.count == 6)
+            #expect(latest.round == 2 && latest.invocations.count == 6)
+            #expect(zip(latest.instances, run.instances).allSatisfy { pair in pair.0.matchesProcess(pair.1) })
+            if clearsConversation {
+                #expect(latest.instances.first { $0.pluginID == "codex" }?.conversationID != run.instances.first { $0.pluginID == "codex" }?.conversationID)
+            } else {
+                #expect(latest.instances == run.instances)
+            }
             #expect(latest.finishRequest != nil)
             #expect(latest.invocations.allSatisfy { $0.result?.text.contains("FIXTURE_ERROR") == false })
             #expect(latest.invocations.filter { $0.nodeID == definition.entryNodeID }.count == 1)

@@ -56,7 +56,7 @@ struct AgentSessionIdentityTests {
             stored.setValue($0)
             writes.withValue { $0 += 1 }
             return true
-        }, runtimeID: { "\($0):start-1" }, codexSessionID: { pid, runtime in
+        }, runtimeID: { "\($0):start-1" }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { pid, runtime in
             #expect(pid == "101" && runtime == "101:start-1")
             probes.withValue { $0 += 1 }
             return id
@@ -79,6 +79,32 @@ struct AgentSessionIdentityTests {
         }
     }
 
+    @Test("Workflow input requires the current Codex writer and stable runtime", arguments: ["current", "switched", "missing", "runtime-before", "runtime-during", "claude"])
+    func workflowInputRevalidatesTheActiveConversation(scenario: String) async {
+        let runtime = LockIsolated(scenario == "runtime-before" ? "replaced" : "runtime")
+        let reads = LockIsolated(0)
+        let conversation = UUID().uuidString
+        let client = AgentSessionIdentityClient(load: { _ in nil }, recoverySource: { _, _, _ in nil }, save: { _ in false }, runtimeID: { _ in runtime.value }, codexOwnsSession: { _, _, id in
+            reads.withValue { $0 += 1 }
+            if scenario == "runtime-during" {
+                runtime.setValue("replaced")
+            }
+            return !["missing", "switched"].contains(scenario) && id == conversation
+        }, codexSessionID: { _, _ in nil })
+        let instance = AgentWorkflowInstance(
+            hostID: UUID(), pluginID: scenario == "claude" ? "claude-code" : "codex", processID: 101, processRuntimeID: "runtime",
+            workspacePane: .init(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID()),
+            paneID: "%5", conversationID: conversation, displayName: "Developer", workingDirectory: "/repo",
+            capabilities: nil, readiness: .ready
+        )
+        let issue = await client.workflowInputIssue(for: instance)
+        #expect((issue == nil) == (scenario == "current" || scenario == "claude"))
+        #expect(reads.value == (["runtime-before", "claude"].contains(scenario) ? 0 : 1))
+        if scenario == "missing" {
+            #expect(await client.workflowInputIssue(for: instance, allowsInitialBinding: true) == nil)
+        }
+    }
+
     @Test("Writer discovery is limited to one verified Codex runtime", arguments: ["claude", "multiple", "missing-runtime", "invalid-id", "no-writer"])
     func writerRecoveryScope(scenario: String) async {
         let command = scenario == "claude" ? "claude" : "codex"
@@ -89,7 +115,7 @@ struct AgentSessionIdentityTests {
         let client = AgentSessionIdentityClient(load: { _ in nil }, recoverySource: { _, _, _ in nil }, save: { _ in
             writes.withValue { $0 += 1 }
             return true
-        }, runtimeID: { scenario == "missing-runtime" ? nil : "\($0):start-1" }, codexSessionID: { _, _ in
+        }, runtimeID: { scenario == "missing-runtime" ? nil : "\($0):start-1" }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in
             probes.withValue { $0 += 1 }
             return scenario == "invalid-id" ? "--last" : nil
         })
@@ -120,7 +146,7 @@ struct AgentSessionIdentityTests {
         let client = AgentSessionIdentityClient(load: { _ in nil }, recoverySource: { _, _, _ in nil }, save: { _ in
             writes.withValue { $0 += 1 }
             return true
-        }, runtimeID: { _ in runtime.value }, codexSessionID: { _, _ in
+        }, runtimeID: { _ in runtime.value }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in
             start.yield(())
             var iterator = release.makeAsyncIterator()
             _ = await iterator.next()
@@ -166,7 +192,7 @@ struct AgentSessionIdentityTests {
             }
             stored.setValue(identity)
             return true
-        }, runtimeID: { "\($0):start-1" }, codexSessionID: { _, _ in oldID })
+        }, runtimeID: { "\($0):start-1" }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in oldID })
         await withDependencies {
             defaults(&$0, rows: rows, client: client)
         } operation: {
@@ -264,7 +290,7 @@ struct AgentSessionIdentityTests {
                 return nil
             }
             return $0 == "101" ? (scenario == "reused-pid" ? "101:start-2" : "101:start-1") : "202:start-1"
-        }, codexSessionID: { _, _ in nil })
+        }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in nil })
         if scenario == "new-pid" {
             rows.setValue("100 1 zsh\n202 100 codex\n")
         }
@@ -295,7 +321,7 @@ struct AgentSessionIdentityTests {
         let client = AgentSessionIdentityClient(load: { _ in nil }, recoverySource: { _, _, _ in nil }, save: { _ in
             writes.withValue { $0 += 1 }
             return true
-        }, runtimeID: { "\($0):start-1" }, codexSessionID: { _, _ in nil })
+        }, runtimeID: { "\($0):start-1" }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in nil })
         await withDependencies {
             defaults(&$0, rows: rows, client: client)
         } operation: {
@@ -349,7 +375,7 @@ struct AgentSessionIdentityTests {
             var iterator = release.makeAsyncIterator()
             _ = await iterator.next()
             return identity
-        }, recoverySource: { _, _, _ in nil }, save: { _ in false }, runtimeID: { _ in "101:start-1" }, codexSessionID: { _, _ in nil })
+        }, recoverySource: { _, _, _ in nil }, save: { _ in false }, runtimeID: { _ in "101:start-1" }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in nil })
         await withDependencies {
             defaults(&$0, rows: rows, client: client)
         } operation: {
@@ -375,7 +401,7 @@ struct AgentSessionIdentityTests {
         let client = AgentSessionIdentityClient(load: { _ in nil }, recoverySource: { _, _, _ in nil }, save: { _ in
             writes.withValue { $0 += 1 }
             return writes.value > 1
-        }, runtimeID: { _ in "101:start-1" }, codexSessionID: { _, _ in nil })
+        }, runtimeID: { _ in "101:start-1" }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in nil })
         await withDependencies {
             defaults(&$0, rows: rows, client: client)
         } operation: {
@@ -399,7 +425,7 @@ struct AgentSessionIdentityTests {
         let client = AgentSessionIdentityClient(load: { _ in stored.value }, recoverySource: { _, _, _ in nil }, save: {
             stored.setValue($0)
             return true
-        }, runtimeID: { runtimes.value[$0] }, codexSessionID: { _, _ in nil })
+        }, runtimeID: { runtimes.value[$0] }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in nil })
         try await withDependencies {
             defaults(&$0, rows: rows, client: client)
         } operation: {
@@ -460,7 +486,7 @@ struct AgentSessionIdentityTests {
                 }
                 stored.setValue(identity)
                 return true
-            }, runtimeID: { "\($0):start-1" }, codexSessionID: { _, _ in nil })
+            }, runtimeID: { "\($0):start-1" }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in nil })
             try await withDependencies {
                 defaults(&$0, rows: rows, client: client)
             } operation: {
@@ -506,7 +532,7 @@ struct AgentSessionIdentityTests {
             }
             stored.setValue(identity)
             return true
-        }, runtimeID: { _ in "101:start-1" }, codexSessionID: { _, _ in nil })
+        }, runtimeID: { _ in "101:start-1" }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in nil })
         await withDependencies {
             defaults(&$0, rows: rows, client: client)
         } operation: {
