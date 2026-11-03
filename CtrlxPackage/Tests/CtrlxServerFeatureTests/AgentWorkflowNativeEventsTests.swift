@@ -98,6 +98,107 @@ struct AgentWorkflowNativeEventsTests {
         )
     }
 
+    @Test(arguments: [false, true])
+    func firstCodexReceiptConfirmsAnInitiallyUnpersistedConversation(uncertain: Bool) async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        if uncertain {
+            try await f.store.update(runID: f.run.id) { try $0.writeUncertain(invocationID: f.invocation.id, reason: "Waiting for receipt") }
+        }
+        var current = f.instance
+        current.conversationID = UUID().uuidString
+        _ = try await f.store.reconcile([.init(current)])
+        #expect(try await f.store.snapshot().runs[0].issue == (uncertain ? "Waiting for receipt" : nil))
+        let event = PluginEvent(pluginID: "codex", sessionID: current.conversationID, tmuxPane: "%1", workflow: .init(
+            kind: .submitted, nativeTurnID: "new-turn", transcriptPath: f.transcript.path, text: f.invocation.delivery.input.text
+        ))
+        let context = try #require(await f.router.receive(event, peer: f.peer))
+        let saved = try await f.store.snapshot()
+        #expect(context.instance.conversationID == current.conversationID)
+        #expect(saved.runs[0].instances[0].conversationID == current.conversationID)
+        #expect(saved.instances[0].conversationID == current.conversationID)
+        #expect(saved.runs[0].invocations[0].nativeTurnID == "new-turn")
+        #expect(saved.runs[0].invocations[0].status == .running)
+        await #expect(throws: AgentWorkflowError.self) {
+            try await f.store.update(runID: f.run.id) {
+                try $0.accept(invocationID: f.invocation.id, instance: f.instance, nativeTurnID: "new-turn")
+            }
+        }
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test
+    func firstConversationBindingRequiresTheExactWrittenTask() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let event = PluginEvent(pluginID: "codex", sessionID: UUID().uuidString, tmuxPane: "%1", workflow: .init(
+            kind: .submitted, nativeTurnID: "new-turn", transcriptPath: f.transcript.path, text: "Different task"
+        ))
+        #expect(try await f.router.receive(event, peer: f.peer) == nil)
+        let saved = try await f.store.snapshot().runs[0]
+        #expect(saved.instances[0].conversationID == f.instance.conversationID)
+        #expect(saved.invocations[0].nativeTurnID == nil)
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test
+    func firstReceiptWaitsForItsNativeWriterWithoutPausingOrLosingStop() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let readable = LockIsolated(false)
+        let verified = LockIsolated<AgentWorkflowTurnContext?>(nil)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            guard readable.value else { throw AgentWorkflowInspectionUnavailable() }
+            return $0
+        }, onVerified: { verified.setValue($0) }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let conversation = UUID().uuidString
+        func event(_ kind: PluginWorkflowEvent.Kind, _ text: String) -> PluginEvent {
+            .init(pluginID: "codex", sessionID: conversation, tmuxPane: "%1", workflow: .init(
+                kind: kind, nativeTurnID: "new-turn", transcriptPath: f.transcript.path, text: text
+            ))
+        }
+        #expect(try await router.receive(event(.submitted, f.invocation.delivery.input.text), peer: f.peer) == nil)
+        #expect(try await f.store.snapshot().runs[0].status == .running)
+        #expect(try await router.receive(event(.stopCandidate, "Final"), peer: f.peer) == nil)
+        readable.setValue(true)
+        for _ in 0..<100 {
+            if verified.value != nil {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let context = try #require(verified.value)
+        #expect(context.instance.conversationID == conversation)
+        #expect(context.candidate.kind == .stopCandidate)
+        let saved = try await f.store.snapshot()
+        #expect(saved.runs[0].status == .running)
+        #expect(saved.runs[0].invocations.count == 1)
+        #expect(saved.runs[0].invocations[0].nativeTurnID == "new-turn")
+        #expect(saved.runs[0].instances[0].conversationID == conversation)
+        #expect(saved.instances[0].conversationID == conversation)
+        await router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test
+    func laterConversationCannotReplaceAnAcceptedTask() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        let event = PluginEvent(pluginID: "codex", sessionID: UUID().uuidString, tmuxPane: "%1", workflow: .init(
+            kind: .submitted, nativeTurnID: "new-turn", transcriptPath: f.transcript.path, text: f.invocation.delivery.input.text
+        ))
+        #expect(try await f.router.receive(event, peer: f.peer) == nil)
+        let saved = try await f.store.snapshot().runs[0]
+        #expect(saved.status == .paused)
+        #expect(saved.instances[0].conversationID == f.instance.conversationID)
+        #expect(saved.invocations[0].nativeTurnID == "turn")
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
     @Test
     func authenticSubmissionPersistsNativeReceiptButStopAloneDoesNotComplete() async throws {
         let f = try await fixture()

@@ -2,11 +2,55 @@ import CtrlxBrowserBridge
 import CtrlxCommon
 import CtrlxNetworking
 import Foundation
+import Logging
 
-struct BrowserAudioStream {
+@MainActor
+final class BrowserAudioStream {
     let id: UUID
     let lease: BrowserControlLease
     var task: Task<Void, Never>?
+    private var sender: Task<Void, Never>?
+    private var pending: [RemoteBrowserAudio] = []
+    private(set) var pendingFrames = 0
+    private(set) var droppedFrames = 0
+    private var sendingFrames = 0
+
+    init(id: UUID, lease: BrowserControlLease) {
+        self.id = id
+        self.lease = lease
+    }
+
+    func enqueue(_ message: RemoteBrowserAudio, send: @escaping @MainActor (RemoteBrowserAudio) async -> Void) {
+        let frames = BrowserAudioBuffering.frames(in: message)
+        while pendingFrames + sendingFrames + frames > BrowserAudioBuffering.maximumFrames, !pending.isEmpty {
+            let discarded = BrowserAudioBuffering.frames(in: pending.removeFirst())
+            pendingFrames -= discarded
+            droppedFrames += discarded
+        }
+        pending.append(message)
+        pendingFrames += frames
+        guard sender == nil else { return }
+        sender = Task { [weak self] in
+            while let self, !Task.isCancelled, !self.pending.isEmpty {
+                let message = self.pending.removeFirst()
+                self.sendingFrames = BrowserAudioBuffering.frames(in: message)
+                self.pendingFrames -= self.sendingFrames
+                await send(message)
+                self.sendingFrames = 0
+            }
+            self?.sender = nil
+        }
+    }
+
+    func stop() {
+        task?.cancel()
+        sender?.cancel()
+        pending.removeAll()
+        pendingFrames = 0
+        if droppedFrames > 0 {
+            Logger(label: "com.ctrlx.browser-audio").info("Host audio discarded \(droppedFrames) frames after send backlog exceeded its time budget")
+        }
+    }
 }
 
 @MainActor
@@ -19,7 +63,7 @@ extension AgentBrowserService {
 
     func stopBrowserAudio(_ tabID: UUID) {
         guard let stream = browserAudioStreams.removeValue(forKey: tabID) else { return }
-        stream.task?.cancel()
+        stream.stop()
         _ = runtime?.setBrowserAudioForTab?(tabID.uuidString, controlToken: stream.lease.id.uuidString, enabled: false)
     }
 
@@ -41,9 +85,11 @@ extension AgentBrowserService {
         browserAudioStreams[tabID]?.task = Task { [weak self] in
             let encoder = BrowserAudioCodec()
             var sequence: UInt64 = 0
+            var nextRead = ContinuousClock.now
             while !Task.isCancelled {
                 do {
-                    try await Task.sleep(for: .milliseconds(40))
+                    nextRead = max(nextRead.advanced(by: .milliseconds(40)), .now)
+                    try await Task.sleep(until: nextRead, clock: .continuous)
                     guard
                         let self, self.browserAudioStreams[tabID]?.id == streamID,
                         let current = self.remoteControls[tabID], current.id == lease.id, current.expires > .now else { return }
@@ -74,7 +120,14 @@ extension AgentBrowserService {
                         magicCookie: encoded.cookie
                     )
                     guard message.isValid else { throw RemoteBrowserError.message("Browser audio exceeded the stream limit.") }
-                    await self.sendBrowserAudio?(lease.viewerID, message)
+                    self.browserAudioStreams[tabID]?.enqueue(message) { [weak self] message in
+                        guard
+                            let self, !Task.isCancelled,
+                            self.browserAudioStreams[tabID]?.id == streamID,
+                            let current = self.remoteControls[tabID], current.id == lease.id,
+                            current.expires > .now else { return }
+                        await self.sendBrowserAudio?(lease.viewerID, message)
+                    }
                 } catch {
                     guard !Task.isCancelled, let self, self.browserAudioStreams[tabID]?.id == streamID else { return }
                     let message = RemoteBrowserAudio(

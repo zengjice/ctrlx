@@ -7,7 +7,7 @@
 // ==========================================
 // Test Target Settings (Customizable by scaffold tool)
 // ==========================================
-PRODUCT_BUNDLE_IDENTIFIER = com.jicezeng.ctrlx.tests
+PRODUCT_BUNDLE_IDENTIFIER = com.gravtice.ctrlx.tests
 TEST_TARGET_NAME = Ctrlx
 
 // Fix duplicate module name issue

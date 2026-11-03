@@ -97,9 +97,6 @@ public struct AgentWorkflowInvocation: Codable, Equatable, Identifiable, Sendabl
     public var status: AgentWorkflowInvocationStatus
     public var nativeTurnID: String?
     public var nativeTranscriptPath: String?
-    /// Explicitly published snapshots, retained even before the final answer.
-    /// Optional for ledgers written before artifact sharing was available.
-    public var sharedAttachmentIDs: [UUID]?
     public var result: AgentWorkflowResult?
     public var issue: String?
 
@@ -130,7 +127,7 @@ public struct AgentWorkflowFinishRequest: Codable, Equatable, Sendable {
 public struct AgentWorkflowRun: Codable, Equatable, Identifiable, Sendable {
     public let id: UUID
     public let definition: AgentWorkflowDefinition
-    public let instances: [AgentWorkflowInstance]
+    public var instances: [AgentWorkflowInstance]
     public let createdAt: Date
     public let authorizationExpiresAt: Date
     public var revision: Int

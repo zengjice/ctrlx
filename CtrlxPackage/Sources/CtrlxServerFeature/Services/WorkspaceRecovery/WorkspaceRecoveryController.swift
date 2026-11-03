@@ -386,6 +386,7 @@ final class WorkspaceRecoveryController {
                     let id = next.sessions[session].windows[window].panes[pane].id
                     next.sessions[session].windows[window].panes[pane].agent = priorPanes[id]?.agent
                     next.sessions[session].windows[window].panes[pane].agentIdentity = priorPanes[id]?.agentIdentity
+                    next.sessions[session].windows[window].panes[pane].savedAgentIdentityInvalidated = priorPanes[id]?.savedAgentIdentityInvalidated
                     next.sessions[session].windows[window].panes[pane].unavailableAgentReason = priorPanes[id]?.unavailableAgentReason
                     if next.recovery?.pendingAgentPaneIDs.contains(id) == true, live.placeholderPaneIDs.contains(id), let directory = priorPanes[id]?.directory {
                         next.sessions[session].windows[window].panes[pane].directory = directory

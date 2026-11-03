@@ -15,14 +15,23 @@ final class HostResourceSessionStore {
         var live: [UUID: ResourceSession] = [:]
         for pane in panes {
             guard let id = pane.workspaceIdentity?.sessionID, !closedIDs.contains(id) else { continue }
-            if live[id] == nil {
+            if live[id]?.directory.hasPrefix("/") != true {
                 live[id] = .init(id: id, name: pane.sessionName, directory: pane.currentPath)
             }
         }
         terminalIDs = Set(live.keys)
-        var retained = sessions.filter { live[$0.id] == nil && (resourceIDs.contains($0.id) || reservations[$0.id] != nil) }
-        // A later tmux session with a reused name cannot inherit human resources.
         var names = Set(live.values.map(\.name))
+        live = live.compactMapValues { session in
+            guard !session.directory.hasPrefix("/") else { return session }
+            // A transient missing cwd must not replace a known directory or block the journal.
+            guard let previous = sessions.first(where: { $0.id == session.id && $0.directory.hasPrefix("/") }) else { return nil }
+            var retained = session
+            retained.directory = previous.directory
+            return retained
+        }
+        var retained = sessions.filter { !terminalIDs.contains($0.id) && (resourceIDs.contains($0.id) || reservations[$0.id] != nil) }
+        // Reserve names even while their new session's directory is unavailable.
+        // A later tmux session with a reused name cannot inherit human resources.
         for index in retained.indices {
             if names.contains(retained[index].name) {
                 retained[index].name += " · " + retained[index].id.uuidString.prefix(8)

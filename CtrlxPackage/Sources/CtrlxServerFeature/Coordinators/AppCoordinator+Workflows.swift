@@ -11,16 +11,22 @@ extension AppCoordinator {
     func localWorkflowEndpoint() -> AgentWorkflowEndpoint {
         AgentWorkflowEndpoint(
             id: "local", name: "This Mac", connected: { true },
-            supported: { [weak self] in self?.agentWorkflowService != nil }
+            supported: { true }
         ) { [weak self] request in
-            guard let service = self?.agentWorkflowService else {
-                throw AgentWorkflowError("Workflows are unavailable on this Host.")
-            }
-            return try await service.handle(request)
+            guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
+            return try await handleAgentWorkflowRequest(request)
         }
     }
 
+    func handleAgentWorkflowRequest(_ request: ManageAgentWorkflows) async throws -> AgentWorkflowResponse {
+        guard let agentWorkflowService else {
+            throw AgentWorkflowError(agentWorkflowStartupError ?? "Workflows are still starting on this Mac. Try again shortly.")
+        }
+        return try await agentWorkflowService.handle(request)
+    }
+
     func setupAgentWorkflows() async {
+        agentWorkflowStartupError = nil
         guard let paths = ctrlxPaths else { return }
         do {
             @Dependency(HostIdentityClient.self) var identity
@@ -33,11 +39,10 @@ extension AppCoordinator {
             agentWorkflowStore = store
             agentWorkflowAgentService = AgentWorkflowAgentService(store: store, inspect: { [weak self] instance in
                 guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
-                return try await inspectWorkflowInstance(instance)
+                return try await inspectWorkflowInstance(instance, verifyNativeWriter: true)
             })
-            let gate = AgentWorkflowInputGate { [weak self] paneID in
-                guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
-                try await pauseAgentWorkflowInput(paneID: paneID, reason: "Human input took over the Agent. Continue the workflow when the terminal is ready.")
+            let gate = AgentWorkflowInputGate { paneID in
+                try await store.authorizeHumanInput(paneID: paneID)
             }
             let delivery = AgentWorkflowTerminalTransport(
                 store: store, gate: gate,
@@ -71,17 +76,18 @@ extension AppCoordinator {
             await agentWorkflowService?.startMonitoring()
             agentWorkflowEvents = AgentWorkflowEventRouter(store: store, runner: runner, inspect: { [weak self] instance in
                 guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
-                return try await inspectWorkflowInstance(instance)
+                return try await inspectWorkflowInstance(instance, verifyNativeWriter: true)
             }, onVerified: { [weak self] context in
                 await self?.verifyAgentWorkflowContext(context)
             }, onFailure: { workflowLogger.error("\($0)") })
             agentWorkflowCompletion = AgentWorkflowCompletionMonitor(store: store, runner: runner, inspect: { [weak self] instance in
                 guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
-                return try await inspectWorkflowInstance(instance)
+                return try await inspectWorkflowInstance(instance, verifyNativeWriter: true)
             }, onFailure: { workflowLogger.error("\($0)") })
             tmuxService.workflowInputGate = gate
             controlClientManager.workflowInputGate = gate
         } catch {
+            agentWorkflowStartupError = "Could not load workflows on this Mac: \(error.localizedDescription)"
             workflowLogger.error("Could not load workflow storage: \(error)")
         }
     }
@@ -147,8 +153,17 @@ extension AppCoordinator {
         } else if pane.editorSession != nil || !recoveredWorkspaceDrafts.localDrafts(paneID: instance.paneID).isEmpty {
             live.readiness = .draft
         } else {
+            @Dependency(AgentSessionIdentityClient.self) var identities
+            let allowsInitialBinding = try await agentWorkflowStore?.allowsInitialConversationBinding(for: live) == true
+            let issue = await identities.workflowInputIssue(for: live, allowsInitialBinding: allowsInitialBinding)
+            try Task.checkCancellation()
+            if let issue {
+                live.readiness = .unavailable
+                live.capabilityIssue = issue
+                return live
+            }
             live.readiness = try AgentWorkflowComposerInspection.readiness(
-                await tmuxService.captureWorkflowTerminal(instance), composer: provider.workflowComposer
+                await tmuxService.captureWorkflowTerminal(instance, composer: provider.workflowComposer), composer: provider.workflowComposer
             )
         }
         return live
@@ -163,7 +178,7 @@ extension AppCoordinator {
 
     /// Revalidate process, stable pane and native conversation at the operation
     /// boundary. A label, saved native ID or reused tmux pane alone is insufficient.
-    func inspectWorkflowInstance(_ instance: AgentWorkflowInstance) async throws -> AgentWorkflowInstance {
+    func inspectWorkflowInstance(_ instance: AgentWorkflowInstance, verifyNativeWriter: Bool = false) async throws -> AgentWorkflowInstance {
         @Dependency(AgentSessionIdentityClient.self) var identities
         @Dependency(WorkspaceAgentProcessClient.self) var processes
         guard let registry = pluginRegistry, let provider = registry.core(instance.pluginID) as? any AgentWorkflowProviding else {
@@ -182,14 +197,25 @@ extension AppCoordinator {
         }
         guard
             let current = detected[instance.paneID], current.pluginID == instance.pluginID,
-            current.processIDs == [String(instance.processID)],
-            let native = await identities.load(instance.paneID),
-            native.processID == String(instance.processID), native.runtimeID == instance.processRuntimeID,
-            native.source.pluginID == instance.pluginID, native.source.sessionID == instance.conversationID,
-            windowManager.paneStates[instance.paneID]?.claudeSessionID == instance.conversationID,
-            identities.runtimeID(String(instance.processID)) == instance.processRuntimeID else {
-            throw AgentWorkflowError("Cannot verify the Agent's current process and conversation.")
+            current.processIDs == [String(instance.processID)] else {
+            throw AgentWorkflowError("Cannot verify the Agent's current process.")
         }
+        if verifyNativeWriter, instance.pluginID == "codex" {
+            // The first submission can precede SessionStart. Its actual CLI
+            // writer verifies the thread independently of the old UI/cache ID.
+            guard await identities.codexOwnsSession(String(instance.processID), instance.processRuntimeID, instance.conversationID) else {
+                throw AgentWorkflowInspectionUnavailable()
+            }
+        } else {
+            guard
+                let native = await identities.load(instance.paneID),
+                native.processID == String(instance.processID), native.runtimeID == instance.processRuntimeID,
+                native.source.pluginID == instance.pluginID, native.source.sessionID == instance.conversationID,
+                windowManager.paneStates[instance.paneID]?.claudeSessionID == instance.conversationID else {
+                throw AgentWorkflowError("Cannot verify the Agent's current process and conversation.")
+            }
+        }
+        guard identities.runtimeID(String(instance.processID)) == instance.processRuntimeID else { throw AgentWorkflowError("The Agent process changed.") }
         var live = instance
         live.workspacePane = pane.identity
         live.workingDirectory = pane.info.currentPath

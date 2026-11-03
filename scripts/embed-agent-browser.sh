@@ -12,8 +12,11 @@ if [[ ! -d "$AB_SOURCE" ]]; then
   exit 0
 fi
 if [[ "${ACTION:-}" == install ]]; then
-  echo 'error: Agent Browser is development-only pending embedded-runtime acceptance and hardened-runtime/notarization validation. Do not archive this runtime yet.' >&2
-  exit 1
+  if [[ "${CTRLX_MAC_DISTRIBUTION:-}" != developer-id ]]; then
+    echo 'error: Agent Browser archives require the Developer ID release workflow (scripts/release.sh).' >&2
+    exit 1
+  fi
+  python3 "${SRCROOT}/scripts/macos_signing.py" verify "$AB_SOURCE" --team "${DEVELOPMENT_TEAM:?Missing archive team}"
 fi
 for ab_component in "$AB_SOURCE"/Frameworks/*; do
   codesign --verify --deep --strict "$ab_component"

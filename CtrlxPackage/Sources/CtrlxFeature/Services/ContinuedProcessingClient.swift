@@ -100,7 +100,7 @@
 
     @available(iOS 26.0, *)
     @MainActor
-    private final class ContinuedProcessingRuntime {
+    final private class ContinuedProcessingRuntime {
         static let shared = ContinuedProcessingRuntime()
 
         private struct Entry {
@@ -335,7 +335,7 @@
         }
 
         private static var identifierPrefix: String {
-            let bundleIdentifier = Bundle.main.bundleIdentifier ?? "com.jicezeng.ctrlx"
+            let bundleIdentifier = Bundle.main.bundleIdentifier ?? "com.gravtice.ctrlx"
             return "\(bundleIdentifier).agent-monitor."
         }
     }

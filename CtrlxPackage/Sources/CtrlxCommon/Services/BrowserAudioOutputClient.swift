@@ -35,6 +35,13 @@
         private var observers: [NSObjectProtocol] = []
         private var audioSessionActive = false
         private(set) var queuedFrames = 0
+        private(set) var pendingFrames = 0
+        private(set) var droppedFrames = 0
+        private(set) var underruns = 0
+        private(set) var resynchronizations = 0
+        private(set) var isPlaying = false
+        private var lastSequence: UInt64 = 0
+        private var prebufferTask: Task<Void, Never>?
         private var playbackEpoch = UUID()
         private let makeEngine: () -> AVAudioEngine
         @Dependency(FileBrowserVideoAudioClient.self) private var audioSession
@@ -51,16 +58,29 @@
             }
             owner = id
             self.onStop = onStop
-            let (stream, continuation) = AsyncStream<RemoteBrowserAudio>.makeStream(bufferingPolicy: .bufferingNewest(3))
+            droppedFrames = 0
+            underruns = 0
+            resynchronizations = 0
+            lastSequence = 0
+            startDecoder(id)
+        }
+
+        private func startDecoder(_ id: UUID) {
+            // Admission is bounded in audio frames, including in-flight decode,
+            // rather than message count (batches vary from 1 to 8 AAC packets).
+            let (stream, continuation) = AsyncStream<RemoteBrowserAudio>.makeStream()
+            let epoch = playbackEpoch
             self.continuation = continuation
             task = Task { [weak self] in
                 let decoder = BrowserAudioCodec()
                 for await message in stream {
                     do {
                         let pcm = try await decoder.decode(message.packets, cookie: message.magicCookie)
-                        guard !Task.isCancelled, let self, self.owner == id else { return }
+                        guard !Task.isCancelled, let self, self.owner == id, self.playbackEpoch == epoch else { return }
+                        self.pendingFrames -= BrowserAudioBuffering.frames(in: message)
                         try self.schedule(pcm, owner: id)
                     } catch {
+                        guard !Task.isCancelled, self?.playbackEpoch == epoch else { return }
                         self?.fail(id, message: error.localizedDescription)
                         return
                     }
@@ -80,7 +100,6 @@
                 audioSessionActive = false
                 throw error
             }
-            player.play()
             self.engine = engine
             self.player = player
             observers.append(NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { [weak self] _ in
@@ -97,7 +116,18 @@
         }
 
         func receive(_ id: UUID, message: RemoteBrowserAudio) {
-            guard owner == id, message.isValid, !message.packets.isEmpty else { return }
+            guard owner == id, message.isValid, !message.packets.isEmpty, message.sequence > lastSequence else { return }
+            let frames = BrowserAudioBuffering.frames(in: message)
+            if
+                (lastSequence > 0 && message.sequence != lastSequence + 1)
+                || pendingFrames + queuedFrames + frames > BrowserAudioBuffering.maximumFrames {
+                droppedFrames += pendingFrames + queuedFrames
+                resynchronizations += 1
+                resetPlayback()
+                startDecoder(id)
+            }
+            lastSequence = message.sequence
+            pendingFrames += frames
             continuation?.yield(message)
         }
 
@@ -105,20 +135,17 @@
             guard owner == id else { return }
             owner = nil
             onStop = nil
-            task?.cancel()
-            task = nil
-            continuation?.finish()
-            continuation = nil
+            if droppedFrames > 0 || underruns > 0 || resynchronizations > 0 {
+                Logger(label: "com.ctrlx.browser-audio").info("Viewer audio: discarded \(droppedFrames) frames, \(underruns) underruns, \(resynchronizations) resynchronizations")
+            }
+            resetPlayback()
             for observer in observers {
                 NotificationCenter.default.removeObserver(observer)
             }
             observers.removeAll()
-            player?.stop()
             engine?.stop()
             player = nil
             engine = nil
-            queuedFrames = 0
-            playbackEpoch = UUID()
             guard audioSessionActive else { return }
             audioSessionActive = false
             do { try audioSession.release(id) } catch {
@@ -144,12 +171,6 @@
             }
             guard let player else { return }
             let frames = pcm.count / 8
-            if queuedFrames + frames > 12_288 {
-                player.stop()
-                queuedFrames = 0
-                playbackEpoch = UUID()
-                player.play()
-            }
             let buffer = AVAudioPCMBuffer(pcmFormat: Self.format, frameCapacity: UInt32(frames))!
             buffer.frameLength = buffer.frameCapacity
             pcm.withUnsafeBytes { bytes in
@@ -167,8 +188,47 @@
                 Task { @MainActor in
                     guard let self, self.owner == id, self.playbackEpoch == epoch else { return }
                     self.queuedFrames = max(0, self.queuedFrames - frames)
+                    if self.queuedFrames == 0, self.isPlaying {
+                        self.underruns += 1
+                        self.player?.pause()
+                        self.isPlaying = false
+                    }
                 }
             }
+            if !isPlaying {
+                if queuedFrames >= BrowserAudioBuffering.prebufferFrames {
+                    beginPlayback()
+                } else if prebufferTask == nil {
+                    // A short sound must still play even if it never fills the buffer.
+                    prebufferTask = Task { [weak self] in
+                        do { try await Task.sleep(for: .milliseconds(128)) } catch { return }
+                        guard let self, self.owner == id, self.playbackEpoch == epoch else { return }
+                        self.beginPlayback()
+                    }
+                }
+            }
+        }
+
+        private func beginPlayback() {
+            prebufferTask?.cancel()
+            prebufferTask = nil
+            guard queuedFrames > 0 else { return }
+            player?.play()
+            isPlaying = true
+        }
+
+        private func resetPlayback() {
+            playbackEpoch = UUID()
+            task?.cancel()
+            task = nil
+            continuation?.finish()
+            continuation = nil
+            prebufferTask?.cancel()
+            prebufferTask = nil
+            player?.stop()
+            isPlaying = false
+            pendingFrames = 0
+            queuedFrames = 0
         }
     }
 #endif

@@ -4,8 +4,10 @@ import CtrlxPluginProtocol
 import Foundation
 
 extension TmuxService {
-    func captureWorkflowTerminal(_ instance: AgentWorkflowInstance) async throws -> AgentWorkflowTerminalCapture {
-        try await captureAgentTerminal(paneID: instance.paneID, identity: instance.workspacePane)
+    func captureWorkflowTerminal(_ instance: AgentWorkflowInstance, composer: AgentWorkflowComposer) async throws -> AgentWorkflowTerminalCapture {
+        try await AgentWorkflowComposerInspection.settledCapture(composer: composer) {
+            try await self.captureAgentTerminal(paneID: instance.paneID, identity: instance.workspacePane)
+        }
     }
 
     func captureAgentTerminal(paneID: String, identity: WorkspacePaneIdentity) async throws -> AgentWorkflowTerminalCapture {
@@ -22,7 +24,7 @@ extension TmuxService {
         _ instance: AgentWorkflowInstance, file: URL, composer: AgentWorkflowComposer,
         launch: @escaping @MainActor @Sendable (@Sendable () throws -> Void) throws -> Void
     ) async throws {
-        let capture = try await captureWorkflowTerminal(instance)
+        let capture = try await captureWorkflowTerminal(instance, composer: composer)
         guard AgentWorkflowComposerInspection.readiness(capture, composer: composer) == .ready else {
             throw AgentWorkflowError("The terminal input changed before submission. Nothing was sent.")
         }
@@ -41,8 +43,11 @@ extension TmuxService {
         } else {
             paneID = try await captureWorkspacePane(target: target).info.paneId
         }
-        return try await workflowInputGate.human(paneID: paneID, editsInput: editsInput) {
-            try await self.runTmuxCommand(arguments)
+        return try await workflowInputGate.human(paneID: paneID, editsInput: editsInput) { authorization in
+            if let authorization {
+                return try await self.runTmuxCommand(arguments) { launch in try authorization.perform(launch) }
+            }
+            return try await self.runTmuxCommand(arguments)
         }
     }
 }

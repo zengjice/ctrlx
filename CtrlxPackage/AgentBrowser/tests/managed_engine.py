@@ -33,7 +33,8 @@ class Managed(Probe):
                     continue
                 pid = int(pidfile.read_text())
                 executable = subprocess.run(['ps', '-p', str(pid), '-o', 'comm='], capture_output=True, text=True).stdout.strip()
-                if executable == str(self.args.engine):
+                expected = {str(self.args.engine), str(self.args.app / 'Contents/Resources/AgentBrowserEngine/agent-browser')}
+                if executable in expected:
                     os.kill(pid, signal.SIGTERM)
 
     async def setup(self):

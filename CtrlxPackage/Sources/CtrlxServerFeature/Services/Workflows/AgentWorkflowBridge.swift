@@ -10,8 +10,10 @@ struct AgentWorkflowBridgeEvidence: Codable, Equatable, Sendable {
     let processRuntimeID: String
     let version: Int
 
-    func matches(_ instance: AgentWorkflowInstance) -> Bool {
-        pluginID == instance.pluginID && conversationID == instance.conversationID
+    /// Hook protocol support belongs to this process runtime. Conversation
+    /// identity and task authority are verified separately for each invocation.
+    func matchesProcess(_ instance: AgentWorkflowInstance) -> Bool {
+        pluginID == instance.pluginID
             && paneID == instance.paneID && processID == instance.processID
             && processRuntimeID == instance.processRuntimeID
     }
@@ -24,7 +26,7 @@ struct AgentWorkflowBridgeEvidence: Codable, Equatable, Sendable {
 
 extension AgentWorkflowStore {
     func bridgeIssue(for instance: AgentWorkflowInstance) throws -> String? {
-        guard let evidence = try load().bridgeEvidence?.first(where: { $0.matches(instance) }) else {
+        guard let evidence = try load().bridgeEvidence?.first(where: { $0.matchesProcess(instance) }) else {
             return "This Agent has not confirmed its workflow hook. Update its CtrlX plugin, then restart the Agent or submit a normal prompt before starting a workflow."
         }
         return evidence.issue
@@ -62,7 +64,7 @@ extension AgentWorkflowStore {
         updated.bridgeEvidence = entries
         if let issue = evidence.issue {
             for index in updated.runs.indices where !updated.runs[index].status.isTerminal
-                && updated.runs[index].instances.contains(where: { evidence.matches($0) }) {
+                && updated.runs[index].instances.contains(where: { evidence.matchesProcess($0) }) {
                 var execution = try AgentWorkflowExecution(validating: updated.runs[index])
                 execution.pause(reason: issue)
                 updated.runs[index] = execution.run

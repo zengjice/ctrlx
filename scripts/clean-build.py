@@ -17,7 +17,7 @@ from xml.parsers.expat import ExpatError
 from local_build import inherited_lock, run_child, validate_path, worktree_lock
 
 
-ARTIFACT_NAME = re.compile(r"CtrlX-[0-9]+\.[0-9]+\.[0-9]+(?P<configuration>-Debug)?\.(?P<platform>ipa|dmg)")
+ARTIFACT_NAME = re.compile(r"CtrlX-[0-9]+\.[0-9]+\.[0-9]+(?P<configuration>-Debug)?(?P<signing>-AdHoc)?\.(?P<platform>ipa|dmg)")
 RELEASE_DIRECTORY = re.compile(r"v?[0-9]+\.[0-9]+\.[0-9]+")
 PUBLISH_REPORT = re.compile(r"publish-report(?:-[0-9]+)?\.json")
 RETAINED_MARKER = ".ctrlx-retained.json"
@@ -53,6 +53,7 @@ DEEP_CACHE_DIRS = (
     "CtrlxPackage/.build",
 )
 SIGNING_CLONE_IDS = (
+    "com.gravtice.ctrlx.macos",
     "com.jicezeng.ctrlx.macos",
     "com.ctrlx.embedded-acceptance",
     "com.ctrlx.extensions-acceptance",
@@ -343,7 +344,7 @@ def artifact_targets(root, current):
     validate_path(root, current)
     match = ARTIFACT_NAME.fullmatch(current.name)
     if current.parent != dist or not match or not current.is_file():
-        raise ValueError("--artifact must be an existing dist/CtrlX-<version>[-Debug].ipa or .dmg")
+        raise ValueError("--artifact must be an existing dist/CtrlX-<version>[-Debug][-AdHoc].ipa or .dmg")
     for suffix in (".sha256", ".manifest.json"):
         metadata = Path(str(current) + suffix)
         validate_path(root, metadata)
@@ -525,7 +526,7 @@ def clean(root, targets, apply):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_subparsers(dest="mode", required=True)
-    prune = modes.add_parser("prune", help="Keep two packages per platform/configuration and clean packaging leftovers")
+    prune = modes.add_parser("prune", help="Keep two packages per platform/configuration/signing mode and clean packaging leftovers")
     prune.add_argument("--artifact", type=Path, help="Just-built package to protect; omit for App-only builds")
     prune.add_argument("--platform", choices=("iOS", "macOS"), help="Also clean that local packaging DerivedData")
     prune.add_argument("--save-space", action="store_true", help="Also remove platform compilation caches; keep products and downloads")

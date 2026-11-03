@@ -56,7 +56,7 @@ extension AgentWorkflowObservation {
 }
 
 struct AgentWorkflowArchive: Codable, Equatable, Sendable {
-    var schemaVersion = 1
+    var schemaVersion = 4
     let hostID: UUID
     var definitions: [AgentWorkflowDefinition] = []
     var instances: [AgentWorkflowInstance] = []
@@ -73,6 +73,7 @@ actor AgentWorkflowStore {
     private let hostID: UUID
     private var archive: AgentWorkflowArchive?
     private var writeAuthorizations: [UUID: AgentWorkflowWriteAuthorization] = [:]
+    private var humanInputAuthorizations: [String: AgentWorkflowHumanInputAuthorization] = [:]
     let attachmentUploads = HostFileUploads()
     var pendingAttachments: [UUID: PendingAttachment] = [:]
     var busyAttachmentUploads: Set<UUID> = []
@@ -86,6 +87,22 @@ actor AgentWorkflowStore {
 
     func snapshot() throws -> AgentWorkflowArchive {
         try load()
+    }
+
+    func authorizeHumanInput(paneID: String) throws -> AgentWorkflowHumanInputAuthorization {
+        let archive = try load()
+        if
+            archive.runs.contains(where: {
+                ($0.status == .running || $0.status == .finishing) && $0.instances.contains { $0.paneID == paneID }
+            }) {
+            throw AgentWorkflowInputReadOnlyError()
+        }
+        if let authorization = humanInputAuthorizations[paneID] {
+            return authorization
+        }
+        let authorization = AgentWorkflowHumanInputAuthorization()
+        humanInputAuthorizations[paneID] = authorization
+        return authorization
     }
 
     /// Call only with a complete, verified process snapshot. Failed inspection
@@ -112,8 +129,11 @@ actor AgentWorkflowStore {
         }
         for index in updated.runs.indices where !updated.runs[index].status.isTerminal {
             let run = updated.runs[index]
+            let execution = try AgentWorkflowExecution(validating: run)
             let changed = run.instances.contains { bound in
-                !updated.instances.contains { bound.matchesBinding($0) && $0.readiness != .unavailable }
+                !updated.instances.contains {
+                    (bound.matchesBinding($0) || execution.canBindFirstConversation($0)) && $0.readiness != .unavailable
+                }
             }
             if changed {
                 var execution = try AgentWorkflowExecution(validating: run)
@@ -186,7 +206,9 @@ actor AgentWorkflowStore {
             !run.status.isTerminal && run.instances.contains { instanceIDs.contains($0.id) }
         }
         guard !occupied else { throw AgentWorkflowError("An Agent is already reserved by another active workflow.") }
-        let instances = definition.nodes.compactMap { node in updated.instances.first { $0.id == node.agentInstanceID } }
+        let instances = definition.agents.compactMap { participant in
+            instanceIDs.contains(participant.id) ? updated.instances.first { $0.id == participant.id } : nil
+        }
         let execution = try AgentWorkflowExecution(
             definition: definition,
             instances: instances,
@@ -248,6 +270,28 @@ actor AgentWorkflowStore {
         cleanUnreferencedAttachments(removed.attachmentIDs)
     }
 
+    func allowsInitialConversationBinding(for instance: AgentWorkflowInstance) throws -> Bool {
+        try !load().runs.contains { run in
+            !run.status.isTerminal && run.instances.contains(where: { $0.matchesProcess(instance) })
+                && run.invocations.contains { $0.delivery.toAgentID == instance.id && $0.nativeTurnID != nil }
+        }
+    }
+
+    /// Commit the verified first receipt and its catalog join key together.
+    func accept(runID: UUID, invocationID: UUID, instance: AgentWorkflowInstance, nativeTurnID: String, transcriptPath: String?, bindFirstConversation: Bool) throws {
+        var updated = try load()
+        guard let index = updated.runs.firstIndex(where: { $0.id == runID }) else {
+            throw AgentWorkflowError("The workflow run does not exist.")
+        }
+        var execution = try AgentWorkflowExecution(validating: updated.runs[index])
+        try execution.accept(invocationID: invocationID, instance: instance, nativeTurnID: nativeTurnID, transcriptPath: transcriptPath, bindFirstConversation: bindFirstConversation)
+        updated.runs[index] = execution.run
+        if bindFirstConversation, let catalog = updated.instances.firstIndex(where: { $0.matchesProcess(instance) }) {
+            updated.instances[catalog].conversationID = instance.conversationID
+        }
+        try commit(updated)
+    }
+
     func load() throws -> AgentWorkflowArchive {
         if let archive {
             return archive
@@ -259,7 +303,7 @@ actor AgentWorkflowStore {
         }
         var loaded = try JSONDecoder().decode(AgentWorkflowArchive.self, from: Data(contentsOf: fileURL))
         guard
-            [1, 2].contains(loaded.schemaVersion), loaded.hostID == hostID,
+            [1, 2, 3, 4].contains(loaded.schemaVersion), loaded.hostID == hostID,
             Set(loaded.definitions.map(\.id)).count == loaded.definitions.count,
             Set(loaded.runs.map(\.id)).count == loaded.runs.count,
             Set(loaded.instances.map(\.id)).count == loaded.instances.count else {
@@ -280,19 +324,30 @@ actor AgentWorkflowStore {
         }
         for index in loaded.runs.indices {
             guard loaded.runs[index].definition.hostID == hostID else { throw AgentWorkflowError("A saved run belongs to another Host.") }
+            if loaded.schemaVersion < 4 {
+                // Agent output sharing was removed. Discard its old references,
+                // preserving input images, content outputs and native turn evidence.
+                for invocationIndex in loaded.runs[index].invocations.indices {
+                    let invocation = loaded.runs[index].invocations[invocationIndex]
+                    guard
+                        loaded.runs[index].definition.nodes.first(where: { $0.id == invocation.nodeID })?.kind == .agent,
+                        let result = invocation.result, !result.attachmentIDs.isEmpty else { continue }
+                    loaded.runs[index].invocations[invocationIndex].result = .init(
+                        id: result.id, invocationID: result.invocationID, nativeTurnID: result.nativeTurnID,
+                        text: result.text, completedAt: result.completedAt
+                    )
+                }
+            }
             loaded.runs[index] = try AgentWorkflowExecution(restoring: loaded.runs[index]).run
         }
+        loaded.schemaVersion = 4
         try commit(loaded)
         return loaded
     }
 
     func commit(_ updated: AgentWorkflowArchive) throws {
         var updated = updated
-        if
-            updated.definitions.contains(where: { $0.nodes.contains { $0.kind == .content } })
-            || updated.runs.contains(where: { $0.definition.nodes.contains { $0.kind == .content } }) {
-            updated.schemaVersion = 2
-        }
+        updated.schemaVersion = 4
         guard updated != archive else { return }
         let data = try JSONEncoder().encode(updated)
         try FileManager.default.createDirectory(
@@ -302,6 +357,11 @@ actor AgentWorkflowStore {
         )
         try data.write(to: fileURL, options: .atomic)
         archive = updated
+        let readOnlyPanes = Set(updated.runs.filter { $0.status == .running || $0.status == .finishing }.flatMap { $0.instances.map(\.paneID) })
+        for (paneID, authorization) in humanInputAuthorizations where readOnlyPanes.contains(paneID) {
+            authorization.revoke()
+            humanInputAuthorizations.removeValue(forKey: paneID)
+        }
         let writable = Set(updated.runs.filter { $0.status == .running }.flatMap {
             $0.invocations.filter { $0.status == .writing }.map(\.id)
         })

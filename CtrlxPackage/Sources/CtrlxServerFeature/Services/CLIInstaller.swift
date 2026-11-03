@@ -16,7 +16,7 @@
         private static let logger = Logger(label: "com.jicezeng.ctrlx.cliinstaller")
         private static let installPath = "/usr/local/bin/ctrlx"
         private static let completionPath = "/usr/local/share/zsh/site-functions/_ctrlx"
-        private static let bundleID = "com.jicezeng.ctrlx.macos"
+        private static let bundleID = "com.gravtice.ctrlx.macos"
 
         /// Result of an install attempt. Communicates CLI vs. completion outcomes
         /// independently so callers can surface partial successes to the user.
@@ -190,8 +190,12 @@
         @MainActor
         public static func uninstall() -> Bool {
             var paths: [String] = []
-            if isInstalled { paths.append(installPath) }
-            if isCompletionInstalled { paths.append(completionPath) }
+            if isInstalled {
+                paths.append(installPath)
+            }
+            if isCompletionInstalled {
+                paths.append(completionPath)
+            }
 
             guard !paths.isEmpty else {
                 logger.info("Nothing to uninstall")

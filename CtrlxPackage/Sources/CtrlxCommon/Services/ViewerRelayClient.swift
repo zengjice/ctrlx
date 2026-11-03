@@ -131,6 +131,7 @@ final public class ViewerRelayClient {
     public private(set) var hostSupportsSimulatorClosing = false
     public private(set) var hostSupportsAgentHookTrust = false
     public private(set) var hostSupportsAgentModelControls = false
+    public private(set) var hostSupportsSharedAgentModelShortcuts = false
     public private(set) var hostSupportsDashboard = false
     public private(set) var hostAgentWorkflowVersion: Int?
     public private(set) var hostWorkflowAgentPluginIDs: Set<String> = []
@@ -206,6 +207,9 @@ final public class ViewerRelayClient {
 
     /// Server URL for reconnection
     private var serverURL: URL?
+
+    @ObservationIgnored private var pendingPushToken: String?
+    @ObservationIgnored private var viewerRegistrationConfirmed = false
 
     /// Whether we should attempt reconnection
     private var shouldReconnect = false
@@ -625,6 +629,8 @@ final public class ViewerRelayClient {
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to manage Agent workflows."))
         case .trustAgentHooks where !hostSupportsAgentHookTrust:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to approve hooks from CtrlX."))
+        case .setAgentModelShortcuts where !hostSupportsSharedAgentModelShortcuts:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to share model shortcut preferences."))
         case .agentModelControls where !hostSupportsAgentModelControls:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to use model shortcuts."))
         case .readDashboard where !hostSupportsDashboard:
@@ -853,6 +859,8 @@ final public class ViewerRelayClient {
             return (try? await sendCommand(spec, paneId: "").get())?.success == true
         case let .trustAgentHooks(spec):
             return (try? await sendCommand(spec, paneId: paneId).get())?.success == true
+        case let .setAgentModelShortcuts(spec):
+            return (try? await sendCommand(spec, paneId: paneId).get())?.success == true
         case let .agentModelControls(spec):
             return (try? await sendCommand(spec, paneId: paneId).get())?.success == true
         case let .readDashboard(spec):
@@ -988,10 +996,8 @@ final public class ViewerRelayClient {
     ///
     /// - Parameter token: The APNs device token as a hex string
     public func sendPushToken(_ token: String) async {
-        guard state.isConnected else {
-            logger.debug("Not connected, cannot send push token")
-            return
-        }
+        pendingPushToken = token
+        guard state.isConnected, viewerRegistrationConfirmed else { return }
 
         logger.info("Sending push token to relay server")
         let message = WebSocketMessage.registerPushToken(RegisterPushTokenMessage(deviceToken: token))
@@ -1251,8 +1257,13 @@ final public class ViewerRelayClient {
             if response.success {
                 logger.info("Successfully registered with relay server as viewer")
 
+                viewerRegistrationConfirmed = true
                 setState(.connected)
                 connectedHostName = response.hostDeviceName
+                if let token = pendingPushToken {
+                    await sendPushToken(token)
+                    guard connectionGeneration.isCurrent(generation), webSocketTask === task else { return }
+                }
                 // `isHostConnected` is deliberately NOT set here — a mismatched host
                 // would otherwise surface as "Connected" in the UI until peerHello
                 // validation completes and flips state to `.error`. The flag is
@@ -1334,6 +1345,7 @@ final public class ViewerRelayClient {
             hostSupportsSimulatorClosing = sessionState.supportsSimulatorClosing == true
             hostSupportsAgentHookTrust = sessionState.supportsAgentHookTrust == true
             hostSupportsAgentModelControls = sessionState.supportsAgentModelControls == true
+            hostSupportsSharedAgentModelShortcuts = sessionState.agentModelShortcuts != nil
             hostSupportsDashboard = sessionState.supportsDashboard == true
             hostAgentWorkflowVersion = sessionState.agentWorkflowVersion
             hostWorkflowAgentPluginIDs = Set(sessionState.workflowAgentPluginIDs ?? [])
@@ -1793,6 +1805,7 @@ final public class ViewerRelayClient {
     }
 
     private func cleanupConnection() async {
+        viewerRegistrationConfirmed = false
         resetFileUploads()
         resetBrowserState()
         resetCtrlXAppUpdate()
@@ -1859,6 +1872,7 @@ final public class ViewerRelayClient {
         hostSupportsSimulatorClosing = false
         hostSupportsAgentHookTrust = false
         hostSupportsAgentModelControls = false
+        hostSupportsSharedAgentModelShortcuts = false
         hostSupportsDashboard = false
         hostAgentWorkflowVersion = nil
         hostWorkflowAgentPluginIDs = []

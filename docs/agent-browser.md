@@ -117,8 +117,11 @@ CEF 使用固定的页面脚本读取选区，并给当前焦点派发带 `DataT
 
 Current embedded-browser contract, followed by dated acceptance history. The
 Apple Development-signed runtime is distributed through the private Mac channel;
-this does not mean hardened-runtime/notarized distribution is approved. Formal
-archives remain gated; see [RELEASE.md](../RELEASE.md). Historical statements such
+Formal archives now require Developer ID mode and verification of every embedded
+component's team, secure timestamp, runtime flags and scoped entitlements. The
+release workflow also requires App/DMG notarization, stapled tickets and Gatekeeper
+acceptance; see [RELEASE.md](../RELEASE.md). Plain development archives remain
+blocked. Historical statements such
 as “not published” apply only to their recorded checkpoint, not today's channel.
 
 **Open Browser** belongs to a terminal Window, not the global New menu. On Mac,
@@ -671,24 +674,37 @@ play in a replacement surface. Old peers retain their existing behavior. Both
 Host and Viewer need the new capability; the Relay forwards existing ciphertext.
 
 Audio uses system AAC-LC encoding at 48 kHz stereo and 96 kbit/s. The Host polls
-its private native PCM ring independently of screenshots and pushes small audio
-batches on the existing E2EE connection. The native ring holds at most 8192
-frames (171 ms); each wire batch holds up to 8 packets/16 KiB. Audio is skipped
-while the send queue is congested; Viewer decode and playback buffers are bounded
-and replace old samples rather than accumulating a delayed playback history.
-The Viewer counts only audio awaiting player rendering toward its 12,288-frame
-(256 ms) playback limit. Render-completion callbacks release that budget;
-downstream device latency, including Bluetooth output, must not trigger queue
-resets. Unrendered overflow still clears stale buffers, and callbacks from a
-retired playback epoch cannot affect the current queue.
+its private native PCM ring on a 40 ms cadence, independently of screenshot and
+network sends. Each read can drain all 8192 frames (171 ms) in the ring; each wire
+batch still holds up to 8 packets/16 KiB. A single sender per stream keeps pending
+and in-flight audio within 24,576 frames (512 ms). It discards the oldest unsent
+batches only when that budget is exceeded; ordinary terminal send-queue bursts
+no longer discard audio at the connection boundary. Stopping a stream cancels
+both capture and delivery and clears unsent batches.
+
+The Viewer budgets pending decode and unrendered playback together at 24,576
+frames (512 ms), rather than dropping by message count. It starts playback after
+6144 frames (128 ms) accumulate, with a 128 ms deadline so short sounds also play.
+An empty player pauses and prebuffers again. Overflow or a sequence gap resets
+the decoder and playback epoch before buffering the newest batch. Retired decode
+results, playback callbacks and timers cannot affect the replacement epoch.
+Only unrendered audio counts against the budget; device/Bluetooth latency does
+not. Playback uses the fixed sample rate without speed changes to catch up.
+Host send drops and Viewer dropped-frame/underrun/resynchronization counts are
+logged at stream teardown; native capture status also includes dropped frames.
+These are local changes to Host and shared Mac/iOS playback; wire fields and
+Relay routing are unchanged, including support for older peers.
 Screenshots still use the existing polling path: this adds page sound, not a
 synchronized high-frame-rate video transport or audio tracks to recordings.
 
 `tests/browser_audio.py` exercises capture, playback takeover, mute, release,
 bounded buffering, page isolation and closing a playing page in the signed
 isolated probe App. Swift `BrowserAudio` tests cover AAC, wire/control identity
-and playback lifecycle. Offline-engine regressions verify queue draining without
-device-playback callbacks and bounded unrendered overflow; codec tests also
+and playback lifecycle. Offline-engine regressions verify six-batch bursts, the combined frame budget,
+prebuffer deadlines, underrun recovery, sequence gaps and queue draining without
+device-playback callbacks. A slow-send Host test checks bounded capture progress
+and cancellation; the native ring regression checks 100 ms polling without loss.
+Codec tests also
 check stereo pitch and duration. On a Mac with a working audio output device, set
 `CTRLX_BROWSER_AUDIO_PLAYBACK_TEST=1` to include the native output test; it
 decodes and schedules encoded silence. The default suite keeps this device

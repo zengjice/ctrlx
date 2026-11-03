@@ -127,9 +127,18 @@ Right-click a button to hide it, or open the adjacent customization popover to
 change several checkboxes without reopening it. Changes apply immediately; Done,
 Escape or clicking outside closes the popover. It scrolls vertically when needed.
 The current choices are labelled Current and cannot be hidden. Display settings
-remain editable while the Agent is working. These display preferences are in-memory,
-per-client and per-stable-window, survive split/detach, and expire when the tab
-closes. Successful refresh prunes closed tabs without publishing an observation
+remain editable while the Agent is working. These display preferences are
+shared per persistent window: the Host saves the authoritative configuration and
+pushes edits to connected Mac Viewers through existing session-state updates.
+The last edit accepted by the Host wins; revisions prevent delayed replies from
+rolling back a newer configuration. No extra polling is added.
+With workspace recovery enabled, the Host saves hidden IDs, creation-time defaults
+and revision in its presentation snapshot. Recovery maps persistent window IDs to
+the current tmux server without overwriting edits to already restored tabs.
+On upgrade, the Host's saved configuration is authoritative; existing Viewer-local
+settings are not uploaded automatically. A Viewer connected to an older Host
+continues to save its own configuration locally, scoped to pairing and Host identity.
+Successful refresh prunes closed tabs without publishing an observation
 change when no entries were removed. The current choice always remains visible.
 
 **Provider defaults:** Settings → Agents → Codex/Claude Code → Providers has a
@@ -144,10 +153,12 @@ when that also follows the CLI, it uses the current CLI configuration's defaults
 Later Provider edits affect future tabs only. Each tab keeps its own creation
 snapshot for Restore Defaults (all buttons when no defaults were configured).
 Fork, resume and existing tabs keep their existing display behavior.
+Workspace recovery restores the saved tab settings rather than reading today's
+Provider defaults. Older snapshots without display settings retain the existing
+all-buttons behavior; recovery does not change the Agent's active model or effort.
 The Host applies defaults locally and includes an optional, stable-pane-scoped
-snapshot in the creation response for the creating Mac Viewer. Preferences are
-never polled or broadcast with terminal state; other clients retain their own tab
-preferences. Old Hosts/clients omit or ignore the snapshot and show all buttons.
+snapshot in the creation response for compatibility with older Mac Viewers. New
+Viewers use the shared Host preferences; older clients retain their local behavior.
 Restore Defaults never changes the Agent's model.
 
 The optional `AgentModelProviding` plugin capability owns discovery, native input
@@ -216,12 +227,18 @@ status fields or use native `/model`. Claude can establish an unknown selection
 through its native picker. Native manual changes are reflected when their
 current state is visible.
 
-Safe shortcut switching also requires the running Host tmux server to expose
-`bracket_paste_flag` (tmux 3.7+). On older servers, including 3.6a, the model list
-and any readable current selection still appear, while switch requests are rejected
-with an upgrade explanation. A missing field remains unknown and cannot enable
-automatic terminal input. Updating the tmux executable or resuming an Agent does
-not upgrade an already-running tmux server.
+Model and effort shortcuts also work with tmux 3.6a on the Host. When the server
+cannot expose `bracket_paste_flag`, the Host verifies the native empty composer
+and submits the validated single-line `/model` command with `paste-buffer -p`,
+letting tmux add paste delimiters according to the terminal's actual mode. The
+private buffer is consumed and deleted; paste and Return share a guarded command
+queue. Foreground command, cursor, size, copy mode, pane/process identity and
+human-input checks still apply. Servers that expose an explicitly disabled paste
+mode remain blocked; tmux 3.7+ retains the single-write submission. This fallback
+is limited to user-requested model/effort changes, including Mac/iOS Viewer
+requests executed on the Host. Automatic workflows and hook approval retain
+their explicit input-mode requirement. Only the Host needs the compatibility fix;
+updating a Viewer alone does not change the Host's behavior.
 
 Only an idle Agent with an empty native composer can accept a switch. Questions,
 approvals, drafts and external editors prevent it. The Host checks stable pane
@@ -331,12 +348,12 @@ button cancellation, overflow scrolling, held buttons, actual keyboard dismissal
 draft preservation and the excluded regions/presentation states. This was not
 a paired-Host or physical-iPhone acceptance run.
 
-In Bottom Bar mode, a single tap in an empty terminal input surface
+A single tap in an empty terminal input surface
 shows/hides the keyboard; with draft text, it places the cursor and opens the
 keyboard (or keeps it open), so editing can resume after hiding it. Native
 Codex placeholder text is recognized as empty without adding a CtrlX placeholder.
-Double-tap copy/paste remains unchanged. The legacy Top Right keyboard layout
-is still selectable and keeps its explicit keyboard button.
+Double-tap copy/paste remains unchanged. Terminal input controls always use the
+bottom bar; the legacy Top Right layout and its position setting are removed.
 
 The Quick Phrases and Commands buttons open a shared **in-page overlay**, not a system
 sheet. The overlay covers terminal content without contributing to its layout:

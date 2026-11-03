@@ -9,6 +9,7 @@ extension AppCoordinator {
         @Dependency(WorkspaceRecoveryStore.self) var store
         @Dependency(WorkspaceRecoverySystem.self) var system
         @Dependency(HostIdentityClient.self) var identity
+        @Dependency(AgentSessionIdentityClient.self) var agentIdentities
         let agents = WorkspaceAgentRecovery(
             core: { [weak self] in self?.pluginRegistry?.core($0) as? any AgentSessionResuming },
             mode: { [settings] in settings.workspaceRecoveryMode },
@@ -24,6 +25,7 @@ extension AppCoordinator {
                 state.source = windowManager.paneStates[runtime].flatMap(AgentForkSource.init(pane:))
                 return state
             },
+            recoverySource: agentIdentities.recoverySource,
             launch: { [tmuxService] runtime, pane, record, command in
                 try await tmuxService.launchWorkspaceAgent(runtimeID: runtime, pane: pane, record: record, command: command)
             }
@@ -88,7 +90,7 @@ extension AppCoordinator {
         let presentationSessions = WorkspaceRecoveryPresentationMapper.includingResources(resourceSessions.sessions, in: live.sessions)
         snapshot.resourceSessions = resourceSessions.sessions
         snapshot.independentFileTabs = hostFileTabs.tabs.filter { $0.resourceSessionID != nil }
-        let captured = WorkspaceRecoveryPresentationMapper.captureLocal(windows: detachedWindows, sessions: presentationSessions, mainID: detachedWindows.mainSceneID)
+        let captured = WorkspaceRecoveryPresentationMapper.captureLocal(windows: detachedWindows, sessions: presentationSessions, mainID: detachedWindows.mainSceneID, modelPreferences: agentModelPreferences, serverID: live.serverID)
         snapshot.scenes = WorkspaceRecoveryPresentationMapper.preservingUnavailable(captured: captured, source: source, live: live)
         snapshot.fileTabs = WorkspaceRecoveryPresentationMapper.captureFiles(hostFileTabs.tabs, sessions: live.sessions)
         if source.recovery != nil {
@@ -141,6 +143,7 @@ extension AppCoordinator {
                                 proof.matches(pane: state, detected: detected, runtimeID: identities.runtimeID(proof.processID)) else {
                                 throw WorkspaceRecoveryError("The Agent process ownership could not be verified at the last capture.")
                             }
+                            WorkspaceAgentCapture.recordIdentity(proof, in: &pane)
                             if let cached = recoveryAgentDescriptors[pane.id], cached.source == identity, cached.runtimeID == proof.runtimeID {
                                 WorkspaceAgentCapture.record(cached.descriptor, identity: proof, in: &pane)
                             } else {
@@ -203,7 +206,7 @@ extension AppCoordinator {
         hostFileTabs.restore(snapshot.fileTabs, sessions: live.sessions, serverID: live.serverID)
         hostFileTabs.migrateRestoredHumanTabs(snapshot.fileTabs, sessions: resourceSessions.sessions)
         let alreadyPresented = detachedWindows.mainTabs.restoredRecoveryWindowIDs
-        WorkspaceRecoveryPresentationMapper.restoreLocal(snapshot.scenes, live: .init(serverID: live.serverID, sessions: WorkspaceRecoveryPresentationMapper.includingResources(resourceSessions.sessions, in: live.sessions)), windows: detachedWindows, files: hostFileTabs.tabs)
+        WorkspaceRecoveryPresentationMapper.restoreLocal(snapshot.scenes, live: .init(serverID: live.serverID, sessions: WorkspaceRecoveryPresentationMapper.includingResources(resourceSessions.sessions, in: live.sessions)), windows: detachedWindows, files: hostFileTabs.tabs, modelPreferences: agentModelPreferences)
         viewerWorkspaceRecovery.restore(snapshot.viewerScenes, windows: detachedWindows)
         for session in live.sessions {
             guard

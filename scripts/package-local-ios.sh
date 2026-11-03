@@ -11,8 +11,9 @@ LOCAL_CONFIG="$PROJECT_ROOT/Config/Local.xcconfig"
 source "$SCRIPT_DIR/common.sh"
 
 CONFIGURATION=Release
-SAVE_SPACE=false
+SAVE_SPACE=true
 APP_ONLY=false
+SIGNING_MODE=""
 LOCAL_BUILD_ARGUMENTS=("$@")
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -25,15 +26,26 @@ while [ "$#" -gt 0 ]; do
             CONFIGURATION="$2"
             shift 2
             ;;
+        --signing-mode)
+            [ "$#" -ge 2 ] || log_error '--signing-mode requires development or ad-hoc.'
+            SIGNING_MODE="$2"
+            shift 2
+            ;;
         --save-space)
             SAVE_SPACE=true
             shift
             ;;
+        --keep-build-cache)
+            SAVE_SPACE=false
+            shift
+            ;;
         --help|-h)
-            printf '%s\n' 'Usage: package-local-ios.sh [--configuration Release|Debug] [--app-only] [--save-space]' \
+            printf '%s\n' 'Usage: package-local-ios.sh [--configuration Release|Debug] [--signing-mode development|ad-hoc] [--app-only] [--save-space|--keep-build-cache]' \
                 '--app-only: build and verify the signed device App without producing an IPA.' \
-                'Default: Release. Debug writes a separate -Debug.ipa for comparison.' \
-                '--save-space: after success, remove compilation caches; keep App, IPA and downloads. Next build is slower.'
+                '--signing-mode: override CTRLX_IOS_SIGNING_MODE in Local.xcconfig (default development). Ad Hoc uses production APNs.' \
+                'Default: Release; remove compilation caches after success. Debug writes a separate -Debug.ipa for comparison.' \
+                '--save-space: explicitly select the default; keep App, IPA and downloads. Next build is slower.' \
+                '--keep-build-cache: retain compilation caches for repeated iOS builds.'
             exit 0
             ;;
         *) log_error "Unknown argument: $1" ;;
@@ -49,6 +61,14 @@ assert_git_worktree
 with_worktree_lock ${LOCAL_BUILD_ARGUMENTS[@]+"${LOCAL_BUILD_ARGUMENTS[@]}"}
 [ -f "$LOCAL_CONFIG" ] \
     || log_error 'Missing Config/Local.xcconfig. Copy Config/Local.xcconfig.example and configure your personal team and bundle ID.'
+EXPECTED_TEAM_ID="$(read_xcconfig_value "$LOCAL_CONFIG" CTRLX_IOS_DEVELOPMENT_TEAM)"
+[ -n "$EXPECTED_TEAM_ID" ] || log_error 'Configure CTRLX_IOS_DEVELOPMENT_TEAM in Config/Local.xcconfig.'
+SIGNING_MODE="${SIGNING_MODE:-$(read_xcconfig_value "$LOCAL_CONFIG" CTRLX_IOS_SIGNING_MODE)}"
+SIGNING_MODE="${SIGNING_MODE:-development}"
+case "$SIGNING_MODE" in
+    development|ad-hoc) ;;
+    *) log_error 'Signing mode must be development or ad-hoc.' ;;
+esac
 
 VERSION="$(get_version)"
 BUILD_STAMP="$(get_build_stamp)"
@@ -62,6 +82,9 @@ EXTENSION_PATH="$APP_PATH/PlugIns/CtrlxNotificationExtension.appex"
 IPA_PATH="$DIST_DIR/CtrlX-$VERSION.ipa"
 if [ "$CONFIGURATION" = Debug ]; then
     IPA_PATH="$DIST_DIR/CtrlX-$VERSION-Debug.ipa"
+fi
+if [ "$SIGNING_MODE" = ad-hoc ]; then
+    IPA_PATH="${IPA_PATH%.ipa}-AdHoc.ipa"
 fi
 
 check_build_space "$PROJECT_ROOT"
@@ -79,6 +102,23 @@ cleanup_ios_workspace() {
     fi
 }
 trap cleanup_ios_workspace EXIT
+
+APP_BUNDLE_ID="$(read_xcconfig_value "$LOCAL_CONFIG" CTRLX_IOS_APP_BUNDLE_IDENTIFIER)"
+EXTENSION_BUNDLE_ID="$(read_xcconfig_value "$LOCAL_CONFIG" CTRLX_IOS_NOTIFICATION_EXTENSION_BUNDLE_IDENTIFIER)"
+APP_ENTITLEMENTS_SOURCE="$(read_xcconfig_value "$LOCAL_CONFIG" CTRLX_IOS_APP_ENTITLEMENTS)"
+EXTENSION_ENTITLEMENTS_SOURCE="$(read_xcconfig_value "$LOCAL_CONFIG" CTRLX_IOS_NOTIFICATION_EXTENSION_ENTITLEMENTS)"
+APP_BUNDLE_ID="${APP_BUNDLE_ID:-$(read_xcconfig_value "$PROJECT_ROOT/Config/Shared.xcconfig" CTRLX_IOS_APP_BUNDLE_IDENTIFIER)}"
+EXTENSION_BUNDLE_ID="${EXTENSION_BUNDLE_ID:-$(read_xcconfig_value "$PROJECT_ROOT/Config/Shared.xcconfig" CTRLX_IOS_NOTIFICATION_EXTENSION_BUNDLE_IDENTIFIER)}"
+APP_ENTITLEMENTS_SOURCE="${APP_ENTITLEMENTS_SOURCE:-$(read_xcconfig_value "$PROJECT_ROOT/Config/Shared.xcconfig" CTRLX_IOS_APP_ENTITLEMENTS)}"
+EXTENSION_ENTITLEMENTS_SOURCE="${EXTENSION_ENTITLEMENTS_SOURCE:-$(read_xcconfig_value "$PROJECT_ROOT/Config/Shared.xcconfig" CTRLX_IOS_NOTIFICATION_EXTENSION_ENTITLEMENTS)}"
+PROFILE_ROOT="$(/usr/bin/mktemp -d "$LOCAL_BUILD_ROOT/profiles.XXXXXX")"
+python3 "$SCRIPT_DIR/ios_profiles.py" prepare --team "$EXPECTED_TEAM_ID" --signing-mode "$SIGNING_MODE" \
+    --app-bundle-id "$APP_BUNDLE_ID" --extension-bundle-id "$EXTENSION_BUNDLE_ID" \
+    --app-entitlements "$PROJECT_ROOT/$APP_ENTITLEMENTS_SOURCE" \
+    --extension-entitlements "$PROJECT_ROOT/$EXTENSION_ENTITLEMENTS_SOURCE" --output-directory "$PROFILE_ROOT"
+SIGNING_IDENTITY="$(/usr/bin/plutil -extract identity raw -o - "$PROFILE_ROOT/signing.json")"
+APP_ENTITLEMENTS="$PROFILE_ROOT/app-entitlements.plist"
+EXTENSION_ENTITLEMENTS="$PROFILE_ROOT/extension-entitlements.plist"
 
 invalidate_local_app ios "$CONFIGURATION"
 log_info "Building CtrlX $VERSION ($CONFIGURATION) from $PROJECT_ROOT"
@@ -103,52 +143,12 @@ log_info "Building CtrlX $VERSION ($CONFIGURATION) from $PROJECT_ROOT"
 [ -d "$APP_PATH" ] || log_error "Build did not produce $APP_PATH"
 [ -d "$EXTENSION_PATH" ] || log_error "Build did not produce $EXTENSION_PATH"
 
-APP_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")"
-EXTENSION_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$EXTENSION_PATH/Info.plist")"
-PROFILE_ROOT="$(/usr/bin/mktemp -d "$LOCAL_BUILD_ROOT/profiles.XXXXXX")"
-
-find_profile() {
-    local bundle_id="$1"
-    local profile decoded identifier
-    for profile_dir in \
-        "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles" \
-        "$HOME/Library/MobileDevice/Provisioning Profiles"; do
-        [ -d "$profile_dir" ] || continue
-        while IFS= read -r profile; do
-            decoded="$PROFILE_ROOT/candidate.plist"
-            /usr/bin/security cms -D -i "$profile" -o "$decoded" >/dev/null 2>&1 || continue
-            identifier=$(/usr/bin/plutil -extract Entitlements.application-identifier raw -o - "$decoded" 2>/dev/null || true)
-            if [ "${identifier#*.}" = "$bundle_id" ]; then
-                printf '%s\n' "$profile"
-                return 0
-            fi
-        done < <(/usr/bin/find "$profile_dir" -maxdepth 1 -type f -name '*.mobileprovision' -print)
-    done
-    return 1
-}
-
-APP_PROFILE="$(find_profile "$APP_BUNDLE_ID")" \
-    || log_error "No provisioning profile found for $APP_BUNDLE_ID"
-EXTENSION_PROFILE="$(find_profile "$EXTENSION_BUNDLE_ID")" \
-    || log_error "No provisioning profile found for $EXTENSION_BUNDLE_ID"
-
-APP_PROFILE_PLIST="$PROFILE_ROOT/app-profile.plist"
-EXTENSION_PROFILE_PLIST="$PROFILE_ROOT/extension-profile.plist"
-APP_ENTITLEMENTS="$PROFILE_ROOT/app-entitlements.plist"
-EXTENSION_ENTITLEMENTS="$PROFILE_ROOT/extension-entitlements.plist"
-/usr/bin/security cms -D -i "$APP_PROFILE" -o "$APP_PROFILE_PLIST"
-/usr/bin/security cms -D -i "$EXTENSION_PROFILE" -o "$EXTENSION_PROFILE_PLIST"
-APP_TEAM_ID="$(/usr/bin/plutil -extract TeamIdentifier.0 raw -o - "$APP_PROFILE_PLIST")"
-EXTENSION_TEAM_ID="$(/usr/bin/plutil -extract TeamIdentifier.0 raw -o - "$EXTENSION_PROFILE_PLIST")"
-[ "$APP_TEAM_ID" = "$EXTENSION_TEAM_ID" ] \
-    || log_error 'The app and notification extension provisioning profiles belong to different teams.'
-SIGNING_IDENTITY="$(find_apple_development_identity "$APP_TEAM_ID")"
-[ -n "$SIGNING_IDENTITY" ] \
-    || log_error "No Apple Development signing identity is available for team $APP_TEAM_ID."
-/usr/bin/plutil -extract Entitlements xml1 -o "$APP_ENTITLEMENTS" "$APP_PROFILE_PLIST"
-/usr/bin/plutil -extract Entitlements xml1 -o "$EXTENSION_ENTITLEMENTS" "$EXTENSION_PROFILE_PLIST"
-/bin/cp "$APP_PROFILE" "$APP_PATH/embedded.mobileprovision"
-/bin/cp "$EXTENSION_PROFILE" "$EXTENSION_PATH/embedded.mobileprovision"
+[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")" = "$APP_BUNDLE_ID" ] \
+    || log_error 'Built App bundle ID differs from prepared signing inputs.'
+[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$EXTENSION_PATH/Info.plist")" = "$EXTENSION_BUNDLE_ID" ] \
+    || log_error 'Built extension bundle ID differs from prepared signing inputs.'
+/bin/cp "$PROFILE_ROOT/app.mobileprovision" "$APP_PATH/embedded.mobileprovision"
+/bin/cp "$PROFILE_ROOT/extension.mobileprovision" "$EXTENSION_PATH/embedded.mobileprovision"
 
 while IFS= read -r dylib; do
     /usr/bin/codesign --force --sign "$SIGNING_IDENTITY" --timestamp=none "$dylib"
@@ -160,6 +160,7 @@ done < <(/usr/bin/find "$APP_PATH" -type d -name '*.framework' -print)
     --entitlements "$EXTENSION_ENTITLEMENTS" --timestamp=none "$EXTENSION_PATH"
 /usr/bin/codesign --force --sign "$SIGNING_IDENTITY" \
     --entitlements "$APP_ENTITLEMENTS" --timestamp=none "$APP_PATH"
+python3 "$SCRIPT_DIR/ios_profiles.py" verify --app "$APP_PATH" --output-directory "$PROFILE_ROOT"
 record_local_app ios "$CONFIGURATION"
 if [ "$APP_ONLY" = true ]; then
     prune_local_artifacts "" iOS "$SAVE_SPACE"

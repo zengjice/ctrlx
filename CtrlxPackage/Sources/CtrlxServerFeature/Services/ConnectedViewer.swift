@@ -529,14 +529,9 @@ final public class ConnectedViewer: Identifiable {
     }
 
     func sendBrowserAudio(_ message: RemoteBrowserAudio) async {
-        // Admit at most one short audio batch. Never enqueue audio behind a
-        // congested terminal stream; the native ring keeps only recent samples.
-        guard state.isConnected, isViewerConnected, message.isValid else { return }
-        if
-            message.error == nil,
-            terminalSendQueueSnapshot.depth >= 2 || terminalSendQueueSnapshot.oldestWaitMilliseconds >= 100 {
-            return
-        }
+        // Each page has one sender and a bounded audio backlog. A brief terminal
+        // burst must not discard otherwise valid audio at this shared boundary.
+        guard !Task.isCancelled, state.isConnected, isViewerConnected, message.isValid else { return }
         await enqueueEncrypted(.browserAudio(message)).value
     }
 
@@ -841,6 +836,7 @@ final public class ConnectedViewer: Identifiable {
             let isFileRequest: Bool = switch command.command {
             case .trustAgentHooks,
                  .agentModelControls,
+                 .setAgentModelShortcuts,
                  .readDashboard,
                  .checkCtrlXAppUpdate,
                  .installCtrlXAppUpdate,

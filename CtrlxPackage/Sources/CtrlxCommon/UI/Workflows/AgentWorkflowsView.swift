@@ -85,6 +85,9 @@ private struct AgentWorkflowHostView: View {
     @State private var editing: AgentWorkflowDefinition?
     @State private var error: String?
     @State private var loading = false
+    @State private var pendingDeletion: AgentWorkflowRunSummary?
+    @State private var confirmingDelete = false
+    @State private var deleting = false
 
     var body: some View {
         List {
@@ -94,7 +97,7 @@ private struct AgentWorkflowHostView: View {
                         NavigationLink(value: AgentWorkflowNavigation.Destination.configuration(route: endpoint.id, hostID: overview.hostID, id: definition.id)) {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(definition.name)
-                                Text("\(definition.nodeCount) nodes").font(.caption).foregroundStyle(.secondary)
+                                Text("\(definition.nodeCount) steps").font(.caption).foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -104,13 +107,30 @@ private struct AgentWorkflowHostView: View {
                 }
                 Section("Runs") {
                     ForEach(overview.runs) { run in
-                        NavigationLink(value: AgentWorkflowNavigation.Destination.run(route: endpoint.id, hostID: overview.hostID, id: run.id)) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(run.name)
-                                Text("\(run.status.title) · round \(run.round)").font(.caption).foregroundStyle(.secondary)
-                                if let issue = run.issue {
-                                    Text(issue).font(.caption).foregroundStyle(.orange).lineLimit(2)
+                        HStack {
+                            NavigationLink(value: AgentWorkflowNavigation.Destination.run(route: endpoint.id, hostID: overview.hostID, id: run.id)) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(run.name)
+                                    Text("\(run.status.title) · round \(run.round)").font(.caption).foregroundStyle(.secondary)
+                                    if let issue = run.issue {
+                                        Text(issue).font(.caption).foregroundStyle(.orange).lineLimit(2)
+                                    }
                                 }
+                            }
+                            if run.status.isTerminal {
+                                deleteButton(run).labelStyle(.iconOnly).buttonStyle(.borderless)
+                                    .help("Delete run")
+                                    .accessibilityIdentifier("workflow-delete-run-\(run.id)")
+                            }
+                        }
+                        .contextMenu {
+                            if run.status.isTerminal {
+                                deleteButton(run)
+                            }
+                        }
+                        .swipeActions(allowsFullSwipe: false) {
+                            if run.status.isTerminal {
+                                deleteButton(run)
                             }
                         }
                     }
@@ -138,6 +158,13 @@ private struct AgentWorkflowHostView: View {
         .sheet(item: $editing, onDismiss: { Task { await refresh() } }) { draft in
             AgentWorkflowEditor(endpoint: endpoint, definition: draft, isNew: true, createAgent: createAgent)
         }
+        .confirmationDialog("Delete this run and its handoff history?", isPresented: $confirmingDelete, presenting: pendingDeletion) { run in
+            Button("Delete run", role: .destructive) { delete(run) }
+                .disabled(loading || deleting || !endpoint.isConnected)
+                .accessibilityIdentifier("workflow-confirm-delete-run")
+        } message: { _ in
+            Text("The configuration and Agent tabs stay available.")
+        }
         .refreshable { await refresh() }
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
@@ -149,7 +176,7 @@ private struct AgentWorkflowHostView: View {
     }
 
     private func refresh() async {
-        guard !loading else { return }
+        guard !loading, !deleting else { return }
         loading = true
         defer { loading = false }
         do {
@@ -160,6 +187,29 @@ private struct AgentWorkflowHostView: View {
         } catch {
             guard !Task.isCancelled else { return }
             self.error = error.localizedDescription
+        }
+    }
+
+    private func deleteButton(_ run: AgentWorkflowRunSummary) -> some View {
+        Button(role: .destructive) {
+            pendingDeletion = run
+            confirmingDelete = true
+        } label: { Label("Delete run", symbol: .trash) }
+            .disabled(loading || deleting || !endpoint.isConnected)
+    }
+
+    private func delete(_ run: AgentWorkflowRunSummary) {
+        guard !loading, !deleting, let hostID = overview?.hostID else { return }
+        deleting = true
+        Task {
+            defer { deleting = false }
+            do {
+                _ = try await endpoint.request(.deleteRun(run.id, expectedRevision: run.revision), hostID: hostID)
+                if let overview {
+                    self.overview = .init(hostID: overview.hostID, definitions: overview.definitions, runs: overview.runs.filter { $0.id != run.id })
+                }
+                error = nil
+            } catch { self.error = error.localizedDescription }
         }
     }
 }
@@ -187,8 +237,20 @@ struct AgentWorkflowConfigurationView: View {
     var body: some View {
         Form {
             if let definition {
-                Section("Initial task") { Text(verbatim: definition.initialInput.text).textSelection(.enabled) }
-                Section("Nodes") {
+                Section("Initial task") {
+                    Text(verbatim: definition.initialInput.text).textSelection(.enabled)
+                    ForEach(definition.initialInput.attachmentIDs, id: \.self) { AgentWorkflowAttachmentLabel(attachment: attachments[$0]) }
+                }
+                Section("Participating Agents") {
+                    ForEach(definition.agents) { participant in
+                        VStack(alignment: .leading) {
+                            Text(participant.name).font(.headline)
+                            Text(instances.first { $0.id == participant.id }?.displayName ?? "Agent unavailable")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                Section("Steps") {
                     ForEach(definition.nodes) { node in
                         if node.kind == .content {
                             NavigationLink {
@@ -213,7 +275,9 @@ struct AgentWorkflowConfigurationView: View {
                 Section {
                     if let loop = definition.loop {
                         LabeledContent("Loop", value: "Up to \(loop.maximumRounds) rounds")
-                        Text("The final node’s output returns to the entry unless an authorized Agent requests completion.").foregroundStyle(.secondary)
+                        LabeledContent("Repeat from", value: definition.nodes.first { $0.id == (loop.entryNodeID ?? definition.entryNodeID) }?.name ?? "Unavailable")
+                        Text(loop.includesResult ? "The final step's output is passed to the repeat entry." : "Repeating waits for the final step without passing its output.")
+                            .font(.caption).foregroundStyle(.secondary)
                     } else {
                         Text("Run once after all dependencies finish.")
                     }
@@ -272,12 +336,19 @@ struct AgentWorkflowConfigurationView: View {
             if node.kind == .content {
                 Text("Content node").font(.caption).foregroundStyle(.secondary)
             } else if let instance = instances.first(where: { $0.id == node.agentInstanceID }) {
-                Text("\(instance.displayName) · \(instance.readiness.title)").font(.caption).foregroundStyle(.secondary)
+                Text("\(definition.agents.first { $0.id == instance.id }?.name ?? instance.displayName) · \(instance.displayName) · \(instance.readiness.title)")
+                    .font(.caption).foregroundStyle(.secondary)
             } else {
                 Text("Agent unavailable").font(.caption).foregroundStyle(.secondary)
             }
             Text(node.id == definition.entryNodeID ? "Entry" : "Waits for: " + definition.upstream(of: node.id).map(\.name).joined(separator: ", "))
                 .font(.caption).foregroundStyle(.secondary)
+            ForEach(definition.edges.filter { $0.target == node.id }, id: \.source) { edge in
+                let source = definition.nodes.first { $0.id == edge.source }?.name ?? "Unavailable"
+                Text("\(source): \(edge.includesResult ? "output and attachments" : "completion only")")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Text("Original task: \(definition.initialTask(for: node).title)").font(.caption).foregroundStyle(.secondary)
             if !node.input.text.isEmpty {
                 Text(verbatim: node.input.text)
             }

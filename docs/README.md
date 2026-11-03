@@ -46,7 +46,12 @@ sharing are confirmed requirements. The first version is implemented; the report
 separates focused tests and isolated runtime evidence from remaining acceptance,
 including follow-up review fixes. No production deployment has occurred.
 
-The [multi-agent collaboration design](multi-agent-design.md) includes preset-content
+The [multi-agent collaboration design](multi-agent-design.md) separates fixed Agent
+participants from execution steps. Ordered steps can reuse one Agent, dependencies
+can wait without forwarding output, and a loop can restart at review after one-time
+development. The shared Mac/iOS editor provides a development/review/repair template;
+its new incremental validation is tracked separately in the implementation status.
+The design also includes preset-content
 nodes that join upstream outputs and forward them without an Agent, alongside manual
 single-Host workflows managed from Mac Host, Mac Viewer and iOS. Users choose
 existing or new Agent tabs, configure per-role instructions and attachments,

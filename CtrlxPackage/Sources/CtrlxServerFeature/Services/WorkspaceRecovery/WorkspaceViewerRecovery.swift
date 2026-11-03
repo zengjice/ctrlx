@@ -17,6 +17,11 @@ final class WorkspaceViewerRecovery {
     @ObservationIgnored private var selectionRevisions: [UUID: Int] = [:]
     @ObservationIgnored private var tabSelectionRevisions: [UUID: [ViewerWorkspaceReference: Int]] = [:]
     private var loaded = false
+    private let modelPreferences: AgentModelPreferences
+
+    init(modelPreferences: AgentModelPreferences = AgentModelPreferences()) {
+        self.modelPreferences = modelPreferences
+    }
 
     func restore(_ saved: [WorkspaceRecoveryScene]?, windows: DetachedTerminalWindows) {
         guard !loaded else { return }
@@ -152,7 +157,8 @@ final class WorkspaceViewerRecovery {
                     hostID: key.hostId, sessionID: reference.sessionID, sessionName: key.sessionName, layout: layout,
                     windowIDs: windowIDs, ownedWindowIDs: owned.compactMap { windowIDs[$0.windowIndex] },
                     focusedRight: tabs.isRightPaneFocused, fileScrollOffsets: tabs.scrollOffsets,
-                    selectedWindowID: selectedWindow, remoteReference: reference, fileSources: sources
+                    selectedWindowID: selectedWindow, remoteReference: reference, fileSources: sources,
+                    modelShortcuts: modelPreferences.capture(hostID: key.hostId, serverID: catalog.scope.serverID, windowIDs: owned.compactMap { windowIDs[$0.windowIndex] })
                 )
                 if let previous {
                     preservePending(
@@ -193,6 +199,12 @@ final class WorkspaceViewerRecovery {
                 ?? (current.windowIDs[old] == nil ? old : (current.windowIDs.keys.max() ?? 0) + 1)
             current.windowIDs[index] = id
             current.ownedWindowIDs.append(id)
+            if let shortcuts = saved.modelShortcuts?[id] {
+                if current.modelShortcuts == nil {
+                    current.modelShortcuts = [:]
+                }
+                current.modelShortcuts?[id] = shortcuts
+            }
             pending.append(.window(index: index))
         }
         func remap(_ ref: SavedTabRef) -> SavedTabRef? {
@@ -331,6 +343,12 @@ final class WorkspaceViewerRecovery {
         for scene in scenes.sorted(by: { !$0.isMain && $1.isMain }) {
             for saved in scene.sessions where saved.hostID == hostID {
                 guard let reference = saved.remoteReference, let sessionName = catalog.sessionName(for: reference) else { continue }
+                let availableWindows = saved.ownedWindowIDs.filter { id in
+                    var window = reference
+                    window.windowID = id
+                    return catalog.resolve(window) != nil
+                }
+                modelPreferences.restore(saved.modelShortcuts, hostID: hostID, serverID: catalog.scope.serverID, windowIDs: availableWindows)
                 let runtime: (Int) -> String? = { index in
                     guard let id = saved.windowIDs[index] else { return nil }
                     var window = reference

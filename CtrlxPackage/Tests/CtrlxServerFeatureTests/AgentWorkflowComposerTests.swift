@@ -80,4 +80,82 @@ struct AgentWorkflowComposerTests {
             #expect(AgentWorkflowComposerInspection.readiness(terminal, composer: claude) == .unavailable)
         }
     }
+
+    @Test
+    func tabFitRedrawSettlesBeforeInspectingEmptyInput() async throws {
+        // Native Codex 0.166.0: after Fit the cursor temporarily points at
+        // an empty row, then returns to the unchanged dim placeholder.
+        let redrawing = capture(["OpenAI Codex", "", "", "", ""], cursor: 2)
+        let empty = capture(["OpenAI Codex", "", "› \u{1b}[2mAsk Codex to do anything\u{1b}[0m", "", ""], cursor: 2)
+        #expect(AgentWorkflowComposerInspection.readiness(redrawing, composer: codex) == .unavailable)
+        var reads = 0
+        let result = try await AgentWorkflowComposerInspection.settledCapture(composer: codex) {
+            reads += 1
+            return reads == 1 ? redrawing : empty
+        }
+        #expect(reads == 2)
+        #expect(AgentWorkflowComposerInspection.readiness(result, composer: codex) == .ready)
+    }
+
+    @Test(arguments: ["ready", "draft", "question", "copy-mode"])
+    func knownInputStatesAreNotRetried(scenario: String) async throws {
+        let snapshot: AgentWorkflowTerminalCapture
+        switch scenario {
+        case "draft": snapshot = capture(["› unsent task", ""], cursor: 0)
+        case "question": snapshot = capture(["Queued follow-up inputs", "", "› \u{1b}[2mAsk Codex to do anything"], cursor: 2)
+        default: snapshot = capture(["› \u{1b}[2mAsk Codex to do anything", ""], cursor: 0, copyMode: scenario == "copy-mode")
+        }
+        var reads = 0
+        let result = try await AgentWorkflowComposerInspection.settledCapture(composer: codex) {
+            reads += 1
+            return snapshot
+        }
+        #expect(reads == 1)
+        #expect(result.ansi == snapshot.ansi)
+        #expect(AgentWorkflowComposerInspection.readiness(result, composer: codex) == AgentWorkflowComposerInspection.readiness(snapshot, composer: codex))
+    }
+
+    @Test
+    func unknownInputDoesNotWaitIndefinitelyOrBecomeReady() async throws {
+        let snapshot = capture(["", "", ""], cursor: 1)
+        var reads = 0
+        let result = try await AgentWorkflowComposerInspection.settledCapture(composer: codex) {
+            reads += 1
+            return snapshot
+        }
+        #expect(reads == 5)
+        #expect(AgentWorkflowComposerInspection.readiness(result, composer: codex) == .unavailable)
+    }
+
+    @Test
+    func cancelledRedrawWaitDoesNotReadAgain() async throws {
+        let snapshot = capture(["", "", ""], cursor: 1)
+        var reads = 0
+        let task = Task {
+            try await AgentWorkflowComposerInspection.settledCapture(composer: codex) {
+                reads += 1
+                withUnsafeCurrentTask { $0?.cancel() }
+                return snapshot
+            }
+        }
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(reads == 1)
+    }
+
+    @Test
+    func identityFailureDuringRedrawIsNotSuppressed() async throws {
+        let snapshot = capture(["", "", ""], cursor: 1)
+        var reads = 0
+        let error = AgentWorkflowError("The pane was replaced.")
+        await #expect(throws: error) {
+            try await AgentWorkflowComposerInspection.settledCapture(composer: codex) {
+                reads += 1
+                if reads > 1 {
+                    throw error
+                }
+                return snapshot
+            }
+        }
+        #expect(reads == 2)
+    }
 }

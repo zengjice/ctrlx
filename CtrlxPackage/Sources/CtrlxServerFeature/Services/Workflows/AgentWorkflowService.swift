@@ -156,7 +156,7 @@ actor AgentWorkflowService {
 
     func pause(runID: UUID, expectedRevision: Int) async throws -> AgentWorkflowRun {
         try await store.update(runID: runID, expectedRevision: expectedRevision) {
-            $0.pause(reason: "Paused by a workflow operator.")
+            $0.pause(reason: "Taken over by a workflow operator. Automatic handoffs are paused.")
         }
     }
 

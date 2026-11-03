@@ -25,18 +25,18 @@ struct IPAFileAssociationClient {
 @propertyWrapper
 struct Dependency {
     var wrappedValue = IPAFileAssociationClient()
-    init(_: IPAFileAssociationClient.Type) { }
+    init(_: IPAFileAssociationClient.Type) {}
 }
 
 struct Logger {
-    init(label _: String) { }
+    init(label _: String) {}
     func warning(_ message: String) {
         record("warning\t" + message)
     }
 }
 
 @MainActor @Observable
-final class AppSettings { var askToHandleIPAFiles = true }
+public final class AppSettings { var askToHandleIPAFiles = true }
 
 func record(_ line: String) {
     let path = Bundle.main.object(forInfoDictionaryKey: "CtrlXProbeLog") as! String

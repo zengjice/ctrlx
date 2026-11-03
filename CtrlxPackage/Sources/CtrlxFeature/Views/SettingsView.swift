@@ -1,10 +1,12 @@
 #if os(iOS)
     import CtrlxCommon
     import SwiftUI
+    import UserNotifications
 
     struct SettingsView: View {
         let onDone: () -> Void
         @Environment(IOSSettings.self) private var settings
+        @State private var pushService = PushNotificationService.shared
 
         var body: some View {
             @Bindable var settings = settings
@@ -65,6 +67,17 @@
                     Toggle("Debug Mode", isOn: $settings.debugModeEnabled)
                         .accessibilityIdentifier("debug-mode-toggle")
 
+                    if settings.debugModeEnabled {
+                        LabeledContent("Notification Permission", value: notificationPermission)
+                        LabeledContent("Push Token", value: pushService.isRegistered ? "Received" : "Not received")
+                        if let error = pushService.registrationError {
+                            Text(error)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                                .textSelection(.enabled)
+                        }
+                    }
+
                     NavigationLink {
                         AboutSettingsView()
                             .toolbar { doneButton }
@@ -87,6 +100,17 @@
                 Button(action: onDone) {
                     Text("Done").fixedSize()
                 }
+            }
+        }
+
+        private var notificationPermission: String {
+            switch pushService.permissionStatus {
+            case .notDetermined: "Not requested"
+            case .denied: "Denied"
+            case .authorized: "Allowed"
+            case .provisional: "Provisional"
+            case .ephemeral: "Temporary"
+            @unknown default: "Unknown"
             }
         }
     }

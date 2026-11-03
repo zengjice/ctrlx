@@ -235,7 +235,7 @@ struct AgentWorkflowAttachmentAccessTests {
         }
         let temporary = f.root.appendingPathComponent("input")
         var submitted: String?
-        let transport = AgentWorkflowTerminalTransport(store: f.store, gate: .init { _ in }, temporaryDirectory: temporary, inspect: { $0 }, submit: { _, file, validate in
+        let transport = AgentWorkflowTerminalTransport(store: f.store, gate: .init { _ in .init() }, temporaryDirectory: temporary, inspect: { $0 }, submit: { _, file, validate in
             try validate { }
             submitted = try String(contentsOf: file, encoding: .utf8)
         }, onFailure: { Issue.record("\($0)") }).transport

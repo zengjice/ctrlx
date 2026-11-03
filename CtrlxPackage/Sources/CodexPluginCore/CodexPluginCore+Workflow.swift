@@ -3,7 +3,7 @@ import CtrlxPluginProtocol
 
 extension CodexPluginCore: AgentWorkflowProviding {
     public nonisolated var workflowCLIVersions: [String] {
-        ["codex-cli 0.163.0"]
+        ["codex-cli 0.163.0", "codex-cli 0.166.0"]
     }
 
     public nonisolated var workflowComposer: AgentWorkflowComposer {

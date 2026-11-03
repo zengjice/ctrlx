@@ -184,4 +184,32 @@ struct AgentWorkflowRunnerTests {
         #expect(try await fixture.store.snapshot().runs[0].invocations[0].status == .pending)
         await runner.shutdown()
     }
+
+    @Test(arguments: [AgentWorkflowReadiness.busy, .draft, .awaitingHuman, .unavailable])
+    func blockedInputReportsItsSpecificCauseAndAgent(readiness: AgentWorkflowReadiness) async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+        let runner = AgentWorkflowRunner(
+            store: fixture.store,
+            transport: .init(inspect: { original in
+                var live = original
+                live.readiness = readiness
+                return live
+            }, prepare: { _, _ in Issue.record("Blocked input must not be prepared") }, write: { _, _ in Issue.record("Blocked input must not be submitted") }),
+            now: { now }, onFailure: { Issue.record(Comment(rawValue: $0)) }
+        )
+        await runner.schedule(runID: fixture.run.id)
+        try await waitUntil { try await fixture.store.snapshot().runs[0].status == .paused }
+        let run = try await fixture.store.snapshot().runs[0]
+        #expect(run.issue?.contains(fixture.run.instances[0].displayName) == true)
+        let cause = switch readiness {
+        case .busy: "still working"
+        case .draft: "unsent draft"
+        case .awaitingHuman: "needs a response"
+        default: "could not be verified after refresh"
+        }
+        #expect(run.issue?.contains(cause) == true)
+        #expect(run.invocations[0].status == .pending)
+        await runner.shutdown()
+    }
 }

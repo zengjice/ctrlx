@@ -68,10 +68,13 @@ public struct AgentWorkflowInstance: Codable, Equatable, Identifiable, Sendable 
     /// Moving a live pane preserves identity; a reused PID, pane or new
     /// conversation must not inherit an existing invocation's authority.
     public func matchesBinding(_ other: Self) -> Bool {
+        matchesProcess(other) && conversationID == other.conversationID
+    }
+
+    public func matchesProcess(_ other: Self) -> Bool {
         id == other.id && hostID == other.hostID && pluginID == other.pluginID
             && processID == other.processID && processRuntimeID == other.processRuntimeID
             && workspacePane.isSamePane(as: other.workspacePane)
-            && conversationID == other.conversationID
     }
 }
 

@@ -22,7 +22,6 @@
         let customButtonStore: TerminalCustomButtonStore
         let sendCustomButton: (TerminalCustomButtonRequest) -> Bool
         var agentCommandContext: AgentCommandContext? = nil
-        var showsTerminalControls = true
 
         /// Editing disables terminal keystrokes, not the panel toggles.
         private var terminalInputEnabled: Bool {
@@ -38,20 +37,18 @@
                 .scrollIndicators(.hidden)
                 .fixedSize(horizontal: false, vertical: true)
 
-                if showsTerminalControls {
-                    Button(action: sendReturn) {
-                        Text("Send")
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.75)
-                            .terminalInputControlStyle()
-                            .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!terminalInputEnabled)
-                    .opacity(terminalInputEnabled ? 1 : 0.4)
-                    .accessibilityLabel("Send Return")
-                    .accessibilityIdentifier("terminal-return-control")
+                Button(action: sendReturn) {
+                    Text("Send")
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .terminalInputControlStyle()
+                        .contentShape(Capsule())
                 }
+                .buttonStyle(.plain)
+                .disabled(!terminalInputEnabled)
+                .opacity(terminalInputEnabled ? 1 : 0.4)
+                .accessibilityLabel("Send Return")
+                .accessibilityIdentifier("terminal-return-control")
             }
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 8)
@@ -70,101 +67,99 @@
                     clipboardPaste: $clipboardPaste
                 )
 
-                if showsTerminalControls {
-                    TerminalVoiceInputButton(
-                        session: voiceSession, context: phraseContext,
-                        isDisabled: !terminalInputEnabled || quickActionPresentation.isPresented,
-                        showsLabel: false,
-                        usesControlStyle: true,
-                        contextProvider: contextProvider
-                    )
-                    .id(phraseContext.target)
+                TerminalVoiceInputButton(
+                    session: voiceSession, context: phraseContext,
+                    isDisabled: !terminalInputEnabled || quickActionPresentation.isPresented,
+                    showsLabel: false,
+                    usesControlStyle: true,
+                    contextProvider: contextProvider
+                )
+                .id(phraseContext.target)
 
-                    TerminalQuickPhraseButton(
-                        context: phraseContext,
-                        presentation: $quickActionPresentation
-                    )
+                TerminalQuickPhraseButton(
+                    context: phraseContext,
+                    presentation: $quickActionPresentation
+                )
 
-                    TerminalAgentCommandButton(
-                        context: agentCommandContext,
-                        terminalContext: phraseContext,
-                        presentation: $quickActionPresentation
-                    )
+                TerminalAgentCommandButton(
+                    context: agentCommandContext,
+                    terminalContext: phraseContext,
+                    presentation: $quickActionPresentation
+                )
 
-                    RepeatingTerminalKeyButton(
-                        title: "←",
-                        key: .left,
-                        accessibilityLabel: "Move Left",
-                        accessibilityIdentifier: "terminal-left-control",
-                        isEnabled: terminalInputEnabled,
-                        sendKeys: sendKeys
-                    )
+                RepeatingTerminalKeyButton(
+                    title: "←",
+                    key: .left,
+                    accessibilityLabel: "Move Left",
+                    accessibilityIdentifier: "terminal-left-control",
+                    isEnabled: terminalInputEnabled,
+                    sendKeys: sendKeys
+                )
 
-                    RepeatingTerminalKeyButton(
-                        title: "→",
-                        key: .right,
-                        accessibilityLabel: "Move Right",
-                        accessibilityIdentifier: "terminal-right-control",
-                        isEnabled: terminalInputEnabled,
-                        sendKeys: sendKeys
-                    )
+                RepeatingTerminalKeyButton(
+                    title: "→",
+                    key: .right,
+                    accessibilityLabel: "Move Right",
+                    accessibilityIdentifier: "terminal-right-control",
+                    isEnabled: terminalInputEnabled,
+                    sendKeys: sendKeys
+                )
 
-                    RepeatingTerminalKeyButton(
-                        title: "⌫",
-                        key: .backspace,
-                        accessibilityLabel: "Delete",
-                        accessibilityIdentifier: "terminal-delete-control",
-                        isEnabled: terminalInputEnabled,
-                        sendKeys: sendKeys
-                    )
+                RepeatingTerminalKeyButton(
+                    title: "⌫",
+                    key: .backspace,
+                    accessibilityLabel: "Delete",
+                    accessibilityIdentifier: "terminal-delete-control",
+                    isEnabled: terminalInputEnabled,
+                    sendKeys: sendKeys
+                )
 
-                    Button(action: sendEscape) {
-                        Text("esc")
-                            .terminalInputControlStyle()
-                            .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!terminalInputEnabled)
-                    .opacity(terminalInputEnabled ? 1 : 0.4)
-                    .accessibilityLabel("Escape")
-                    .accessibilityIdentifier("terminal-escape-control")
-
-                    Button(action: sendDollar) {
-                        Text("$")
-                            .terminalInputControlStyle()
-                            .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!terminalInputEnabled)
-                    .opacity(terminalInputEnabled ? 1 : 0.4)
-                    .accessibilityLabel("Dollar Sign")
-                    .accessibilityIdentifier("terminal-dollar-control")
-
-                    Divider()
-                        .frame(height: TerminalInputControlMetrics.buttonHeight - 8)
-                        .padding(.horizontal, 4)
-                        .accessibilityHidden(true)
-
-                    ForEach(customButtonStore.buttons) { button in
-                        TerminalCustomButtonControl(
-                            button: button, store: customButtonStore,
-                            context: phraseContext, isInputEnabled: terminalInputEnabled,
-                            send: sendCustomButton
-                        )
-                    }
-                    .id(phraseContext.target)
-
-                    Button {
-                        quickActionPresentation.toggle(.addCustomButton(phraseContext))
-                    } label: {
-                        Label("Add Button", symbol: .plus)
-                            .labelStyle(.iconOnly)
-                            .terminalInputControlStyle()
-                            .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("terminal-add-custom-button")
+                Button(action: sendEscape) {
+                    Text("esc")
+                        .terminalInputControlStyle()
+                        .contentShape(Capsule())
                 }
+                .buttonStyle(.plain)
+                .disabled(!terminalInputEnabled)
+                .opacity(terminalInputEnabled ? 1 : 0.4)
+                .accessibilityLabel("Escape")
+                .accessibilityIdentifier("terminal-escape-control")
+
+                Button(action: sendDollar) {
+                    Text("$")
+                        .terminalInputControlStyle()
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(!terminalInputEnabled)
+                .opacity(terminalInputEnabled ? 1 : 0.4)
+                .accessibilityLabel("Dollar Sign")
+                .accessibilityIdentifier("terminal-dollar-control")
+
+                Divider()
+                    .frame(height: TerminalInputControlMetrics.buttonHeight - 8)
+                    .padding(.horizontal, 4)
+                    .accessibilityHidden(true)
+
+                ForEach(customButtonStore.buttons) { button in
+                    TerminalCustomButtonControl(
+                        button: button, store: customButtonStore,
+                        context: phraseContext, isInputEnabled: terminalInputEnabled,
+                        send: sendCustomButton
+                    )
+                }
+                .id(phraseContext.target)
+
+                Button {
+                    quickActionPresentation.toggle(.addCustomButton(phraseContext))
+                } label: {
+                    Label("Add Button", symbol: .plus)
+                        .labelStyle(.iconOnly)
+                        .terminalInputControlStyle()
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("terminal-add-custom-button")
             }
         }
 

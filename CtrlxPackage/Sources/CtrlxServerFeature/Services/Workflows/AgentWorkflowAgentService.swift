@@ -21,9 +21,6 @@ actor AgentWorkflowAgentService {
     }
 
     func handle(_ request: JSONRPCRequest, peer: PluginIngressPeer?) async -> JSONRPCResponse {
-        if request.method == "workflow.artifact" {
-            return await artifact(request, peer: peer)
-        }
         if request.method == "workflow.attachments" {
             return await attachments(request, peer: peer)
         }
@@ -64,8 +61,8 @@ actor AgentWorkflowAgentService {
                 "invocationId": .string(invocationID.uuidString),
                 "status": .string(updated.status.rawValue),
                 "message": .string(updated.status == .paused
-                    ? "Finish request saved. Provide your final answer; the workflow remains paused until an operator continues it."
-                    : "Finish request saved. Provide your final answer; the Host will verify completion before closing the workflow."),
+                    ? "Finish request saved. The workflow remains paused until an operator continues it."
+                    : "Finish request saved. The workflow will complete after the Host verifies this turn's final result."),
             ])
         } catch let error as AgentWorkflowError {
             return denied(request.id, error.localizedDescription)
@@ -76,52 +73,6 @@ actor AgentWorkflowAgentService {
 
     private func denied(_ id: String, _ message: String) -> JSONRPCResponse {
         .init(id: id, error: .init(code: "workflow_denied", message: message))
-    }
-
-    private func artifact(_ request: JSONRPCRequest, peer: PluginIngressPeer?) async -> JSONRPCResponse {
-        let upload: AgentWorkflowArtifactRequest
-        do { upload = try AgentWorkflowArtifactRequest(request.params) }
-        catch { return .invalidParams(id: request.id, error.localizedDescription) }
-        guard let peer else { return denied(request.id, "Cannot verify the workflow command's caller.") }
-        do {
-            let archive = try await store.snapshot()
-            guard
-                let run = archive.runs.first(where: { $0.invocations.contains { $0.id == upload.invocationID } }),
-                let invocation = run.invocations.first(where: { $0.id == upload.invocationID }),
-                let instance = run.instances.first(where: { $0.id == invocation.delivery.toAgentID }),
-                peer.contains(processID: instance.processID, runtimeID: instance.processRuntimeID) else {
-                return denied(request.id, "This caller does not own the workflow invocation.")
-            }
-            let context = AgentWorkflowStore.ArtifactUpload(
-                owner: .init(runID: run.id, invocationID: invocation.id, instanceID: instance.id),
-                instance: instance,
-                verifyInstance: { [inspect, now] in
-                    let live = try await inspect(instance)
-                    guard live.matchesBinding(instance) else {
-                        throw AgentWorkflowError("The Agent process or conversation changed.")
-                    }
-                    return now()
-                }
-            )
-            let receipt = try await store.uploadAttachment(upload.operation, artifact: context)
-            var result: [String: JSONValue] = [
-                "invocationId": .string(invocation.id.uuidString),
-                "uploadId": .string(upload.operation.id.uuidString),
-                "offset": .int(receipt.offset),
-            ]
-            if let attachment = receipt.attachment {
-                result["artifact"] = .object([
-                    "id": .string(attachment.id.uuidString), "name": .string(attachment.name),
-                    "mediaType": .string(attachment.mediaType), "size": .int(Int(attachment.byteCount)),
-                    "sha256": .string(attachment.sha256),
-                ])
-            }
-            return .init(id: request.id, result: result)
-        } catch let error as AgentWorkflowError {
-            return denied(request.id, error.localizedDescription)
-        } catch {
-            return .internalError(id: request.id, "Could not share the workflow artifact: \(error.localizedDescription)")
-        }
     }
 
     private func attachments(_ request: JSONRPCRequest, peer: PluginIngressPeer?) async -> JSONRPCResponse {

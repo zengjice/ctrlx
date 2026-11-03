@@ -7,7 +7,7 @@
 // One page, one destination, at most 170 ms. A slow consumer loses old sound.
 class BrowserAudioBuffer {
  public:
-  static constexpr size_t channels = 2, capacity = 8192;
+  static constexpr size_t channels = 2, capacity = 8192, maximumReadFrames = 8192;
   static constexpr int sampleRate = 48000;
   void Route(bool remote, bool enabled) {
     std::lock_guard guard(lock_);
@@ -17,8 +17,9 @@ class BrowserAudioBuffer {
     std::lock_guard guard(lock_);
     captured_ += frames;
     if (remote_ && !enabled_) return;
+    if (frames > capacity) dropped_ += frames - capacity;
     for (size_t f = frames > capacity ? frames - capacity : 0; f < frames; ++f) {
-      if (count_ == capacity) { start_ = (start_ + 1) % capacity; --count_; }
+      if (count_ == capacity) { start_ = (start_ + 1) % capacity; --count_; ++dropped_; }
       size_t target = (start_ + count_++) % capacity;
       for (size_t c = 0; c < channels; ++c) samples_[target * channels + c] = data[c][f];
     }
@@ -35,12 +36,12 @@ class BrowserAudioBuffer {
     return frames;
   }
   void Clear() { std::lock_guard guard(lock_); start_ = count_ = 0; }
-  struct State { uint64_t captured, local; size_t buffered; bool remote, enabled; };
-  State Status() { std::lock_guard guard(lock_); return {captured_, local_, count_, remote_, enabled_}; }
+  struct State { uint64_t captured, local, dropped; size_t buffered; bool remote, enabled; };
+  State Status() { std::lock_guard guard(lock_); return {captured_, local_, dropped_, count_, remote_, enabled_}; }
  private:
   std::mutex lock_;
   std::vector<float> samples_ = std::vector<float>(capacity * channels);
   size_t start_ = 0, count_ = 0;
   bool remote_ = false, enabled_ = false;
-  uint64_t captured_ = 0, local_ = 0;
+  uint64_t captured_ = 0, local_ = 0, dropped_ = 0;
 };

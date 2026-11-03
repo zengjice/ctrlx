@@ -54,10 +54,8 @@ actor AgentWorkflowRunner {
         pumps[runID] = Task { await self.pump(runID: runID) }
     }
 
-    func accepted(runID: UUID, invocationID: UUID, instance: AgentWorkflowInstance, nativeTurnID: String, transcriptPath: String? = nil) async throws {
-        try await store.update(runID: runID) {
-            try $0.accept(invocationID: invocationID, instance: instance, nativeTurnID: nativeTurnID, transcriptPath: transcriptPath)
-        }
+    func accepted(runID: UUID, invocationID: UUID, instance: AgentWorkflowInstance, nativeTurnID: String, transcriptPath: String? = nil, bindFirstConversation: Bool = false) async throws {
+        try await store.accept(runID: runID, invocationID: invocationID, instance: instance, nativeTurnID: nativeTurnID, transcriptPath: transcriptPath, bindFirstConversation: bindFirstConversation)
         acknowledgements.removeValue(forKey: invocationID)?.cancel()
     }
 
@@ -155,8 +153,18 @@ actor AgentWorkflowRunner {
             let live: AgentWorkflowInstance
             do {
                 live = try await transport.inspect(binding)
-                guard binding.matchesBinding(live), live.readiness == .ready else {
-                    throw AgentWorkflowError("The Agent changed, is busy, or has an unsent draft. Nothing was sent.")
+                guard binding.matchesBinding(live) else {
+                    throw AgentWorkflowError("\(binding.displayName): the Agent identity changed. Nothing was sent.")
+                }
+                guard live.readiness == .ready else {
+                    let reason = switch live.readiness {
+                    case .busy: "The Agent is still working."
+                    case .draft: "The Agent has an unsent draft."
+                    case .awaitingHuman: "A question or permission request needs a response."
+                    case .unavailable: live.capabilityIssue ?? "The terminal's empty input could not be verified after refresh."
+                    case .ready: "The Agent is ready."
+                    }
+                    throw AgentWorkflowError("\(binding.displayName): \(reason) Nothing was sent.")
                 }
                 try Task.checkCancellation()
                 try await transport.prepare(invocation, live)

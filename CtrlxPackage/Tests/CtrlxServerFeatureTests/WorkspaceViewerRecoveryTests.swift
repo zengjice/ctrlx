@@ -15,7 +15,7 @@ struct WorkspaceViewerRecoveryTests {
     private let paneIDs = [UUID(), UUID()]
     private let fileID = UUID()
 
-    private func state(server: String = "100:1", name: String = "project", offset: Int = 0, host: UUID? = nil, files: Bool = true, shared: SharedTerminalLayout? = nil, indices: [Int] = [0, 1]) -> SessionStateMessage {
+    private func state(server: String = "100:1", name: String = "project", offset: Int = 0, host: UUID? = nil, files: Bool = true, shared: SharedTerminalLayout? = nil, indices: [Int] = [0, 1], pair: String = "pair") -> SessionStateMessage {
         let panes = indices.map { index in
             PaneState(
                 paneId: "%\(index + offset)",
@@ -28,12 +28,62 @@ struct WorkspaceViewerRecoveryTests {
             )
         }
         return .init(
-            pairId: "pair",
+            pairId: pair,
             paneStates: Dictionary(uniqueKeysWithValues: panes.map { ($0.paneId, $0) }),
             sharedTerminalLayouts: shared.map { [name: $0] },
             fileTabs: files ? [.init(id: fileID, sessionName: name, windowID: "@\(offset)", sourcePaneID: "%\(offset)", initialDirectory: "/Host/project")] : [],
             workspaceIdentity: .init(hostID: host ?? root, serverID: server)
         )
+    }
+
+    @Test("Viewer shortcuts survive restart, live Host reconstruction and partial discovery", arguments: [false, true])
+    func modelShortcuts(restartViewer: Bool) throws {
+        var preferences = AgentModelPreferences(), windows = DetachedTerminalWindows()
+        var recovery = WorkspaceViewerRecovery(modelPreferences: preferences)
+        recovery.restore(nil, windows: windows)
+        recovery.update(state(), windows: windows)
+        _ = windows.mainTabs.tabs(hostID: "pair", session: "project")
+        for pane in state().paneStates.values {
+            let identity = try #require(pane.workspaceIdentity)
+            preferences.initialize(.init(pane: identity, defaults: .init(models: ["default-hidden"], efforts: ["low"])), hostID: "pair")
+            preferences.tabs[.init(hostID: "pair", serverID: "100:1", windowID: identity.windowID)]?.models.insert("custom")
+        }
+        let saved = recovery.capture(windows: windows)
+        recovery.suspend("pair", windows: windows)
+        #expect(recovery.capture(windows: windows) == saved)
+        if restartViewer {
+            preferences = AgentModelPreferences()
+            windows = DetachedTerminalWindows()
+            recovery = WorkspaceViewerRecovery(modelPreferences: preferences)
+            try recovery.restore(JSONDecoder().decode([WorkspaceRecoveryScene].self, from: JSONEncoder().encode(saved)), windows: windows)
+        }
+        let partial = state(server: "200:2", offset: 20, indices: [0])
+        recovery.update(partial, windows: windows)
+        preferences.prune(hostID: "pair", identities: partial.paneStates.values.compactMap(\.workspaceIdentity))
+        let first = AgentModelPreferences.Key(hostID: "pair", serverID: "200:2", windowID: windowIDs[0])
+        let second = AgentModelPreferences.Key(hostID: "pair", serverID: "200:2", windowID: windowIDs[1])
+        #expect(preferences.tabs[first]?.models == ["default-hidden", "custom"])
+        #expect(preferences.defaults[first]?.models == ["default-hidden"])
+        #expect(preferences.tabs[second] == nil)
+        #expect(recovery.capture(windows: windows).flatMap(\.sessions).contains { $0.modelShortcuts?[windowIDs[1]]?.hidden.models.contains("custom") == true })
+        preferences.tabs[first]?.efforts.insert("high")
+        recovery.update(state(server: "200:2", offset: 20), windows: windows)
+        #expect(preferences.tabs[first]?.efforts == ["low", "high"])
+        #expect(preferences.tabs[second]?.models == ["default-hidden", "custom"])
+        #expect(preferences.defaults[second]?.efforts == ["low"])
+        recovery.update(state(server: "200:2", offset: 20, indices: [1]), windows: windows)
+        #expect(recovery.capture(windows: windows).flatMap(\.sessions).allSatisfy { $0.modelShortcuts?[windowIDs[0]] == nil })
+    }
+
+    @Test("Saved model shortcuts never cross pairings or replacement Host state roots", arguments: [false, true])
+    func modelShortcutIsolation(otherPair: Bool) throws {
+        var scene = try selectionScene(isMain: true)
+        scene.sessions[0].modelShortcuts = [windowIDs[0]: .init(hidden: .init(models: ["private"]), defaults: .init(efforts: ["low"]))]
+        let preferences = AgentModelPreferences(), windows = DetachedTerminalWindows()
+        let recovery = WorkspaceViewerRecovery(modelPreferences: preferences)
+        recovery.restore([scene], windows: windows)
+        recovery.update(state(server: "new", host: otherPair ? root : UUID(), pair: otherPair ? "other" : "pair"), windows: windows)
+        #expect(preferences.tabs.isEmpty && preferences.defaults.isEmpty)
     }
 
     private func selectionScene(isMain: Bool = false) throws -> WorkspaceRecoveryScene {
@@ -458,7 +508,8 @@ struct WorkspaceViewerRecoveryTests {
 
     @Test("Late Host Files and terminal discovery retain original order and survive closing the partially restored native window", arguments: [false, true])
     func partialDiscovery(closeWindow: Bool) throws {
-        let recovery = WorkspaceViewerRecovery(), windows = DetachedTerminalWindows()
+        let preferences = AgentModelPreferences()
+        let recovery = WorkspaceViewerRecovery(modelPreferences: preferences), windows = DetachedTerminalWindows()
         recovery.restore(nil, windows: windows)
         recovery.update(state(), windows: windows)
         let first = try #require(DetachedTerminalTarget(hostID: "pair", windowID: "@0"))
@@ -471,7 +522,11 @@ struct WorkspaceViewerRecoveryTests {
         tabs.rightSide = [.file(fileID), .window("@1")]
         tabs.selectedRight = .file(fileID)
         tabs.directoryTabs[fileID]?.navigate("/Host/late-file")
-        let restored = WorkspaceViewerRecovery(), owner = DetachedTerminalWindows()
+        for id in windowIDs {
+            preferences.tabs[.init(hostID: "pair", serverID: "100:1", windowID: id)] = .init(models: [id.uuidString])
+        }
+        let restoredPreferences = AgentModelPreferences()
+        let restored = WorkspaceViewerRecovery(modelPreferences: restoredPreferences), owner = DetachedTerminalWindows()
         restored.restore(recovery.capture(windows: windows), windows: owner)
         restored.update(state(server: "200:2", offset: 20, files: false, indices: [0]), windows: owner)
         let partial = try #require(owner.workspaces[group.id])
@@ -479,6 +534,7 @@ struct WorkspaceViewerRecoveryTests {
         #expect(partial.tabs.existing(hostID: "pair", session: "project")?.openFileTabs.isEmpty == true)
         let pending = try #require(restored.capture(windows: owner).first { $0.id == group.id }?.sessions.first)
         #expect(pending.layout.tabOrder == [.window(index: 0), .file(id: fileID), .window(index: 1)])
+        #expect(pending.modelShortcuts?[windowIDs[1]]?.hidden.models == [windowIDs[1].uuidString])
         if closeWindow {
             let native = NSWindow(contentRect: .init(x: 0, y: 0, width: 800, height: 600), styleMask: [.titled], backing: .buffered, defer: true)
             try owner.attach(native, to: #require(partial.anchor))
@@ -486,6 +542,9 @@ struct WorkspaceViewerRecoveryTests {
             _ = restored.capture(windows: owner)
         }
         restored.update(state(server: "200:2", offset: 20), windows: owner)
+        for id in windowIDs {
+            #expect(restoredPreferences.tabs[.init(hostID: "pair", serverID: "200:2", windowID: id)]?.models == [id.uuidString])
+        }
         let store = closeWindow ? owner.mainTabs : partial.tabs
         let result = try #require(store.existing(hostID: "pair", session: "project"))
         #expect(result.directoryTabs[fileID]?.path == "/Host/late-file")

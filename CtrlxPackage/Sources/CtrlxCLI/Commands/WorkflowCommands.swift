@@ -4,47 +4,19 @@ import Foundation
 struct WorkflowCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "workflow",
-        abstract: "Read task attachments, share artifacts or request workflow completion",
-        subcommands: [WorkflowFinishCommand.self, WorkflowAttachmentsCommand.self, WorkflowShareCommand.self]
+        abstract: "Read task attachments or request workflow completion",
+        subcommands: [WorkflowFinishCommand.self, WorkflowAttachmentsCommand.self]
     )
 }
 
-struct WorkflowShareCommand: ParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "share", abstract: "Share an immutable file snapshot with this task's downstream Agents")
-
-    @Option(name: .long, help: "Invocation UUID supplied with this workflow task") var invocation: String
-    @Option(name: .long, help: "Local image, audio, video or UTF-8 text file to snapshot") var file: String
-    @OptionGroup var options: GlobalOptions
-
-    func invocationID() throws -> UUID {
-        guard options.pane == nil, options.session == nil, options.window == nil else {
-            throw ValidationError("Workflow authority comes from the calling Agent; target overrides are not supported.")
-        }
-        guard let id = UUID(uuidString: invocation) else {
-            throw ValidationError("--invocation must be the UUID supplied with this workflow task.")
-        }
-        return id
-    }
-
-    func run() throws {
-        let id = try invocationID()
-        do {
-            let response = try WorkflowArtifactUpload.send(file: URL(fileURLWithPath: file), invocationID: id) {
-                try SocketClient.send($0, socketPath: options.socket, timeoutSeconds: 30, responseLimit: 64 * 1_024)
-            }
-            printResponse(response, json: true)
-        } catch {
-            if options.json {
-                printResponse(.init(id: id.uuidString, error: .init(code: "workflow_share_failed", message: error.localizedDescription)), json: true)
-                throw ExitCode.failure
-            }
-            throw error
-        }
-    }
-}
-
 struct WorkflowAttachmentsCommand: ParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "attachments", abstract: "Get verified files authorized for this Agent invocation")
+    static let configuration = CommandConfiguration(
+        commandName: "attachments", abstract: "Get verified files authorized for this Agent invocation",
+        discussion: """
+        Returns authorized Host-local paths, media types and checksums for the current invocation. Read returned images with an image-reading tool and text files with a file-reading tool; the listing itself contains metadata, not image pixels.
+        If a file cannot be read, report the limitation. Audio and video require a supported conversion. Use only the invocation UUID supplied with this task.
+        """
+    )
 
     @Option(name: .long, help: "Invocation UUID supplied with this workflow task") var invocation: String
     @OptionGroup var options: GlobalOptions
@@ -74,7 +46,12 @@ struct WorkflowAttachmentsCommand: ParsableCommand {
 struct WorkflowFinishCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "finish",
-        abstract: "Request workflow completion, then provide your final Agent answer"
+        abstract: "Request completion of an authorized workflow invocation",
+        discussion: """
+        Available only when the current step grants completion permission. The Host validates the calling Agent, invocation and grant; knowing a UUID does not grant authority.
+        Completion conditions come from the workflow's configured task or step instructions. This command does not define business criteria.
+        Success records a completion request. The workflow completes after the Host verifies the current turn's final result. A paused workflow remains paused until an operator continues it. This command does not kill Agents.
+        """
     )
 
     @Option(name: .long, help: "Invocation UUID supplied with this workflow task") var invocation: String

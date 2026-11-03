@@ -99,7 +99,9 @@
                 #available(iOS 26.0, *),
                 sceneIsActive
             else { return false }
-            if monitoringSession != nil { return true }
+            if monitoringSession != nil {
+                return true
+            }
 
             lastStartFailure = nil
             let identifier = Self.makeIdentifier()
@@ -139,9 +141,10 @@
                 activityReporter?.cancel()
                 activityReporter = nil
                 let failure = error as NSError
-                lastStartFailure = "\(failure.domain) (\(failure.code)): \(failure.localizedDescription)"
+                let failureDescription = "\(failure.domain) (\(failure.code)): \(failure.localizedDescription)"
+                lastStartFailure = failureDescription
                 logger.error(
-                    "Continued processing unavailable; using notifications only: \(self.lastStartFailure ?? "unknown error", privacy: .public)"
+                    "Continued processing unavailable; using notifications only: \(failureDescription, privacy: .public)"
                 )
                 return false
             }
@@ -354,8 +357,9 @@
         public func noteSceneActive(_ active: Bool) {
             let wasActive = sceneIsActive
             sceneIsActive = active
+            let isMonitoring = monitoringSession != nil
             logger.info(
-                "Scene \(active ? "active" : "background", privacy: .public); globalMonitor=\(self.monitoringSession != nil, privacy: .public)"
+                "Scene \(active ? "active" : "background", privacy: .public); globalMonitor=\(isMonitoring, privacy: .public)"
             )
 
             if active {
@@ -448,10 +452,11 @@
                 case .waitingForInput: "Needs input"
                 }
 
-                if AgentBackgroundMonitoringPolicy.shouldEmitTerminalNotification(
-                    reason: reason,
-                    recoveredFromSnapshot: source == .snapshot
-                ) {
+                if
+                    AgentBackgroundMonitoringPolicy.shouldEmitTerminalNotification(
+                        reason: reason,
+                        recoveredFromSnapshot: source == .snapshot
+                    ) {
                     beforeFinishing(TerminalNotification(
                         hostId: key.pairId,
                         paneId: key.paneId,
@@ -604,8 +609,9 @@
             for hostId in connectionManager.managedHostIDs {
                 guard monitoringSession?.identifier == identifier else { return }
                 let now = Date()
-                if let lastProbeAt = lastConnectionProbeAtByHost[hostId],
-                   now.timeIntervalSince(lastProbeAt)
+                if
+                    let lastProbeAt = lastConnectionProbeAtByHost[hostId],
+                    now.timeIntervalSince(lastProbeAt)
                     < AgentBackgroundMonitoringPolicy.connectionProbeInterval {
                     continue
                 }
@@ -640,10 +646,11 @@
             guard var session = monitoringSession, session.identifier == identifier else {
                 return false
             }
-            guard let nextUnit = AgentBackgroundMonitoringPolicy.nextActivityUnit(
-                after: session.completedActivityUnits,
-                limit: session.activityUnitLimit
-            ) else {
+            guard
+                let nextUnit = AgentBackgroundMonitoringPolicy.nextActivityUnit(
+                    after: session.completedActivityUnits,
+                    limit: session.activityUnitLimit
+                ) else {
                 finishMonitoringSession(subtitle: "Monitoring ended")
                 return false
             }
@@ -731,9 +738,10 @@
             for state: AgentState,
             reason: AgentBackgroundMonitoringPolicy.TerminalReason
         ) -> String {
-            if case let .doneWorking(summary) = state,
-               let summary,
-               !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if
+                case let .doneWorking(summary) = state,
+                let summary,
+                !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return summary
             }
             return switch reason {
@@ -743,7 +751,7 @@
         }
 
         private static func makeIdentifier() -> String {
-            let bundleIdentifier = Bundle.main.bundleIdentifier ?? "com.jicezeng.ctrlx"
+            let bundleIdentifier = Bundle.main.bundleIdentifier ?? "com.gravtice.ctrlx"
             return "\(bundleIdentifier).agent-monitor.\(UUID().uuidString)"
         }
     }

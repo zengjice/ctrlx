@@ -70,7 +70,7 @@
         let resourceSessions = HostResourceSessionStore()
         var workspaceRecovery: WorkspaceRecoveryController?
         let recoveredWorkspaceDrafts = WorkspaceRecoveryDrafts()
-        let viewerWorkspaceRecovery = WorkspaceViewerRecovery()
+        let viewerWorkspaceRecovery: WorkspaceViewerRecovery
         var workspaceRecoveryReady = false
         var workspaceAgentDiscoveryComplete = false
         @ObservationIgnored var recoveryAgentDescriptors: [UUID: (source: AgentForkSource, runtimeID: String, descriptor: AgentResumeDescriptor)] = [:]
@@ -151,11 +151,13 @@
         @ObservationIgnored var agentModelRequests: Set<String> = []
         @ObservationIgnored let agentModelReads = AgentModelReadRequests()
         @ObservationIgnored let agentModelDisplayCache = AgentModelDisplayCache()
-        let agentModelPreferences = AgentModelPreferences()
+        let agentModelPreferences: AgentModelPreferences
 
         @ObservationIgnored var agentWorkflowStore: AgentWorkflowStore?
 
         var agentWorkflowService: AgentWorkflowService?
+
+        var agentWorkflowStartupError: String?
 
         @ObservationIgnored var agentWorkflowAgentService: AgentWorkflowAgentService?
 
@@ -352,6 +354,9 @@
         /// Synchronous initialization sets up core services. Call `setupAllServices()` asynchronously
         /// to complete service initialization and start connections.
         public init(settings: AppSettings = AppSettings(), agentBrowser: AgentBrowserService = AgentBrowserService()) {
+            let modelPreferences = AgentModelPreferences()
+            self.agentModelPreferences = modelPreferences
+            self.viewerWorkspaceRecovery = WorkspaceViewerRecovery(modelPreferences: modelPreferences)
             self.settings = settings
             self.agentBrowser = agentBrowser
             self.licenseManager = LicenseManager(settings: settings)
@@ -3165,7 +3170,7 @@
                 if request.method == "simulator.action" {
                     return await agentSimulator.handle(request)
                 }
-                if ["workflow.finish", "workflow.attachments", "workflow.artifact"].contains(request.method) {
+                if ["workflow.finish", "workflow.attachments"].contains(request.method) {
                     guard let self else { return .internalError(id: request.id, "Host is shutting down.") }
                     return await self.handleWorkflowAgentCommand(request, peer: peer)
                 }
@@ -3452,11 +3457,9 @@
                     } catch { return .failure(for: command.id, error: error.localizedDescription) }
                 }
                 if case let .manageAgentWorkflows(spec) = command.command {
-                    guard let service = self?.agentWorkflowService else {
-                        return .failure(for: command.id, error: "Workflows are unavailable on this Host.")
-                    }
+                    guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
                     do {
-                        return try await CommandResponseMessage(commandId: command.id, success: true, agentWorkflow: service.handle(spec))
+                        return try await CommandResponseMessage(commandId: command.id, success: true, agentWorkflow: handleAgentWorkflowRequest(spec))
                     } catch { return .failure(for: command.id, error: error.localizedDescription) }
                 }
                 if case let .trustAgentHooks(spec) = command.command {
@@ -3469,6 +3472,13 @@
                             agentHookTrust: result,
                             agentHooksRefreshed: spec.refreshIfTrusted == true && result == .alreadyTrusted
                         )
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                }
+                if case let .setAgentModelShortcuts(spec) = command.command {
+                    guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
+                    do {
+                        let value = try await self.handleSetAgentModelShortcuts(spec, paneID: command.paneId)
+                        return CommandResponseMessage(commandId: command.id, success: true, agentModelShortcutPreferences: value)
                     } catch { return .failure(for: command.id, error: error.localizedDescription) }
                 }
                 if case let .agentModelControls(spec) = command.command {
@@ -3629,7 +3639,7 @@
                             worktree: spec.worktree,
                             providerID: spec.providerID
                         )
-                        return await Self.handleCreateSession(
+                        let response = await Self.handleCreateSession(
                             command: command,
                             spec: spec,
                             preparation: preparation,
@@ -3639,6 +3649,10 @@
                             hostID: self?.workspaceRecovery?.hostID,
                             tmuxService: tmux
                         )
+                        if response.success {
+                            await self?.connectedViewerManager?.pushSessionStateToAll()
+                        }
+                        return response
                     } catch {
                         return .failure(for: command.id, error: error.localizedDescription)
                     }
@@ -3953,7 +3967,6 @@
                 let usageOverview = await self?.currentUsageOverview()
                 let sharedTerminalLayouts = await windowManager.sharedTerminalLayouts
                 let recoveryHostID = await self?.workspaceRecovery?.hostID
-                let workflowVersion: Int? = await self?.agentWorkflowService == nil ? nil : AgentWorkflowWire.version
                 let workspaceIdentity = HostSessionStateSnapshot.workspaceIdentity(hostID: recoveryHostID, panes: paneStates)
 
                 // Open response forms ride `AgentSession.state` in `paneStates`, so a
@@ -3999,9 +4012,10 @@
                     supportsSimulatorClosing: await self?.agentSimulator.supportsSimulatorViewing,
                     supportsAgentHookTrust: true,
                     supportsAgentModelControls: true,
+                    agentModelShortcuts: workspaceIdentity == nil ? nil : await self?.agentModelPreferences.shared(identities: paneStates.values.compactMap(\.workspaceIdentity)),
                     supportsDashboard: true,
-                    agentWorkflowVersion: workflowVersion,
-                    workflowAgentPluginIDs: workflowVersion == nil ? nil : await self?.workflowAgentPluginIDs(),
+                    agentWorkflowVersion: AgentWorkflowWire.version,
+                    workflowAgentPluginIDs: await self?.workflowAgentPluginIDs(),
                     simulatorTabs: await self?.agentSimulator.sharedSimulatorTabs.filter { $0.resourceSessionID == nil },
                     supportsPaneFiles: true, fileTabs: await self?.hostFileTabs.tabs.filter { $0.resourceSessionID == nil },
                     workspaceIdentity: workspaceIdentity,
@@ -4436,8 +4450,6 @@
                         try? await Task.sleep(for: PaneSurfaceRetry.delay)
                     }
                 }
-                await connectionManager?.pushSessionStateToAll()
-
                 var initialization: AgentModelShortcutInitialization?
                 if let modelShortcutDefaults, let captured = try? await tmuxService.captureWorkspacePane(target: paneId) {
                     initialization = .init(pane: captured.identity, defaults: modelShortcutDefaults)
@@ -4445,6 +4457,7 @@
                 if let initialization {
                     modelPreferences?.initialize(initialization, hostID: "local")
                 }
+                await connectionManager?.pushSessionStateToAll()
                 return CommandResponseMessage(commandId: command.id, success: true, paneId: paneId, agentModelShortcuts: initialization)
             } catch {
                 return .failure(for: command.id, error: error.localizedDescription)

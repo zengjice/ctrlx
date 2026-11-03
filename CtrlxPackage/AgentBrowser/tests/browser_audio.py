@@ -41,10 +41,21 @@ class Audio(Managed):
         self.passed('page audio reaches Host output before Viewer takeover')
         assert (await self.request(run, 'probe.remote-control', tab=tab, lease=lease))['accepted']
         assert (await audio('route', lease=lease, enabled=True))['accepted']
-        await asyncio.sleep(.12)
+        async def accumulated():
+            value = await audio()
+            return value if value['buffered'] > 4096 else None
+        await self.wait(accumulated)
         samples = array.array('f', base64.b64decode((await audio('read', lease=lease))['pcm']))
-        assert len(samples) >= 2048 and all(math.isfinite(value) for value in samples)
+        assert 4096 * 2 < len(samples) <= 8192 * 2 and all(math.isfinite(value) for value in samples)
         assert sum(value * value for value in samples) / len(samples) > .00001
+        for channel in range(2):
+            mono = samples[channel::2]
+            crossings = [i - mono[i] / (mono[i] - mono[i - 1])
+                         for i in range(1, len(mono)) if mono[i - 1] <= 0 < mono[i]]
+            assert len(crossings) > 10
+            frequency = (len(crossings) - 1) * 48000 / (crossings[-1] - crossings[0])
+            assert abs(frequency - 440) < 1, frequency
+        self.passed('a delayed native read drains more than 4096 frames with correct stereo pitch')
         self.passed('a page already playing can be captured midstream without reload or restarting media')
         remote = await audio()
         await asyncio.sleep(.1)

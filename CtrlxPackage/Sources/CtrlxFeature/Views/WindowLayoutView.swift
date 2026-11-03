@@ -444,8 +444,7 @@
                         quickActionPresentation: $quickActionPresentation,
                         customButtonStore: settings.customButtons,
                         sendCustomButton: sendCustomButton,
-                        agentCommandContext: activeAgentCommandContext,
-                        showsTerminalControls: settings.terminalKeyboardControlPosition == .bottomBar
+                        agentCommandContext: activeAgentCommandContext
                     )
                     .gesture(terminalBarSwipe)
                 } else if let tab = selectedLinkedTab {
@@ -1099,29 +1098,6 @@
                 .accessibilityLabel("Tabs: \(navigationTitle)")
                 .accessibilityIdentifier("window-tabs-picker")
             }
-            if terminalIsVisible, settings.terminalKeyboardControlPosition == .topRight {
-                ToolbarItem(placement: .topBarTrailing) {
-                    TerminalVoiceInputButton(
-                        session: voiceSession, context: activePhraseContext,
-                        isDisabled: !relayClient.isHostConnected || activePaneId == nil || quickActionPresentation.isPresented,
-                        contextProvider: activeVoiceInputContext
-                    )
-                    .id(activePhraseContext.target)
-                }
-
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        isKeyboardActive.toggle()
-                    } label: {
-                        Label(
-                            isKeyboardActive ? "Hide Keyboard" : "Show Keyboard",
-                            symbol: isKeyboardActive ? .keyboardChevronCompactDown : .keyboard
-                        )
-                    }
-                    .disabled(!relayClient.isHostConnected || activePaneId == nil)
-                }
-            }
-
             if terminalIsVisible, let window {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -2000,7 +1976,7 @@
                 ),
                 isConnected: relayClient.isHostConnected,
                 hideNavigationBar: false,
-                showKeyboardButton: false,
+                showsInputControls: false,
                 showCopyButton: false,
                 isActive: terminalIsVisible && pane.paneId == activePaneId,
                 isInputSuspended: !terminalIsVisible || artifactPreview != nil,

@@ -157,7 +157,9 @@ enum ManagedAgentBrowser {
             throw AgentBrowserTransport.Failure("This CtrlX build has no bundled vercel engine. Use --engine ctrlx or rebuild with scripts/build-agent-browser.sh.")
         }
         let digest = SHA256.hash(data: try Data(contentsOf: binary)).map { String(format: "%02x", $0) }.joined()
-        guard digest == sha256 else { throw AgentBrowserTransport.Failure("Bundled vercel engine checksum mismatch; not executed.") }
+        if digest != sha256 {
+            try AgentBrowserEngineSignature.verify(binary)
+        }
         return binary
     }
 

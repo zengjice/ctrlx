@@ -25,7 +25,7 @@ public extension AgentWorkflowDefinition {
 public extension AgentWorkflowRun {
     var attachmentIDs: Set<UUID> {
         definition.attachmentIDs.union(invocations.flatMap {
-            $0.delivery.input.attachmentIDs + ($0.sharedAttachmentIDs ?? []) + ($0.result?.attachmentIDs ?? [])
+            $0.delivery.input.attachmentIDs + ($0.result?.attachmentIDs ?? [])
         })
     }
 }

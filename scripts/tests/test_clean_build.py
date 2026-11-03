@@ -770,6 +770,16 @@ class BuildCleanupTests(unittest.TestCase):
         self.assertIn("Preview only", output)
         self.assertTrue(old.exists())
 
+    def test_ad_hoc_retention_keeps_development_and_debug_packages_separate(self):
+        preserved = [self.artifact('3.0.1'), self.artifact('3.0.1-Debug-AdHoc')]
+        old = self.artifact('3.0.1-AdHoc', timestamp=1)
+        previous = self.artifact('3.0.2-AdHoc', timestamp=2)
+        current = self.artifact('3.0.3-AdHoc', timestamp=3)
+        self.clean(storage.artifact_targets(self.root, current))
+        self.assertFalse(old.exists())
+        for path in preserved + [previous, current]:
+            self.assertTrue(path.exists())
+
     def test_unknown_files_and_subdirectories_are_preserved(self):
         sentinels = [self.file(name) for name in (
             "dist/manual-backup.ipa", "dist/plugin.zip", "dist/qcloud-release/3.0.1/report.json",
@@ -929,12 +939,13 @@ class BuildCleanupTests(unittest.TestCase):
     def test_packaging_prunes_only_after_metadata_is_written(self):
         for name, variable, platform in (("package-local-ios.sh", "IPA_PATH", ' iOS "$SAVE_SPACE"'),
                                          ("package-local-macos.sh", "DMG_PATH", ' macOS "$SAVE_SPACE"'),
-                                         ("release.sh", "DMG_PATH", "")):
+                                         ("release.sh", "DMG_PATH", " macOS")):
             with self.subTest(script=name):
                 script = (SCRIPTS / name).read_text()
                 staged = "STAGED_IPA" if variable == "IPA_PATH" else "STAGED_DMG"
-                expected = (f'write_artifact_metadata "${variable}"\n' if name == "release.sh" else
-                            f'write_artifact_metadata "${staged}"\npublish_local_package "${staged}" "${variable}"\n')
+                expected = f'write_artifact_metadata "${staged}"\npublish_local_package "${staged}" "${variable}"\n'
+                if name == "release.sh":
+                    expected += 'mv "$STAGED_APPCAST" "$APPCAST_PATH"\n'
                 self.assertIn(expected + f'prune_local_artifacts "${variable}"{platform}\n', script)
 
     def test_space_saving_packaging_tail_only_cleans_after_success(self):

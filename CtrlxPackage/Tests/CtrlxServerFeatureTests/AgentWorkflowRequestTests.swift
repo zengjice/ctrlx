@@ -1,10 +1,29 @@
+import ConcurrencyExtras
+import CtrlxCommon
 import CtrlxNetworking
+import Dependencies
 import Foundation
 import Testing
 @testable import CtrlxServerFeature
 
 struct AgentWorkflowRequestTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    @MainActor
+    final private class WriteBoundary {
+        var entered = false
+        private var continuation: CheckedContinuation<Void, Never>?
+
+        func wait() async {
+            entered = true
+            await withCheckedContinuation { continuation = $0 }
+        }
+
+        func release() {
+            continuation?.resume()
+            continuation = nil
+        }
+    }
 
     private struct Fixture {
         let root: URL
@@ -55,8 +74,10 @@ struct AgentWorkflowRequestTests {
                 try await f.service.handle(.init(.deleteDefinition(f.definition.id, expectedRevision: 1), expectedHostID: hostID))
             }
         }
-        await #expect(throws: AgentWorkflowError.self) {
-            try await f.service.handle(.init(.deleteDefinition(f.definition.id, expectedRevision: 1), expectedHostID: f.hostID, version: 1))
+        for version in [1, 2] {
+            await #expect(throws: AgentWorkflowError.self) {
+                try await f.service.handle(.init(.deleteDefinition(f.definition.id, expectedRevision: 1), expectedHostID: f.hostID, version: version))
+            }
         }
         #expect(try await f.service.snapshot() == before)
     }
@@ -76,6 +97,125 @@ struct AgentWorkflowRequestTests {
         #expect(ended.summary.status == .ended)
         _ = try await f.service.handle(.init(.deleteRun(state.summary.id, expectedRevision: ended.summary.revision), expectedHostID: f.hostID))
         #expect(try await f.service.snapshot().runs.isEmpty)
+    }
+
+    @Test
+    func removedArtifactAPIIsNeitherAdvertisedNorHandled() async throws {
+        let router = LiveAPIRequestRouter()
+        let capabilities = await router.handleRequest(.init(id: "capabilities", method: "system.capabilities", params: [:]))
+        let value = try #require(capabilities.result?["methods"])
+        guard case let .array(methods) = value else { Issue.record("Missing capability methods")
+            return
+        }
+        #expect(!methods.contains(.string("workflow.artifact")))
+        let store = AgentWorkflowStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("removed-artifact-\(UUID()).json"), hostID: UUID())
+        let service = AgentWorkflowAgentService(store: store, inspect: { $0 })
+        let response = await service.handle(.init(id: "removed", method: "workflow.artifact", params: [:]), peer: nil)
+        #expect(response.error?.code == "method_not_found")
+    }
+
+    @MainActor
+    @Test
+    func terminalsRequireExplicitTakeoverWithoutPausingOnRejectedInput() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let running = try await start(f)
+        let before = try await f.store.snapshot()
+        let writes = LockIsolated(0)
+        try await withDependencies {
+            $0[ProcessRunner.self].run = { _, _, _, _ in
+                writes.withValue { $0 += 1 }
+                return ProcessResult(exitCode: 0, stdout: Data(), stderr: Data())
+            }
+            $0[ProcessRunner.self].runWithLaunch = { _, _, _, _, launch in
+                try await launch { writes.withValue { $0 += 1 } }
+                return ProcessResult(exitCode: 0, stdout: Data(), stderr: Data())
+            }
+        } operation: {
+            let gate = AgentWorkflowInputGate { try await f.store.authorizeHumanInput(paneID: $0) }
+            let tmux = TmuxService(tmuxPath: "/unused")
+            tmux.workflowInputGate = gate
+            let control = TmuxControlClientManager(tmuxPath: "/must/not/run")
+            control.workflowInputGate = gate
+            let claim = gate.claim(paneID: "%0")
+            for _ in 0..<4 {
+                await #expect(throws: AgentWorkflowInputReadOnlyError.self) {
+                    try await tmux.sendKeys("%0", keys: "a", literal: true)
+                }
+            }
+            await #expect(throws: AgentWorkflowInputReadOnlyError.self) {
+                try await control.sendKeystrokesIfConnected(paneId: "%0", sessionName: "missing", keys: [.enter])
+            }
+            let click = Data("\u{1b}[<0;10;20M".utf8)
+            await #expect(throws: AgentWorkflowInputReadOnlyError.self) {
+                try await tmux.sendRawBytes("%0", data: click)
+            }
+            #expect(writes.value == 0)
+            try gate.validate(claim)
+            let scroll = Data(String(repeating: "\u{1b}[<64;10;20M", count: 5).utf8)
+            try await tmux.sendRawBytes("%0", data: scroll)
+            #expect(writes.value == 1)
+            try gate.validate(claim)
+            #expect(try await f.store.snapshot() == before)
+
+            let paused = try #require(try await f.service.handle(.init(.pause(running.summary.id, expectedRevision: running.summary.revision), expectedHostID: f.hostID)).run)
+            try await tmux.sendKeys("%0", keys: "a", literal: true)
+            #expect(writes.value == 2)
+            #expect(try await f.store.snapshot().runs.first?.status == .paused)
+
+            let resumed = try #require(try await f.service.handle(.init(.resume(running.summary.id, expectedRevision: paused.summary.revision, roundLimit: nil), expectedHostID: f.hostID)).run)
+            await #expect(throws: AgentWorkflowInputReadOnlyError.self) {
+                try await tmux.sendKeys("%0", keys: "Enter")
+            }
+            try await tmux.sendKeys("%99", keys: "unrelated", literal: true)
+            #expect(writes.value == 3)
+            _ = try await f.service.handle(.init(.end(running.summary.id, expectedRevision: resumed.summary.revision), expectedHostID: f.hostID))
+            try await tmux.sendKeys("%0", keys: "a", literal: true)
+            #expect(writes.value == 4)
+        }
+    }
+
+    @MainActor
+    @Test(arguments: [false, true])
+    func continueRevokesHumanInputBeforeProcessLaunch(takeOverAgain: Bool) async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let running = try await start(f)
+        let paused = try await f.service.pause(runID: running.summary.id, expectedRevision: running.summary.revision)
+        let boundary = WriteBoundary()
+        let writes = LockIsolated(0)
+        try await withDependencies {
+            $0[ProcessRunner.self].runWithLaunch = { _, _, _, _, launch in
+                await boundary.wait()
+                try await launch { writes.withValue { $0 += 1 } }
+                return ProcessResult(exitCode: 0, stdout: Data(), stderr: Data())
+            }
+        } operation: {
+            let tmux = TmuxService(tmuxPath: "/must/not/run")
+            tmux.workflowInputGate = AgentWorkflowInputGate { try await f.store.authorizeHumanInput(paneID: $0) }
+            let pending = Task { try await tmux.sendKeys("%0", keys: "C-c") }
+            defer { boundary.release()
+                pending.cancel()
+            }
+            let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+            while !boundary.entered, ContinuousClock.now < deadline {
+                await Task.yield()
+            }
+            try #require(boundary.entered)
+            let resumed = try await f.service.resume(runID: running.summary.id, expectedRevision: paused.revision)
+            if takeOverAgain {
+                _ = try await f.service.pause(runID: resumed.id, expectedRevision: resumed.revision)
+            }
+            boundary.release()
+            await #expect(throws: AgentWorkflowInputReadOnlyError.self) { try await pending.value }
+            #expect(writes.value == 0)
+            #expect(try await f.store.snapshot().runs[0].status == (takeOverAgain ? .paused : .running))
+            if takeOverAgain {
+                let fresh = try await f.store.authorizeHumanInput(paneID: "%0")
+                try fresh.perform { writes.withValue { $0 += 1 } }
+                #expect(writes.value == 1)
+            }
+        }
     }
 
     @Test

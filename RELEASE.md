@@ -20,14 +20,33 @@ Choose the workflow that matches the task:
    notification extension on the same build number. iOS uses this build string
    to recognize updates during synchronization; see Apple's
    [version and build guidance](https://help.apple.com/xcode/mac/current/en.lproj/devba7f53ad4.html).
-2. Run all boundary checks, Swift tests, website build and Mac/iOS build checks.
+2. Run boundary checks, relevant tests and isolated native-runtime acceptance.
+   Mac-only releases do not build the iOS Simulator unless explicitly requested.
 3. Commit from the selected worktree and create `v<version>` at that exact commit.
 4. Copy `.env.example` to the selected root environment file and configure the
    signing identity, notary profile and owned download URL.
 5. Run the zero-parameter `./scripts/release.sh`.
 
-The script refuses dirty or untagged source, archives and signs `CtrlX.app`,
-submits the app and DMG for notarization, generates `CtrlX-<version>.dmg`, a
+The script refuses dirty or untagged source, missing Developer ID identities or
+unusable notarization credentials before building. Configure the Keychain profile
+interactively with `xcrun notarytool store-credentials ctrlx-notary`; use an
+App-specific password for the same Apple account/team. Keep passwords and private
+keys out of environment files, command arguments and logs.
+
+It prepares native dependencies, archives and exports `CtrlX.app`, signs nested
+Mach-O files and bundles from the inside out, and checks their Developer ID team,
+secure timestamp, Hardened Runtime and exact entitlements. Renderer/GPU helpers
+receive JIT permission; other processes retain their scoped entitlements. The
+bundled automation engine and CEF framework libraries are included in the inventory.
+The original CEF SDK is never signed or modified.
+The upstream automation-engine download is hash-verified before signing. Its
+signature attests the pinned upstream hash in a fixed identifier; the CLI accepts
+either the original pinned bytes or a strict Developer ID signature for that
+identifier from its own team. Arbitrarily re-signed engines are rejected.
+
+It submits the app and DMG separately, requires `Accepted`, staples and validates
+both tickets, and requires Gatekeeper acceptance before publishing the local
+package. It generates `CtrlX-<version>.dmg`, a
 Sparkle appcast, SHA-256 file and JSON manifest containing the full source
 commit and AGPL license. The appcast is retained for older clients that still
 used Sparkle's in-process updater; current clients use the Qcloud installer
@@ -46,11 +65,30 @@ signatures fail closed; HTTPS alone is not the update trust root. The app does
 not check the installer merely because Settings → General opened; startup, the
 daily maintenance loop and the explicit **Check Again** action trigger a check.
 
+Formal archives reuse this worktree's Mac DerivedData and package downloads.
+They target arm64, matching the Apple Silicon-only CEF distribution.
+When development continues concurrently, use
+`CTRLX_RELEASE_PREPARE_ONLY=1 ./scripts/release.sh` to stop after signing and preparing the ZIP. Copy the
+retained state/App/ZIP and notary reports into a clean checkout of the exact
+same commit, then resume there. This avoids copying compilation caches or
+changing the artifact's source identity.
+They keep compilation caches. Failed releases retain their staging directory and
+notarization reports under `dist/qcloud-release/<version>/`; do not rebuild just
+because a notarization wait timed out. Resume the whole workflow using the exact
+absolute staging path printed by the failed run:
+`CTRLX_RELEASE_RESUME=/path/to/worktree/.build-local/package-macos.XXXXXX ./scripts/release.sh`.
+The source revision, signing team and original build stamp must still match.
+It reuses the signed App/ZIP, submission IDs and existing DMG; it does not archive
+or re-sign them. `scripts/notarize_macos.py` can also query/resume an individual
+input using its existing `--profile` and `--report`.
+An `Invalid` result retains the notary log and stops publication. Only fully
+verified staged packages replace the previous local package and its sidecars.
+
 The simulator build scripts sign both `CtrlxSimulatorHost` and the pinned
 `simslim` helper with Hardened Runtime. Validate actual display, input,
 accessibility and profile changes in the signed candidate before distribution.
-Full App hardening and notarization still require the Agent Browser archive
-gates described in `docs/agent-browser.md`.
+Agent Browser archives require the Developer ID mode and verified nested code;
+plain development archives remain blocked. See `docs/agent-browser.md`.
 
 ## Publish only the macOS package
 
@@ -61,6 +99,9 @@ For the existing Qcloud private-distribution channel, follow the sibling
 ../publish-ctrlx-macos.py --check
 ../publish-ctrlx-macos.py --yes
 ```
+
+For macOS-only packaging/publication, build macOS only by default. Do not add an
+iOS Simulator build unless the user explicitly requests iOS validation.
 
 Prepare a tested, clean commit published as remote `main` and matching
 `v<version>` tag first. A linked worktree and its local branch are supported;
@@ -74,6 +115,11 @@ python3 /path/to/publish-ctrlx-macos.py --root "$PWD" --yes
 `CTRLX_ROOT` remains supported; without either option, the maintainer's usual
 primary checkout remains the default. This path uses
 `scripts/package-local-macos.sh` (Apple Development signature, not notarized).
+For a formal release prepared with `scripts/release.sh`, pass `--developer-id`
+to the private publisher's `--check` and `--yes` commands. It verifies all nested
+code, the chosen team, both stapled tickets and Gatekeeper acceptance before
+uploading or switching the installer. If the DMG is absent, this mode invokes
+`scripts/release.sh`; it never falls back to a development package.
 The publishing Mac uploads directly to COS using its exported `COS_SECRET_ID`
 and `COS_SECRET_KEY`. Neither publication nor installer/package downloads require
 SSH, SCP or the Qcloud host. Publication does not install locally or deploy the Relay.
@@ -160,9 +206,75 @@ python3 scripts/install-local.py ios --device '<CoreDevice UUID>'
 python3 scripts/install-local.py macos --skip-build
 python3 scripts/install-local.py ios --device '<CoreDevice UUID>' --skip-build
 
-# Optional Debug device build and post-install cache cleanup:
-python3 scripts/install-local.py ios --device '<CoreDevice UUID>' --configuration Debug --save-space
+# Repeated Debug device builds: retain compilation caches explicitly.
+python3 scripts/install-local.py ios --device '<CoreDevice UUID>' --configuration Debug --keep-build-cache
+
+# Ad Hoc: Apple Distribution, production APNs, registered devices only.
+python3 scripts/install-local.py ios --device '<CoreDevice UUID>' --signing-mode ad-hoc
+./scripts/package-local-ios.sh --signing-mode ad-hoc
 ```
+
+The iOS signing mode defaults to `CTRLX_IOS_SIGNING_MODE` from ignored
+`Config/Local.xcconfig`, or `development` when omitted. `ad-hoc` requires an
+Apple Distribution identity with its private key and two unexpired Ad Hoc
+profiles: one for the app and one for the notification extension, both including
+the intended iPhone. Keep the existing team, bundle IDs and App/Keychain groups
+when changing signing mode to preserve the App's identity. The installer updates
+in place; it does not uninstall the development-signed App.
+
+Before compilation, signing preflight matches the team, bundle IDs, distribution
+mode, profile expiry, sharing capabilities and a common certificate available
+locally for both profiles. It rejects App Store/enterprise profiles and disjoint
+device lists. The app's `aps-environment` resolves to `production` for Ad Hoc or
+`development` otherwise; both final signatures must match their prepared claims.
+Ad Hoc IPAs use `CtrlX-<version>[-Debug]-AdHoc.ipa`, with independent retention
+from development packages. The installer prints the recorded App's actual
+signing mode and profile APNs environment, including with `--skip-build`; an
+explicit conflicting `--signing-mode` fails before installation.
+
+APNs production is a coordinated client/Relay change. After installing the Ad
+Hoc App, register its token again and configure the Relay with
+`APNS_ENVIRONMENT=production`, keeping `APNS_BUNDLE_ID` equal to the App bundle ID.
+A token from a sandbox registration must not be reused for production. An APNs
+authentication key authorized for Sandbox & Production can be retained. The
+current Relay uses one global APNs environment/topic, so coordinate the cutover
+with its maintainer and other development-signed clients. Changing a Keychain
+service name does not change the APNs topic. These scripts do not deploy or
+reconfigure the Relay. TestFlight/App Store upload remains blocked separately.
+
+### Gravtice identity transition
+
+Current identifiers are `com.gravtice.ctrlx` (iOS),
+`com.gravtice.ctrlx.notification-service` (notification extension), and
+`com.gravtice.ctrlx.macos` (Mac). The iOS App Group is
+`group.com.gravtice.ctrlx`; both targets claim the concrete
+`$(AppIdentifierPrefix)com.gravtice.ctrlx.shared` Keychain group. Register the two
+new iOS App IDs, enable Push Notifications on the main App, associate the App
+Group with both, and generate matching Ad Hoc profiles. The production Relay
+topic must be `APNS_BUNDLE_ID=com.gravtice.ctrlx`. A team-scoped APNs key already
+authorized for both environments can be reused.
+
+Changing the iOS bundle ID creates another App installation. Retain the old App
+and its data, back up its container, and import ordinary settings with
+`--initial-preferences` before the new App's first launch. The new Keychain
+group starts a separate identity: omit old device/pair records and pair again.
+Do not uninstall the old App as part of packaging or migration.
+
+On Mac, the new App copies `com.jicezeng.ctrlx.e2ee` items to
+`com.gravtice.ctrlx.e2ee` before initializing settings or encryption, compares
+every copied value, and retains the source. Identical partial copies can resume;
+conflicts or denied access stop startup without generating replacement keys.
+A completion marker prevents later intentional deletions from being restored
+from the retained source. It then imports the old preferences domain into
+`com.gravtice.ctrlx.macos`, preserving existing new-domain values and the old
+domain. Isolated/E2E Apps skip production migration. App support files retain
+their existing CtrlX locations; macOS permissions and login-item registration
+may need user authorization for the new bundle identity.
+
+The local Mac installer permits only this explicit old-to-new bundle transition
+in addition to same-ID installs, retaining its normal rollback backup. The
+private publisher/installer must target the new ID before publishing the first
+renamed release; keep their pre-transition copies for old release verification.
 
 Default behavior calls `package-local-macos.sh --app-only` /
 `package-local-ios.sh --app-only`, reusing their build/sign/verify steps but skipping
@@ -174,6 +286,15 @@ revision and build stamp against this worktree/configuration-specific record.
 `--skip-build` deliberately installs that recorded build, not the current source;
 it prints its identity before installing. Builds predating the record need one
 fresh build, without `--skip-build`. No automatic choice among phones is made.
+
+iOS rejects an in-place upgrade when the signing team's application-identifier
+prefix changes. To keep the old App and its data, use different app/extension
+bundle IDs in ignored `Config/Local.xcconfig`; `PRODUCT_DISPLAY_NAME` can distinguish
+the parallel App. Its pairing and Keychain identity are separate. For ordinary
+settings, `ios --initial-preferences <plist>` imports a UserDefaults dictionary
+after installation and before first launch, refusing an already installed bundle
+ID. Prepare this file without the old `deviceId`, `pairedHosts` or host-pair-specific
+state. A failed import prevents launch and cleanup; it never uninstalls the old App.
 
 Mac replacement targets only `/Applications/CtrlX.app`, without sudo. The current
 user needs write permission there. The installer validates a staged new App, asks
@@ -193,9 +314,10 @@ the signed device App directly with `devicectl`, then launches its bundle ID; it
 does not uninstall, clear App data, or create another host-side App copy.
 
 After a successful install/launch, the existing worktree-local pruning runs even
-with `--skip-build`. Incremental caches remain by default. `--save-space` defers
-compiler-cache removal until install/launch succeeds; failure keeps those caches
-and diagnostic backups. The nested App build defers retention to this outer success
+with `--skip-build`. Mac keeps incremental caches by default. iOS defaults to
+`--save-space`; use `--keep-build-cache` to retain them for repeated device builds.
+Compiler-cache removal waits until install/launch succeeds; failure keeps those
+caches and diagnostic backups. The nested App build defers retention to this outer success
 boundary, so cleanup runs once, after installation and launch.
 Local packaging, formal release, native-browser preparation, package tests,
 installation and worktree cleanup share `.build-local/operation.lock`; a
@@ -253,10 +375,13 @@ Release and Debug packages are retained independently. This also applies to
 formal Mac releases, but never prunes Qcloud or Inbox files.
 
 Command-line packaging disables index generation. After success, local Mac/iOS
-packaging removes only that platform's old `Index.noindex` and duplicate DerivedData
+packaging removes that platform's old `Index.noindex` and duplicate DerivedData
 `SourcePackages` directory (when the shared dependency directory exists).
-By default, build intermediates, compilation/module caches and installable apps
-are kept.
+Mac keeps build intermediates and compilation/module caches by default. iOS
+removes its compilation caches after successful packaging or installation;
+`--keep-build-cache` opts out for repeated device builds. Signed installable apps,
+IPA/DMG files and shared downloads are kept in either case. Mac publication does
+not build an iOS Simulator unless the user explicitly requests iOS validation.
 Do not run concurrent builds or installs against the same DerivedData directory.
 
 Successful packaging also prunes **managed, completed** local verification copies
@@ -290,16 +415,19 @@ below 20 GiB. This is an advisory threshold, not a guarantee or a hard minimum;
 packaging still proceeds and never deletes caches to make room before a build.
 Formal releases also check their temporary build volume.
 
-For low-storage machines, opt in per invocation:
+Mac and package tests keep incremental caches for frequent releases and regression
+runs. iOS device packaging defaults to post-success cache removal for occasional
+IPA builds and phone installs. Control the policy per invocation:
 
 ```bash
 ./scripts/package-local-macos.sh --save-space
-./scripts/package-local-ios.sh --save-space
-./scripts/package-local-ios.sh --configuration Debug --save-space
+./scripts/package-local-ios.sh                         # Default: clear iOS caches after success
+./scripts/package-local-ios.sh --keep-build-cache      # Repeated device builds
+python3 scripts/install-local.py ios --device '<CoreDevice UUID>' --keep-build-cache
 ```
 
 Only after the requested workflow succeeds (verified App, package, or install/launch),
-this mode removes the selected platform's `Build/Intermediates.noindex`, compilation/module caches,
+this policy removes the selected platform's `Build/Intermediates.noindex`, compilation/module caches,
 explicit precompiled SDK modules and SDK stat caches. It keeps `Build/Products`
 (including the signed installable App), IPA/DMG files, shared dependencies,
 Chromium SDKs/runtime and logs. The next build recompiles and will be slower;
@@ -350,7 +478,8 @@ the inherited `TMPDIR` may instead point into a live updater's staging directory
 Only these two kinds of data are eligible:
 
 - Sibling `X/<bundle-id>.code_sign_clone/code_sign_clone.<six characters>`
-  directories for `com.jicezeng.ctrlx.macos`, `com.ctrlx.embedded-acceptance`,
+  directories for `com.gravtice.ctrlx.macos` (also the legacy
+  `com.jicezeng.ctrlx.macos`), `com.ctrlx.embedded-acceptance`,
   `com.ctrlx.extensions-acceptance`, and `com.ctrlx.experimental.browser-probe`.
   A copy must contain exactly one `.app.bundle` with a matching
   `CFBundleIdentifier`. Keep all active copies and the two most recently modified

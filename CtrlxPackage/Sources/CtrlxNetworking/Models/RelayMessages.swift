@@ -98,6 +98,8 @@ public struct SessionStateMessage: Codable, Sendable {
     public let supportsSimulatorClosing: Bool?
     public let supportsAgentHookTrust: Bool?
     public let supportsAgentModelControls: Bool?
+    /// Presence advertises shared shortcut editing. Keys are persistent window IDs in workspaceIdentity.
+    public let agentModelShortcuts: [UUID: AgentModelShortcutPreferences]?
     public let supportsDashboard: Bool?
     public let agentWorkflowVersion: Int?
     public let workflowAgentPluginIDs: [String]?
@@ -168,6 +170,7 @@ public struct SessionStateMessage: Codable, Sendable {
         case supportsSimulatorClosing
         case supportsAgentHookTrust
         case supportsAgentModelControls
+        case agentModelShortcuts
         case supportsDashboard
         case agentWorkflowVersion
         case workflowAgentPluginIDs
@@ -214,6 +217,7 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsSimulatorClosing: Bool? = nil,
         supportsAgentHookTrust: Bool? = nil,
         supportsAgentModelControls: Bool? = nil,
+        agentModelShortcuts: [UUID: AgentModelShortcutPreferences]? = nil,
         supportsDashboard: Bool? = nil,
         agentWorkflowVersion: Int? = nil,
         workflowAgentPluginIDs: [String]? = nil,
@@ -271,6 +275,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsSimulatorClosing = supportsSimulatorClosing
         self.supportsAgentHookTrust = supportsAgentHookTrust
         self.supportsAgentModelControls = supportsAgentModelControls
+        self.agentModelShortcuts = agentModelShortcuts
         self.supportsDashboard = supportsDashboard
         self.agentWorkflowVersion = agentWorkflowVersion
         self.workflowAgentPluginIDs = workflowAgentPluginIDs
@@ -322,6 +327,7 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsSimulatorClosing: supportsSimulatorClosing,
             supportsAgentHookTrust: supportsAgentHookTrust,
             supportsAgentModelControls: supportsAgentModelControls,
+            agentModelShortcuts: agentModelShortcuts,
             supportsDashboard: supportsDashboard,
             agentWorkflowVersion: agentWorkflowVersion,
             workflowAgentPluginIDs: workflowAgentPluginIDs,

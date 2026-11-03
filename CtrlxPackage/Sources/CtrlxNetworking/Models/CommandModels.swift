@@ -1160,6 +1160,7 @@ public struct PasteTerminalText: CommandSpec, Equatable {
 public enum CommandType: Codable, Sendable, Equatable {
     case trustAgentHooks(TrustAgentHooks)
     case agentModelControls(AgentModelControls)
+    case setAgentModelShortcuts(SetAgentModelShortcuts)
     case readDashboard(ReadDashboard)
     /// Check the fixed Host-owned CtrlX app update feed now.
     case checkCtrlXAppUpdate(CheckCtrlXAppUpdate)
@@ -1485,6 +1486,7 @@ public struct CommandResponseMessage: Codable, Sendable {
     public let agentWorkflow: AgentWorkflowResponse?
     public let agentModels: AgentModelSnapshot?
     public let agentModelShortcuts: AgentModelShortcutInitialization?
+    public let agentModelShortcutPreferences: AgentModelShortcutPreferences?
     /// Missing on older Hosts; command success alone does not confirm new approval.
     public let agentHookTrust: AgentHookTrustResult?
     /// Explicit confirmation of a requested refresh; older peers omit this field.
@@ -1515,6 +1517,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         agentWorkflow: AgentWorkflowResponse? = nil,
         agentModels: AgentModelSnapshot? = nil,
         agentModelShortcuts: AgentModelShortcutInitialization? = nil,
+        agentModelShortcutPreferences: AgentModelShortcutPreferences? = nil,
         agentHookTrust: AgentHookTrustResult? = nil,
         agentHooksRefreshed: Bool? = nil,
         codexQuestionsHandled: Bool? = nil
@@ -1540,6 +1543,7 @@ public struct CommandResponseMessage: Codable, Sendable {
         self.agentWorkflow = agentWorkflow
         self.agentModels = agentModels
         self.agentModelShortcuts = agentModelShortcuts
+        self.agentModelShortcutPreferences = agentModelShortcutPreferences
         self.agentHookTrust = agentHookTrust
         self.agentHooksRefreshed = agentHooksRefreshed
         self.codexQuestionsHandled = codexQuestionsHandled

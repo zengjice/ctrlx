@@ -4,8 +4,10 @@ import argparse
 import contextlib
 import fcntl
 import importlib.util
+import json
 import os
 from pathlib import Path
+import plistlib
 import signal
 import subprocess
 import sys
@@ -109,17 +111,36 @@ def replace_mac(source, info, backup, target):
 def install_mac(root, source, info, target=MAC_APP):
     if target.is_symlink() or (target.exists() and not target.is_dir()):
         raise ValueError(f"Refusing non-directory installation target: {target}")
-    if target.exists() and app_info(target, "macos").get("CFBundleIdentifier") != info["CFBundleIdentifier"]:
-        raise ValueError("Installed App has a different bundle ID; refusing to replace it.")
+    if target.exists():
+        previous_id = app_info(target, "macos").get("CFBundleIdentifier")
+        if previous_id != info['CFBundleIdentifier'] and (previous_id, info['CFBundleIdentifier']) != (
+                'com.jicezeng.ctrlx.macos', 'com.gravtice.ctrlx.macos'):
+            raise ValueError("Installed App has a different bundle ID; refusing to replace it.")
     backup = Path(tempfile.mkdtemp(prefix="mac-install-backup.", dir=root / ".build-local"))
     print(f"Rollback backup: {backup}", flush=True)
     with storage.managed_artifact(root, backup):
         replace_mac(source, info, backup, target)
 
 
-def install_ios(app, info, device):
+def install_ios(app, info, device, initial_preferences=None):
+    if initial_preferences is not None:
+        if initial_preferences.is_symlink() or not initial_preferences.is_file():
+            raise ValueError('Initial preferences must be a regular plist file.')
+        if not isinstance(plistlib.loads(initial_preferences.read_bytes()), dict):
+            raise ValueError('Initial preferences must contain a dictionary.')
+        result = run('/usr/bin/xcrun', 'devicectl', 'device', 'info', 'apps', '--device', device,
+                     '--include-all-apps', '--bundle-id', info['CFBundleIdentifier'], '--json-output', '-',
+                     capture_output=True, text=True)
+        if any(item['bundleIdentifier'] == info['CFBundleIdentifier']
+               for item in json.loads(result.stdout)['result']['apps']):
+            raise ValueError('Initial preferences cannot overwrite an installed App; its data was retained.')
     run("/usr/bin/xcrun", "devicectl", "device", "install", "app", "--device", device,
         "--timeout", "180", app)
+    if initial_preferences is not None:
+        run('/usr/bin/xcrun', 'devicectl', 'device', 'copy', 'to', '--device', device,
+            '--source', initial_preferences.resolve(), '--domain-type', 'appDataContainer',
+            '--domain-identifier', info['CFBundleIdentifier'],
+            '--destination', f"Library/Preferences/{info['CFBundleIdentifier']}.plist", '--timeout', '60')
     run("/usr/bin/xcrun", "devicectl", "device", "process", "launch", "--device", device,
         "--timeout", "60", "--terminate-existing", info["CFBundleIdentifier"])
 
@@ -130,10 +151,17 @@ def parser():
     for platform in ("macos", "ios"):
         command = platforms.add_parser(platform)
         command.add_argument("--skip-build", action="store_true", help="Install a recorded, signed App build; no DMG/IPA required")
-        command.add_argument("--save-space", action="store_true", help="Remove compilation caches only after installation/launch succeeds")
+        caches = command.add_mutually_exclusive_group()
+        caches.add_argument("--save-space", action="store_true", help="Remove compilation caches only after installation/launch succeeds (default for iOS)")
+        command.set_defaults(save_space=platform == "ios")
         if platform == "ios":
+            caches.add_argument("--keep-build-cache", dest="save_space", action="store_false", help="Retain compilation caches for repeated iOS builds")
             command.add_argument("--device", required=True, type=uuid.UUID, help="CoreDevice UUID from xcrun devicectl list devices")
             command.add_argument("--configuration", choices=("Release", "Debug"), default="Release")
+            command.add_argument('--signing-mode', choices=('development', 'ad-hoc'),
+                                 help='Override Local.xcconfig signing mode when building; Ad Hoc uses production APNs')
+            command.add_argument('--initial-preferences', type=Path,
+                                 help='Import a UserDefaults plist before first launch; refuses an already installed App')
         else:
             command.set_defaults(configuration="Release", device=None)
     return result
@@ -159,15 +187,33 @@ def main(argv=None):
             command = ["bash", root / "scripts" / f"package-local-{args.platform}.sh", "--app-only"]
             if args.platform == "ios":
                 command += ["--configuration", args.configuration]
+                if args.signing_mode is not None:
+                    command += ['--signing-mode', args.signing_mode]
+                if not args.save_space:
+                    command.append("--keep-build-cache")
             # Keep compile caches on install failure, even with --save-space.
             build.run_child(command, descriptor, defer_cleanup=True, cwd=root)
         app, info = build.built_app(root, args.platform, args.configuration)
+        if args.platform == 'ios':
+            result = run('/usr/bin/security', 'cms', '-D', '-i', app / 'embedded.mobileprovision',
+                         capture_output=True)
+            profile = plistlib.loads(result.stdout)
+            if not profile.get('ProvisionedDevices') or profile.get('ProvisionsAllDevices'):
+                raise ValueError('Local installation requires a development or Ad Hoc device profile.')
+            environment = profile['Entitlements'].get('aps-environment', 'unconfigured')
+            mode = 'development' if profile['Entitlements'].get('get-task-allow') else 'ad-hoc'
+            if args.signing_mode is not None and mode != args.signing_mode:
+                raise ValueError('Recorded App signing mode differs from --signing-mode; rebuild it.')
+            print(f"iOS signing: {mode} · APNs: {environment} · profile: {profile['Name']}", flush=True)
         print(f"Installing {info['CFBundleShortVersionString']} ({info['CFBundleVersion']}) · "
               f"{info['CtrlXBuildStamp']} · {info['CtrlXSourceRevision']}\nApp: {app}", flush=True)
         if args.platform == "macos":
             install_mac(root, app, info)
         else:
-            install_ios(app, info, str(args.device))
+            if args.initial_preferences is None:
+                install_ios(app, info, str(args.device))
+            else:
+                install_ios(app, info, str(args.device), args.initial_preferences)
         print("Installed and launched. Applying worktree-local retention.", flush=True)
         command = [sys.executable, root / "scripts/clean-build.py", "prune",
                    "--platform", "macOS" if args.platform == "macos" else "iOS", "--yes"]

@@ -141,9 +141,9 @@ log_success() { :; }
     def package(self, suffix=".dmg", existing=True):
         target = self.root / f"dist/CtrlX-3.0.58{suffix}"
         stage = self.root / ".build-local/stage" / target.name
-        stage.parent.mkdir(parents=True)
-        target.parent.mkdir()
-        if suffix == ".ipa":
+        stage.parent.mkdir(parents=True, exist_ok=True)
+        target.parent.mkdir(exist_ok=True)
+        if suffix.endswith(".ipa"):
             with zipfile.ZipFile(stage, "w") as archive:
                 archive.writestr("Payload/CtrlX.app/test", "new package")
         else:
@@ -161,12 +161,14 @@ log_success() { :; }
             self.assertEqual(Path(str(target) + extra).read_bytes(), b"old" + extra.encode())
 
     def test_package_replacement_publishes_all_three_files(self):
-        stage, target = self.package(suffix=".ipa")
-        expected = {extra: Path(str(stage) + extra).read_bytes() for extra in ("", ".sha256", ".manifest.json")}
-        build.publish_package(self.root, stage, target)
-        for extra, content in expected.items():
-            self.assertEqual(Path(str(target) + extra).read_bytes(), content)
-        self.assertFalse(list(target.parent.glob(".package-replace.*")))
+        for suffix in (".ipa", "-AdHoc.ipa", "-Debug-AdHoc.ipa"):
+            with self.subTest(suffix=suffix):
+                stage, target = self.package(suffix=suffix)
+                expected = {extra: Path(str(stage) + extra).read_bytes() for extra in ("", ".sha256", ".manifest.json")}
+                build.publish_package(self.root, stage, target)
+                for extra, content in expected.items():
+                    self.assertEqual(Path(str(target) + extra).read_bytes(), content)
+                self.assertFalse(list(target.parent.glob(".package-replace.*")))
 
     def test_bad_integrity_preserves_old_package(self):
         stage, target = self.package()
@@ -176,14 +178,16 @@ log_success() { :; }
         self.assert_old(target)
 
     def test_invalid_ipa_preserves_old_package_even_with_matching_checksum(self):
-        stage, target = self.package(suffix=".ipa")
-        stage.write_bytes(b"not a zip")
-        digest = hashlib.sha256(stage.read_bytes()).hexdigest()
-        Path(str(stage) + ".sha256").write_text(digest)
-        Path(str(stage) + ".manifest.json").write_text(json.dumps({"artifact": target.name, "sha256": digest}))
-        with self.assertRaises(zipfile.BadZipFile):
-            build.publish_package(self.root, stage, target)
-        self.assert_old(target)
+        for suffix in (".ipa", "-AdHoc.ipa", "-Debug-AdHoc.ipa"):
+            with self.subTest(suffix=suffix):
+                stage, target = self.package(suffix=suffix)
+                stage.write_bytes(b"not a zip")
+                digest = hashlib.sha256(stage.read_bytes()).hexdigest()
+                Path(str(stage) + ".sha256").write_text(digest)
+                Path(str(stage) + ".manifest.json").write_text(json.dumps({"artifact": target.name, "sha256": digest}))
+                with self.assertRaises(zipfile.BadZipFile):
+                    build.publish_package(self.root, stage, target)
+                self.assert_old(target)
 
     def test_failure_mid_publication_restores_old_package_and_sidecars(self):
         stage, target = self.package()

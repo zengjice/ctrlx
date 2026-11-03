@@ -7026,6 +7026,7 @@ public struct MainView: View {
             )
             if let captured = try? await tmuxService.captureWorkspacePane(target: paneID) {
                 coordinator.agentModelPreferences.initialize(.init(pane: captured.identity, defaults: shortcutDefaults), hostID: "local")
+                await coordinator.connectedViewerManager?.pushSessionStateToAll()
             }
             let window = await PaneSurfaceRetry.localWindow(
                 containing: paneID,
@@ -7490,6 +7491,7 @@ public struct MainView: View {
                     let captured = try? await tmuxService.captureWorkspacePane(target: created.paneId),
                     captured.identity.serverID == created.serverID {
                     coordinator.agentModelPreferences.initialize(.init(pane: captured.identity, defaults: shortcutDefaults), hostID: "local")
+                    await coordinator.connectedViewerManager?.pushSessionStateToAll()
                 }
 
                 // Find the window containing the new pane and select it.

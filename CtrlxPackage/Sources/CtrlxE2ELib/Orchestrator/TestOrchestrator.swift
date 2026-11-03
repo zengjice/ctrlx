@@ -24,8 +24,8 @@ public actor TestOrchestrator {
     private let baselinesDir: String
     private let tmuxSocket: String?
     private let e2eRunnerPath: String?
-    private let e2eHostBundleId = "com.jicezeng.ctrlx.e2ehost"
-    private let e2eRunnerBundleId = "com.jicezeng.ctrlx.e2erunner.xctrunner"
+    private let e2eHostBundleId = "com.gravtice.ctrlx.e2ehost"
+    private let e2eRunnerBundleId = "com.gravtice.ctrlx.e2erunner.xctrunner"
     private let serverPort = 8_765
     /// Base directory for the per-instance `--ctrlx-state-root`. Each instance
     /// gets its own subdirectory so the plugin runtime's ingress socket + state

@@ -151,7 +151,8 @@ def built_app(root, platform, configuration):
 
 def publish_package(root, staged, artifact):
     """Validate before replacing; retain/restore the old package and all sidecars."""
-    if artifact.parent != root / "dist" or not re.fullmatch(r"CtrlX-\d+\.\d+\.\d+(?:-Debug)?\.(?:dmg|ipa)", artifact.name):
+    if (artifact.parent != root / "dist"
+            or not re.fullmatch(r"CtrlX-\d+\.\d+\.\d+(?:-Debug)?(?:\.dmg|(?:-AdHoc)?\.ipa)", artifact.name)):
         raise ValueError("Expected a versioned CtrlX package in this worktree's dist directory.")
     if staged.name != artifact.name or staged == artifact:
         raise ValueError("Package must be staged separately with the final file name.")

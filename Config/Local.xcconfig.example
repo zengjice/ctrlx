@@ -1,5 +1,12 @@
 // Copy to Local.xcconfig for personal-device packaging. Local.xcconfig is
 // ignored by Git and is the only local iOS identity configuration source.
 CTRLX_IOS_DEVELOPMENT_TEAM = YOUR_TEAM_ID
-CTRLX_IOS_APP_BUNDLE_IDENTIFIER = com.jicezeng.ctrlx
-CTRLX_IOS_NOTIFICATION_EXTENSION_BUNDLE_IDENTIFIER = com.jicezeng.ctrlx.notification-service
+CTRLX_IOS_APP_BUNDLE_IDENTIFIER = com.gravtice.ctrlx
+CTRLX_IOS_NOTIFICATION_EXTENSION_BUNDLE_IDENTIFIER = com.gravtice.ctrlx.notification-service
+
+// development: Apple Development / sandbox APNs (default).
+// ad-hoc: Apple Distribution / production APNs, registered devices only.
+CTRLX_IOS_SIGNING_MODE = development
+
+// Use distinct bundle IDs for a parallel App that preserves an older team's install.
+// PRODUCT_DISPLAY_NAME = CtrlX Preview

@@ -58,12 +58,6 @@
 
             Form {
                 Section("Keyboard") {
-                    Picker("Button Position", selection: $settings.terminalKeyboardControlPosition) {
-                        ForEach(TerminalKeyboardControlPosition.allCases, id: \.self) { position in
-                            Text(position.displayName).tag(position)
-                        }
-                    }
-
                     Toggle("Show Keyboard on Entry", isOn: $settings.showTerminalKeyboardOnEntry)
                         .accessibilityIdentifier("terminal-keyboard-on-entry-toggle")
                 }

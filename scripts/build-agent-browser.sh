@@ -88,11 +88,14 @@ if [[ -z "$AB_IDENTITY" ]]; then
   AB_IDENTITY="$(security find-identity -v -p codesigning | awk '/"Apple Development:/{print $2; exit}')"
 fi
 [[ -n "$AB_IDENTITY" ]] || { echo 'No signing identity for Agent Browser.' >&2; exit 1; }
-# Local validation first. Hardened-runtime/notarization must also be verified
-# before distributing the runtime; the embedding phase rejects archives.
-for ab_component in "$AB_OUTPUT"/Frameworks/*; do
-  codesign --force --deep --sign "$AB_IDENTITY" "$ab_component"
-  codesign --verify --deep --strict "$ab_component"
-done
 bash "$AB_REPO/scripts/prepare-agent-browser-engine.sh"
+if [[ "${CTRLX_MAC_DISTRIBUTION:-}" == developer-id ]]; then
+  python3 "$SCRIPT_DIR/macos_signing.py" sign "$AB_OUTPUT" \
+    --identity "$AB_IDENTITY" --team "${CTRLX_MAC_DEVELOPMENT_TEAM:?Missing distribution team}"
+else
+  for ab_component in "$AB_OUTPUT"/Frameworks/*; do
+    codesign --force --deep --sign "$AB_IDENTITY" "$ab_component"
+    codesign --verify --deep --strict "$ab_component"
+  done
+fi
 printf 'Built: %s\n' "$AB_OUTPUT"

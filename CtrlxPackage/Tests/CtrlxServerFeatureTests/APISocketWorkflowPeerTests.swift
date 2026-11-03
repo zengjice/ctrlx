@@ -29,7 +29,7 @@
             }
         }
 
-        @Test(.timeLimit(.minutes(1)), arguments: ["workflow.finish", "workflow.attachments", "workflow.artifact"])
+        @Test(.timeLimit(.minutes(1)), arguments: ["workflow.finish", "workflow.attachments"])
         func socketSuppliesKernelIdentitySeparatelyFromClaimedJSON(method: String) async throws {
             try await withDependencies {
                 $0[PluginIngressPeerClient.self] = .liveValue

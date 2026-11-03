@@ -5,13 +5,13 @@
 	<!-- App Groups - must match main app for shared data access -->
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.com.jicezeng.ctrlx</string>
+		<string>group.com.gravtice.ctrlx</string>
 	</array>
 
 	<!-- Keychain Sharing - must match main app for E2EE key access -->
 	<key>keychain-access-groups</key>
 	<array>
-		<string>$(AppIdentifierPrefix)com.jicezeng.ctrlx.shared</string>
+		<string>$(AppIdentifierPrefix)com.gravtice.ctrlx.shared</string>
 	</array>
 </dict>
 </plist>

@@ -7,6 +7,64 @@ import Testing
 @testable import CtrlxServerFeature
 
 struct WorkspaceTmuxRecoveryTests {
+    @MainActor
+    @Test("Stopped recovery panes, independent Files and model shortcuts checkpoint together")
+    func stoppedPaneResourceCheckpoint() async throws {
+        try await withTmux { recovery, run, directory in
+            var source = WorkspaceRecoveryStoreTests.snapshot()
+            source.sessions[0].windows[0].panes[0].directory = directory.path
+            source.sessions[0].windows[0].panes[0].unavailableAgentReason = "No saved conversation in this fixture"
+            let restored = try await recovery.restore(source.sessions)
+            try #require(restored.failures.isEmpty)
+            let session = try #require(restored.state.sessions.first)
+            let window = try #require(session.windows.first)
+            let pane = try #require(window.panes.first)
+            var stopped = false
+            for _ in 0..<40 {
+                if try await run(["display-message", "-p", "-t", pane.runtimeID, "#{pane_dead}"]).stdoutString.trimmingCharacters(in: .whitespacesAndNewlines) == "1" {
+                    stopped = true
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(25))
+            }
+            try #require(stopped)
+            #expect(try await run(["display-message", "-p", "-t", pane.runtimeID, "#{pane_current_path}"]).stdoutString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            try await withDependencies {
+                $0[ProcessRunner.self] = .liveValue
+                $0.continuousClock = ContinuousClock()
+            } operation: {
+                let tmux = try TmuxService(tmuxPath: #require(TmuxBinaryLocator.liveValue.find()), socketPath: directory.appendingPathComponent("tmux.sock").path)
+                let panes = await tmux.refreshPanes()
+                try #require(panes.count == 1)
+                #expect(panes[0].currentPath == directory.path)
+                let resources = HostResourceSessionStore(), files = HostFileTabService()
+                resources.update(panes)
+                let resource = try resources.resolve(session.id)
+                let file = try files.open(session: resource)
+                let preferences = AgentModelPreferences(), windows = DetachedTerminalWindows()
+                let identity = try #require(panes[0].workspaceIdentity)
+                preferences.initialize(.init(pane: identity, defaults: .init(efforts: ["low"])), hostID: "local")
+                let key = AgentModelPreferences.Key(hostID: "local", serverID: identity.serverID, windowID: identity.windowID)
+                preferences.tabs[key]?.models.insert("hidden-model")
+                source.serverID = restored.state.serverID
+                source.sessions = restored.state.sessions
+                source.recovery = .init(bootID: source.bootID, pendingAgentPaneIDs: [pane.id])
+                source.resourceSessions = resources.sessions
+                source.independentFileTabs = files.tabs
+                source.scenes = WorkspaceRecoveryPresentationMapper.captureLocal(windows: windows, sessions: source.sessions, mainID: windows.mainSceneID, modelPreferences: preferences, serverID: source.serverID)
+                let journal = directory.appendingPathComponent("Recovery")
+                _ = try await WorkspaceRecoveryStore.diskBacked(directory: journal).save(source)
+                let saved = try #require(try await WorkspaceRecoveryStore.diskBacked(directory: journal).load())
+                #expect(saved.recovery?.pendingAgentPaneIDs == [pane.id])
+                #expect(saved.resourceSessions == [resource] && saved.independentFileTabs == [file])
+                let afterRestart = AgentModelPreferences()
+                WorkspaceRecoveryPresentationMapper.restoreLocal(saved.scenes, live: restored.state, windows: DetachedTerminalWindows(), files: files.tabs, modelPreferences: afterRestart)
+                #expect(afterRestart.tabs[key]?.models == ["hidden-model"])
+                #expect(afterRestart.defaults[key]?.efforts == ["low"])
+            }
+        }
+    }
+
     @Test("Restoration cannot mutate targets replaced after capture or between commands", arguments: [
         "after-snapshot", "before-resize", "before-split", "before-layout", "after-layout",
         "server-identity", "session-identity", "window-identity", "pane-identity",

@@ -109,6 +109,7 @@ struct WorkspaceRecoverySnapshot: Codable, Equatable, Sendable {
                 Set(files.map(\.id)).count == files.count, Set(browsers.map(\.id)).count == browsers.count,
                 Set(presentation.ownedWindowIDs).count == presentation.ownedWindowIDs.count,
                 Set(presentation.ownedWindowIDs).isSubset(of: Set(presentation.windowIDs.values)),
+                Set(presentation.modelShortcuts?.keys.map { $0 } ?? []).isSubset(of: Set(presentation.ownedWindowIDs)),
                 presentation.selectedWindowID.map({ presentation.ownedWindowIDs.contains($0) }) ?? true,
                 presentation.layout.splitRatio.isFinite else {
                 throw WorkspaceRecoveryError("Invalid saved workbench tabs.")
@@ -175,8 +176,10 @@ struct WorkspaceRecoveryPane: Codable, Equatable, Sendable {
     var runtimeID: String
     var directory: String
     var agent: AgentResumeDescriptor?
-    /// Provenance of the last verified descriptor; absent in older snapshots.
+    /// Last verified native identity, even if capturing its invocation failed.
     var agentIdentity: AgentSessionIdentity?
+    /// A confirmed replacement/exit must not revive an older standalone cache entry.
+    var savedAgentIdentityInvalidated: Bool?
     /// A recognized Agent whose conversation could not be verified must never silently
     /// become an auto-launched new conversation at the same directory.
     var unavailableAgentReason: String?
@@ -347,6 +350,7 @@ struct WorkspaceRecoveryPresentation: Codable, Equatable, Sendable {
     var selectedWindowID: UUID?
     var remoteReference: ViewerWorkspaceReference?
     var fileSources: [UUID: ViewerWorkspaceReference]?
+    var modelShortcuts: [UUID: AgentModelPreferences.Snapshot]?
 }
 
 struct WorkspaceRecoveryDraft: Codable, Equatable, Sendable, Identifiable {

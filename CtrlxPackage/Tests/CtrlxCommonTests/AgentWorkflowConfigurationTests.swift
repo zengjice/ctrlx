@@ -124,5 +124,65 @@
             let png = try #require(bitmap.representation(using: .png, properties: [:]))
             try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent("\(name).png"))
         }
+
+        @Test
+        func reviewTemplateConfigurationAndEditorLoadBothParticipants() async throws {
+            _ = NSApplication.shared
+            let hostID = UUID()
+            let instances = ["dev", "review"].enumerated().map { index, name in
+                AgentWorkflowInstance(
+                    hostID: hostID,
+                    pluginID: index == 0 ? "codex" : "claude-code",
+                    processID: Int32(index + 42),
+                    processRuntimeID: "runtime-\(index)",
+                    workspacePane: .init(serverID: "tmux", sessionID: UUID(), windowID: UUID(), paneID: UUID()),
+                    paneID: "%\(index)",
+                    conversationID: "native-\(index)",
+                    displayName: "project · \(name)",
+                    workingDirectory: "/work",
+                    capabilities: .init(maximumInputBytes: 100_000),
+                    readiness: .ready
+                )
+            }
+            var definition = AgentWorkflowDefinition(name: "Develop, review and repair", hostID: hostID, nodes: [], edges: [], entryNodeID: UUID(), initialInput: .init(text: "Implement the task with its supplied image."))
+            AgentWorkflowReviewTemplate.apply(to: &definition, developerID: instances[0].id, reviewerID: instances[1].id)
+            let saved = definition
+            var catalogs = 0
+            let endpoint = AgentWorkflowEndpoint(id: "fixture", name: "Test Host", connected: { true }, supported: { true }) { request in
+                var response = AgentWorkflowResponse(hostID: hostID)
+                switch request.operation {
+                case .definition: response.definition = saved
+                case .catalog:
+                    catalogs += 1
+                    response.instances = .init(items: instances, nextOffset: nil)
+                case .attachments: response.attachments = []
+                default: Issue.record("Unexpected template UI request")
+                }
+                return response
+            }
+            let window = NSWindow(contentRect: CGRect(x: -10_000, y: -10_000, width: 760, height: 1_200), styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            let configuration = NSHostingView(rootView: NavigationStack {
+                AgentWorkflowConfigurationView(endpoint: endpoint, hostID: hostID, definitionID: saved.id, openAgent: { _ in }, createAgent: nil)
+            })
+            window.contentView = configuration
+            window.orderBack(nil)
+            try await wait { catalogs > 0 }
+            if let directory = ProcessInfo.processInfo.environment["CTRLX_WORKFLOW_UI_EVIDENCE"] {
+                try await capture(configuration, directory: directory, name: "steps-configuration")
+            }
+            let editor = NSHostingView(rootView: AgentWorkflowEditor(endpoint: endpoint, definition: saved, isNew: false, createAgent: nil))
+            window.contentView = editor
+            try await wait { catalogs > 1 }
+            if let directory = ProcessInfo.processInfo.environment["CTRLX_WORKFLOW_UI_EVIDENCE"] {
+                try await capture(editor, directory: directory, name: "steps-editor")
+                let preview = NSHostingView(rootView: NavigationStack {
+                    AgentWorkflowInputPreview(definition: saved, node: saved.nodes[1], attachments: [:])
+                })
+                window.contentView = preview
+                try await capture(preview, directory: directory, name: "steps-review-input")
+            }
+        }
     }
 #endif

@@ -7,6 +7,13 @@ import Dependencies
 import Foundation
 
 extension AppCoordinator {
+    func handleSetAgentModelShortcuts(_ request: SetAgentModelShortcuts, paneID: String) async throws -> AgentModelShortcutPreferences {
+        let captured = try await tmuxService.captureWorkspacePane(target: paneID)
+        let value = try agentModelPreferences.update(request, current: captured.identity)
+        await connectedViewerManager?.pushSessionStateToAll()
+        return value
+    }
+
     func newAgentModelShortcuts(pluginID: String, providerID: String?) -> AgentModelShortcuts {
         let data = pluginSettingsData(id: pluginID)
         switch pluginID {

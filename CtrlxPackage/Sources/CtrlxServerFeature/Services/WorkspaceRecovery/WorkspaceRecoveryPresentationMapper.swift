@@ -11,7 +11,7 @@ enum WorkspaceRecoveryPresentationMapper {
         }
     }
 
-    static func captureLocal(windows: DetachedTerminalWindows, sessions: [WorkspaceRecoverySession], mainID: UUID) -> [WorkspaceRecoveryScene] {
+    static func captureLocal(windows: DetachedTerminalWindows, sessions: [WorkspaceRecoverySession], mainID: UUID, modelPreferences: AgentModelPreferences? = nil, serverID: String? = nil) -> [WorkspaceRecoveryScene] {
         let main = scene(
             id: mainID,
             main: true,
@@ -31,7 +31,15 @@ enum WorkspaceRecoveryPresentationMapper {
                 owns: { runtime in workspace.members.contains { $0.windowID == runtime } }
             )
         }
-        return [main] + detached
+        var result = [main] + detached
+        for scene in result.indices {
+            for session in result[scene].sessions.indices {
+                result[scene].sessions[session].modelShortcuts = modelPreferences?.capture(
+                    hostID: "local", serverID: serverID, windowIDs: result[scene].sessions[session].ownedWindowIDs
+                )
+            }
+        }
+        return result
     }
 
     private static func scene(
@@ -110,7 +118,7 @@ enum WorkspaceRecoveryPresentationMapper {
         }
     }
 
-    static func restoreLocal(_ scenes: [WorkspaceRecoveryScene], live: WorkspaceTmuxState, windows: DetachedTerminalWindows, files: [HostFileTab]) {
+    static func restoreLocal(_ scenes: [WorkspaceRecoveryScene], live: WorkspaceTmuxState, windows: DetachedTerminalWindows, files: [HostFileTab], modelPreferences: AgentModelPreferences? = nil) {
         // Reserve detached ownership first; the main scene must not temporarily
         // render a second copy of terminals that belong to another native window.
         for saved in scenes where !saved.isMain {
@@ -137,6 +145,7 @@ enum WorkspaceRecoveryPresentationMapper {
             guard let store = saved.isMain ? windows.mainTabs : windows.workspaces[saved.id]?.tabs else { continue }
             for presentation in saved.sessions where presentation.hostID == nil {
                 guard let session = live.sessions.first(where: { $0.id == presentation.sessionID }) else { continue }
+                modelPreferences?.restore(presentation.modelShortcuts, hostID: "local", serverID: live.serverID, windowIDs: session.windows.map(\.id))
                 let tabs = store.tabs(hostID: nil, session: session.name)
                 var availableLayout = presentation.layout
                 availableLayout.fileTabs.removeAll { saved in saved.browser?.hostOwned == true && !files.contains { $0.id == saved.id } }
@@ -270,6 +279,12 @@ extension WorkspaceRecoveryPresentationMapper {
                     let key = current.windowIDs[oldIndex] == nil ? oldIndex : (current.windowIDs.keys.max() ?? 0) + 1
                     current.windowIDs[key] = id
                     current.ownedWindowIDs.append(id)
+                    if let shortcuts = saved.modelShortcuts?[id] {
+                        if current.modelShortcuts == nil {
+                            current.modelShortcuts = [:]
+                        }
+                        current.modelShortcuts?[id] = shortcuts
+                    }
                     let ref = SavedTabRef.window(index: key)
                     current.layout.tabOrder.append(ref)
                     if saved.layout.rightSide.contains(.window(index: oldIndex)) {

@@ -7,6 +7,206 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.137 — Reliable iOS push token registration
+
+- Keep the complete iOS terminal input toolbar at the bottom. Remove the
+  Top Right layout and its setting; older position preferences no longer hide
+  controls or disable tapping an empty input area to toggle the keyboard.
+  All 29 focused input tests and the Release device build/signing checks pass;
+  the updated toolbar still requires physical-device UI acceptance.
+- Register paired iOS devices with APNs on launch even when automatic Host
+  connection is disabled. Forward tokens when the APNs callback arrives instead
+  of taking a single snapshot after a fixed delay.
+- Retain the latest token while a Relay connection is unavailable, send it after
+  Viewer registration is acknowledged, and re-register it after reconnection.
+  Debug Mode shows notification permission, token availability and registration
+  errors without displaying the token itself.
+- Update the existing `com.gravtice.ctrlx` iOS installation in place. Background
+  delivery requires the Relay's production APNs environment and matching topic.
+  Seven focused token/transport tests, the Release device build and Ad Hoc
+  signing checks pass. The user confirmed a production APNs notification on the
+  locked iPhone with both Viewer connections disconnected and the full encrypted
+  message successfully decrypted.
+
+## 3.0.136 — Gravtice identity migration and production iOS signing
+
+- Move the Mac bundle ID to `com.gravtice.ctrlx.macos`. Before app services
+  initialize, copy and verify the previous Keychain service into
+  `com.gravtice.ctrlx.e2ee` and import the old preferences domain. Retain both
+  sources; conflicts or denied Keychain access stop startup without replacing
+  keys. Identical interrupted copies can resume, and completed migrations do
+  not resurrect credentials subsequently deleted from the new service.
+- Preserve existing Mac configuration and pairing identity during upgrades.
+  Permit only the explicit old-to-new bundle transition in the local installer,
+  retain rollback backups, and update CLI discovery and isolated test App IDs.
+  Migration progress is available in the `identity-migration` system log.
+- Move iOS and its notification extension to `com.gravtice.ctrlx` and
+  `com.gravtice.ctrlx.notification-service`, with shared App/Keychain groups.
+  This is a separate iOS installation: retain the old App, import ordinary
+  preferences before first launch, and pair again. Relay APNs configuration
+  must match the new topic and selected environment; see
+  [migration requirements](RELEASE.md#gravtice-identity-transition).
+- Add explicit Ad Hoc signing with Apple Distribution and production APNs.
+  Before compilation, require matching unexpired profiles, registered devices,
+  capabilities and a common installed signing identity. Verify final signed
+  entitlements and keep Ad Hoc packages separate from development artifacts.
+  TestFlight/App Store upload remains disabled.
+- Validation: all 281 repository script checks, 32 focused Swift migration/update
+  tests and 94 private installer/publisher tests passed. Both previously stale
+  UI test fixtures compile again. Changed Swift files pass formatting checks;
+  formal signing, App/DMG notarization and Gatekeeper checks remain mandatory
+  release gates. iOS device builds are separate from this Mac-only publication.
+
+## 3.0.135 — Developer ID signing and notarized Mac releases
+
+3.0.133 and 3.0.134 remained internal candidates and were not distributed.
+
+- Keep menu-bar attention/quota observation inside its label instead of the
+  App Scene body, reducing unrelated scene updates while preserving initial
+  Dock badges and updates when no Sessions window is open.
+
+- Restore model/effort shortcuts on tmux 3.6a using a guarded single-line native
+  paste when the paste-mode field is unavailable. Preserve foreground process,
+  cursor, size, copy-mode, identity and human-input checks; automatic workflows
+  and hook approval retain their explicit input-mode requirement. Update the
+  Host to receive this compatibility fix.
+- Add a formal Mac release path with Developer ID signatures, secure timestamps
+  and Hardened Runtime checks for every embedded native component. Sign CEF
+  libraries, helpers, the automation engine and the enclosing App in order;
+  grant JIT only to Renderer/GPU helpers and preserve the customized CEF SDK.
+- Require separate accepted notarizations, stapled tickets and Gatekeeper
+  acceptance for the App and DMG before local package replacement or public
+  installer promotion. Retain failed inputs, logs and submission IDs; resume
+  notarization waits without submitting the same input again.
+- Disable S3 transfer acceleration/progress callbacks for notarization uploads
+  after an observed Apple notarytool upload crash, and preserve process status
+  when the tool exits without diagnostics. Allow an archive-only preparation
+  phase so confirmed inputs can continue from a clean release checkout.
+- Build formal archives for Apple Silicon, matching the bundled CEF SDK.
+  Reuse Mac compilation caches for formal archives and keep signing credentials
+  in Keychain. Continue to support explicit local development packages.
+- Retain the original upstream engine hash for development builds. Formally
+  signed engines must carry the fixed upstream hash in their signing identifier
+  and pass strict Developer ID validation against the running CLI's team.
+- Make the isolated browser fixture use its own explicit API socket and wait
+  for the restored page's presentation before testing restart persistence.
+- Validation: 97 repository script tests, 43 CLI tests, focused workflow/model
+  regressions and 118 private publisher/COS/installer
+  tests passed. Native menu-bar label tests passed for local and remote state,
+  including badge updates without invalidating the parent view. A Developer
+  ID-signed isolated App with the updated CLI passed native page actions,
+  multi-session routing, ownership checks, graceful restart, profile persistence
+  and stale-grant rejection without new crash reports. Both browser engines
+  passed the complete managed-engine acceptance; separate native signature
+  probes accepted the pinned build and rejected tampering, unrelated identifiers
+  and forged ad-hoc attestations. Full Swift and iOS
+  regression were not rerun. Formal notarization
+  and final package checks are enforced by the release workflow.
+
+## 3.0.132 — Workflow input checks during terminal redraw
+
+- Avoid pausing workflows when switching tabs briefly moves Codex's cursor
+  during a terminal redraw. Recheck unrecognized input at 100 ms intervals,
+  at most four times, before inspection or submission. Drafts, questions,
+  copy mode, identity changes and cancellation still block sending.
+- Identify the affected Agent and the specific reason when input is blocked:
+  busy, unsent draft, awaiting a response or unverifiable terminal input.
+- Bump the bundled Claude Code plugin to 1.3.17 and Codex plugin to 1.1.16 so
+  installed older plugin caches can be recognized as needing an update.
+- Release validation: focused workflow regressions passed, including bounded
+  redraw retries, recognized input states, cancellation, identity failures and
+  per-Agent pause reasons. All 117 publisher/COS/installer tests, six Swift
+  format checks and both boundary checks passed. Full Swift regression, opt-in
+  native Agent/clipboard probes and live tab-switch acceptance were not rerun;
+  this release builds macOS only.
+
+## 3.0.131 — Workflow history recovery and deletion
+
+- Restore older workflow ledgers that still reference removed Agent output
+  attachments. Migrate schemas 1–3 to schema 4 only after full validation,
+  preserving configurations, answers, native turn records, input images and
+  content outputs. Unfinished runs still pause after restart. Earlier releases
+  cannot read the migrated ledger.
+- Show actual workflow startup or loading errors on local and remote clients
+  instead of incorrectly asking users to upgrade a compatible Host.
+- Add confirmed deletion of completed and ended runs from the shared history
+  list. Delete that run and its handoff history while retaining configurations,
+  Agent tabs and sessions; active and paused runs must be ended first.
+- Release validation: focused workflow regressions passed, including legacy
+  ledger migration, rejected-record preservation, startup recovery and native
+  Mac deletion confirmation. All 117 publisher/COS/installer tests, eight Swift
+  format checks and both boundary checks passed. Full Swift regression, opt-in
+  native Agent/clipboard probes and iOS runtime validation were not rerun;
+  this release builds macOS only.
+
+## 3.0.130 — Workflow steps, images and shared model shortcuts
+
+- Separate workflow participants from execution steps so several serial steps
+  can reuse one Agent conversation. Add an editable development/review/repair
+  template, selectable original inputs and upstream results, and loops that
+  restart from a chosen step.
+- Accept pasted, dropped and selected images in workflow task inputs, with
+  bounded preparation and verified chunk uploads. Require explicit Take over
+  before typing in workflow terminals; Continue revokes pending human writes.
+  Keep reporting requirements in step instructions and injected context concise.
+- Breaking change: remove workflow share and workflow.artifact. Agent outputs
+  carry text; downstream Agents use agreed workspace paths for files. Workflow
+  management now uses protocol version 3; update Host and Viewer together for
+  workflow controls. Existing configuration archives remain readable.
+- Save model shortcut display preferences on the Host and synchronize revisions
+  across clients through existing session updates. Older Hosts retain the local
+  Viewer behavior; hidden choices never change the Agent's active model.
+- Recover missing Agent descriptors from uniquely matching persistent identities
+  only after native history validation, then require explicit Resume. Preserve
+  invalidation across restarts so stale identities cannot revive replaced Agents.
+- Release validation: 475 focused Swift tests and two opt-in native probes
+  passed: Mac image paste/text editing, and a private Codex/Claude review/repair
+  loop using deterministic local replies, real image reads and authorized finish.
+  All 117 publisher/COS/installer tests and both boundary checks passed. SwiftFormat
+  passes for 79 of 81 changed Swift files; the other two retain only verified
+  pre-existing violations. Full Swift regression and complete App UI acceptance
+  were not rerun; this release builds macOS only.
+
+## 3.0.129 — Checkpoints for stopped terminals
+
+- Use stopped tmux panes' launch directory consistently in live discovery and
+  recovery capture. A stopped terminal no longer blocks saving the complete
+  workspace checkpoint, including independent Files tabs and model shortcuts.
+- Prefer an available absolute directory from the session's live panes, then
+  retain a known directory only for the same persistent session identity.
+  Sessions without a reliable directory wait for discovery or saved identity;
+  they never publish an empty path or inherit another same-named session's path.
+- Release validation: all 176 focused Swift tests passed, including a private
+  native tmux stopped-pane checkpoint and reload. All 117 publisher/COS/installer
+  tests, five Swift format checks and both boundary checks passed. Full Swift
+  regression and end-to-end App reboot acceptance were not rerun; macOS only.
+
+## 3.0.128 — Workspace recovery across CLI updates
+
+- Retain the last verified Agent conversation and process evidence through
+  transient discovery failures. Invalidate it when a different conversation or
+  process is confirmed, and explain manual history recovery when no reliable
+  descriptor was saved.
+- Resume through the configured CLI when its old executable was removed by an
+  update, preserving the recorded conversation, configuration root and allowed
+  options. Recheck the selected CLI's version; Codex 0.162.1 and 0.166.0 support
+  verified automatic resume, while other versions require explicit Resume.
+- Restore each Mac Host/Viewer tab's hidden model/effort choices and original
+  defaults with its workspace. Keep preferences through partial recovery and
+  offline Viewer state, without overwriting restored edits or changing the
+  Agent's active model. Older snapshots retain the existing all-buttons behavior.
+- Preserve Mac and test compilation caches for frequent releases. iOS packaging
+  and installation now clear only iOS compilation caches after success; use
+  --keep-build-cache for repeated device builds. Failed workflows keep caches,
+  and installation waits for launch success. Mac-only releases omit iOS
+  Simulator builds unless explicitly requested.
+- Release validation: all 580 selected Swift tests passed on the unchanged
+  filter's rerun. One account timeout test initially exceeded its deadline,
+  then passed both alone and in that rerun. Three isolated Codex CLI 0.166.0
+  resume scenarios, 251 script/publisher/COS/installer tests, 23 Swift format
+  checks and both boundary checks passed. Full Swift regression and end-to-end
+  App reboot/recovery acceptance were not rerun; this release builds macOS only.
+
 ## 3.0.127 — In-session hook refresh and model switch feedback
 
 - Let model and effort shortcuts revalidate live Host state after cached

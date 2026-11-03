@@ -6,7 +6,7 @@ import Testing
 
 @MainActor @Suite("Independent resource sessions")
 struct IndependentResourceTests {
-    func pane(session: UUID, name: String = "work") -> PaneInfo {
+    func pane(session: UUID, name: String = "work", directory: String = "/tmp") -> PaneInfo {
         .init(
             paneId: "%1",
             target: "\(name):0.0",
@@ -15,12 +15,47 @@ struct IndependentResourceTests {
             tmuxWindowId: "@1",
             paneIndex: 0,
             command: "zsh",
-            currentPath: "/tmp",
+            currentPath: directory,
             width: 80,
             height: 24,
             isActive: true,
             workspaceIdentity: .init(serverID: "1:1", sessionID: session, windowID: UUID(), paneID: UUID())
         )
+    }
+
+    @Test("Missing directories retain only the same session's known directory", arguments: ["", "relative"])
+    func missingDirectoryPreservesKnown(directory: String) throws {
+        let store = HostResourceSessionStore(), id = UUID()
+        store.update([pane(session: id, directory: "/original")])
+        store.update([pane(session: id, name: "renamed", directory: directory)])
+        #expect(try store.resolve(id).directory == "/original")
+        #expect(try store.resolve(id).name == "renamed")
+        store.update([pane(session: id, name: "renamed", directory: "/current")])
+        #expect(try store.resolve(id).directory == "/current")
+    }
+
+    @Test("An unavailable first pane does not hide another pane's valid directory", arguments: [false, true])
+    func availablePaneDirectory(reverse: Bool) throws {
+        let store = HostResourceSessionStore(), id = UUID()
+        store.restore([.init(id: id, name: "work", directory: "/previous")])
+        let panes = [pane(session: id, directory: ""), pane(session: id, directory: "/current")]
+        store.update(reverse ? Array(panes.reversed()) : panes)
+        #expect(try store.resolve(id).directory == "/current")
+    }
+
+    @Test("Unknown directories wait for a saved identity and never adopt a same-named session")
+    func unknownDirectoryWaitsForIdentity() throws {
+        let store = HostResourceSessionStore(), old = UUID(), current = UUID()
+        store.update([pane(session: old, directory: "/old")])
+        store.retainResources(in: [old])
+        store.update([pane(session: current, directory: "")])
+        #expect(throws: FileBrowserError.self) { try store.resolve(current) }
+        #expect(try store.resolve(old).name != "work")
+        #expect(try store.resolve(old).directory == "/old")
+        store.restore([.init(id: current, name: "work", directory: "/saved")])
+        store.retainResources(in: [old])
+        #expect(try store.resolve(current).directory == "/saved")
+        #expect(try store.resolve(current).name == "work")
     }
 
     @Test
