@@ -65,6 +65,12 @@ struct AgentWorkflowArchive: Codable, Equatable, Sendable {
     var bridgeEvidence: [AgentWorkflowBridgeEvidence]?
 }
 
+struct AgentWorkflowCatalogChanged: LocalizedError, Sendable {
+    var errorDescription: String? {
+        "An Agent's conversation was confirmed during inspection. Refresh the Agent list."
+    }
+}
+
 /// Owns the single-Host ledger. Each mutation writes a complete atomic snapshot
 /// before exposing it; no await can interleave a check and its committed change.
 /// Terminal writes happen outside this actor, after the writing intent is saved.
@@ -117,14 +123,19 @@ actor AgentWorkflowStore {
             guard
                 observation.processID > 1, !observation.processRuntimeID.isEmpty,
                 !observation.pluginID.isEmpty, !observation.paneID.isEmpty,
-                !observation.conversationID.isEmpty,
+                !observation.conversationID.isEmpty || observation.pluginID == "codex",
                 paneIDs.insert(observation.workspacePane.paneID).inserted,
                 processIDs.insert(observation.processID).inserted else {
                 throw AgentWorkflowError("Cannot register ambiguous or unverified Agent processes.")
             }
         }
-        updated.instances = observations.map { observation in
-            let existing = updated.instances.first { observation.matchesProcess($0) }
+        updated.instances = try observations.map { observation in
+            let existing = previous.instances.first { observation.matchesProcess($0) }
+            // Readiness was checked against the old join key. Reinspect instead
+            // of combining a confirmed conversation with that stale result.
+            if observation.conversationID.isEmpty, let existing, !existing.conversationID.isEmpty {
+                throw AgentWorkflowCatalogChanged()
+            }
             return observation.instance(hostID: hostID, id: existing?.id ?? UUID())
         }
         for index in updated.runs.indices where !updated.runs[index].status.isTerminal {

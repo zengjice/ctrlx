@@ -76,6 +76,22 @@ struct AgentWorkflowBridgeTests {
     }
 
     @Test
+    func onlyAFreshCodexMayDeferMissingHookEvidenceUntilItsFirstReceipt() async throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        var fresh = f.instance
+        fresh.conversationID = ""
+        #expect(try await f.store.bridgeIssue(for: fresh, allowsFirstSubmission: true) == nil)
+        #expect(try await f.store.bridgeIssue(for: fresh) != nil)
+        #expect(try await f.store.bridgeIssue(for: f.instance, allowsFirstSubmission: true) != nil)
+        var claude = AgentWorkflowObservation(fresh)
+        claude.pluginID = "claude-code"
+        #expect(try await f.store.bridgeIssue(for: claude.instance(hostID: fresh.hostID, id: fresh.id), allowsFirstSubmission: true) != nil)
+        #expect(try await f.record(f.event(version: 0)))
+        #expect(try await f.store.bridgeIssue(for: fresh, allowsFirstSubmission: true) != nil)
+    }
+
+    @Test
     func sameProcessMayReuseProtocolSupportButNotAnOldRunsAuthority() async throws {
         let f = try fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }

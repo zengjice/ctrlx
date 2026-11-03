@@ -206,7 +206,7 @@ extension AppCoordinator {
             guard await identities.codexOwnsSession(String(instance.processID), instance.processRuntimeID, instance.conversationID) else {
                 throw AgentWorkflowInspectionUnavailable()
             }
-        } else {
+        } else if !instance.conversationID.isEmpty || instance.pluginID != "codex" {
             guard
                 let native = await identities.load(instance.paneID),
                 native.processID == String(instance.processID), native.runtimeID == instance.processRuntimeID,
@@ -229,7 +229,7 @@ extension AppCoordinator {
         }
         if live.capabilityIssue == nil {
             guard let store = agentWorkflowStore else { throw AgentWorkflowError("Workflow storage is not ready.") }
-            live.capabilityIssue = try await store.bridgeIssue(for: live)
+            live.capabilityIssue = try await store.bridgeIssue(for: live, allowsFirstSubmission: !verifyNativeWriter)
         }
         live.capabilities = live.capabilityIssue == nil ? provider.workflowCapabilities : nil
         if live.capabilityIssue != nil {

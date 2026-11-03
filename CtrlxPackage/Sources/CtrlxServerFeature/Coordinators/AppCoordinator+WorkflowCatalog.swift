@@ -36,34 +36,38 @@ extension AppCoordinator {
             try Task.checkCancellation()
             guard let candidate = detected[paneID] else { continue }
             guard
-                registry.core(candidate.pluginID) is any AgentWorkflowProviding,
+                let provider = registry.core(candidate.pluginID) as? any AgentWorkflowProviding,
                 candidate.processIDs.count == 1,
                 let process = candidate.processIDs.first, let pid = Int32(process),
                 let runtime = identities.runtimeID(process),
-                let pane = windowManager.paneStates[paneID],
-                let native = await identities.load(paneID),
-                native.matches(pane: pane, detected: candidate, runtimeID: runtime),
-                pane.claudeSessionID == native.source.sessionID,
-                let provider = registry.core(candidate.pluginID) as? any AgentWorkflowProviding else {
-                // Temporarily missing native evidence must not assign a new UUID
-                // when the same live process is verified on a later refresh.
-                if
-                    let known = previous.first(where: {
-                        $0.paneID == paneID && $0.pluginID == candidate.pluginID
-                            && candidate.processIDs.contains(String($0.processID))
-                            && identities.runtimeID(String($0.processID)) == $0.processRuntimeID
-                    }) {
+                let pane = windowManager.paneStates[paneID] else { continue }
+            let captured = try await tmuxService.captureWorkspacePane(target: paneID)
+            let known = previous.first {
+                $0.pluginID == candidate.pluginID && $0.processID == pid && $0.processRuntimeID == runtime
+                    && $0.workspacePane.isSamePane(as: captured.identity)
+            }
+            let native = await identities.load(paneID)
+            let conversation: String
+            if
+                let native, native.matches(pane: pane, detected: candidate, runtimeID: runtime),
+                pane.claudeSessionID == native.source.sessionID {
+                conversation = native.source.sessionID
+            } else if candidate.pluginID == "codex", known?.conversationID.isEmpty ?? true {
+                // A fresh Codex process creates its first native record only
+                // after input. Its first authenticated task receipt binds it.
+                conversation = ""
+            } else {
+                if let known {
                     var observation = AgentWorkflowObservation(known)
                     observation.readiness = .unavailable
                     observations.append(observation)
                 }
                 continue
             }
-            let captured = try await tmuxService.captureWorkspacePane(target: paneID)
             let instance = AgentWorkflowInstance(
-                hostID: hostID, pluginID: candidate.pluginID,
+                id: known?.id ?? UUID(), hostID: hostID, pluginID: candidate.pluginID,
                 processID: pid, processRuntimeID: runtime, workspacePane: captured.identity,
-                paneID: paneID, conversationID: native.source.sessionID,
+                paneID: paneID, conversationID: conversation,
                 displayName: "\(pane.sessionName) · \(pane.windowName)",
                 workingDirectory: captured.info.currentPath,
                 capabilities: provider.workflowCapabilities, readiness: .unavailable

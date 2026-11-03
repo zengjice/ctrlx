@@ -23,7 +23,7 @@ struct AgentWorkflowExecution: Sendable {
         for instance in instances {
             guard
                 instance.hostID == definition.hostID, instance.processID > 1,
-                !instance.processRuntimeID.isEmpty, !instance.conversationID.isEmpty,
+                !instance.processRuntimeID.isEmpty, !instance.conversationID.isEmpty || instance.pluginID == "codex",
                 let capabilities = instance.capabilities, capabilities.maximumInputBytes > 0,
                 instance.readiness == .ready else {
                 throw AgentWorkflowError("\(instance.displayName) is not ready for an authenticated workflow task.")

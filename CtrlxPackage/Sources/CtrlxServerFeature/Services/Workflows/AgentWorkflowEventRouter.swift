@@ -150,6 +150,9 @@ actor AgentWorkflowEventRouter {
         guard candidate.instance.matchesBinding(live) else {
             throw AgentWorkflowError("The Agent changed before its submission receipt could be verified.")
         }
+        if let issue = live.capabilityIssue {
+            throw AgentWorkflowError(issue)
+        }
         try await runner.accepted(
             runID: candidate.runID, invocationID: id, instance: live,
             nativeTurnID: candidate.candidate.nativeTurnID, transcriptPath: candidate.candidate.transcriptPath,

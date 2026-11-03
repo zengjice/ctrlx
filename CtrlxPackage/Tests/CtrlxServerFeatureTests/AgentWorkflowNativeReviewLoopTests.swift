@@ -145,6 +145,7 @@ struct AgentWorkflowNativeReviewLoopTests {
     private func runNativeSample() async throws {
         let manifest = try URL(fileURLWithPath: #require(ProcessInfo.processInfo.environment["CTRLX_WORKFLOW_NATIVE_FIXTURE"]))
         let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: manifest))
+        let freshCodex = ProcessInfo.processInfo.environment["CTRLX_WORKFLOW_NATIVE_FRESH"] == "1"
         let root = URL(fileURLWithPath: fixture.root)
         try #require(root.lastPathComponent.hasPrefix("cx-wf-steps-") && fixture.tmux == root.appendingPathComponent("tmux.sock").path)
         try #require(fixture.agents.count == 2)
@@ -172,6 +173,7 @@ struct AgentWorkflowNativeReviewLoopTests {
             guard try processRuntime(instance.processID) == instance.processRuntimeID else { throw AgentWorkflowError("The fixture Agent changed.") }
             let core = try #require(cores[instance.pluginID])
             var live = instance
+            live.capabilityIssue = try await store.bridgeIssue(for: instance, allowsFirstSubmission: true)
             live.readiness = try AgentWorkflowComposerInspection.readiness(capture(fixture, instance), composer: core.workflowComposer)
             if await core.isWorking(instance.conversationID) {
                 live.readiness = .busy
@@ -203,13 +205,15 @@ struct AgentWorkflowNativeReviewLoopTests {
                     throw AgentWorkflowInspectionUnavailable()
                 }
             }
-            return try await inspect(instance)
+            var live = try await inspect(instance)
+            live.capabilityIssue = try await store.bridgeIssue(for: instance)
+            return live
         }
         let router = AgentWorkflowEventRouter(store: store, runner: runner, inspect: inspectConversation)
         let monitor = AgentWorkflowCompletionMonitor(store: store, runner: runner, inspect: inspectConversation, onFailure: { Issue.record(Comment(rawValue: $0)) })
         let dispatcher = PluginEventDispatcher(onWorkflow: { event, peer in
             do {
-                if let instance = instances.first(where: { $0.paneID == event.tmuxPane && $0.conversationID == event.sessionID && $0.pluginID == event.pluginID }) {
+                if let instance = instances.first(where: { $0.paneID == event.tmuxPane && $0.pluginID == event.pluginID }) {
                     guard try processRuntime(instance.processID) == instance.processRuntimeID else { return }
                     try await store.recordBridge(event, processID: instance.processID, runtimeID: instance.processRuntimeID, peer: peer)
                 }
@@ -226,6 +230,10 @@ struct AgentWorkflowNativeReviewLoopTests {
         try await api.start(root.appendingPathComponent("api.sock").path)
         do {
             for instance in instances {
+                if freshCodex, instance.pluginID == "codex" {
+                    #expect(instance.conversationID.isEmpty)
+                    continue
+                }
                 let file = root.appendingPathComponent("warmup-\(instance.id).txt")
                 try Data("Confirm isolated workflow bridge readiness.".utf8).write(to: file)
                 let commands = try AgentWorkflowTmuxSubmission.commands(instance: instance, file: file, capture: capture(fixture, instance))
@@ -235,7 +243,7 @@ struct AgentWorkflowNativeReviewLoopTests {
             for _ in 0..<300 {
                 var current = true
                 for instance in instances {
-                    let bridgeIssue = try await store.bridgeIssue(for: instance)
+                    let bridgeIssue = try await store.bridgeIssue(for: instance, allowsFirstSubmission: true)
                     let live = try await inspect(instance)
                     if bridgeIssue != nil || live.readiness != .ready {
                         current = false
@@ -296,7 +304,7 @@ struct AgentWorkflowNativeReviewLoopTests {
             try #require(latest.status == .completed, Comment(rawValue: latest.issue ?? "Native sample did not finish."))
             #expect(latest.round == 2 && latest.invocations.count == 6)
             #expect(zip(latest.instances, run.instances).allSatisfy { pair in pair.0.matchesProcess(pair.1) })
-            if clearsConversation {
+            if clearsConversation || freshCodex {
                 #expect(latest.instances.first { $0.pluginID == "codex" }?.conversationID != run.instances.first { $0.pluginID == "codex" }?.conversationID)
             } else {
                 #expect(latest.instances == run.instances)

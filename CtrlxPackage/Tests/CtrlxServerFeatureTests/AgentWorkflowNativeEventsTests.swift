@@ -57,7 +57,7 @@ struct AgentWorkflowNativeEventsTests {
         }
     }
 
-    private func fixture() async throws -> Fixture {
+    private func fixture(conversation: String = "conversation") async throws -> Fixture {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-workflow-events-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let transcript = directory.appendingPathComponent("native.jsonl")
@@ -67,7 +67,7 @@ struct AgentWorkflowNativeEventsTests {
         let instance = try #require(await store.reconcile([.init(
             pluginID: "codex", processID: 10, processRuntimeID: "501:10:100:0",
             workspacePane: .init(serverID: "tmux", sessionID: UUID(), windowID: UUID(), paneID: UUID()),
-            paneID: "%1", conversationID: "conversation", displayName: "Developer", workingDirectory: directory.path,
+            paneID: "%1", conversationID: conversation, displayName: "Developer", workingDirectory: directory.path,
             capabilities: .init(maximumInputBytes: 10_000), readiness: .ready
         )]).first)
         let node = AgentWorkflowNode(name: "Developer", agentInstanceID: instance.id)
@@ -98,9 +98,9 @@ struct AgentWorkflowNativeEventsTests {
         )
     }
 
-    @Test(arguments: [false, true])
-    func firstCodexReceiptConfirmsAnInitiallyUnpersistedConversation(uncertain: Bool) async throws {
-        let f = try await fixture()
+    @Test(arguments: [false, true], [false, true])
+    func firstCodexReceiptConfirmsAnInitiallyUnpersistedConversation(uncertain: Bool, fresh: Bool) async throws {
+        let f = try await fixture(conversation: fresh ? "" : "conversation")
         defer { try? FileManager.default.removeItem(at: f.directory) }
         if uncertain {
             try await f.store.update(runID: f.run.id) { try $0.writeUncertain(invocationID: f.invocation.id, reason: "Waiting for receipt") }
@@ -119,11 +119,102 @@ struct AgentWorkflowNativeEventsTests {
         #expect(saved.instances[0].conversationID == current.conversationID)
         #expect(saved.runs[0].invocations[0].nativeTurnID == "new-turn")
         #expect(saved.runs[0].invocations[0].status == .running)
+        if fresh {
+            for readiness in [AgentWorkflowReadiness.ready, .unavailable] {
+                var stale = AgentWorkflowObservation(f.instance)
+                stale.readiness = readiness
+                await #expect(throws: AgentWorkflowCatalogChanged.self) { try await f.store.reconcile([stale]) }
+                #expect(try await f.store.snapshot() == saved)
+            }
+        }
         await #expect(throws: AgentWorkflowError.self) {
             try await f.store.update(runID: f.run.id) {
                 try $0.accept(invocationID: f.invocation.id, instance: f.instance, nativeTurnID: "new-turn")
             }
         }
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test
+    func firstReceiptCannotBypassAnUnsupportedHook() async throws {
+        let f = try await fixture(conversation: "")
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            var live = $0
+            live.capabilityIssue = "Unsupported workflow hook"
+            return live
+        })
+        let event = PluginEvent(pluginID: "codex", sessionID: UUID().uuidString, tmuxPane: "%1", workflow: .init(
+            kind: .submitted, nativeTurnID: "new-turn", transcriptPath: f.transcript.path, text: f.invocation.delivery.input.text
+        ))
+        await #expect(throws: AgentWorkflowError.self) { try await router.receive(event, peer: f.peer) }
+        let run = try await f.store.snapshot().runs[0]
+        #expect(run.instances[0].conversationID.isEmpty)
+        #expect(run.invocations[0].nativeTurnID == nil)
+        await router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true], [AgentWorkflowReadiness.ready, .busy, .unavailable])
+    func firstReceiptDuringCatalogScanRechecksTheConfirmedConversation(uncertain: Bool, readiness: AgentWorkflowReadiness) async throws {
+        let f = try await fixture(conversation: "")
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        if uncertain {
+            try await f.store.update(runID: f.run.id) { try $0.writeUncertain(invocationID: f.invocation.id, reason: "Waiting for receipt") }
+        }
+        let conversation = UUID().uuidString
+        let scans = LockIsolated(0)
+        let receiptSnapshot = LockIsolated<AgentWorkflowArchive?>(nil)
+        let identities = AgentSessionIdentityClient(load: { _ in nil }, recoverySource: { _, _, _ in nil }, save: { _ in false }, runtimeID: { _ in f.instance.processRuntimeID }, codexOwnsSession: { _, _, id in
+            id == conversation
+        }, codexSessionID: { _, _ in conversation })
+        let service = AgentWorkflowService(store: f.store, scan: { previous in
+            var live = try #require(previous.first)
+            let scan = scans.withValue { $0 += 1
+                return $0
+            }
+            if scan == 1 {
+                #expect(live.conversationID.isEmpty)
+                let event = PluginEvent(pluginID: "codex", sessionID: conversation, tmuxPane: "%1", workflow: .init(
+                    kind: .submitted, nativeTurnID: "new-turn", transcriptPath: f.transcript.path, text: f.invocation.delivery.input.text
+                ))
+                _ = try #require(await f.router.receive(event, peer: f.peer))
+                let accepted = try await f.store.snapshot()
+                receiptSnapshot.setValue(accepted)
+            } else {
+                // The stale observation must not change either the catalog or run
+                // before a second scan verifies the now-confirmed conversation.
+                #expect(try await f.store.snapshot() == receiptSnapshot.value)
+                #expect(live.conversationID == conversation)
+            }
+            let allowsInitialBinding = try await f.store.allowsInitialConversationBinding(for: live)
+            #expect(!allowsInitialBinding)
+            live.capabilityIssue = await identities.workflowInputIssue(for: live, allowsInitialBinding: allowsInitialBinding)
+            if scan == 1 {
+                #expect(live.capabilityIssue != nil)
+                live.readiness = .unavailable
+            } else {
+                #expect(live.capabilityIssue == nil)
+                live.readiness = readiness
+                if readiness == .unavailable {
+                    live.capabilityIssue = "Current conversation is unavailable"
+                }
+            }
+            return [.init(live)]
+        }, schedule: { _ in Issue.record("Refreshing the catalog must not submit a task.") })
+        let catalog = try await service.refreshInstancesCatalog()
+        #expect(scans.value == 2)
+        #expect(catalog[0].conversationID == conversation)
+        #expect(catalog[0].readiness == readiness)
+        #expect(catalog[0].capabilityIssue == (readiness == .unavailable ? "Current conversation is unavailable" : nil))
+        let saved = try await f.store.snapshot().runs[0]
+        #expect(saved.status == (uncertain || readiness == .unavailable ? .paused : .running))
+        #expect(saved.instances[0].conversationID == conversation)
+        #expect(saved.invocations.count == 1)
+        #expect(saved.invocations[0].nativeTurnID == "new-turn")
+        #expect(saved.invocations[0].status == .running)
+        await service.shutdown()
         await f.router.shutdown()
         await f.runner.shutdown()
     }
