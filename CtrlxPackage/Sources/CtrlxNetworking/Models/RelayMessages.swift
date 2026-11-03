@@ -459,9 +459,8 @@ public struct PaneState: Codable, Sendable, Identifiable {
     /// The coding-agent session running in this pane, if any
     public var agentSession: AgentSession?
 
-    /// Latest activity time used for session ordering: the maximum of Host
-    /// plugin-state receipt and tmux window activity. Viewing a session does not
-    /// change this. Optional for snapshots from older Hosts.
+    /// Latest Host task-event time used for session ordering, persisted by pane
+    /// identity. Terminal output and viewing do not change it. Optional for older Hosts.
     public var lastAgentActivityAt: Date?
 
     /// Latest Codex question hook identity. Its presence advertises support for

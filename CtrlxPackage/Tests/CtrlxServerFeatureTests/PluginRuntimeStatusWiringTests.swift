@@ -1,10 +1,10 @@
 #if os(macOS)
     import CtrlxCommon
     import CtrlxNetworking
+    import CtrlxPluginProtocol
     import Darwin
     import Dependencies
     import Foundation
-    import CtrlxPluginProtocol
     import Testing
     @testable import CtrlxServerFeature
 
@@ -121,7 +121,9 @@
                 var offset = 0
                 while offset < raw.count {
                     let n = Darwin.write(fd, base + offset, raw.count - offset)
-                    if n <= 0 { return false }
+                    if n <= 0 {
+                        return false
+                    }
                     offset += n
                 }
                 return true
@@ -145,7 +147,9 @@
                         connect(fd, sockPtr, addrLen)
                     }
                 }
-                if result == 0 { return fd }
+                if result == 0 {
+                    return fd
+                }
                 close(fd)
                 usleep(20_000)
             }
@@ -179,7 +183,7 @@
         @Test("Task activity is shared in pane snapshots and survives viewing and metadata refresh")
         func taskActivitySurvivesViewing() throws {
             let windowManager = makeWindowManager()
-            let before = Date()
+            let before = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down))
             windowManager.applyState(
                 pluginID: "echo", sessionID: "s1", state: .doneWorking(summary: nil),
                 tmuxPane: "%7", projectPath: "/tmp/proj"

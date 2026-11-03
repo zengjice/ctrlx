@@ -199,14 +199,18 @@ updates, but verify decoding, capability gating and envelope limits per change.
   any pane's explicit progress wins, otherwise any working agent supplies a bar.
   Within the idle group, the latest task activity sorts first; ties and missing
   timestamps fall back to session-name ordering. Other groups keep name ordering.
-  Activity is the latest of Host plugin-state receipt and tmux window activity,
-  taking the maximum across every pane/window in the session. Tmux activity is
-  the durable fallback across Host restarts; viewing/marking handled does not
-  update it. The optional `PaneState.lastAgentActivityAt` travels
-  in full snapshots, so local Mac and remote Viewers share the same time across
-  Viewer reconnects. All recency sorting uses whole seconds to match the wire's
-  ISO 8601 precision; activity within the same second ties and sorts by name.
-  Older Hosts, and panes with neither plugin nor tmux activity, fall back to
+  Activity is the latest Host receipt of a task state (working, waiting for input,
+  or finished), taking the maximum across every pane in the session. The Host
+  persists it by durable pane UUID in local preferences and restores it when
+  tmux metadata arrives. Session discovery/start, viewing/marking handled, terminal
+  output and redraws do not update it. Events received before pane metadata are
+  persisted once the durable identity arrives. The optional
+  `PaneState.lastAgentActivityAt` travels in full snapshots, so local Mac and
+  remote Viewers share the same time across reconnects. Times use whole seconds
+  to match the wire's ISO 8601 precision; activity within one second ties by name.
+  No terminal-output timestamp is migrated on upgrade. Panes without a saved
+  task event use name ordering until their next event. Older Hosts retain their
+  own timestamp semantics; missing timestamps fall back to
   name ordering. Saved sort-mode choices are
   preserved on Mac, which uses its own sort mode for local and remote sections.
   iOS automatic order always uses this activity-first rule, independent of the

@@ -674,7 +674,7 @@ final public class TmuxService {
     private static var paneListFormat: String {
         // Keep live routing and UI parsing on the same field contract.
         let sep = String(PaneInfo.fieldSeparator)
-        return "#{pane_id}\(sep)#{session_name}\(sep)#{window_index}\(sep)#{pane_index}\(sep)#{pane_current_command}\(sep)\(WorkspaceTmuxRecovery.paneDirectoryFormat)\(sep)#{pane_width}\(sep)#{pane_height}\(sep)#{pane_active}\(sep)#{pane_title}\(sep)#{window_layout}\(sep)#{window_name}\(sep)#{window_active}\(sep)#{\(Self.colorOptionKey)}\(sep)#{\(Self.emojiOptionKey)}\(sep)#{\(Self.descriptionOptionKey)}\(sep)#{window_id}\(sep)#{pid}:#{start_time}\(sep)#{\(WorkspaceTmuxRecovery.sessionKey)}\(sep)#{\(WorkspaceTmuxRecovery.windowKey)}\(sep)#{\(WorkspaceTmuxRecovery.paneKey)}\(sep)#{session_id}\(sep)#{window_activity}"
+        return "#{pane_id}\(sep)#{session_name}\(sep)#{window_index}\(sep)#{pane_index}\(sep)#{pane_current_command}\(sep)\(WorkspaceTmuxRecovery.paneDirectoryFormat)\(sep)#{pane_width}\(sep)#{pane_height}\(sep)#{pane_active}\(sep)#{pane_title}\(sep)#{window_layout}\(sep)#{window_name}\(sep)#{window_active}\(sep)#{\(Self.colorOptionKey)}\(sep)#{\(Self.emojiOptionKey)}\(sep)#{\(Self.descriptionOptionKey)}\(sep)#{window_id}\(sep)#{pid}:#{start_time}\(sep)#{\(WorkspaceTmuxRecovery.sessionKey)}\(sep)#{\(WorkspaceTmuxRecovery.windowKey)}\(sep)#{\(WorkspaceTmuxRecovery.paneKey)}\(sep)#{session_id}"
     }
 
     /// Queries tmux and folds every signal into a single `RefreshOutcome`.
