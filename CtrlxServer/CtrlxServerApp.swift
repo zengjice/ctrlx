@@ -428,6 +428,7 @@ struct TmuxPaneMirrorApp: App {
         DetachedTerminalScene(coordinator: coordinator)
         IPAInstallerScene()
         IPADefaultApplicationPromptScene(settings: coordinator.settings)
+        FullDiskAccessPromptScene()
 
         // Main sessions window - can be shown via menu bar "Show Sessions"
         Window("Sessions", id: "panes") {
@@ -467,6 +468,7 @@ struct TmuxPaneMirrorApp: App {
                         .environment(coordinator.settings)
                 }
                 .suggestDefaultIPAApplication(ipaFiles, isReady: !showingTmuxInstallGuide && !showingLaunchAtLoginPrompt && coordinator.settings.hasAskedAboutLaunchAtLogin)
+                .suggestFullDiskAccess(isReady: !showingTmuxInstallGuide && !showingLaunchAtLoginPrompt && coordinator.settings.hasAskedAboutLaunchAtLogin)
                 .environment(coordinator.settings)
         }
         .defaultLaunchBehavior(

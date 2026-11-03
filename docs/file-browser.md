@@ -1,5 +1,25 @@
 # Host-backed Files tabs
 
+## Mac Host file access
+
+The first foreground Sessions window, after tmux and launch-at-login setup,
+offers a Full Disk Access guide. It opens a separate, non-modal window that does
+not block application quit or remote updates. Closing it skips further automatic
+prompts, including after relaunch; Settings → General → Host File Access always
+offers the guide again. Background launch defers the introduction until CtrlX is
+active, and isolated E2E apps suppress it.
+
+The guide opens System Settings → Privacy & Security → Full Disk Access and can
+reveal the running CtrlX app in Finder so the user can add the correct copy.
+macOS requires the user to enable access; CtrlX does not grant it or automatically
+restart. The stored flag records only that the guide was presented, not that
+permission was granted. There is no supported public Full Disk Access status API;
+CtrlX does not probe private TCC databases or display an inferred authorization
+status. Existing file error handling and macOS folder consent remain effective
+until the user grants access.
+See Apple's [permission guidance](https://developer.apple.com/forums/thread/114452)
+and [Privacy & Security settings](https://support.apple.com/guide/mac-help/mchl211c911f/mac).
+
 ## Independent human resource tabs
 
 Capable Hosts publish `independentResources` separately from the legacy pane

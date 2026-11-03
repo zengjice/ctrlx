@@ -98,6 +98,8 @@ struct GeneralSettingsView: View {
         @Bindable var settings = settings
 
         Form {
+            FullDiskAccessSettingsSection()
+
             Section("Terminal") {
                 Picker("Terminal App", selection: $settings.terminalApp) {
                     ForEach(TerminalApp.allCases, id: \.self) { app in

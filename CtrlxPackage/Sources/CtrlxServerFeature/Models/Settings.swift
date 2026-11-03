@@ -474,6 +474,17 @@ final public class AppSettings {
         didSet { preferences.setBool(askToHandleIPAFiles, Keys.askToHandleIPAFiles) }
     }
 
+    /// Records the introduction, not the macOS permission (which has no public query API).
+    var hasShownFullDiskAccessPrompt = false {
+        didSet { preferences.setBool(hasShownFullDiskAccessPrompt, Keys.hasShownFullDiskAccessPrompt) }
+    }
+
+    func takeFullDiskAccessPrompt(isReady: Bool, isActive: Bool, isTesting: Bool) -> Bool {
+        guard isReady, isActive, !isTesting, !hasShownFullDiskAccessPrompt else { return false }
+        hasShownFullDiskAccessPrompt = true
+        return true
+    }
+
     // MARK: - Initialization
 
     public init() {
@@ -568,6 +579,7 @@ final public class AppSettings {
         self.launchAtLogin = preferences.optionalBool(Keys.launchAtLogin) ?? Defaults.launchAtLogin
         self.hasAskedAboutLaunchAtLogin = preferences.optionalBool(Keys.hasAskedAboutLaunchAtLogin) ?? Defaults.hasAskedAboutLaunchAtLogin
         self.askToHandleIPAFiles = preferences.optionalBool(Keys.askToHandleIPAFiles) ?? true
+        self.hasShownFullDiskAccessPrompt = preferences.optionalBool(Keys.hasShownFullDiskAccessPrompt) ?? false
         self.quickPhrasePairingsLoaded = true
         updateQuickPhraseSyncPairings()
     }
@@ -645,6 +657,7 @@ final public class AppSettings {
         case launchAtLogin
         case hasAskedAboutLaunchAtLogin
         case askToHandleIPAFiles
+        case hasShownFullDiskAccessPrompt
     }
 
     // MARK: - Defaults
