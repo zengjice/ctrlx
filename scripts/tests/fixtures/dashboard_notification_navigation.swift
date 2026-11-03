@@ -20,12 +20,17 @@ private struct SessionStore {
     }
 }
 
+private struct WorkflowNavigation {
+    var isPresented = false
+}
+
 @MainActor
 private struct NavigationProbe: View {
     @State private var sessionsNavigationPath = NavigationPath()
     @State private var currentlyDisplayedPaneId: String?
     @State private var dashboardDestination: SessionNavigation?
     @State private var showingSettings = false
+    @State private var workflowNavigation = WorkflowNavigation()
     private let sessionStore = SessionStore()
 
     var body: some View {

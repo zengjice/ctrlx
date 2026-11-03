@@ -9,13 +9,13 @@
 	<!-- App Groups - enables sharing data between main app and extensions -->
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.com.jicezeng.ctrlx</string>
+		<string>group.com.gravtice.ctrlx</string>
 	</array>
 
 	<!-- Keychain Sharing - enables sharing Keychain items with extensions -->
 	<key>keychain-access-groups</key>
 	<array>
-		<string>$(AppIdentifierPrefix)com.jicezeng.ctrlx.shared</string>
+		<string>$(AppIdentifierPrefix)com.gravtice.ctrlx.shared</string>
 	</array>
 </dict>
 </plist>

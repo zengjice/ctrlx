@@ -4,7 +4,7 @@ import XCTest
 
 enum RunningApp {
     static let springboardBundleId = "com.apple.springboard"
-    static let e2eHostBundleId = "com.jicezeng.ctrlx.e2ehost"
+    static let e2eHostBundleId = "com.gravtice.ctrlx.e2ehost"
 
     /// Get an XCUIApplication for a known bundle ID
     static func getApp(bundleId: String) -> XCUIApplication {

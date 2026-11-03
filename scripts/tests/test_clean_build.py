@@ -770,6 +770,16 @@ class BuildCleanupTests(unittest.TestCase):
         self.assertIn("Preview only", output)
         self.assertTrue(old.exists())
 
+    def test_ad_hoc_retention_keeps_development_and_debug_packages_separate(self):
+        preserved = [self.artifact('3.0.1'), self.artifact('3.0.1-Debug-AdHoc')]
+        old = self.artifact('3.0.1-AdHoc', timestamp=1)
+        previous = self.artifact('3.0.2-AdHoc', timestamp=2)
+        current = self.artifact('3.0.3-AdHoc', timestamp=3)
+        self.clean(storage.artifact_targets(self.root, current))
+        self.assertFalse(old.exists())
+        for path in preserved + [previous, current]:
+            self.assertTrue(path.exists())
+
     def test_unknown_files_and_subdirectories_are_preserved(self):
         sentinels = [self.file(name) for name in (
             "dist/manual-backup.ipa", "dist/plugin.zip", "dist/qcloud-release/3.0.1/report.json",

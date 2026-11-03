@@ -243,6 +243,21 @@ class LocalInstallTests(unittest.TestCase):
             installer.install_mac(self.root, app, dict(self.info, CFBundleIdentifier="other"), self.target)
         self.assertEqual(self.backups(), [])
 
+    def test_mac_identity_transition_allows_only_the_explicit_legacy_to_current_pair(self):
+        app, _ = self.package()
+        self.app(self.target, stamp='old')
+        previous = installer.app_info(self.target, 'macos')
+        previous['CFBundleIdentifier'] = 'com.jicezeng.ctrlx.macos'
+        (self.target / 'Contents/Info.plist').write_bytes(plistlib.dumps(previous))
+        current = dict(self.info, CFBundleIdentifier='com.gravtice.ctrlx.macos')
+        (app / 'Contents/Info.plist').write_bytes(plistlib.dumps(current))
+        installer.install_mac(self.root, app, current, self.target)
+        self.assertEqual(installer.app_info(self.target, 'macos')['CFBundleIdentifier'], current['CFBundleIdentifier'])
+        backup = self.backups()[0] / 'CtrlX.app'
+        self.assertEqual(installer.app_info(backup, 'macos')['CFBundleIdentifier'], previous['CFBundleIdentifier'])
+        with self.assertRaisesRegex(ValueError, 'different bundle ID'):
+            installer.install_mac(self.root, app, previous, self.target)
+
     def test_process_check_ignores_same_named_apps_and_helpers(self):
         executable = self.target / "Contents/MacOS/CtrlX"
         uid = os.getuid()
@@ -290,8 +305,50 @@ class LocalInstallTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     installer.parser().parse_args(arguments)
 
+    def test_ios_initial_preferences_are_copied_to_the_new_bundle_before_launch(self):
+        preferences = self.root / 'old settings.plist'
+        preferences.write_bytes(plistlib.dumps({'terminalFontSize': 14}))
+        installer.run.side_effect = None
+        installer.run.return_value = subprocess.CompletedProcess([], 0, stdout='{"result":{"apps":[]}}')
+        installer.install_ios(Path('app'), self.info, DEVICE, preferences)
+        calls = installer.run.call_args_list
+        self.assertEqual([call.args[3:5] for call in calls],
+                         [('info', 'apps'), ('install', 'app'), ('copy', 'to'), ('process', 'launch')])
+        self.assertIn('com.example.ctrlx', calls[2].args)
+        self.assertIn('Library/Preferences/com.example.ctrlx.plist', calls[2].args)
+        self.assertIn(preferences.resolve(), calls[2].args)
+
+    def test_ios_initial_preferences_never_overwrite_an_existing_apps_data(self):
+        preferences = self.root / 'settings.plist'
+        preferences.write_bytes(plistlib.dumps({'terminalFontSize': 14}))
+        installer.run.side_effect = None
+        installer.run.return_value = subprocess.CompletedProcess(
+            [], 0, stdout='{"result":{"apps":[{"bundleIdentifier":"com.example.ctrlx"}]}}')
+        with self.assertRaisesRegex(ValueError, 'cannot overwrite'):
+            installer.install_ios(Path('app'), self.info, DEVICE, preferences)
+        self.assertEqual(installer.run.call_count, 1)
+
+    def test_ios_failed_initial_preferences_copy_prevents_launch(self):
+        preferences = self.root / 'settings.plist'
+        preferences.write_bytes(plistlib.dumps({'terminalFontSize': 14}))
+        success = subprocess.CompletedProcess([], 0, stdout='{"result":{"apps":[]}}')
+        installer.run.side_effect = [success, success, subprocess.CalledProcessError(1, 'copy')]
+        with self.assertRaises(subprocess.CalledProcessError):
+            installer.install_ios(Path('app'), self.info, DEVICE, preferences)
+        self.assertEqual(installer.run.call_count, 3)
+
+    def test_ios_invalid_initial_preferences_are_rejected_before_installation(self):
+        preferences = self.root / 'settings.plist'
+        preferences.write_bytes(plistlib.dumps(['not a settings dictionary']))
+        with self.assertRaisesRegex(ValueError, 'dictionary'):
+            installer.install_ios(Path('app'), self.info, DEVICE, preferences)
+        installer.run.assert_not_called()
+
     def workflow(self, arguments, install_error=None):
-        installer.run.side_effect = lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, stdout=str(self.root))
+        profile = {'Name': 'Development fixture', 'ProvisionedDevices': ['DEVICE'],
+                   'Entitlements': {'get-task-allow': True, 'aps-environment': 'development'}}
+        installer.run.side_effect = lambda *args, **kwargs: subprocess.CompletedProcess(
+            args, 0, stdout=plistlib.dumps(profile) if args[0] == '/usr/bin/security' else str(self.root))
         with mock.patch.object(installer, "ROOT", self.root), \
                 mock.patch.object(installer.sys, "platform", "darwin"), \
                 mock.patch.object(installer.Path, "home", return_value=self.root / "home"), \
@@ -318,6 +375,19 @@ class LocalInstallTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertIn("prune", calls[-1].args[0])
         self.assertNotIn("--save-space", calls[-1].args[0])
+
+    def test_ios_signing_mode_is_forwarded_and_old_record_does_not_install_as_ad_hoc(self):
+        with self.assertRaisesRegex(ValueError, 'signing mode differs'):
+            self.workflow(['ios', '--device', DEVICE, '--signing-mode', 'ad-hoc'])
+        self.assertIn('--signing-mode', self.children.call_args.args[0])
+        self.assertIn('ad-hoc', self.children.call_args.args[0])
+        self.assertEqual(self.children.call_count, 1)
+        with self.assertRaisesRegex(ValueError, 'signing mode differs'):
+            self.workflow(['ios', '--device', DEVICE, '--signing-mode', 'ad-hoc', '--skip-build'])
+
+    def test_ios_prints_actual_profile_environment_for_recorded_apps(self):
+        self.workflow(['ios', '--device', DEVICE, '--skip-build'])
+        self.assertIn('iOS signing: development · APNs: development', self.output.getvalue())
 
     def test_ios_defaults_to_cleanup_only_after_install_and_launch(self):
         for skip_build in ([], ["--skip-build"]):

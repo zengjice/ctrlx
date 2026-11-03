@@ -1599,6 +1599,12 @@ Current entry points:
 APNs bundle/topic, signing entitlements and environment must match the installed
 build. Do not copy a maintainer's keys into Git. Stale permission/question replies
 must fail the Host's current-request check, not inject input into a newer form.
+The current iOS topic is `com.gravtice.ctrlx`; its App/notification extension share
+`group.com.gravtice.ctrlx` and a team-prefixed `com.gravtice.ctrlx.shared` Keychain
+group. See [identity transition](../RELEASE.md#gravtice-identity-transition) for
+Ad Hoc provisioning and migration from the previous IDs. Mac startup copies and
+verifies the old Keychain service and imports the old preference domain before
+initializing app services; source data is retained and conflicts stop startup.
 
 ## E2EE Encryption
 

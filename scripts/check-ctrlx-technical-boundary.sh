@@ -25,7 +25,7 @@ if rg --files CtrlxPackage/Sources CtrlxPackage/Tests | rg '(^|/)Gallager'; then
   exit 1
 fi
 
-required_patterns='com\.jicezeng\.ctrlx\.macos|com\.jicezeng\.ctrlx\.notification-service|group\.com\.jicezeng\.ctrlx|com\.jicezeng\.ctrlx\.shared|CTRLX_SOCKET|@ctrlx-description|\.ctrlx|ctrlx\.sock|CTRLX_SOURCE_REVISION|app\.get\("source"\)'
+required_patterns='com\.gravtice\.ctrlx\.macos|com\.gravtice\.ctrlx\.notification-service|group\.com\.gravtice\.ctrlx|com\.gravtice\.ctrlx\.shared|CTRLX_SOCKET|@ctrlx-description|\.ctrlx|ctrlx\.sock|CTRLX_SOURCE_REVISION|app\.get\("source"\)'
 for pattern in $(printf '%s' "$required_patterns" | tr '|' ' '); do
   if ! rg -q "$pattern" $runtime_paths; then
     printf 'CtrlX technical boundary check failed: required identity not found: %s\n' "$pattern" >&2

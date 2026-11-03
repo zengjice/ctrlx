@@ -24,7 +24,13 @@ class LocalIOSPackageTests(unittest.TestCase):
         self.script = scripts / SCRIPT.name
         shutil.copyfile(SCRIPT, self.script)
         (self.root / "Config").mkdir()
-        (self.root / "Config" / "Local.xcconfig").touch()
+        (self.root / "Config" / "Local.xcconfig").write_text('CTRLX_IOS_DEVELOPMENT_TEAM = FIXTURETEAM\n')
+        shutil.copyfile(CONFIG_DIR / 'Shared.xcconfig', self.root / 'Config/Shared.xcconfig')
+        # The signing preflight is mocked; this fixture only evaluates shell arguments.
+        (scripts / 'ios_profiles.py').write_text('''import json, pathlib, sys
+output = pathlib.Path(sys.argv[sys.argv.index('--output-directory') + 1])
+(output / 'signing.json').write_text(json.dumps({'identity': 'FIXTURE'}))
+''')
         # Stop at the first build log, after the real argument/path preparation.
         # All writes stay inside the disposable fixture; Xcode is never invoked.
         (scripts / "common.sh").write_text("""
@@ -35,6 +41,9 @@ invalidate_local_app() { :; }
 get_version() { printf '3.0.40'; }
 get_build_stamp() { printf 'test-stamp'; }
 get_source_revision() { printf 'test-revision'; }
+read_xcconfig_value() {
+    sed -n "s/^[[:space:]]*$2[[:space:]]*=[[:space:]]*//p" "$1" | tail -1
+}
 check_build_space() { :; }
 log_warning() { :; }
 log_info() {
@@ -68,6 +77,27 @@ log_info() {
 
     def test_debug_does_not_overwrite_release_artifact(self):
         self.assert_configuration(["--configuration", "Debug"], "Debug", "CtrlX-3.0.40-Debug.ipa")
+
+    def test_ad_hoc_and_debug_ad_hoc_have_separate_artifacts(self):
+        self.assert_configuration(['--signing-mode', 'ad-hoc'], 'Release', 'CtrlX-3.0.40-AdHoc.ipa')
+        self.assert_configuration(['--signing-mode', 'ad-hoc', '--configuration', 'Debug'],
+                                  'Debug', 'CtrlX-3.0.40-Debug-AdHoc.ipa')
+
+    def test_local_signing_mode_can_be_overridden_explicitly(self):
+        with (self.root / 'Config/Local.xcconfig').open('a') as config:
+            config.write('CTRLX_IOS_SIGNING_MODE = ad-hoc\n')
+        self.assert_configuration([], 'Release', 'CtrlX-3.0.40-AdHoc.ipa')
+        self.assert_configuration(['--signing-mode', 'development'], 'Release', 'CtrlX-3.0.40.ipa')
+
+    def test_failed_signing_preflight_never_invalidates_the_previous_app_or_starts_build(self):
+        (self.root / 'scripts/ios_profiles.py').write_text('raise SystemExit(9)\n')
+        common = self.root / 'scripts/common.sh'
+        common.write_text(common.read_text().replace('invalidate_local_app() { :; }',
+                                                    'invalidate_local_app() { echo unexpected-invalidation; }'))
+        result = self.run_script('--signing-mode', 'ad-hoc')
+        self.assertEqual(result.returncode, 9)
+        self.assertNotIn('unexpected-invalidation', result.stdout)
+        self.assertEqual(result.stdout, '')
 
     def test_save_space_keeps_configuration_and_installable_app_path(self):
         for arguments, configuration, artifact in (
@@ -232,9 +262,9 @@ CTRLX_IOS_NOTIFICATION_EXTENSION_BUNDLE_IDENTIFIER = com.example.ctrlx.local.not
         for configuration in ("Debug", "Release"):
             with self.subTest(configuration=configuration):
                 settings = self.build_settings(configuration)
-                self.assertEqual(settings["Ctrlx"]["PRODUCT_BUNDLE_IDENTIFIER"], "com.jicezeng.ctrlx")
+                self.assertEqual(settings["Ctrlx"]["PRODUCT_BUNDLE_IDENTIFIER"], "com.gravtice.ctrlx")
                 self.assertEqual(settings["CtrlxNotificationExtension"]["PRODUCT_BUNDLE_IDENTIFIER"],
-                                 "com.jicezeng.ctrlx.notification-service")
+                                 "com.gravtice.ctrlx.notification-service")
                 for target in settings.values():
                     self.assertEqual(target.get("DEVELOPMENT_TEAM", ""), "")
 

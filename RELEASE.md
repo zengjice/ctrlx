@@ -208,7 +208,73 @@ python3 scripts/install-local.py ios --device '<CoreDevice UUID>' --skip-build
 
 # Repeated Debug device builds: retain compilation caches explicitly.
 python3 scripts/install-local.py ios --device '<CoreDevice UUID>' --configuration Debug --keep-build-cache
+
+# Ad Hoc: Apple Distribution, production APNs, registered devices only.
+python3 scripts/install-local.py ios --device '<CoreDevice UUID>' --signing-mode ad-hoc
+./scripts/package-local-ios.sh --signing-mode ad-hoc
 ```
+
+The iOS signing mode defaults to `CTRLX_IOS_SIGNING_MODE` from ignored
+`Config/Local.xcconfig`, or `development` when omitted. `ad-hoc` requires an
+Apple Distribution identity with its private key and two unexpired Ad Hoc
+profiles: one for the app and one for the notification extension, both including
+the intended iPhone. Keep the existing team, bundle IDs and App/Keychain groups
+when changing signing mode to preserve the App's identity. The installer updates
+in place; it does not uninstall the development-signed App.
+
+Before compilation, signing preflight matches the team, bundle IDs, distribution
+mode, profile expiry, sharing capabilities and a common certificate available
+locally for both profiles. It rejects App Store/enterprise profiles and disjoint
+device lists. The app's `aps-environment` resolves to `production` for Ad Hoc or
+`development` otherwise; both final signatures must match their prepared claims.
+Ad Hoc IPAs use `CtrlX-<version>[-Debug]-AdHoc.ipa`, with independent retention
+from development packages. The installer prints the recorded App's actual
+signing mode and profile APNs environment, including with `--skip-build`; an
+explicit conflicting `--signing-mode` fails before installation.
+
+APNs production is a coordinated client/Relay change. After installing the Ad
+Hoc App, register its token again and configure the Relay with
+`APNS_ENVIRONMENT=production`, keeping `APNS_BUNDLE_ID` equal to the App bundle ID.
+A token from a sandbox registration must not be reused for production. An APNs
+authentication key authorized for Sandbox & Production can be retained. The
+current Relay uses one global APNs environment/topic, so coordinate the cutover
+with its maintainer and other development-signed clients. Changing a Keychain
+service name does not change the APNs topic. These scripts do not deploy or
+reconfigure the Relay. TestFlight/App Store upload remains blocked separately.
+
+### Gravtice identity transition
+
+Current identifiers are `com.gravtice.ctrlx` (iOS),
+`com.gravtice.ctrlx.notification-service` (notification extension), and
+`com.gravtice.ctrlx.macos` (Mac). The iOS App Group is
+`group.com.gravtice.ctrlx`; both targets claim the concrete
+`$(AppIdentifierPrefix)com.gravtice.ctrlx.shared` Keychain group. Register the two
+new iOS App IDs, enable Push Notifications on the main App, associate the App
+Group with both, and generate matching Ad Hoc profiles. The production Relay
+topic must be `APNS_BUNDLE_ID=com.gravtice.ctrlx`. A team-scoped APNs key already
+authorized for both environments can be reused.
+
+Changing the iOS bundle ID creates another App installation. Retain the old App
+and its data, back up its container, and import ordinary settings with
+`--initial-preferences` before the new App's first launch. The new Keychain
+group starts a separate identity: omit old device/pair records and pair again.
+Do not uninstall the old App as part of packaging or migration.
+
+On Mac, the new App copies `com.jicezeng.ctrlx.e2ee` items to
+`com.gravtice.ctrlx.e2ee` before initializing settings or encryption, compares
+every copied value, and retains the source. Identical partial copies can resume;
+conflicts or denied access stop startup without generating replacement keys.
+A completion marker prevents later intentional deletions from being restored
+from the retained source. It then imports the old preferences domain into
+`com.gravtice.ctrlx.macos`, preserving existing new-domain values and the old
+domain. Isolated/E2E Apps skip production migration. App support files retain
+their existing CtrlX locations; macOS permissions and login-item registration
+may need user authorization for the new bundle identity.
+
+The local Mac installer permits only this explicit old-to-new bundle transition
+in addition to same-ID installs, retaining its normal rollback backup. The
+private publisher/installer must target the new ID before publishing the first
+renamed release; keep their pre-transition copies for old release verification.
 
 Default behavior calls `package-local-macos.sh --app-only` /
 `package-local-ios.sh --app-only`, reusing their build/sign/verify steps but skipping
@@ -220,6 +286,15 @@ revision and build stamp against this worktree/configuration-specific record.
 `--skip-build` deliberately installs that recorded build, not the current source;
 it prints its identity before installing. Builds predating the record need one
 fresh build, without `--skip-build`. No automatic choice among phones is made.
+
+iOS rejects an in-place upgrade when the signing team's application-identifier
+prefix changes. To keep the old App and its data, use different app/extension
+bundle IDs in ignored `Config/Local.xcconfig`; `PRODUCT_DISPLAY_NAME` can distinguish
+the parallel App. Its pairing and Keychain identity are separate. For ordinary
+settings, `ios --initial-preferences <plist>` imports a UserDefaults dictionary
+after installation and before first launch, refusing an already installed bundle
+ID. Prepare this file without the old `deviceId`, `pairedHosts` or host-pair-specific
+state. A failed import prevents launch and cleanup; it never uninstalls the old App.
 
 Mac replacement targets only `/Applications/CtrlX.app`, without sudo. The current
 user needs write permission there. The installer validates a staged new App, asks
@@ -403,7 +478,8 @@ the inherited `TMPDIR` may instead point into a live updater's staging directory
 Only these two kinds of data are eligible:
 
 - Sibling `X/<bundle-id>.code_sign_clone/code_sign_clone.<six characters>`
-  directories for `com.jicezeng.ctrlx.macos`, `com.ctrlx.embedded-acceptance`,
+  directories for `com.gravtice.ctrlx.macos` (also the legacy
+  `com.jicezeng.ctrlx.macos`), `com.ctrlx.embedded-acceptance`,
   `com.ctrlx.extensions-acceptance`, and `com.ctrlx.experimental.browser-probe`.
   A copy must contain exactly one `.app.bundle` with a matching
   `CFBundleIdentifier`. Keep all active copies and the two most recently modified

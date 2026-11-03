@@ -36,7 +36,7 @@ import Foundation
     /// assigns the app's default access group (first entry in keychain-access-groups entitlement)
     /// which includes the team ID prefix.
     ///
-    /// - Returns: The full access group (e.g., "ABCDE12345.com.jicezeng.ctrlx.shared"),
+    /// - Returns: The full access group (e.g., "ABCDE12345.com.gravtice.ctrlx.shared"),
     ///   or nil if discovery fails
     public func getSharedKeychainAccessGroup() -> String? {
         accessGroupCache.getOrCompute {
@@ -46,8 +46,8 @@ import Foundation
 
     /// Performs the actual keychain access group discovery.
     private func discoverKeychainAccessGroup() -> String? {
-        let tempAccount = "com.jicezeng.ctrlx.accessgroup.discovery"
-        let tempService = "com.jicezeng.ctrlx.accessgroup"
+        let tempAccount = "com.gravtice.ctrlx.accessgroup.discovery"
+        let tempService = "com.gravtice.ctrlx.accessgroup"
 
         // Query attributes including accessibility to check if migration is needed
         let queryExisting: [String: Any] = [
@@ -141,7 +141,7 @@ import Foundation
     public actor KeyManager {
         // MARK: - Constants
 
-        private let keychainService = "com.jicezeng.ctrlx.e2ee"
+        private let keychainService = "com.gravtice.ctrlx.e2ee"
         private let privateKeyAccount = "private-key"
         private let keyIdAccount = "key-id"
         private let sessionKeyAccountPrefix = "session-key-"

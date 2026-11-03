@@ -8,6 +8,7 @@ import SwiftUI
 @main
 enum CtrlxAppEntry {
     @MainActor static func main() {
+        guard MacIdentityMigration.prepareForLaunch() else { return }
         AgentBrowserService.prepareApplication()
         TmuxPaneMirrorApp.main()
     }

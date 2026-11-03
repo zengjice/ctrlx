@@ -151,22 +151,44 @@ reimplementing its signing steps:
 
 The script can run in any Git worktree. Configure that worktree's ignored
 `Config/Local.xcconfig`; caches and artifacts remain worktree-local. It builds
-both the app and its notification extension, selects matching installed provisioning profiles,
-signs and verifies the result, and defaults to an optimized Release build:
+both the app and its notification extension, selects installed provisioning
+profiles matching the bundle ID and configured team, signs and verifies the result,
+and defaults to an optimized Release build:
 
 - Installable app: `.build-local/DerivedData/iOS/Build/Products/Release-iphoneos/CtrlX.app`
 - IPA: `dist/CtrlX-<version>.ipa`
 - Integrity metadata: adjacent `.sha256` and `.manifest.json` files
 
+Signing resolves the project's declared entitlements to concrete values and
+checks them against each profile; profile wildcard permissions are never copied
+into the App's signature. Missing push or sharing capabilities fail the build.
+Signing preflight runs before compilation and requires unexpired app/extension
+profiles with a common installed signing identity and matching sharing groups.
+
+`CTRLX_IOS_SIGNING_MODE` in ignored `Config/Local.xcconfig` selects `development`
+(default, Apple Development / sandbox APNs) or `ad-hoc` (Apple Distribution /
+production APNs, registered devices only). Both packaging and the iOS installer
+accept `--signing-mode` to override it. Ad Hoc writes `CtrlX-<version>-AdHoc.ipa`
+(or `-Debug-AdHoc.ipa`). The signed App's APNs environment is resolved from the
+selected mode and checked against the profile and final signature; Release
+optimization alone does not select production signing. Coordinate the Relay's
+APNs environment with the installed App; the device must register its new token.
+
 For same-source performance comparisons, `--configuration Debug` produces
 `Debug-iphoneos/CtrlX.app` and a separate `CtrlX-<version>-Debug.ipa`. Install the
 configuration printed by the script; do not reuse the other configuration's app.
 
-This is a local-development IPA. TestFlight/App Store upload remains deliberately
+These are locally distributed device IPAs. TestFlight/App Store upload remains deliberately
 blocked by `scripts/testflight.sh` pending the review documented in `RELEASE.md`.
 
 Both provisioning profiles must belong to the same team. The app bundle ID must
 also match the Relay's APNs configuration for background notifications to work.
+Current iOS IDs use `com.gravtice.ctrlx` and
+`com.gravtice.ctrlx.notification-service`, with App Group
+`group.com.gravtice.ctrlx`. Mac uses `com.gravtice.ctrlx.macos` and migrates the
+previous Keychain service/preferences at startup. See the
+[identity transition](RELEASE.md#gravtice-identity-transition) before changing
+identifiers or installing over an older identity.
 Do not try to install an intermediate app produced with
 `CODE_SIGNING_ALLOWED=NO`; install the script's final, verified `CtrlX.app`.
 
@@ -182,7 +204,7 @@ tests. iOS packaging and installation default to `--save-space`: remove only iOS
 compilation caches after success, retaining signed apps, IPA files and downloads.
 Use `--keep-build-cache` for repeated iOS builds. Failed builds/installs keep caches;
 installation defers cleanup until install and launch succeed. Successful packaging
-retains two packages per platform/configuration and prunes completed artifacts.
+retains two packages per platform/configuration/signing mode and prunes completed artifacts.
 Cache removal makes the next build slower and cannot make room for the current build.
 Packaging warns below 20 GiB free, without deleting caches before building.
 
@@ -229,6 +251,11 @@ prints that build's identity before installation. No DMG/IPA is required. Builds
 without a record need one fresh build. iOS accepts `--configuration Debug`
 (default Release).
 
+For a separately identified iOS App, `--initial-preferences <plist>` copies a
+UserDefaults dictionary before its first launch. It refuses an already installed
+bundle ID. Cross-team parallel installs still need new pairing/Keychain keys;
+omit the old device identity and pairing records from the imported preferences.
+
 Mac installation gracefully quits the exact installed App and retains a managed
 rollback backup; it never force-kills CtrlX or touches tmux sessions. iOS installs
 in place without uninstalling the App or data. Installation locks the destination
@@ -238,7 +265,7 @@ install/launch succeeds. See [installation and rollback](RELEASE.md#local-overwr
 Prefer the CoreDevice UUID from `devicectl list devices` over a device name.
 When discovery or installation fails, first verify that the phone is unlocked,
 trusted, in Developer Mode, and shown as available. For signing errors, verify
-`Config/Local.xcconfig`, the Apple Development certificate, and both installed
+`Config/Local.xcconfig`, the selected Apple Development/Distribution certificate, and both installed
 provisioning profiles before changing build settings.
 
 **Killing Mac app:** Use `osascript -e 'quit app "CtrlX"'` — `pkill`/`killall` don't work reliably.

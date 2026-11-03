@@ -7,6 +7,35 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.136 — Gravtice identity migration and production iOS signing
+
+- Move the Mac bundle ID to `com.gravtice.ctrlx.macos`. Before app services
+  initialize, copy and verify the previous Keychain service into
+  `com.gravtice.ctrlx.e2ee` and import the old preferences domain. Retain both
+  sources; conflicts or denied Keychain access stop startup without replacing
+  keys. Identical interrupted copies can resume, and completed migrations do
+  not resurrect credentials subsequently deleted from the new service.
+- Preserve existing Mac configuration and pairing identity during upgrades.
+  Permit only the explicit old-to-new bundle transition in the local installer,
+  retain rollback backups, and update CLI discovery and isolated test App IDs.
+  Migration progress is available in the `identity-migration` system log.
+- Move iOS and its notification extension to `com.gravtice.ctrlx` and
+  `com.gravtice.ctrlx.notification-service`, with shared App/Keychain groups.
+  This is a separate iOS installation: retain the old App, import ordinary
+  preferences before first launch, and pair again. Relay APNs configuration
+  must match the new topic and selected environment; see
+  [migration requirements](RELEASE.md#gravtice-identity-transition).
+- Add explicit Ad Hoc signing with Apple Distribution and production APNs.
+  Before compilation, require matching unexpired profiles, registered devices,
+  capabilities and a common installed signing identity. Verify final signed
+  entitlements and keep Ad Hoc packages separate from development artifacts.
+  TestFlight/App Store upload remains disabled.
+- Validation: all 281 repository script checks, 32 focused Swift migration/update
+  tests and 94 private installer/publisher tests passed. Both previously stale
+  UI test fixtures compile again. Changed Swift files pass formatting checks;
+  formal signing, App/DMG notarization and Gatekeeper checks remain mandatory
+  release gates. iOS device builds are separate from this Mac-only publication.
+
 ## 3.0.135 — Developer ID signing and notarized Mac releases
 
 3.0.133 and 3.0.134 remained internal candidates and were not distributed.
