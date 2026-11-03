@@ -141,9 +141,10 @@
                 activityReporter?.cancel()
                 activityReporter = nil
                 let failure = error as NSError
-                lastStartFailure = "\(failure.domain) (\(failure.code)): \(failure.localizedDescription)"
+                let failureDescription = "\(failure.domain) (\(failure.code)): \(failure.localizedDescription)"
+                lastStartFailure = failureDescription
                 logger.error(
-                    "Continued processing unavailable; using notifications only: \(lastStartFailure ?? "unknown error", privacy: .public)"
+                    "Continued processing unavailable; using notifications only: \(failureDescription, privacy: .public)"
                 )
                 return false
             }
@@ -356,8 +357,9 @@
         public func noteSceneActive(_ active: Bool) {
             let wasActive = sceneIsActive
             sceneIsActive = active
+            let isMonitoring = monitoringSession != nil
             logger.info(
-                "Scene \(active ? "active" : "background", privacy: .public); globalMonitor=\(monitoringSession != nil, privacy: .public)"
+                "Scene \(active ? "active" : "background", privacy: .public); globalMonitor=\(isMonitoring, privacy: .public)"
             )
 
             if active {
