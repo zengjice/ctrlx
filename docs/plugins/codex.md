@@ -157,12 +157,20 @@ written to recovery snapshots.
 
 ## Manual launch in a CtrlX terminal
 
+CtrlX-managed interactive launches explicitly use `--no-daemon`: New Agent,
+project launch, Fork, workspace recovery, and the shell integration below.
+`ctrlx ios run -- codex` also supplies this flag. Each Codex process owns its
+backend and tool process ancestry, independently of telemetry or hook trust
+settings. This does not restart an existing shared daemon or synchronize its
+cached account with newly launched sessions.
+
 In a newly created **zsh** terminal, type `codex` normally. The Host installs a
 shell-local function after user startup configuration and adds the same ephemeral
 interactive launch defaults as New Agent / project launch (`terminalLaunchArguments`):
-hook trust bypass plus optional OTEL arguments. `resume` and `fork` receive the
-hook flag too; an explicit flag is retained without duplication. Help, version,
-maintenance and noninteractive subcommands receive no automatic hook bypass.
+`--no-daemon`, hook trust bypass, and optional OTEL arguments. `resume` and `fork`
+receive both interactive flags; explicit flags are retained without duplication.
+Help, version, maintenance and noninteractive subcommands receive neither
+automatic hook bypass nor `--no-daemon`.
 `auto_run` only governs UI auto-launch, not an explicit manual command.
 
 - Applies to new sessions, New Terminal and ordinary split panes, including those
@@ -179,12 +187,15 @@ maintenance and noninteractive subcommands receive no automatic hook bypass.
   authentication/session/skill locations are unchanged.
 - Existing `codex` aliases/functions win. `command codex` or an absolute executable
   path explicitly bypasses the function. Such launches must supply their own
-  hook trust/telemetry options if desired. The manual command uses the shell's normal Codex
+  daemon/hook trust/telemetry options if desired. The manual command uses the shell's normal Codex
   executable; Settings' command-path override still governs UI launches.
+- An explicit `--remote ADDR` or `--remote=ADDR` suppresses automatic
+  `--no-daemon`, preserving the user's selected endpoint. These connections
+  remain outside CtrlX's supported process-local agent integration.
 - An explicit `-c`/`--config` for `otel` or `otel.*` bypasses **all** injected
   telemetry defaults, avoiding duplicate UI overrides or mixing a user's exporter
-  with the local endpoint. It does not disable hook trust bypass for interactive
-  launches. Arguments after `--` are treated as positional text.
+  with the local endpoint. It does not disable hook trust bypass or `--no-daemon`
+  for interactive launches. Arguments after `--` are treated as positional text.
 - Unsupported shells (bash/fish/etc.) and explicit custom split commands retain
   their original startup behavior. Use New Agent for instrumented Codex launches
   in those shells. Claude retains its existing environment-variable integration.

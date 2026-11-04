@@ -733,10 +733,10 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
             || value.hasPrefix("model_catalog_json=")
     }
 
-    /// The shell wrapper applies hook trust only to interactive launches and
+    /// The shell wrapper applies process-local defaults only to interactive launches and
     /// preserves explicit telemetry options. Auto-run does not govern manual input.
     public func terminalLaunchArguments() -> [String] {
-        [Self.bypassHookTrustArgument] + terminalTelemetryArguments()
+        [Self.bypassHookTrustArgument, "--no-daemon"] + terminalTelemetryArguments()
     }
 
     public func terminalTelemetryArguments() -> [String] {

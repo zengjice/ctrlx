@@ -12,15 +12,20 @@ struct TerminalAgentShellIntegrationTests {
         "-c", #"otel.exporter.otlp-http.endpoint="http://127.0.0.1:54321/v1/logs""#,
         "-c", #"otel.log_user_prompt=false"#,
         "--dangerously-bypass-hook-trust",
+        "--no-daemon",
     ]
 
-    @Test("Interactive manual launches receive hook trust once", arguments: [
+    @Test("Interactive manual launches receive hook trust and no-daemon once", arguments: [
         "", "resume exact-session", "fork exact-session", "resume --last", "fork login",
         "-m login resume exact-session", "--profile=login fork exact-session",
         "--config 'model=\"login\"' resume exact-session", "'a task with spaces'",
         "-- 'login'", "resume exact-session --dangerously-bypass-hook-trust",
         "--dangerously-bypass-hook-trust resume exact-session",
         "resume exact-session --config 'otel.exporter=\"none\"'",
+        "--no-daemon", "resume exact-session --no-daemon", "--no-daemon fork exact-session",
+        "--no-daemon --dangerously-bypass-hook-trust resume exact-session",
+        "--model --remote", "--profile --remote=unix:///tmp/example.sock",
+        "-- '--remote'", "-- '--remote=unix:///tmp/example.sock'",
     ])
     func manualHookTrust(arguments: String) async throws {
         let fixture = try Fixture()
@@ -28,9 +33,10 @@ struct TerminalAgentShellIntegrationTests {
         let result = try await fixture.run(defaults: defaults, command: "__ctrlx_install_codex; codex \(arguments)")
         #expect(result.isSuccess)
         #expect(result.stdoutString.components(separatedBy: "<--dangerously-bypass-hook-trust>").count == 2)
+        #expect(result.stdoutString.components(separatedBy: "<--no-daemon>").count == 2)
     }
 
-    @Test("Maintenance and noninteractive commands do not receive hook trust", arguments: [
+    @Test("Maintenance and noninteractive commands do not receive interactive defaults", arguments: [
         "--help", "--version", "-h", "-V", "resume --help", "fork --help",
         "login", "login status", "logout", "plugin list", "mcp list", "features list",
         "exec 'a task'", "e 'a task'", "review", "app-server", "remote-control", "agents",
@@ -45,6 +51,33 @@ struct TerminalAgentShellIntegrationTests {
         let result = try await fixture.run(defaults: defaults, command: "__ctrlx_install_codex; codex \(arguments)")
         #expect(result.isSuccess)
         #expect(!result.stdoutString.contains("<--dangerously-bypass-hook-trust>"))
+        #expect(!result.stdoutString.contains("<--no-daemon>"))
+    }
+
+    @Test("Explicit remote endpoints do not receive no-daemon", arguments: [
+        "--remote unix:///tmp/example.sock", "--remote=unix:///tmp/example.sock",
+        "resume exact-session --remote unix:///tmp/example.sock",
+        "--remote unix:///tmp/example.sock -c 'otel.exporter=\"none\"'",
+    ])
+    func explicitRemote(arguments: String) async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let result = try await fixture.run(defaults: defaults, command: "__ctrlx_install_codex; codex \(arguments)")
+        #expect(result.isSuccess)
+        #expect(!result.stdoutString.contains("<--no-daemon>"))
+        #expect(result.stdoutString.contains("unix:///tmp/example.sock"))
+    }
+
+    @Test("No-daemon flag values and literal prompt text do not suppress launch policy", arguments: [
+        "--model --no-daemon resume exact-session",
+        "resume exact-session -- '--no-daemon'",
+    ])
+    func noDaemonTextIsNotAnOption(arguments: String) async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let result = try await fixture.run(defaults: defaults, command: "__ctrlx_install_codex; codex \(arguments)")
+        #expect(result.isSuccess)
+        #expect(result.stdoutString.components(separatedBy: "<--no-daemon>").count == 3)
     }
 
     @Test("Hook flag values and literal prompt text do not suppress launch policy", arguments: [
@@ -59,13 +92,13 @@ struct TerminalAgentShellIntegrationTests {
         #expect(result.stdoutString.components(separatedBy: "<--dangerously-bypass-hook-trust>").count == 3)
     }
 
-    @Test("Hook trust works without telemetry defaults")
+    @Test("Interactive defaults work without telemetry defaults")
     func hookTrustWithoutTelemetry() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let result = try await fixture.run(defaults: ["--dangerously-bypass-hook-trust"], command: "__ctrlx_install_codex; codex resume exact-session")
+        let result = try await fixture.run(defaults: ["--dangerously-bypass-hook-trust", "--no-daemon"], command: "__ctrlx_install_codex; codex resume exact-session")
         #expect(result.isSuccess)
-        #expect(result.stdoutString.contains("<--dangerously-bypass-hook-trust>\n<resume>\n<exact-session>"))
+        #expect(result.stdoutString.contains("<--dangerously-bypass-hook-trust>\n<--no-daemon>\n<resume>\n<exact-session>"))
         #expect(!result.stdoutString.contains("otel"))
     }
 
@@ -103,7 +136,7 @@ struct TerminalAgentShellIntegrationTests {
         #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("SHOULD_NOT_EXIST").path))
     }
 
-    @Test("Explicit OTEL arguments bypass telemetry defaults while retaining hook trust", arguments: [
+    @Test("Explicit OTEL arguments bypass telemetry defaults while retaining interactive defaults", arguments: [
         #"-c 'otel.exporter="none"'"#,
         #"--config 'otel.log_user_prompt=false'"#,
         #"--config='otel.exporter="none"'"#,
@@ -120,6 +153,7 @@ struct TerminalAgentShellIntegrationTests {
         #expect(!result.stdoutString.contains("54321"))
         #expect(result.stdoutString.contains("otel"))
         #expect(result.stdoutString.components(separatedBy: "<--dangerously-bypass-hook-trust>").count == 2)
+        #expect(result.stdoutString.components(separatedBy: "<--no-daemon>").count == 2)
     }
 
     @Test("UI-supplied defaults appear exactly once")
@@ -132,6 +166,7 @@ struct TerminalAgentShellIntegrationTests {
         #expect(result.stdoutString.components(separatedBy: "54321").count == 2)
         #expect(result.stdoutString.components(separatedBy: "<-c>").count == 3)
         #expect(result.stdoutString.components(separatedBy: "<--dangerously-bypass-hook-trust>").count == 2)
+        #expect(result.stdoutString.components(separatedBy: "<--no-daemon>").count == 2)
     }
 
     @Test("Fork config overrides survive rc, preserve shell commands/telemetry and do not leak into the prompt", arguments: [
@@ -351,7 +386,7 @@ struct TerminalAgentShellIntegrationTests {
                 let tmux = TmuxService(tmuxPath: binary, socketPath: socket)
                 tmux.zdotDirOverride = fixture.dotfiles.path
                 let original = try await tmux.createSession(baseName: "shell-test", width: 200, height: 32)
-                tmux.terminalCodexArguments = { telemetry ? defaults : ["--dangerously-bypass-hook-trust"] }
+                tmux.terminalCodexArguments = { telemetry ? defaults : ["--dangerously-bypass-hook-trust", "--no-daemon"] }
                 let pane = if viewerRequest {
                     // The same Host handler used by iOS and Mac Viewer. No
                     // agent ID, exporter endpoint or startup keystrokes in the request.
@@ -380,10 +415,12 @@ struct TerminalAgentShellIntegrationTests {
                 }
                 #expect(screen.contains("<\(defaults[1])>") == telemetry)
                 #expect(screen.contains("<--dangerously-bypass-hook-trust>"))
+                #expect(screen.contains("<--no-daemon>"))
                 #expect(screen.contains("<resume>"))
                 #expect(screen.contains("<--last>"))
                 let originalScreen = try await tmux.capturePaneText(original.paneId)
                 #expect(!originalScreen.contains("54321"))
+                #expect(!originalScreen.contains("<--no-daemon>"))
             }
         } catch {
             _ = try? await runner.run(binary, ["-S", socket, "kill-server"], nil, nil)

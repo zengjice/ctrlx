@@ -23,10 +23,10 @@ struct CodexPluginCoreTests {
         }
     }
 
-    @Test("Native recovery preserves options and adds hook trust bypass once, excluding prompts, images and old telemetry", arguments: [false, true])
-    func nativeResumeInvocation(includesHookBypass: Bool) async throws {
+    @Test("Native recovery preserves options and adds interactive defaults once, excluding prompts, images and old telemetry", arguments: [false, true], [false, true])
+    func nativeResumeInvocation(includesHookBypass: Bool, includesNoDaemon: Bool) async throws {
         let id = UUID().uuidString
-        let hookArguments = includesHookBypass ? ["--dangerously-bypass-hook-trust"] : []
+        let interactiveArguments = (includesHookBypass ? ["--dangerously-bypass-hook-trust"] : []) + (includesNoDaemon ? ["--no-daemon"] : [])
         try await withDependencies {
             $0[AgentForkHistoryClient.self].root = { _, roots, _ in
                 #expect(roots == ["/original/account"])
@@ -34,16 +34,17 @@ struct CodexPluginCoreTests {
             }
         } operation: {
             let core = makeCore()
-            let invocation = AgentResumeInvocation(executable: "/tools/codex", arguments: ["resume", "old-id", "secret prompt", "-p", "work", "-s", "read-only", "-a", "on-request", "-c", "model_reasoning_effort=high", "-c", "otel.log_user_prompt=false", "--image", "/secret/image.png"] + hookArguments, configurationRoots: ["CODEX_HOME": "/original/account"], version: "fixture-version")
+            let invocation = AgentResumeInvocation(executable: "/tools/codex", arguments: ["resume", "old-id", "secret prompt", "-p", "work", "-s", "read-only", "-a", "on-request", "-c", "model_reasoning_effort=high", "-c", "otel.log_user_prompt=false", "--image", "/secret/image.png"] + interactiveArguments, configurationRoots: ["CODEX_HOME": "/original/account"], version: "fixture-version")
             let descriptor = try await core.recoveryDescriptor(sessionID: id, projectPath: "/project", invocation: invocation)
-            #expect(descriptor.arguments == ["--profile", "work", "--sandbox", "read-only", "--ask-for-approval", "on-request", "--config", "model_reasoning_effort=high"] + hookArguments)
+            #expect(descriptor.arguments == ["--profile", "work", "--sandbox", "read-only", "--ask-for-approval", "on-request", "--config", "model_reasoning_effort=high"] + interactiveArguments)
             #expect(descriptor.automaticResumeUnavailableReason != nil)
             let encoded = try String(decoding: JSONEncoder().encode(descriptor), as: UTF8.self)
             #expect(!encoded.contains("secret") && !encoded.contains("old-id") && !encoded.contains("otel"))
             let launch = try await core.commandForResume(descriptor)
             #expect(launch.command.command == "/tools/codex")
-            #expect(launch.command.args == ["resume", id, "-C", "/project"] + descriptor.arguments + (includesHookBypass ? [] : ["--dangerously-bypass-hook-trust"]) + ["--no-daemon"])
+            #expect(launch.command.args == ["resume", id, "-C", "/project"] + descriptor.arguments + (includesHookBypass ? [] : ["--dangerously-bypass-hook-trust"]) + (includesNoDaemon ? [] : ["--no-daemon"]))
             #expect(launch.command.args.filter { $0 == "--dangerously-bypass-hook-trust" }.count == 1)
+            #expect(launch.command.args.filter { $0 == "--no-daemon" }.count == 1)
             await #expect(throws: AgentResumeConfigurationError.self) {
                 try await core.recoveryDescriptor(sessionID: id, projectPath: "/project", invocation: .init(executable: "/tools/codex", arguments: ["--remote", "unix:///private/agent.sock"], configurationRoots: ["CODEX_HOME": "/original/account"]))
             }
@@ -100,11 +101,12 @@ struct CodexPluginCoreTests {
             #expect(Array(command.args.prefix(4)) == ["fork", id, "-C", "/Host/new repo"])
             #expect(command.args.contains("otel.log_user_prompt=false"))
             #expect(command.args.contains("--dangerously-bypass-hook-trust"))
+            #expect(command.args.filter { $0 == "--no-daemon" }.count == 1)
             #expect(command.env == ["CODEX_HOME": "/Host/custom codex"])
             #expect(fork.unsetEnvironment.isEmpty)
             _ = try await core.applySettings(JSONEncoder().encode(CodexSettings(autoRun: false, exportTelemetry: false)))
             let withoutTelemetry = try await core.commandForFork(sessionID: id, projectPath: "/Host/new repo")
-            #expect(withoutTelemetry.command.args == ["fork", id, "-C", "/Host/new repo", "--dangerously-bypass-hook-trust"])
+            #expect(withoutTelemetry.command.args == ["fork", id, "-C", "/Host/new repo", "--dangerously-bypass-hook-trust", "--no-daemon"])
             await #expect(throws: AgentForkError.self) { try await core.commandForFork(sessionID: "--last", projectPath: "/repo") }
             await core.shutdown()
         }
@@ -205,6 +207,7 @@ struct CodexPluginCoreTests {
                 "-c", catalogArgument(environment: environment, providerID: profile.id),
                 "--model", "custom-model",
                 "--dangerously-bypass-hook-trust",
+                "--no-daemon",
             ])
         }
     }
@@ -268,7 +271,7 @@ struct CodexPluginCoreTests {
             #expect(messages["instructions_template"] as? String == "fixture instructions")
 
             let official = try #require(try await core.commandForLaunch(projectPath: "/repo", providerID: CodexSettings.builtInProviderID))
-            #expect(official.args == ["-c", #"model_provider="openai""#, "--dangerously-bypass-hook-trust"])
+            #expect(official.args == ["-c", #"model_provider="openai""#, "--dangerously-bypass-hook-trust", "--no-daemon"])
             #expect(official.env == [AgentProviderEnvironment.markerKey: CodexSettings.builtInProviderID])
         }
     }
@@ -435,6 +438,7 @@ struct CodexPluginCoreTests {
         #expect(args.contains(#"otel.exporter.otlp-http.endpoint="http://127.0.0.1:4318/v1/logs""#))
         #expect(args.contains(#"otel.log_user_prompt=false"#))
         #expect(args.contains("--dangerously-bypass-hook-trust"))
+        #expect(args.filter { $0 == "--no-daemon" }.count == 1)
     }
 
     @Test("commandForLaunch omits otel overrides when exportTelemetry is off")
@@ -451,7 +455,7 @@ struct CodexPluginCoreTests {
 
         let launch = await core.commandForLaunch(projectPath: "/Users/test/Proj")
         #expect(launch?.command == "codex")
-        #expect(launch?.args == ["--dangerously-bypass-hook-trust"])
+        #expect(launch?.args == ["--dangerously-bypass-hook-trust", "--no-daemon"])
     }
 
     @Test("commandForLaunch omits otel overrides when no receiver endpoint is available")
@@ -462,7 +466,7 @@ struct CodexPluginCoreTests {
         try await core.initialize(makeEnv(settings: settings), host: host) // no endpoint
 
         let launch = await core.commandForLaunch(projectPath: "/Users/test/Proj")
-        #expect(launch?.args == ["--dangerously-bypass-hook-trust"])
+        #expect(launch?.args == ["--dangerously-bypass-hook-trust", "--no-daemon"])
     }
 
     @Test("commandForLaunch declines when autoRun is off")
@@ -478,7 +482,7 @@ struct CodexPluginCoreTests {
         #expect(launch == nil)
     }
 
-    @Test("Manual launch shares UI defaults; hook trust is independent of Auto-run and telemetry")
+    @Test("Manual launch shares UI defaults; process-local execution and hook trust are independent of Auto-run and telemetry")
     func terminalTelemetry() async throws {
         let core = makeCore()
         let endpoint = URL(string: "http://127.0.0.1:54321")
@@ -490,7 +494,7 @@ struct CodexPluginCoreTests {
         #expect(await core.terminalLaunchArguments() == automatic?.args)
         _ = try await core.applySettings(JSONEncoder().encode(CodexSettings(exportTelemetry: false)))
         #expect(await core.terminalTelemetryArguments().isEmpty)
-        #expect(await core.terminalLaunchArguments() == ["--dangerously-bypass-hook-trust"])
+        #expect(await core.terminalLaunchArguments() == ["--dangerously-bypass-hook-trust", "--no-daemon"])
         await core.shutdown()
     }
 

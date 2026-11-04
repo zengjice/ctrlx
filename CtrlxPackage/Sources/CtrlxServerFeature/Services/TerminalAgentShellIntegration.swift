@@ -45,6 +45,7 @@ enum TerminalAgentShellIntegration {
                         local ctrlx_arg ctrlx_key ctrlx_previous=''
                         local ctrlx_skip_value=0 ctrlx_positional=0 ctrlx_interactive=1
                         local ctrlx_hook_supplied=0 ctrlx_otel_supplied=0
+                        local ctrlx_no_daemon_supplied=0 ctrlx_remote_supplied=0
                         for ctrlx_arg in "$@"; do
                             [[ "$ctrlx_arg" == -- ]] && break
                             ctrlx_key=''
@@ -69,8 +70,11 @@ enum TerminalAgentShellIntegration {
                             else
                                 case "$ctrlx_arg" in
                                     --dangerously-bypass-hook-trust) ctrlx_hook_supplied=1 ;;
+                                    --no-daemon) ctrlx_no_daemon_supplied=1 ;;
+                                    --remote) ctrlx_remote_supplied=1; ctrlx_skip_value=1 ;;
+                                    --remote=*) ctrlx_remote_supplied=1 ;;
                                     -h|--help|-V|--version) ctrlx_interactive=0 ;;
-                                    -c|--config|-m|--model|-p|--profile|-s|--sandbox|-a|--ask-for-approval|-C|--cd|-i|--image|--add-dir|--local-provider|--enable|--disable|--remote|--remote-auth-token-env)
+                                    -c|--config|-m|--model|-p|--profile|-s|--sandbox|-a|--ask-for-approval|-C|--cd|-i|--image|--add-dir|--local-provider|--enable|--disable|--remote-auth-token-env)
                                         ctrlx_skip_value=1 ;;
                                     -*) ;;
                                     *)
@@ -86,12 +90,15 @@ enum TerminalAgentShellIntegration {
                             ctrlx_previous="$ctrlx_arg"
                         done
                         # Explicit OTEL settings replace telemetry defaults, but
-                        # do not opt out of the independent hook launch policy.
+                        # do not opt out of the interactive launch policy.
                         if (( ctrlx_otel_supplied )); then
-                            ctrlx_defaults=("${(@M)ctrlx_defaults:#--dangerously-bypass-hook-trust}")
+                            ctrlx_defaults=("${(@M)ctrlx_defaults:#(--dangerously-bypass-hook-trust|--no-daemon)}")
                         fi
                         if (( ! ctrlx_interactive || ctrlx_hook_supplied )); then
                             ctrlx_defaults=("${(@)ctrlx_defaults:#--dangerously-bypass-hook-trust}")
+                        fi
+                        if (( ! ctrlx_interactive || ctrlx_no_daemon_supplied || ctrlx_remote_supplied )); then
+                            ctrlx_defaults=("${(@)ctrlx_defaults:#--no-daemon}")
                         fi
                         command codex "${ctrlx_defaults[@]}" "$@"
                     }
