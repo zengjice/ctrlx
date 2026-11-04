@@ -217,6 +217,7 @@ struct AgentWorkflowExecution: Sendable {
                     && [.writing, .awaitingAcceptance, .running, .uncertain].contains($0.status)
             }) else { throw AgentWorkflowError("Another step is still using this Agent. Resolve it before sending more input.") }
         run.invocations[index].status = .writing
+        run.invocations[index].allowsQuestionInput = nil
         changed()
     }
 
@@ -350,6 +351,17 @@ struct AgentWorkflowExecution: Sendable {
             run.status = .paused
             run.issue = reason
         }
+        changed()
+    }
+
+    mutating func allowQuestionInput(instance: AgentWorkflowInstance) {
+        guard
+            !run.status.isTerminal,
+            run.instances.contains(where: { $0.matchesBinding(instance) }) || canBindFirstConversation(instance),
+            let index = run.invocations.firstIndex(where: {
+                $0.delivery.toAgentID == instance.id && [.writing, .awaitingAcceptance, .running].contains($0.status)
+            }), run.invocations[index].allowsQuestionInput != true else { return }
+        run.invocations[index].allowsQuestionInput = true
         changed()
     }
 

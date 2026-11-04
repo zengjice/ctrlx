@@ -780,9 +780,7 @@
                         projectPath: projectPath,
                         permissionMode: permissionMode
                     )
-                    if state.openForm != nil, let tmuxPane {
-                        await self?.pauseAgentWorkflows(paneID: tmuxPane, reason: "The Agent needs a human response. Resolve it before continuing the workflow.")
-                    }
+                    await self?.handleAgentWorkflowState(state, paneID: tmuxPane)
                     // (handlePluginState also forwards agent_session_status to iOS;
                     // the open form rides AgentSession.state so it's in the snapshot.)
                 },

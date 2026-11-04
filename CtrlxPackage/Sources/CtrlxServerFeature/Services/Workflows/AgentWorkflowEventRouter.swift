@@ -56,7 +56,13 @@ actor AgentWorkflowEventRouter {
     }
 
     func receive(_ event: PluginEvent, peer: PluginIngressPeer) async throws -> AgentWorkflowTurnContext? {
-        guard !stopped, let native = event.workflow else { return nil }
+        guard !stopped else { return nil }
+        if case .awaitingReplies = event.state {
+            try await store.allowQuestionInput(event, peer: peer)
+        } else if event.notification?.isQuestion == true {
+            try await store.allowQuestionInput(event, peer: peer)
+        }
+        guard let native = event.workflow else { return nil }
         let archive = try await store.snapshot()
         guard
             !stopped,
@@ -110,6 +116,25 @@ actor AgentWorkflowEventRouter {
                         pending.removeValue(forKey: invocation.id)?.retry?.cancel()
                         throw error
                     }
+                }
+                // A human answer may arrive as input in the same native turn.
+                // Use the original receipt even while its identity is being
+                // verified; an answer must never replace or confirm it.
+                if
+                    invocations.contains(where: { invocation in
+                        guard invocation.allowsQuestionInput == true else { return false }
+                        if invocation.status == .running {
+                            return run.instances.contains { $0.matchesBinding(instance) }
+                                && invocation.nativeTurnID == native.nativeTurnID && invocation.nativeTranscriptPath == native.transcriptPath
+                        }
+                        guard
+                            [.writing, .awaitingAcceptance].contains(invocation.status),
+                            let receipt = pending[invocation.id]?.context else { return false }
+                        return receipt.instance.matchesBinding(instance)
+                            && receipt.candidate.nativeTurnID == native.nativeTurnID
+                            && receipt.candidate.transcriptPath == native.transcriptPath
+                    }) {
+                    continue
                 }
                 if !run.status.isTerminal {
                     try await store.update(runID: run.id) {

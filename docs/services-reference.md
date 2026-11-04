@@ -1566,6 +1566,13 @@ Agent. This uses the existing wildcard hook bridge, not terminal polling or
 question auto-expansion. The hook fields and both tools were checked against
 [Codex 0.162.1](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/hook_runtime.rs).
 
+During a workflow, the Host also uses these existing question events and Claude
+Code's `awaitingReplies` to allow human input for the asking Agent's current
+invocation. The workflow and other branches continue; a later `working` state
+does not close this permission. Verified task completion revokes the permission
+before the next automatic handoff. Notifications retain this same delivery path.
+Permission and plan approvals still pause the workflow.
+
 Notifications carry a bounded question preview through the existing Mac local,
 Mac Viewer and encrypted iOS delivery paths. The additive `isQuestion` marker
 allows the iOS live notification to alert even while the app is active and

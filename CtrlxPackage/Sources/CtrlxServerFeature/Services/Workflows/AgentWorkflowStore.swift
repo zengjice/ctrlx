@@ -97,10 +97,7 @@ actor AgentWorkflowStore {
 
     func authorizeHumanInput(paneID: String) throws -> AgentWorkflowHumanInputAuthorization {
         let archive = try load()
-        if
-            archive.runs.contains(where: {
-                ($0.status == .running || $0.status == .finishing) && $0.instances.contains { $0.paneID == paneID }
-            }) {
+        if archive.readOnlyPaneIDs.contains(paneID) {
             throw AgentWorkflowInputReadOnlyError()
         }
         if let authorization = humanInputAuthorizations[paneID] {
@@ -109,6 +106,10 @@ actor AgentWorkflowStore {
         let authorization = AgentWorkflowHumanInputAuthorization()
         humanInputAuthorizations[paneID] = authorization
         return authorization
+    }
+
+    func allowsQuestionInput(for instance: AgentWorkflowInstance) throws -> Bool {
+        try load().runs.contains { $0.allowsQuestionInput(for: instance) }
     }
 
     /// Call only with a complete, verified process snapshot. Failed inspection
@@ -383,8 +384,9 @@ actor AgentWorkflowStore {
             attributes: [.posixPermissions: 0o700]
         )
         try data.write(to: fileURL, options: .atomic)
+        let closedQuestions = (archive?.questionInputPaneIDs ?? []).subtracting(updated.questionInputPaneIDs)
         archive = updated
-        let readOnlyPanes = Set(updated.runs.filter { $0.status == .running || $0.status == .finishing }.flatMap { $0.instances.map(\.paneID) })
+        let readOnlyPanes = updated.readOnlyPaneIDs.union(closedQuestions)
         for (paneID, authorization) in humanInputAuthorizations where readOnlyPanes.contains(paneID) {
             authorization.revoke()
             humanInputAuthorizations.removeValue(forKey: paneID)
@@ -396,5 +398,27 @@ actor AgentWorkflowStore {
             authorization.revoke()
             writeAuthorizations.removeValue(forKey: id)
         }
+    }
+}
+
+extension AgentWorkflowRun {
+    func allowsQuestionInput(for instance: AgentWorkflowInstance) -> Bool {
+        !status.isTerminal && instances.contains { $0.matchesBinding(instance) }
+            && invocations.contains {
+                $0.delivery.toAgentID == instance.id && $0.allowsQuestionInput == true
+                    && [.writing, .awaitingAcceptance, .running].contains($0.status)
+            }
+    }
+}
+
+private extension AgentWorkflowArchive {
+    var readOnlyPaneIDs: Set<String> {
+        Set(runs.filter { $0.status == .running || $0.status == .finishing }.flatMap { run in
+            run.instances.filter { !run.allowsQuestionInput(for: $0) }.map(\.paneID)
+        })
+    }
+
+    var questionInputPaneIDs: Set<String> {
+        Set(runs.flatMap { run in run.instances.filter { run.allowsQuestionInput(for: $0) }.map(\.paneID) })
     }
 }

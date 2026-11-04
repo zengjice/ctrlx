@@ -3,7 +3,8 @@ import Foundation
 import Synchronization
 
 /// Serializes terminal mutations from local keys, Viewer input and workflow
-/// submissions. Running workflows reject edits until an operator takes over.
+/// submissions. Running workflows allow edits only after takeover or a native
+/// question in the current invocation.
 @MainActor
 final class AgentWorkflowInputGate {
     struct Claim: Sendable {

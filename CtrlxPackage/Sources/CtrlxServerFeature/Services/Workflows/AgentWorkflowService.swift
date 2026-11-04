@@ -69,15 +69,17 @@ actor AgentWorkflowService {
         for run in runs {
             if
                 let blocked = run.instances.compactMap({ binding in instances.first { binding.matchesBinding($0) } })
-                    .first(where: { $0.readiness == .draft || $0.readiness == .awaitingHuman }) {
-                try await store.update(runID: run.id) {
-                    $0.pause(reason: "\(blocked.displayName) needs human input or has a draft. Resolve it before continuing.")
+                    .first(where: { ($0.readiness == .draft || $0.readiness == .awaitingHuman) && !run.allowsQuestionInput(for: $0) }) {
+                try await store.update(runID: run.id) { execution in
+                    guard !execution.run.allowsQuestionInput(for: blocked) else { return }
+                    execution.pause(reason: "\(blocked.displayName) needs human input or has a draft. Resolve it before continuing.")
                 }
                 continue
             }
             for invocation in run.invocations where invocation.status == .running {
                 guard
                     let bound = run.instances.first(where: { $0.id == invocation.delivery.toAgentID }),
+                    !run.allowsQuestionInput(for: bound),
                     instances.contains(where: { bound.matchesBinding($0) && $0.readiness == .ready }) else { continue }
                 observedIdle.insert(invocation.id)
                 let since = idleSince[invocation.id] ?? timestamp
@@ -86,6 +88,7 @@ actor AgentWorkflowService {
                 // A submission hook can reject a task after emitting a receipt,
                 // or a final hook may be missing. Idle is never success evidence.
                 try await store.update(runID: run.id) { execution in
+                    guard !execution.run.allowsQuestionInput(for: bound) else { return }
                     guard execution.run.invocations.contains(where: { $0.id == invocation.id && $0.status == .running }) else { return }
                     execution.pause(reason: "\(bound.displayName) returned to its input without a verified final result. Check its terminal; this task will not be resent automatically.")
                 }

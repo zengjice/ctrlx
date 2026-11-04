@@ -126,6 +126,32 @@ struct AgentWorkflowNativeEventsTests {
         await f.runner.shutdown()
     }
 
+    @Test
+    func firstQuestionSurvivesConcurrentInitialConversationBinding() async throws {
+        let f = try await fixture(conversation: "")
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let conversation = UUID().uuidString
+        _ = try await f.router.receive(.init(
+            pluginID: "codex", sessionID: conversation,
+            notification: .init(title: "Question", body: "Which approach?", isQuestion: true), tmuxPane: "%1"
+        ), peer: f.peer)
+        let pending = try await f.store.snapshot().runs[0]
+        #expect(pending.status == .running && pending.invocations[0].allowsQuestionInput == true)
+        #expect(pending.instances[0].conversationID.isEmpty)
+        _ = try await f.router.receive(.init(
+            pluginID: "codex", sessionID: conversation, tmuxPane: "%1",
+            workflow: .init(kind: .submitted, nativeTurnID: "turn", transcriptPath: f.transcript.path, text: f.invocation.delivery.input.text)
+        ), peer: f.peer)
+        let accepted = try await f.store.snapshot().runs[0]
+        #expect(accepted.status == .running && accepted.invocations[0].status == .running)
+        #expect(accepted.instances[0].conversationID == conversation)
+        #expect(accepted.invocations[0].allowsQuestionInput == true)
+        let permission = try await f.store.authorizeHumanInput(paneID: "%1")
+        try permission.validate()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
     @Test(arguments: [false, true], [false, true])
     func firstCodexReceiptConfirmsAnInitiallyUnpersistedConversation(uncertain: Bool, fresh: Bool) async throws {
         let f = try await fixture(conversation: fresh ? "" : "conversation")
@@ -297,6 +323,103 @@ struct AgentWorkflowNativeEventsTests {
         #expect(saved.runs[0].invocations[0].nativeTurnID == "new-turn")
         #expect(saved.runs[0].instances[0].conversationID == conversation)
         #expect(saved.instances[0].conversationID == conversation)
+        await router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true])
+    func questionAnswerPreservesThePendingFirstReceipt(awaitingAcceptance: Bool) async throws {
+        let f = try await fixture(conversation: "")
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        if awaitingAcceptance {
+            try await f.store.update(runID: f.run.id) { try $0.didWrite(invocationID: f.invocation.id) }
+        }
+        let readable = LockIsolated(false)
+        let verified = LockIsolated<AgentWorkflowTurnContext?>(nil)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            guard readable.value else { throw AgentWorkflowInspectionUnavailable() }
+            return $0
+        }, onVerified: { verified.setValue($0) }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let conversation = UUID().uuidString
+        func submission(_ text: String) -> PluginEvent {
+            .init(pluginID: "codex", sessionID: conversation, tmuxPane: "%1", workflow: .init(
+                kind: .submitted, nativeTurnID: "first-turn", transcriptPath: f.transcript.path, text: text
+            ))
+        }
+        #expect(try await router.receive(submission(f.invocation.delivery.input.text), peer: f.peer) == nil)
+        _ = try await router.receive(.init(
+            pluginID: "codex", sessionID: conversation,
+            notification: .init(title: "Question", body: "Which approach?", isQuestion: true), tmuxPane: "%1"
+        ), peer: f.peer)
+        let waiting = try await f.store.snapshot().runs[0]
+        #expect(waiting.status == .running)
+        #expect(waiting.invocations[0].status == (awaitingAcceptance ? .awaitingAcceptance : .writing))
+        #expect(waiting.invocations[0].allowsQuestionInput == true)
+        let permission = try await f.store.authorizeHumanInput(paneID: "%1")
+        try permission.validate()
+        #expect(try await router.receive(submission("Use the simple approach."), peer: f.peer) == nil)
+        #expect(try await f.store.snapshot().runs[0] == waiting)
+        #expect(verified.value == nil)
+
+        readable.setValue(true)
+        for _ in 0..<100 {
+            if verified.value != nil {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let context = try #require(verified.value)
+        #expect(context.candidate.kind == .submitted)
+        #expect(context.candidate.text == f.invocation.delivery.input.text)
+        #expect(context.invocation.id == f.invocation.id)
+        let accepted = try await f.store.snapshot().runs[0]
+        #expect(accepted.status == .running && accepted.invocations.count == 1)
+        #expect(accepted.instances[0].conversationID == conversation)
+        #expect(accepted.invocations[0].status == .running)
+        #expect(accepted.invocations[0].nativeTurnID == "first-turn")
+        #expect(accepted.invocations[0].nativeTranscriptPath == f.transcript.path)
+        #expect(accepted.invocations[0].delivery == f.invocation.delivery)
+        try permission.validate()
+        await router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: ["different-turn", "different-transcript", "different-conversation", "no-question", "no-receipt"])
+    func unrelatedAnswerCannotUseAPendingReceipt(scenario: String) async throws {
+        let f = try await fixture(conversation: "")
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try await f.store.update(runID: f.run.id) { try $0.didWrite(invocationID: f.invocation.id) }
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: { _ in
+            throw AgentWorkflowInspectionUnavailable()
+        }, onVerified: { _ in Issue.record("An unverified receipt was accepted.") }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let conversation = UUID().uuidString
+        if scenario != "no-receipt" {
+            _ = try await router.receive(.init(
+                pluginID: "codex", sessionID: conversation, tmuxPane: "%1", workflow: .init(
+                    kind: .submitted, nativeTurnID: "first-turn", transcriptPath: f.transcript.path, text: f.invocation.delivery.input.text
+                )
+            ), peer: f.peer)
+        }
+        if scenario != "no-question" {
+            _ = try await router.receive(.init(
+                pluginID: "codex", sessionID: conversation,
+                notification: .init(title: "Question", body: "Which approach?", isQuestion: true), tmuxPane: "%1"
+            ), peer: f.peer)
+        }
+        #expect(try await f.store.snapshot().runs[0].status == .running)
+        #expect(try await router.receive(.init(
+            pluginID: "codex", sessionID: scenario == "different-conversation" ? UUID().uuidString : conversation, tmuxPane: "%1", workflow: .init(
+                kind: .submitted, nativeTurnID: scenario == "different-turn" ? "another-turn" : "first-turn",
+                transcriptPath: scenario == "different-transcript" ? f.transcript.path + ".other" : f.transcript.path,
+                text: "Use the simple approach."
+            )
+        ), peer: f.peer) == nil)
+        let paused = try await f.store.snapshot().runs[0]
+        #expect(paused.status == .paused && paused.invocations.count == 1)
+        #expect(paused.invocations[0].status == .awaitingAcceptance)
+        #expect(paused.invocations[0].nativeTurnID == nil)
+        #expect(paused.invocations[0].delivery == f.invocation.delivery)
+        #expect(paused.instances[0].conversationID.isEmpty)
         await router.shutdown()
         await f.runner.shutdown()
     }

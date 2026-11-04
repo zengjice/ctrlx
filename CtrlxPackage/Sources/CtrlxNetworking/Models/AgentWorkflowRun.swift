@@ -100,6 +100,9 @@ public struct AgentWorkflowInvocation: Codable, Equatable, Identifiable, Sendabl
     /// Older in-flight calls received attachment lookup instructions as text.
     /// Native image numbers can continue across turns in the same CLI.
     public var nativeImageNumbers: [Int]?
+    /// A native question permits human input for this invocation, even while
+    /// the Agent continues working. Absent on older records.
+    public var allowsQuestionInput: Bool?
     public var result: AgentWorkflowResult?
     public var issue: String?
 
