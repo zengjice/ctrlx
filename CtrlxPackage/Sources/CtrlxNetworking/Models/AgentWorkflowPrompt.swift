@@ -19,6 +19,12 @@ public enum AgentWorkflowPrompt {
         }
     }
 
+    public static func submittedText(_ input: AgentWorkflowInput, pluginID: String, imageNumbers: [Int]) -> String {
+        guard !imageNumbers.isEmpty else { return input.text }
+        let images = imageNumbers.map { "[Image #\($0)]" }.joined(separator: " ")
+        return images + (pluginID == "claude-code" ? "" : " ") + input.text
+    }
+
     public static func compose(
         definition: AgentWorkflowDefinition, node: AgentWorkflowNode,
         answers: [Answer], invocationReference: String
@@ -40,9 +46,6 @@ public enum AgentWorkflowPrompt {
             attachments += answer.attachmentIDs
         }
         var context = ["[CtrlX workflow invocation: \(invocationReference)]"]
-        if !attachments.isEmpty {
-            context.append("Attachments: ctrlx workflow attachments --invocation \(invocationReference) --json")
-        }
         if node.allowsFinish {
             context.append("May end workflow: ctrlx workflow finish --invocation \(invocationReference) --reason \"<reason>\"")
         }

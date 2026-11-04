@@ -65,6 +65,65 @@ struct AgentWorkflowRequestTests {
     }
 
     @Test
+    func terminalControlIsScopedToStablePaneAndUsesTheCurrentRun() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let pane = f.instances[0].workspacePane
+        #expect(try await f.service.handle(.init(.terminal(pane))).run == nil)
+        let run = try await start(f)
+        let state = try #require(await f.service.handle(.init(.terminal(pane))).run)
+        #expect(state.summary.id == run.summary.id)
+        var other = pane
+        other.paneID = UUID()
+        #expect(try await f.service.handle(.init(.terminal(other))).run == nil)
+        let paused = try #require(await f.service.handle(.init(.pause(run.summary.id, expectedRevision: state.summary.revision), expectedHostID: f.hostID)).run)
+        #expect(paused.summary.status == .paused)
+        let current = try #require(await f.service.handle(.init(.terminal(pane))).run)
+        let resumed = try #require(await f.service.handle(.init(.resume(run.summary.id, expectedRevision: current.summary.revision, roundLimit: nil), expectedHostID: f.hostID)).run)
+        #expect(resumed.summary.status == .running)
+        _ = try await f.service.handle(.init(.end(run.summary.id, expectedRevision: resumed.summary.revision), expectedHostID: f.hostID))
+        #expect(try await f.service.handle(.init(.terminal(pane))).run == nil)
+    }
+
+    @Test(arguments: [false, true])
+    func terminalControlFollowsTheReplacementAgentWithoutChangingItsOldRun(reusesPID: Bool) async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let original = f.instances[0]
+        let oldRun = try await start(f)
+        _ = try await f.store.reconcile([])
+        #expect(try await f.service.handle(.init(.terminal(original.workspacePane))).run == nil)
+
+        var observation = AgentWorkflowObservation(original)
+        if !reusesPID {
+            observation.processID += 1
+        }
+        observation.processRuntimeID += ":replacement"
+        observation.conversationID = UUID().uuidString
+        let replacement = observation
+        let service = AgentWorkflowService(store: f.store, scan: { _ in [replacement] }, schedule: { _ in }, now: { now })
+        let live = try #require(await service.refreshInstancesCatalog().first)
+        #expect(live.id != original.id && live.workspacePane == original.workspacePane)
+        let node = AgentWorkflowNode(name: "Replacement", agentInstanceID: live.id)
+        let definition = try await service.save(.init(name: "New workflow", hostID: f.hostID, nodes: [node], edges: [], entryNodeID: node.id), expectedRevision: nil)
+        let newRun = try await service.start(definitionID: definition.id, expectedRevision: definition.revision, requestID: UUID(), authorizationExpiresAt: now.addingTimeInterval(3_600))
+        let oldState = try #require(await f.store.snapshot().runs.first { $0.id == oldRun.summary.id })
+        #expect(oldState.status == .paused)
+
+        let current = try #require(await service.handle(.init(.terminal(original.workspacePane))).run)
+        #expect(current.summary.id == newRun.id && current.summary.status == .running)
+        let paused = try #require(await service.handle(.init(.pause(current.summary.id, expectedRevision: current.summary.revision), expectedHostID: f.hostID)).run)
+        #expect(paused.summary.id == newRun.id && paused.summary.status == .paused)
+        let manual = try #require(await service.handle(.init(.terminal(original.workspacePane))).run)
+        #expect(manual.summary.id == newRun.id)
+        let resumed = try #require(await service.handle(.init(.resume(manual.summary.id, expectedRevision: manual.summary.revision, roundLimit: nil), expectedHostID: f.hostID)).run)
+        #expect(resumed.summary.id == newRun.id && resumed.summary.status == .running)
+        _ = try await service.handle(.init(.end(newRun.id, expectedRevision: resumed.summary.revision), expectedHostID: f.hostID))
+        #expect(try await service.handle(.init(.terminal(original.workspacePane))).run == nil)
+        #expect(try await f.store.snapshot().runs.first { $0.id == oldRun.summary.id } == oldState)
+    }
+
+    @Test
     func mutationsRequireObservedHostAndSupportedProtocolBeforeWriting() async throws {
         let f = try await fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }

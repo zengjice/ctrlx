@@ -59,13 +59,14 @@ struct AgentWorkflowNavigationTests {
         }
     }
 
-    @Test(arguments: ["stay", "back", "switch-host", "other-configuration", "already-away", "cancelled"])
-    func delayedStartOnlyNavigatesFromItsOriginalConfiguration(scenario: String) async throws {
+    @Test(arguments: [false, true], ["stay", "back", "switch-host", "other-configuration", "already-away", "cancelled"])
+    func delayedStartOnlyNavigatesFromItsOriginalEntry(quickStart: Bool, scenario: String) async throws {
         let fixture = Fixture(), navigation = AgentWorkflowNavigation()
         let run = fixture.makeRun()
-        let originalPath: [AgentWorkflowNavigation.Destination] = [
-            .host("pair"), .configuration(route: "pair", hostID: fixture.hostID, id: run.definition.id),
-        ]
+        var originalPath: [AgentWorkflowNavigation.Destination] = [.host("pair")]
+        if !quickStart {
+            originalPath.append(.configuration(route: "pair", hostID: fixture.hostID, id: run.definition.id))
+        }
         navigation.path = scenario == "already-away" ? [.host("another-pair")] : originalPath
         let attempt = ManageAgentWorkflows.Operation.start(
             definitionID: run.definition.id, expectedRevision: run.definition.revision,
@@ -79,7 +80,7 @@ struct AgentWorkflowNavigationTests {
         }
         let continuation = try #require(fixture.startContinuation)
         switch scenario {
-        case "back": navigation.path = [.host("pair")]
+        case "back": navigation.path = quickStart ? [] : [.host("pair")]
         case "switch-host": navigation.path = [.host("another-pair")]
         case "other-configuration": navigation.path = [.host("pair"), .configuration(route: "pair", hostID: fixture.hostID, id: UUID())]
         case "cancelled": task.cancel()

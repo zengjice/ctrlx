@@ -74,11 +74,16 @@ extension AgentWorkflowStore {
         return try attachmentFiles(saved.delivery.input.attachmentIDs, instance: instance)
     }
 
-    func definitionAttachments(id: UUID, revision: Int) throws -> [AgentWorkflowAttachmentFile] {
+    func definitionAttachments(id: UUID, revision: Int, initialInput: AgentWorkflowInput? = nil) throws -> [AgentWorkflowAttachmentFile] {
         let archive = try load()
-        guard let definition = archive.definitions.first(where: { $0.id == id && $0.revision == revision }) else {
+        guard var definition = archive.definitions.first(where: { $0.id == id && $0.revision == revision }) else {
             throw AgentWorkflowError("The workflow changed. Reload before starting.")
         }
+        if let initialInput {
+            definition.initialInput = initialInput
+        }
+        try AgentWorkflowWire.validate(definition)
+        try validateAttachments(definition.attachmentIDs, in: archive)
         var files: [AgentWorkflowAttachmentFile] = []
         for node in definition.nodes {
             let instance = archive.instances.first(where: { $0.id == node.agentInstanceID })
@@ -109,6 +114,24 @@ extension AgentWorkflowStore {
     func uploadAttachment(_ operation: AgentWorkflowAttachmentUpload) async throws -> (offset: Int, attachment: AgentWorkflowAttachment?) {
         try Task.checkCancellation()
         guard !attachmentUploadsClosed else { throw AgentWorkflowError("Workflow uploads are shutting down.") }
+        if case let .image(id, name, mediaType, data, checksum) = operation {
+            guard
+                ["image/png", "image/jpeg"].contains(mediaType), !data.isEmpty,
+                data.count <= SendDroppedFiles.maxRawBytes else {
+                throw AgentWorkflowError("Choose a supported image within the terminal image transfer limit.")
+            }
+            do {
+                _ = try await uploadAttachment(.begin(id: id, name: name, mediaType: mediaType, size: data.count))
+                for offset in stride(from: 0, to: data.count, by: AgentWorkflowWire.attachmentChunkBytes) {
+                    let end = min(data.count, offset + AgentWorkflowWire.attachmentChunkBytes)
+                    _ = try await uploadAttachment(.append(id: id, offset: offset, data: data.subdata(in: offset..<end)))
+                }
+                return try await uploadAttachment(.finish(id: id, sha256: checksum))
+            } catch {
+                _ = try? await uploadAttachment(.cancel(id: id))
+                throw error
+            }
+        }
         let id = operation.id
         guard busyAttachmentUploads.insert(id).inserted else {
             throw AgentWorkflowError("An operation for this attachment is already in progress.")
@@ -126,6 +149,8 @@ extension AgentWorkflowStore {
                 throw AgentWorkflowError("This attachment has already been imported.")
             }
             switch operation {
+            case .image:
+                throw AgentWorkflowError("The image import could not be processed.")
             case let .begin(_, name, mediaType, size):
                 guard
                     pendingAttachments[id] == nil, pendingAttachments.count < 4,

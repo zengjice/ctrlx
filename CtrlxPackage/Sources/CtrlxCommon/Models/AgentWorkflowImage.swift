@@ -51,10 +51,8 @@ struct AgentWorkflowImage: Sendable {
             throw AgentWorkflowError("Only images can be attached. Reference other files by their workspace paths.")
         }
         let encoded: Data
-        let format: UTType
         if type as String == UTType.png.identifier || type as String == UTType.jpeg.identifier {
             encoded = data
-            format = type as String == UTType.png.identifier ? .png : .jpeg
         } else {
             let output = NSMutableData()
             guard
@@ -69,18 +67,19 @@ struct AgentWorkflowImage: Sendable {
             CGImageDestinationAddImage(destination, upright, nil)
             guard CGImageDestinationFinalize(destination) else { throw AgentWorkflowError("This image could not be converted to PNG.") }
             encoded = output as Data
-            format = .png
         }
-        guard encoded.count <= maximumBytes else { throw AgentWorkflowError("The converted image exceeds 20 MiB. Choose a smaller image.") }
+        guard let optimized = RelayImagePreparer.prepare(encoded, maxBytes: SendDroppedFiles.maxRawBytes) else {
+            throw AgentWorkflowError("This image could not be prepared for transfer.")
+        }
         let base = URL(fileURLWithPath: name).deletingPathExtension().lastPathComponent
-        let filename = (base.isEmpty ? "Image" : base) + (format == .jpeg ? ".jpg" : ".png")
+        let filename = (base.isEmpty ? "Image" : base) + "." + optimized.format.fileExtension
         guard SessionDirectoryName.isValid(filename) else { throw AgentWorkflowError("The image filename is invalid.") }
         try Task.checkCancellation()
         return .init(
-            data: encoded,
+            data: optimized.data,
             name: filename,
-            mediaType: format == .jpeg ? "image/jpeg" : "image/png",
-            sha256: SHA256.hash(data: encoded).map { String(format: "%02x", $0) }.joined()
+            mediaType: optimized.format == .jpeg ? "image/jpeg" : "image/png",
+            sha256: SHA256.hash(data: optimized.data).map { String(format: "%02x", $0) }.joined()
         )
     }
 }

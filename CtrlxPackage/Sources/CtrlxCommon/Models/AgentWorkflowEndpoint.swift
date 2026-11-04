@@ -36,7 +36,7 @@ public struct AgentWorkflowEndpoint: Identifiable {
         guard isConnected else { throw AgentWorkflowError("The Host is offline. Its workflows continue there.") }
         guard isSupported else { throw AgentWorkflowError("Update the Host Mac to manage Agent workflows.") }
         let command = ManageAgentWorkflows(operation, expectedHostID: hostID)
-        guard try JSONEncoder().encode(command).count <= AgentWorkflowWire.maximumEncodedBytes else {
+        guard try JSONEncoder().encode(command).count <= command.maximumEncodedBytes else {
             throw AgentWorkflowError("The workflow request is too large.")
         }
         if case let .save(definition, _) = operation {

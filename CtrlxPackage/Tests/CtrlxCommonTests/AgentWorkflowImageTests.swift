@@ -121,6 +121,35 @@ struct AgentWorkflowImageTests {
         #expect(closed.value)
     }
 
+    @Test
+    func imageOverTheEncodedBudgetFallsBackToBoundedChunks() async throws {
+        let data = Data(repeating: 255, count: SendDroppedFiles.maxRawBytes)
+        let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let image = AgentWorkflowImage(data: data, name: "prepared.png", mediaType: "image/png", sha256: hash)
+        let hostID = UUID()
+        var received = Data(), chunks = 0
+        let endpoint = AgentWorkflowEndpoint(id: "viewer", name: "Host", connected: { true }, supported: { true }) { request in
+            let encoded = try JSONEncoder().encode(request)
+            #expect(encoded.count <= request.maximumEncodedBytes)
+            var response = AgentWorkflowResponse(hostID: hostID)
+            switch request.operation {
+            case .uploadAttachment(.begin): response.uploadedOffset = 0
+            case let .uploadAttachment(.append(_, offset, bytes)):
+                #expect(offset == received.count)
+                received.append(bytes)
+                chunks += 1
+                response.uploadedOffset = received.count
+            case let .uploadAttachment(.finish(id, checksum)):
+                response.uploadedOffset = received.count
+                response.attachments = [.init(id: id, name: image.name, mediaType: image.mediaType, byteCount: Int64(received.count), sha256: checksum)]
+            default: Issue.record("An oversized image was sent as a single request")
+            }
+            return response
+        }
+        _ = try await endpoint.importImage(image, hostID: hostID)
+        #expect(received == data && chunks == data.count / AgentWorkflowWire.attachmentChunkBytes)
+    }
+
     @Test(arguments: ["success", "badReceipt", "cancel"])
     func pastedImageUsesVerifiedUploadAndCleansFailedImports(outcome: String) async throws {
         let image = try await AgentWorkflowImage.prepare(png, name: "Clipboard")
@@ -130,18 +159,13 @@ struct AgentWorkflowImageTests {
             #expect(request.expectedHostID == hostID)
             var response = AgentWorkflowResponse(hostID: hostID)
             switch request.operation {
-            case let .uploadAttachment(.begin(uploadID, name, mediaType, size)):
+            case let .uploadAttachment(.image(uploadID, name, mediaType, bytes, sha256)):
                 id = uploadID
-                #expect(name == image.name && mediaType == image.mediaType && size == image.data.count)
-                response.uploadedOffset = 0
-            case let .uploadAttachment(.append(uploadID, offset, bytes)):
-                #expect(uploadID == id && offset == received.count)
-                received.append(bytes)
-                response.uploadedOffset = received.count
-            case let .uploadAttachment(.finish(uploadID, sha256)):
+                #expect(name == image.name && mediaType == image.mediaType && bytes == image.data)
                 #expect(sha256 == image.sha256)
-                response.uploadedOffset = received.count
-                response.attachments = [.init(id: uploadID, name: image.name, mediaType: image.mediaType, byteCount: Int64(received.count), sha256: outcome == "badReceipt" ? "wrong" : sha256)]
+                received = bytes
+                response.uploadedOffset = bytes.count
+                response.attachments = [.init(id: uploadID, name: name, mediaType: mediaType, byteCount: Int64(bytes.count), sha256: outcome == "badReceipt" ? "wrong" : sha256)]
                 if outcome == "cancel" {
                     withUnsafeCurrentTask { $0?.cancel() }
                 }

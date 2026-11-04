@@ -89,6 +89,41 @@ struct AgentWorkflowServiceTests {
     }
 
     @Test
+    func perRunTaskOverrideIsFrozenAndRetryDoesNotChangeTheTemplate() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let input = AgentWorkflowInput(text: "This run only: inspect the changed implementation")
+        let id = UUID(), expires = now.addingTimeInterval(3_600)
+        let run = try await f.service.start(
+            definitionID: f.definition.id,
+            expectedRevision: f.definition.revision,
+            requestID: id,
+            authorizationExpiresAt: expires,
+            initialInput: input
+        )
+        #expect(run.definition.initialInput == input)
+        #expect(try await f.store.snapshot().definitions == [f.definition])
+        f.backend.failScan = true
+        #expect(try await f.service.start(
+            definitionID: f.definition.id,
+            expectedRevision: f.definition.revision,
+            requestID: id,
+            authorizationExpiresAt: expires,
+            initialInput: input
+        ) == run)
+        await #expect(throws: AgentWorkflowError.self) {
+            try await f.service.start(
+                definitionID: f.definition.id,
+                expectedRevision: f.definition.revision,
+                requestID: id,
+                authorizationExpiresAt: expires,
+                initialInput: .init(text: "A different task")
+            )
+        }
+        #expect(f.backend.scheduled == [id])
+    }
+
+    @Test
     func unavailableProcessScanKeepsCatalogAndRunUntouched() async throws {
         let f = try await fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }

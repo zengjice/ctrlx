@@ -21,6 +21,36 @@ struct AgentWorkflowEndpointTests {
         }
     }
 
+    @Test(arguments: [false, true], [AgentWorkflowRunStatus.running, .paused])
+    func terminalControlPreservesIntentWhenAnotherOperatorChangedTheState(manual: Bool, status: AgentWorkflowRunStatus) async throws {
+        let transport = Transport(), hostID = transport.response.hostID
+        let instance = AgentWorkflowInstance(
+            hostID: hostID,
+            pluginID: "codex",
+            processID: 42,
+            processRuntimeID: "42:start",
+            workspacePane: .init(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID()),
+            paneID: "%1",
+            conversationID: "native",
+            displayName: "Developer",
+            workingDirectory: "/work",
+            capabilities: .init(maximumInputBytes: 1_000),
+            readiness: .ready
+        )
+        let node = AgentWorkflowNode(name: "Developer", agentInstanceID: instance.id)
+        let definition = AgentWorkflowDefinition(name: "Work", hostID: hostID, nodes: [node], edges: [], entryNodeID: node.id)
+        var run = AgentWorkflowRun(definition: definition, instances: [instance], createdAt: Date(), authorizationExpiresAt: Date().addingTimeInterval(3_600))
+        run.status = status
+        transport.response.run = .init(run, currentInstances: [instance])
+        _ = try await transport.endpoint.setManualControl(manual, pane: instance.workspacePane, hostID: hostID)
+        #expect(transport.requests[0].operation == .terminal(instance.workspacePane))
+        let alreadyApplied = (status == .paused) == manual
+        #expect(transport.requests.count == (alreadyApplied ? 1 : 2))
+        if !alreadyApplied {
+            #expect(transport.requests[1].operation == (manual ? .pause(run.id, expectedRevision: run.revision) : .resume(run.id, expectedRevision: run.revision, roundLimit: nil)))
+        }
+    }
+
     @Test
     func disconnectedOrOldHostNeverReceivesCommands() async throws {
         let transport = Transport()

@@ -92,7 +92,7 @@ actor AgentWorkflowEventRouter {
             case .submitted:
                 if
                     let invocation = invocations.first(where: {
-                        $0.delivery.input.text == native.text
+                        $0.submissionText(pluginID: instance.pluginID) == native.text
                             && [.writing, .awaitingAcceptance, .uncertain, .running, .succeeded, .failed].contains($0.status)
                     }) {
                     guard pending[invocation.id] == nil else { return nil }

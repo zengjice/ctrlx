@@ -6,15 +6,20 @@ struct AgentWorkflowAttachmentRows: View {
     let ids: [UUID]
     let attachments: [UUID: AgentWorkflowAttachment]
     let remove: (UUID) -> Void
+    var thumbnails: [UUID: Data] = [:]
 
     var body: some View {
         ForEach(ids, id: \.self) { id in
             HStack {
+                if let data = thumbnails[id] {
+                    AgentWorkflowImageThumbnail(data: data).frame(width: 52, height: 52)
+                }
                 AgentWorkflowAttachmentLabel(attachment: attachments[id])
                 Spacer()
                 Button("Remove", role: .destructive) { remove(id) }
                     .buttonStyle(.borderless)
                     .accessibilityLabel("Remove \(attachments[id]?.name ?? "attachment")")
+                    .accessibilityIdentifier("workflow-remove-attachment-\(id)")
             }
         }
     }

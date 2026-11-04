@@ -51,13 +51,13 @@ extension AppCoordinator {
                     guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
                     return try await inspectWorkflowInput(instance)
                 },
-                submit: { [weak self] instance, file, beforeWrite in
+                submit: { [weak self] instance, file, images, beforeWrite, imagesReady in
                     guard
                         let self,
                         let provider = pluginRegistry?.core(instance.pluginID) as? any AgentWorkflowProviding else {
                         throw AgentWorkflowError("The workflow Agent plugin is unavailable.")
                     }
-                    try await tmuxService.submitWorkflowInput(instance, file: file, composer: provider.workflowComposer) { launch in
+                    try await tmuxService.submitWorkflowInput(instance, file: file, images: images, composer: provider.workflowComposer, imagesReady: imagesReady) { launch in
                         @Dependency(AgentSessionIdentityClient.self) var identities
                         guard identities.runtimeID(String(instance.processID)) == instance.processRuntimeID else {
                             throw AgentWorkflowError("The Agent process exited before submission. Nothing was sent.")
@@ -148,6 +148,8 @@ extension AppCoordinator {
         }
         if pane.agentSession?.state.openForm != nil {
             live.readiness = .awaitingHuman
+        } else if try await agentWorkflowStore?.isStagingInput(for: live) == true {
+            live.readiness = .busy
         } else if pane.agentSession?.state.isActiveWorking == true {
             live.readiness = .busy
         } else if pane.editorSession != nil || !recoveredWorkspaceDrafts.localDrafts(paneID: instance.paneID).isEmpty {

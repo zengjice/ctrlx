@@ -141,11 +141,13 @@ actor AgentWorkflowService {
         try await store.deleteDefinition(id: id, expectedRevision: expectedRevision)
     }
 
-    func start(definitionID: UUID, expectedRevision: Int, requestID: UUID, authorizationExpiresAt: Date) async throws -> AgentWorkflowRun {
+    func start(definitionID: UUID, expectedRevision: Int, requestID: UUID, authorizationExpiresAt: Date, initialInput: AgentWorkflowInput? = nil) async throws -> AgentWorkflowRun {
         // A retry after a lost reply must return the original run even when the
         // Agent is now busy, the template changed, or a new scan is unavailable.
         if let existing = try await store.snapshot().runs.first(where: { $0.id == requestID }) {
-            guard existing.definition.id == definitionID, existing.definition.revision == expectedRevision else {
+            guard
+                existing.definition.id == definitionID, existing.definition.revision == expectedRevision,
+                initialInput == nil || initialInput == existing.definition.initialInput else {
                 throw AgentWorkflowError("This request ID already belongs to a different workflow start.")
             }
             return existing
@@ -153,11 +155,11 @@ actor AgentWorkflowService {
         if try await store.snapshot().definitions.first(where: { $0.id == definitionID })?.agentInstanceIDs.isEmpty == false {
             _ = try await refreshInstancesCatalog()
         }
-        let attachments = try await store.definitionAttachments(id: definitionID, revision: expectedRevision)
+        let attachments = try await store.definitionAttachments(id: definitionID, revision: expectedRevision, initialInput: initialInput)
         try await attachmentReader.validate(attachments)
         let run = try await store.start(
             definitionID: definitionID, expectedRevision: expectedRevision,
-            requestID: requestID, now: now(), authorizationExpiresAt: authorizationExpiresAt
+            requestID: requestID, now: now(), authorizationExpiresAt: authorizationExpiresAt, initialInput: initialInput
         )
         await schedule(run.id)
         return run

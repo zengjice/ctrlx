@@ -200,17 +200,23 @@ actor AgentWorkflowStore {
     }
 
     @discardableResult
-    func start(definitionID: UUID, expectedRevision: Int, requestID: UUID, now: Date, authorizationExpiresAt: Date) throws -> AgentWorkflowRun {
+    func start(definitionID: UUID, expectedRevision: Int, requestID: UUID, now: Date, authorizationExpiresAt: Date, initialInput: AgentWorkflowInput? = nil) throws -> AgentWorkflowRun {
         var updated = try load()
         if let existing = updated.runs.first(where: { $0.id == requestID }) {
-            guard existing.definition.id == definitionID, existing.definition.revision == expectedRevision else {
+            guard
+                existing.definition.id == definitionID, existing.definition.revision == expectedRevision,
+                initialInput == nil || initialInput == existing.definition.initialInput else {
                 throw AgentWorkflowError("This request ID already belongs to a different workflow start.")
             }
             return existing
         }
-        guard let definition = updated.definitions.first(where: { $0.id == definitionID }), definition.revision == expectedRevision else {
+        guard var definition = updated.definitions.first(where: { $0.id == definitionID }), definition.revision == expectedRevision else {
             throw AgentWorkflowError("The workflow changed. Reload before starting.")
         }
+        if let initialInput {
+            definition.initialInput = initialInput
+        }
+        try AgentWorkflowWire.validate(definition)
         try validateAttachments(definition.attachmentIDs, in: updated)
         let instanceIDs = definition.agentInstanceIDs
         let occupied = updated.runs.contains { run in
@@ -256,18 +262,28 @@ actor AgentWorkflowStore {
         return execution.run
     }
 
-    func authorizeWrite(_ invocation: AgentWorkflowInvocation) throws -> AgentWorkflowWriteAuthorization {
+    func authorizeWrite(_ invocation: AgentWorkflowInvocation, numberOfWrites: Int = 1) throws -> AgentWorkflowWriteAuthorization {
         let archive = try load()
         guard
             let run = archive.runs.first(where: { $0.id == invocation.delivery.runID }),
             run.status == .running, run.authorizationExpiresAt > Date(),
             run.invocations.contains(where: { $0.id == invocation.id && $0.status == .writing }),
-            writeAuthorizations[invocation.id] == nil else {
+            writeAuthorizations[invocation.id] == nil,
+            (1...(AgentWorkflowWire.maximumAttachments + 1)).contains(numberOfWrites) else {
             throw AgentWorkflowError("The workflow is no longer authorized to submit this input.")
         }
-        let authorization = AgentWorkflowWriteAuthorization(expiresAt: run.authorizationExpiresAt)
+        let authorization = AgentWorkflowWriteAuthorization(expiresAt: run.authorizationExpiresAt, numberOfWrites: numberOfWrites)
         writeAuthorizations[invocation.id] = authorization
         return authorization
+    }
+
+    func isStagingInput(for instance: AgentWorkflowInstance) throws -> Bool {
+        try load().runs.contains { run in
+            guard run.status == .running else { return false }
+            let execution = try AgentWorkflowExecution(validating: run)
+            return run.instances.contains { $0.matchesBinding(instance) || execution.canBindFirstConversation(instance) }
+                && run.invocations.contains { $0.delivery.toAgentID == instance.id && $0.status == .writing && writeAuthorizations[$0.id]?.isStaging == true }
+        }
     }
 
     func deleteRun(id: UUID, expectedRevision: Int) throws {

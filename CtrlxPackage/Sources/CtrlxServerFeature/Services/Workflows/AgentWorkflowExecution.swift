@@ -220,6 +220,19 @@ struct AgentWorkflowExecution: Sendable {
         changed()
     }
 
+    mutating func recordImageInput(invocationID: UUID, numbers: [Int], now: Date) throws {
+        try requireScheduling(now: now)
+        let index = try index(of: invocationID)
+        guard
+            run.invocations[index].status == .writing,
+            !numbers.isEmpty, numbers.allSatisfy({ $0 > 0 }), Set(numbers).count == numbers.count,
+            numbers.count == run.invocations[index].delivery.input.attachmentIDs.count else {
+            throw AgentWorkflowError("The Agent did not confirm this task's native images.")
+        }
+        run.invocations[index].nativeImageNumbers = numbers
+        changed()
+    }
+
     mutating func didWrite(invocationID: UUID) throws {
         let index = try index(of: invocationID)
         // A native submit/finish can arrive before the terminal write returns.

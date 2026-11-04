@@ -1,4 +1,5 @@
 import CryptoKit
+import CtrlxCommon
 import CtrlxNetworking
 import CtrlxPluginProtocol
 import Foundation
@@ -17,7 +18,7 @@ struct AgentWorkflowAttachmentAccessTests {
         let peer: PluginIngressPeer
 
         var file: URL {
-            root.appendingPathComponent("attachments/\(attachment.id.uuidString)/content.txt")
+            root.appendingPathComponent("attachments/\(attachment.id.uuidString)/content.\(attachment.mediaType == "image/png" ? "png" : "txt")")
         }
 
         func start(accepted: Bool = true) async throws -> AgentWorkflowInvocation {
@@ -92,7 +93,7 @@ struct AgentWorkflowAttachmentAccessTests {
         #expect(file["path"] == .string(f.file.path))
         #expect(file["sha256"] == .string(f.attachment.sha256))
         #expect(!task.delivery.input.text.contains(f.file.path))
-        #expect(task.delivery.input.text.contains("ctrlx workflow attachments --invocation \(task.id.uuidString) --json"))
+        #expect(!task.delivery.input.text.contains("ctrlx workflow attachments"))
     }
 
     @Test(arguments: [false, true])
@@ -224,22 +225,30 @@ struct AgentWorkflowAttachmentAccessTests {
         #expect(denied.error?.code == "workflow_denied")
     }
 
-    @Test(arguments: [false, true])
+    @Test(arguments: ["valid", "corrupted", "partial-rejection"])
     @MainActor
-    func terminalReceivesAuthorizedLookupWithoutRewritingItsText(corrupted: Bool) async throws {
-        let f = try await fixture()
+    func terminalReceivesNativeImagesWithoutInjectingTheirPathsIntoTheTask(scenario: String) async throws {
+        let bytes = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aV1cAAAAASUVORK5CYII="))
+        let f = try await fixture(mediaType: "image/png", contents: bytes)
         defer { try? FileManager.default.removeItem(at: f.root) }
         let task = try await f.start(accepted: false)
-        if corrupted {
+        if scenario == "corrupted" {
             try Data("Changed after preparing the run".utf8).write(to: f.file)
         }
         let temporary = f.root.appendingPathComponent("input")
         var submitted: String?
-        let transport = AgentWorkflowTerminalTransport(store: f.store, gate: .init { _ in .init() }, temporaryDirectory: temporary, inspect: { $0 }, submit: { _, file, validate in
+        let transport = AgentWorkflowTerminalTransport(store: f.store, gate: .init { _ in .init() }, temporaryDirectory: temporary, inspect: { $0 }, submit: { _, file, images, validate, imagesReady in
+            #expect(images.count == 1)
+            #expect(try String(contentsOf: #require(images.first), encoding: .utf8) == DroppedPathFormatter.escape(path: f.file.path))
+            try validate { }
+            try await imagesReady([3])
+            if scenario == "partial-rejection" {
+                throw AgentWorkflowInputNotWritten(reason: "The task paste was rejected after an image was staged.")
+            }
             try validate { }
             submitted = try String(contentsOf: file, encoding: .utf8)
         }, onFailure: { Issue.record("\($0)") }).transport
-        if corrupted {
+        if scenario == "corrupted" {
             await #expect(throws: AgentWorkflowError.self) { try await transport.prepare(task, f.instance) }
             #expect(!FileManager.default.fileExists(atPath: temporary.path))
             #expect(submitted == nil)
@@ -248,9 +257,15 @@ struct AgentWorkflowAttachmentAccessTests {
             _ = try await f.store.update(runID: task.delivery.runID) {
                 try $0.beginWriting(invocationID: task.id, instance: f.instance, now: .now)
             }
-            try await transport.write(task, f.instance)
-            #expect(submitted == task.delivery.input.text)
-            #expect(submitted?.contains(f.file.path) == false)
+            if scenario == "partial-rejection" {
+                await #expect(throws: AgentWorkflowError.self) { try await transport.write(task, f.instance) }
+                #expect(submitted == nil)
+            } else {
+                try await transport.write(task, f.instance)
+                #expect(submitted == task.delivery.input.text)
+            }
+            #expect(try await f.store.snapshot().runs[0].invocations[0].nativeImageNumbers == [3])
+            #expect(submitted?.contains(f.file.path) != true)
             await transport.discard(task.id)
             #expect(try FileManager.default.contentsOfDirectory(atPath: temporary.path).isEmpty)
         }

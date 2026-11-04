@@ -140,6 +140,6 @@ final class AgentWorkflowHumanInputAuthorization: Sendable {
 
 struct AgentWorkflowInputReadOnlyError: LocalizedError {
     var errorDescription: String? {
-        "This Agent is read-only while its workflow is running. Open View Workflow and choose Take over to enter input."
+        "This Agent is read-only while its workflow is running. Use the control button in the Agent tab to take over before entering input."
     }
 }
