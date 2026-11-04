@@ -86,6 +86,7 @@
         @State private var voiceInputContextProviders: [String: TerminalVoiceInputContextProvider] = [:]
         @State private var cursorNavigationCancellations: [String: @MainActor () -> Void] = [:]
         @State private var terminalInputReadiness: [String: @MainActor () -> Bool] = [:]
+        @State private var keyboardDismissalInputs = TerminalKeyboardDismissalInputs()
         @State private var terminalCopyActions: [String: @MainActor () -> Void] = [:]
         @State private var terminalInputRevision: UInt64 = 0
         @State private var voiceSession = TerminalVoiceInputSession()
@@ -326,6 +327,22 @@
 
         private var terminalIsVisible: Bool {
             selectedBrowser == nil && selectedSimulator == nil && fileWorkspace.selected == nil
+        }
+
+        private var terminalInputSuspension: TerminalInputSuspension {
+            .init(
+                external: !terminalIsVisible || artifactPreview != nil,
+                quickActionEditor: quickActionPresentation.suspendsTerminalInput
+            )
+        }
+
+        private var canFitAfterKeyboardDismissal: Bool {
+            guard
+                isViewVisible, terminalIsVisible, scenePhase == .active,
+                !isKeyboardActive, !terminalInputSuspension.suspendsInput,
+                !showsWindowTabs, !creationSheetIsPresented,
+                let activePaneId else { return false }
+            return keyboardDismissalInputs.allowsFit(paneID: activePaneId)
         }
 
         private var canAcknowledgeCompletion: Bool {
@@ -954,6 +971,11 @@
                 }
                 .onChange(of: viewportGrids) {
                     fitTerminalIfReady()
+                }
+                .onChange(of: canFitAfterKeyboardDismissal) {
+                    if !canFitAfterKeyboardDismissal {
+                        automaticTabFit.cancelKeyboardDismissal()
+                    }
                 }
                 .onChange(of: window?.windowLayout, initial: true) {
                     fitTerminalIfReady()
@@ -1959,6 +1981,7 @@
 
         private func paneTerminal(pane: PaneState, windowName: String, windowID: String) -> some View {
             let preparationID = annotationHandoff.request?.id
+            let fitWindowID = window?.stableId
             return LiveTerminalView(
                 paneId: pane.paneId,
                 hostId: hostId,
@@ -1979,11 +2002,16 @@
                 showsInputControls: false,
                 showCopyButton: false,
                 isActive: terminalIsVisible && pane.paneId == activePaneId,
-                isInputSuspended: !terminalIsVisible || artifactPreview != nil,
-                isQuickActionInputSuspended: quickActionPresentation.suspendsTerminalInput,
+                isInputSuspended: terminalInputSuspension.external,
+                isQuickActionInputSuspended: terminalInputSuspension.quickActionEditor,
                 parentKeyboardRequested: isKeyboardActive,
                 mouseReportingEnabled: mouseReportingPaneIDs.contains(pane.paneId),
-                onKeyboardRequest: { isKeyboardActive = $0 },
+                onKeyboardRequest: { requested in
+                    if requested {
+                        automaticTabFit.cancelKeyboardDismissal()
+                    }
+                    isKeyboardActive = requested
+                },
                 settings: settings,
                 telemetry: pane.telemetry,
                 // Tiled panes pass `responseState: .constant(nil)`, so no response
@@ -2025,6 +2053,12 @@
                 onTerminalInputReadinessChange: { readiness in
                     terminalInputReadiness[pane.paneId] = readiness
                 },
+                onInputPresentationChange: { input in
+                    keyboardDismissalInputs.update(
+                        input, paneID: pane.paneId, activePaneID: activePaneId,
+                        fit: &automaticTabFit
+                    )
+                },
                 onCopyActionChange: { action in
                     terminalCopyActions[pane.paneId] = action
                 },
@@ -2032,6 +2066,13 @@
                     if viewportGrids[pane.paneId] != grid {
                         viewportGrids[pane.paneId] = grid
                     }
+                },
+                onKeyboardDismissed: {
+                    guard
+                        canFitAfterKeyboardDismissal,
+                        activePaneId == pane.paneId, let fitWindowID,
+                        window?.stableId == fitWindowID else { return }
+                    requestAutomaticTabFit(windowID: fitWindowID, requiresHiddenKeyboard: true)
                 },
                 onSwitchWindow: { selectAdjacentWindow(from: windowID, direction: $0) },
                 preparationID: preparationID,
@@ -2124,11 +2165,18 @@
             fitTerminalIfReady()
         }
 
-        private func requestAutomaticTabFit(windowID: String? = nil) {
-            automaticTabFit.request(.init(hostID: hostId, sessionName: sessionName, windowID: windowID))
+        private func requestAutomaticTabFit(windowID: String? = nil, requiresHiddenKeyboard: Bool = false) {
+            automaticTabFit.request(
+                .init(hostID: hostId, sessionName: sessionName, windowID: windowID),
+                requiresHiddenKeyboard: requiresHiddenKeyboard
+            )
         }
 
         private func fitTerminalIfReady() {
+            // A delayed Host reply may have just released the resize guard.
+            if !canFitAfterKeyboardDismissal {
+                automaticTabFit.cancelKeyboardDismissal()
+            }
             guard artifactPreview == nil else { return }
             fitCreatedTerminalIfReady()
             guard terminalIsVisible, !isResizing else { return }

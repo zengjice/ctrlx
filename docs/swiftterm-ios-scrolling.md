@@ -153,8 +153,8 @@ telemetry and controls, then combines the pane layout into one window grid.
 Each split is constrained by its smallest proportional child capacity, not a
 sum that assumes tmux will distribute those measured sizes automatically.
 `ResizeTmuxPane(userInitiated: true)` targets the stable tmux window ID. This
-changes the Host and every Viewer; rotation, keyboard presentation and layout
-changes only update the available capacity and never automatically resize.
+changes the Host and every Viewer; passive rotation, keyboard presentation and
+layout changes only update the available capacity and never automatically resize.
 The inner terminal continues to use the Host's authoritative dimensions.
 The Host snapshots the current layout, scales each split proportionally (with
 at least two rows/columns per leaf), and applies the resized grid and layout in
@@ -181,6 +181,39 @@ arm Fit. A pending request survives a disconnect and waits for the connection,
 the pending target; leaving the page or manually fitting cancels it. Completed or
 failed requests are not retried by reconnecting. Hosts without `supportsTerminalFit`
 retain their dimensions.
+
+Explicitly hiding the keyboard by tapping an empty terminal input area on iOS
+also fits the current window once. The native terminal waits for UIKit's keyboard
+frame-change completion with hidden input applied, discards queued pre-animation
+measurements, then publishes a fresh usable viewport before requesting Fit.
+Reopening the keyboard, suspending the input or leaving the page cancels the
+dismissal intent; a late callback cannot fit a different pane/window.
+The parent Fit queue retains the hidden-keyboard requirement after this handoff.
+Reopening or suspending terminal input cancels that queued request even while an
+earlier resize awaits its Host reply. Admission, cancellation and dispatch use the
+same input-presentation eligibility: active, unsuspended input with a hidden terminal
+keyboard. Custom-button/phrase editors therefore cancel it without changing the
+terminal's keyboard intent; closing an editor does not re-arm it. Browsing an action
+panel without editing retains input and the pending request. The parent consumes
+the current pane's actual child input state, including private copy and link sheets,
+instead of reconstructing those presentation flags. Opening either sheet reports
+disabled input synchronously before UIKit resigns focus. Unknown/unmounted input
+is unavailable; a sibling pane's report cannot cancel the active pane's request.
+Link input remains disabled through the sheet's dismissal animation, and closing
+either sheet never re-arms a canceled Fit. This cancellation
+does not discard an ordinary tab-entry or foreground Fit.
+This uses the existing one-shot Fit and capability
+checks, without a fixed delay or repeated resizing on geometry changes.
+
+Validation (2026-11-04, working tree based on `bb2e30a1`): 91 focused tests for
+keyboard dismissal/cancellation after handoff, child input reporting, copy/link
+presentation, input presentation/focus, tab Fit, viewport sizing, tap routing and
+quick-action editor suspension passed via
+`scripts/unit-tests.sh`.
+The Debug iOS device-SDK build passed;
+the new dismissal and existing viewport/touch/theme UIKit test sources passed
+device-SDK typechecking but were not executed. Physical third-party keyboard
+acceptance remains pending.
 
 On Mac and iOS, explicitly closing a selected Host browser fits the terminal revealed
 by the resulting browser-catalog update. The close intent is consumed once,
