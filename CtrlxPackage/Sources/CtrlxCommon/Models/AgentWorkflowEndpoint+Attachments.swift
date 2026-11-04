@@ -24,6 +24,33 @@ public extension AgentWorkflowEndpoint {
         onProgress: @MainActor (Int, Int) -> Void = { _, _ in }
     ) async throws -> AgentWorkflowAttachment {
         let file = FileBrowserUploadFile(id: UUID(), name: image.name, size: image.data.count)
+        let operation = ManageAgentWorkflows.Operation.uploadAttachment(.image(
+            id: file.id, name: image.name, mediaType: image.mediaType, data: image.data, sha256: image.sha256
+        ))
+        if try JSONEncoder().encode(ManageAgentWorkflows(operation, expectedHostID: hostID)).count <= AgentWorkflowWire.imageEncodedBytes {
+            do {
+                onProgress(0, file.size)
+                let response = try await request(operation, hostID: hostID)
+                guard
+                    response.uploadedOffset == file.size, let attachment = response.attachments?.first,
+                    response.attachments?.count == 1, attachment.id == file.id,
+                    attachment.name == image.name, attachment.mediaType == image.mediaType,
+                    attachment.byteCount == file.size, attachment.sha256 == image.sha256 else {
+                    throw AgentWorkflowError("The Host returned an invalid image receipt.")
+                }
+                try Task.checkCancellation()
+                onProgress(file.size, file.size)
+                return attachment
+            } catch {
+                await Task {
+                    do {
+                        _ = try await request(.uploadAttachment(.cancel(id: file.id)), hostID: hostID)
+                        _ = try await request(.discardAttachments([file.id]), hostID: hostID)
+                    } catch { Logger(subsystem: "com.jicezeng.ctrlx", category: "WorkflowUploads").debug("Could not clean up a workflow image: \(error.localizedDescription)") }
+                }.value
+                throw error
+            }
+        }
         var cursor = 0
         return try await importAttachment(
             file, mediaType: image.mediaType, hostID: hostID,

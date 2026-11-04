@@ -1146,6 +1146,15 @@
                 .accessibilityIdentifier("window-tabs-picker")
             }
             if terminalIsVisible, let window {
+                if
+                    let pane = window.panes.first(where: { $0.paneId == activePaneId }) ?? window.activePane,
+                    pane.agentSession != nil, let identity = pane.workspaceIdentity,
+                    let host = settings.pairedHosts.first(where: { $0.id == hostId }) {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        AgentWorkflowControlButton(endpoint: .remote(host, manager: connectionManager), pane: identity)
+                            .id("\(hostId):\(identity.paneID)")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         if

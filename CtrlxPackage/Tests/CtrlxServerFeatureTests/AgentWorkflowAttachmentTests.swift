@@ -54,6 +54,26 @@ struct AgentWorkflowAttachmentTests {
         #expect(try Data(contentsOf: file) == data)
     }
 
+    @Test(arguments: [false, true])
+    func singleRequestImageImportUsesTheVerifiedSnapshotAndCleansFailures(badHash: Bool) async throws {
+        let f = Fixture(), id = UUID()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let store = f.store()
+        let data = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR4nGNQaPjQAMIMMAYARzIIQdQEEEMAAAAASUVORK5CYII="))
+        let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let operation = AgentWorkflowAttachmentUpload.image(id: id, name: "Screenshot.png", mediaType: "image/png", data: data, sha256: badHash ? "wrong" : hash)
+        if badHash {
+            await #expect(throws: (any Error).self) { try await store.uploadAttachment(operation) }
+            #expect(try await store.snapshot().attachments?.isEmpty != false)
+            #expect(!FileManager.default.fileExists(atPath: f.directory(id).path))
+        } else {
+            let uploaded = try await store.uploadAttachment(operation)
+            #expect(uploaded.offset == data.count && uploaded.attachment?.sha256 == hash)
+            #expect(try Data(contentsOf: f.directory(id).appendingPathComponent("content.png")) == data)
+        }
+        await store.shutdownAttachmentUploads()
+    }
+
     @Test(arguments: ["checksum", "offset", "oversize", "cancel"])
     func incompleteUploadsNeverBecomeAttachments(failure: String) async throws {
         let f = Fixture(), id = UUID(), data = Data("original".utf8)

@@ -8,6 +8,7 @@ final class AgentWorkflowTerminalTransport {
     private struct Prepared {
         let claim: AgentWorkflowInputGate.Claim
         let file: URL
+        let images: [URL]
     }
 
     private let store: AgentWorkflowStore
@@ -15,7 +16,7 @@ final class AgentWorkflowTerminalTransport {
     private let files: AgentWorkflowInputFiles
     private let attachmentReader = AgentWorkflowAttachmentReader()
     private let inspect: @MainActor @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance
-    private let submit: @MainActor @Sendable (AgentWorkflowInstance, URL, @escaping @MainActor @Sendable (@Sendable () throws -> Void) throws -> Void) async throws -> Void
+    private let submit: @MainActor @Sendable (AgentWorkflowInstance, URL, [URL], @escaping @MainActor @Sendable (@Sendable () throws -> Void) throws -> Void, @escaping @MainActor @Sendable ([Int]) async throws -> Void) async throws -> Void
     private let onFailure: @Sendable (String) -> Void
     private var prepared: [UUID: Prepared] = [:]
 
@@ -24,7 +25,7 @@ final class AgentWorkflowTerminalTransport {
         gate: AgentWorkflowInputGate,
         temporaryDirectory: URL,
         inspect: @escaping @MainActor @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance,
-        submit: @escaping @MainActor @Sendable (AgentWorkflowInstance, URL, @escaping @MainActor @Sendable (@Sendable () throws -> Void) throws -> Void) async throws -> Void,
+        submit: @escaping @MainActor @Sendable (AgentWorkflowInstance, URL, [URL], @escaping @MainActor @Sendable (@Sendable () throws -> Void) throws -> Void, @escaping @MainActor @Sendable ([Int]) async throws -> Void) async throws -> Void,
         onFailure: @escaping @Sendable (String) -> Void
     ) {
         self.store = store
@@ -47,10 +48,6 @@ final class AgentWorkflowTerminalTransport {
     private func prepare(_ invocation: AgentWorkflowInvocation, instance: AgentWorkflowInstance) async throws {
         guard prepared[invocation.id] == nil else { throw AgentWorkflowError("This input is already prepared.") }
         let claim = gate.claim(paneID: instance.paneID)
-        if !invocation.delivery.input.attachmentIDs.isEmpty {
-            let attachments = try await store.invocationAttachments(invocation, instance: instance, status: .pending, now: Date())
-            try await attachmentReader.validate(attachments)
-        }
         let text = invocation.delivery.input.text
         guard
             let limit = instance.capabilities?.maximumInputBytes, text.utf8.count <= limit,
@@ -58,8 +55,35 @@ final class AgentWorkflowTerminalTransport {
             text.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) || $0 == "\n" || $0 == "\t" }) else {
             throw AgentWorkflowError("The task exceeds this Agent's input limit or contains terminal control characters. Nothing was sent.")
         }
-        let file = try await files.create(text)
-        prepared[invocation.id] = Prepared(claim: claim, file: file)
+        var imageFiles: [URL] = []
+        if !invocation.delivery.input.attachmentIDs.isEmpty {
+            let attachments = try await store.invocationAttachments(invocation, instance: instance, status: .pending, now: Date())
+            try await attachmentReader.validate(attachments)
+            guard
+                ["codex", "claude-code"].contains(instance.pluginID),
+                attachments.allSatisfy({ ["image/png", "image/jpeg"].contains($0.attachment.mediaType) }) else {
+                throw AgentWorkflowError("This Agent cannot receive native workflow images.")
+            }
+            do {
+                for attachment in attachments {
+                    try imageFiles.append(await files.create(DroppedPathFormatter.escape(path: attachment.url.path)))
+                }
+            } catch {
+                for file in imageFiles {
+                    try await files.remove(file)
+                }
+                throw error
+            }
+        }
+        let file: URL
+        do { file = try await files.create(text) }
+        catch {
+            for file in imageFiles {
+                try await files.remove(file)
+            }
+            throw error
+        }
+        prepared[invocation.id] = Prepared(claim: claim, file: file, images: imageFiles)
         try Task.checkCancellation()
         try gate.validate(claim)
     }
@@ -73,19 +97,28 @@ final class AgentWorkflowTerminalTransport {
                 guard live.matchesBinding(instance), live.readiness == .ready else {
                     throw AgentWorkflowError("The Agent changed or its input is no longer empty. Nothing was sent.")
                 }
-                let authorization = try await self.store.authorizeWrite(invocation)
+                let authorization = try await self.store.authorizeWrite(invocation, numberOfWrites: prepared.images.count + 1)
                 try Task.checkCancellation()
                 try self.gate.validate(prepared.claim)
-                try await self.submit(live, prepared.file) { launch in
+                try await self.submit(live, prepared.file, prepared.images, { launch in
                     try Task.checkCancellation()
                     try self.gate.validate(prepared.claim)
                     try authorization.perform(launch)
                     committed = true
-                }
+                }, { numbers in
+                    _ = try await self.store.update(runID: invocation.delivery.runID) {
+                        try $0.recordImageInput(invocationID: invocation.id, numbers: numbers, now: Date())
+                    }
+                })
             }
         } catch {
             if !committed {
                 throw AgentWorkflowInputNotWritten(reason: error.localizedDescription)
+            }
+            if !prepared.images.isEmpty, error is AgentWorkflowInputNotWritten {
+                // An earlier image paste already changed the draft. A later
+                // guarded rejection cannot make this whole input retryable.
+                throw AgentWorkflowError(error.localizedDescription)
             }
             throw error
         }
@@ -93,8 +126,11 @@ final class AgentWorkflowTerminalTransport {
 
     private func discard(_ invocationID: UUID) async {
         guard let prepared = prepared.removeValue(forKey: invocationID) else { return }
-        do { try await files.remove(prepared.file) }
-        catch { onFailure("Could not remove a prepared workflow input: \(error.localizedDescription)") }
+        do {
+            for file in prepared.images + [prepared.file] {
+                try await files.remove(file)
+            }
+        } catch { onFailure("Could not remove a prepared workflow input: \(error.localizedDescription)") }
     }
 }
 

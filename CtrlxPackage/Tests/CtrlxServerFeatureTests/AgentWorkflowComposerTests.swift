@@ -23,6 +23,27 @@ struct AgentWorkflowComposerTests {
         )
     }
 
+    @Test(arguments: ["codex", "claude"])
+    func imageStagingRequiresTheExactVisibleAttachments(agent: String) {
+        let composer = agent == "codex" ? codex : claude
+        let prefix = composer.prompt
+        let staged = capture([prefix + "[Image #1] [Image #2]", ""], cursor: 0, x: 24)
+        #expect(AgentWorkflowComposerInspection.hasImages(staged, composer: composer, count: 2))
+        #expect(!AgentWorkflowComposerInspection.hasImages(staged, composer: composer, count: 1))
+        for text in ["[Image #1] not my draft", "[Image #2]", "[Image #1] [Image #2] changed", "/tmp/image.png"] {
+            let other = capture([prefix + text, ""], cursor: 0, x: 24)
+            #expect(!AgentWorkflowComposerInspection.hasImages(other, composer: composer, count: 2))
+        }
+        let wrapped = capture([prefix + "[Image #1] [Image #2]", "  [Image #3]", ""], cursor: 1, x: 12)
+        #expect(AgentWorkflowComposerInspection.hasImages(wrapped, composer: composer, count: 3))
+        let later = capture([prefix + "[Image #3] [Image #5]", ""], cursor: 0, x: 24)
+        #expect(AgentWorkflowComposerInspection.imageNumbers(later, composer: composer) == [3, 5])
+        let repeated = capture([prefix + "[Image #3] [Image #3]", ""], cursor: 0, x: 24)
+        #expect(AgentWorkflowComposerInspection.imageNumbers(repeated, composer: composer) == nil)
+        let copying = capture([prefix + "[Image #1] [Image #2]", ""], cursor: 0, copyMode: true)
+        #expect(!AgentWorkflowComposerInspection.hasImages(copying, composer: composer, count: 2))
+    }
+
     @Test
     func nativeCodexPlaceholderIsEmptyButIdenticalDraftIsNot() {
         // Empty composer captured from Codex 0.163.0. Text alone is ambiguous

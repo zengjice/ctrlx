@@ -217,6 +217,20 @@ struct AgentWorkflowExecution: Sendable {
                     && [.writing, .awaitingAcceptance, .running, .uncertain].contains($0.status)
             }) else { throw AgentWorkflowError("Another step is still using this Agent. Resolve it before sending more input.") }
         run.invocations[index].status = .writing
+        run.invocations[index].allowsQuestionInput = nil
+        changed()
+    }
+
+    mutating func recordImageInput(invocationID: UUID, numbers: [Int], now: Date) throws {
+        try requireScheduling(now: now)
+        let index = try index(of: invocationID)
+        guard
+            run.invocations[index].status == .writing,
+            !numbers.isEmpty, numbers.allSatisfy({ $0 > 0 }), Set(numbers).count == numbers.count,
+            numbers.count == run.invocations[index].delivery.input.attachmentIDs.count else {
+            throw AgentWorkflowError("The Agent did not confirm this task's native images.")
+        }
+        run.invocations[index].nativeImageNumbers = numbers
         changed()
     }
 
@@ -337,6 +351,17 @@ struct AgentWorkflowExecution: Sendable {
             run.status = .paused
             run.issue = reason
         }
+        changed()
+    }
+
+    mutating func allowQuestionInput(instance: AgentWorkflowInstance) {
+        guard
+            !run.status.isTerminal,
+            run.instances.contains(where: { $0.matchesBinding(instance) }) || canBindFirstConversation(instance),
+            let index = run.invocations.firstIndex(where: {
+                $0.delivery.toAgentID == instance.id && [.writing, .awaitingAcceptance, .running].contains($0.status)
+            }), run.invocations[index].allowsQuestionInput != true else { return }
+        run.invocations[index].allowsQuestionInput = true
         changed()
     }
 

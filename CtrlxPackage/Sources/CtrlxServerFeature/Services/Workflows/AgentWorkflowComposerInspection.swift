@@ -60,6 +60,27 @@ enum AgentWorkflowComposerInspection {
         return current
     }
 
+    static func hasImages(_ capture: AgentWorkflowTerminalCapture, composer: AgentWorkflowComposer, count: Int) -> Bool {
+        imageNumbers(capture, composer: composer)?.count == count
+    }
+
+    static func imageNumbers(_ capture: AgentWorkflowTerminalCapture, composer: AgentWorkflowComposer) -> [Int]? {
+        guard
+            capture.bracketedPaste == true, !capture.inCopyMode,
+            capture.cursorY >= 0, capture.cursorY < capture.height else { return nil }
+        let lines = capture.plainLines
+        guard
+            lines.count >= capture.height,
+            let start = (max(0, capture.cursorY - 16)...capture.cursorY).reversed().first(where: { lines[$0].hasPrefix(composer.prompt) }) else { return nil }
+        let text = ([String(lines[start].dropFirst(composer.prompt.count))] + Array(lines[(start + 1)..<(capture.cursorY + 1)]))
+            .joined().filter { !$0.isWhitespace }
+        guard !text.isEmpty, text.replacingOccurrences(of: "\\[Image#[1-9][0-9]*\\]", with: "", options: .regularExpression).isEmpty else { return nil }
+        let parts = text.components(separatedBy: "[Image#").dropFirst()
+        let numbers = parts.compactMap { Int($0.dropLast()) }
+        guard numbers.count == parts.count, Set(numbers).count == numbers.count else { return nil }
+        return numbers
+    }
+
     static func readiness(_ capture: AgentWorkflowTerminalCapture, composer: AgentWorkflowComposer, allowUnknownBracketedPaste: Bool = false) -> AgentWorkflowReadiness {
         guard
             capture.width >= 20, capture.width <= 4_096,

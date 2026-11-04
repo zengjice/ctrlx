@@ -2694,6 +2694,11 @@ public struct MainView: View {
                 let claudePane = window.panes.first { windowManager.paneStates[$0.paneId]?.agentSession != nil }
                 let activePane = window.activePane
 
+                if let activePane, let pane = windowManager.paneStates[activePane.paneId], pane.agentSession != nil, let identity = pane.workspaceIdentity {
+                    AgentWorkflowControlButton(endpoint: coordinator.localWorkflowEndpoint(), pane: identity)
+                        .id("local:\(identity.paneID)")
+                }
+
                 // Yolo mode toggle (only for windows with active Claude sessions)
                 if let claudePane {
                     Toggle(isOn: localYoloModeBinding(for: claudePane.paneId)) {
@@ -2727,6 +2732,12 @@ public struct MainView: View {
                 .accessibilityLabel("Close session")
                 .help("Close session")
             } else if let remote = selectedRemoteSession, let remoteWindow = selectedRemoteWindow ?? remoteRightPaneTerminalWindow() {
+                if
+                    let pane = remoteWindow.activePane, pane.agentSession != nil, let identity = pane.workspaceIdentity,
+                    let host = settings.pairedHosts.first(where: { $0.id == remote.hostId }) {
+                    AgentWorkflowControlButton(endpoint: .remote(host, manager: coordinator.viewerConnectionManager), pane: identity)
+                        .id("\(remote.hostId):\(identity.paneID)")
+                }
                 // Yolo mode toggle for remote windows with active Claude sessions
                 let claudePaneId = remoteWindow.panes.first(where: { $0.agentSession != nil })?.paneId
                 if

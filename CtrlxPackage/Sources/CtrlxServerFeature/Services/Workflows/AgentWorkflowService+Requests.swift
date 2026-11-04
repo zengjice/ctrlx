@@ -8,7 +8,7 @@ extension AgentWorkflowService {
         guard request.version == AgentWorkflowWire.version else {
             throw AgentWorkflowError("Update CtrlX to use this workflow protocol version.")
         }
-        guard try JSONEncoder().encode(request).count <= AgentWorkflowWire.maximumEncodedBytes else {
+        guard try JSONEncoder().encode(request).count <= request.maximumEncodedBytes else {
             throw AgentWorkflowError("The workflow request is too large.")
         }
         let archive = try await snapshot()
@@ -17,6 +17,14 @@ extension AgentWorkflowService {
         }
         var response = AgentWorkflowResponse(hostID: archive.hostID)
         switch request.operation {
+        case let .terminal(pane):
+            if
+                let instance = archive.instances.first(where: { $0.workspacePane.isSamePane(as: pane) }),
+                let run = archive.runs.first(where: { run in
+                    !run.status.isTerminal && run.instances.contains { $0.matchesBinding(instance) }
+                }) {
+                response.run = try AgentWorkflowRunState(run, currentInstances: archive.instances)
+            }
         case let .catalog(offset):
             let instances = try await refreshInstancesCatalog()
             response.instances = try Self.page(instances, offset: offset)
@@ -31,8 +39,8 @@ extension AgentWorkflowService {
             response.definition = try await save(definition, expectedRevision: expectedRevision)
         case let .deleteDefinition(id, expectedRevision):
             try await deleteDefinition(id: id, expectedRevision: expectedRevision)
-        case let .start(definitionID, expectedRevision, requestID, authorizationExpiresAt):
-            let run = try await start(definitionID: definitionID, expectedRevision: expectedRevision, requestID: requestID, authorizationExpiresAt: authorizationExpiresAt)
+        case let .start(definitionID, expectedRevision, requestID, authorizationExpiresAt, initialInput):
+            let run = try await start(definitionID: definitionID, expectedRevision: expectedRevision, requestID: requestID, authorizationExpiresAt: authorizationExpiresAt, initialInput: initialInput)
             response.run = try AgentWorkflowRunState(run, currentInstances: await snapshot().instances)
         case let .runs(offset):
             response.runs = try Self.page(archive.runs.reversed().map(AgentWorkflowRunSummary.init), offset: offset)

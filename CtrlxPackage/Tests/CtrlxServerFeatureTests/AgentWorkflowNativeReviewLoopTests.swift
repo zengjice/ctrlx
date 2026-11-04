@@ -187,10 +187,28 @@ struct AgentWorkflowNativeReviewLoopTests {
             return live
         }
         let gate = AgentWorkflowInputGate { _ in throw AgentWorkflowError("Unexpected human input in the private fixture.") }
-        let transport = AgentWorkflowTerminalTransport(store: store, gate: gate, temporaryDirectory: root.appendingPathComponent("input"), inspect: inspect, submit: { instance, file, beforeWrite in
-            let terminal = try capture(fixture, instance)
+        let transport = AgentWorkflowTerminalTransport(store: store, gate: gate, temporaryDirectory: root.appendingPathComponent("input"), inspect: inspect, submit: { instance, file, images, beforeWrite, imagesReady in
+            var terminal = try capture(fixture, instance)
             let core = try #require(cores[instance.pluginID])
             try #require(AgentWorkflowComposerInspection.readiness(terminal, composer: core.workflowComposer) == .ready)
+            var imageNumbers: [Int] = []
+            for (index, image) in images.enumerated() {
+                let commands = try AgentWorkflowTmuxSubmission.commands(instance: instance, file: image, capture: terminal, submit: false)
+                try beforeWrite { _ = try tmux(fixture, commands.flatMap { $0 }) }
+                let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+                repeat {
+                    try await Task.sleep(for: .milliseconds(100))
+                    terminal = try capture(fixture, instance)
+                    if let numbers = AgentWorkflowComposerInspection.imageNumbers(terminal, composer: core.workflowComposer), numbers.count == index + 1, numbers.starts(with: imageNumbers) {
+                        imageNumbers = numbers
+                        break
+                    }
+                    try #require(ContinuousClock.now < deadline)
+                } while true
+            }
+            if !images.isEmpty {
+                try await imagesReady(imageNumbers)
+            }
             let commands = try AgentWorkflowTmuxSubmission.commands(instance: instance, file: file, capture: terminal)
             try beforeWrite {
                 let result = try tmux(fixture, commands.flatMap { $0 })
@@ -287,6 +305,7 @@ struct AgentWorkflowNativeReviewLoopTests {
             var draft = AgentWorkflowDefinition(name: "Native development and review", hostID: hostID, nodes: [], edges: [], entryNodeID: UUID(), initialInput: .init(text: "Implement the attached fixture image. USER_IMAGE_TASK", attachmentIDs: [imageID]))
             try AgentWorkflowReviewTemplate.apply(to: &draft, developerID: #require(instances.first { $0.pluginID == "codex" }?.id), reviewerID: #require(instances.first { $0.pluginID == "claude-code" }?.id))
             draft.nodes[1].input.text += "\nEnd this workflow only when there are no P0, P1, P2 or P3 findings."
+            draft.nodes[1].input.attachmentIDs = [imageID]
             let definition = try await store.saveDefinition(draft, expectedRevision: nil)
             let run = try await store.start(definitionID: definition.id, expectedRevision: definition.revision, requestID: UUID(), now: Date(), authorizationExpiresAt: Date().addingTimeInterval(180))
             await runner.schedule(runID: run.id)
@@ -312,10 +331,10 @@ struct AgentWorkflowNativeReviewLoopTests {
             #expect(latest.finishRequest != nil)
             #expect(latest.invocations.allSatisfy { $0.result?.text.contains("FIXTURE_ERROR") == false })
             #expect(latest.invocations.filter { $0.nodeID == definition.entryNodeID }.count == 1)
-            #expect(latest.invocations.filter { $0.delivery.input.attachmentIDs == [imageID] }.count == 1)
+            #expect(latest.invocations.filter { $0.delivery.input.attachmentIDs == [imageID] }.count == 3)
             for invocation in latest.invocations where invocation.nodeID == definition.nodes[1].id {
                 #expect(!invocation.delivery.input.text.contains("USER_IMAGE_TASK"))
-                #expect(!invocation.delivery.input.text.contains("Answer from") && invocation.delivery.input.attachmentIDs.isEmpty)
+                #expect(!invocation.delivery.input.text.contains("Answer from") && invocation.delivery.input.attachmentIDs == [imageID])
             }
             for instance in instances {
                 #expect(try processRuntime(instance.processID) == instance.processRuntimeID)
