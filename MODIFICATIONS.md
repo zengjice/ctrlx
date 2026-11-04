@@ -7,6 +7,22 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.142 — Relay account access and workflow controls
+
+- Add optional Relay access keys, per-pair Host/Viewer credentials and shared
+  monthly traffic allowances, with persistent accounting, administrator top-ups
+  and reconnect after quota recovery. Open mode remains the default; deploy
+  compatible clients before enabling `RELAY_ACCESS_MODE=metered`, then pair
+  existing devices again. See [migration and operations](docs/self-hosting.md#optional-account-authentication-and-traffic-quotas).
+- Preserve quota admission for queued APNs alerts and badge updates; normal
+  cancellation and stale connections cannot disconnect a healthy replacement.
+- Streamline workflow task/image entry and run controls, and allow replies to
+  Agent Questions without pausing the workflow. Improve iOS terminal fitting
+  after keyboard dismissal and attention badges.
+- Validation before packaging: the merged source passed 316 focused Swift tests
+  and 89 build/cleanup script tests. Native quota acceptance was opt-in and skipped
+  in that run; production migration and physical-device checks are separate.
+
 ## 3.0.141 — Browser downloads and Host workflow improvements
 
 - Save human-initiated browser downloads, including POST responses and Blob
