@@ -1,16 +1,74 @@
 # AppKit Toolbar Layout Crash Investigation
 
-Status: mitigated, pending runtime validation
+Status: Sidebar and Editors settings layouts bounded; current validation below
 
 Scope: macOS `3.0.89`, `3.0.95`, `3.0.100`; `3.0.102` is the first distributed
 build with the Settings sidebar mitigation. The locally built `3.0.101` package
 predates the mitigation and was not published.
 
-Last updated: 2026-10-25
+Last updated: 2026-11-04
 
-## Fix applied
+## Settings blank-window follow-up (2026-11-04)
 
-The Settings `TabView` now uses `.tabViewStyle(.sidebarAdaptable)`. On macOS 15+
+The installed `3.0.142 (75)` also exhibited an empty Settings sidebar and detail
+area after switching categories on macOS `27.0.1 (26A434)`. Accessibility still
+reported the category rows and detail controls. Closing/reopening Settings and
+collapsing/expanding its sidebar did not restore the visible content. No matching
+toolbar-layout exception was captured. This is a reproduced UI failure, not
+proof that the earlier toolbar exception or Relay refresh caused it. Simplified
+standalone `TabView` probes did not reproduce it.
+
+A signed isolated copy reproduced the blank window at the same Sidebar page even
+with `NavigationSplitView` replacing `TabView`. A native layout probe measured a
+1472 pt minimum height when switching to Sidebar in a 900 × 600 pt window; the
+navigation container extended 420 pt above the visible content. The Sidebar
+page's non-scrolling stack was imposing its minimum content height on the entire
+Settings container. This explains the blank/offscreen category rows in this
+reproduction; replacing the navigation container alone did not fix it. After
+bounding Sidebar, the same visual failure was reproduced on Editors, which used
+the same non-scrolling stack plus a minimum-height-only List.
+
+The fix retains the existing `TabView` navigation and programmatic selection.
+Sidebar and Editors settings now have outer vertical `ScrollView`s, and their
+independently scrollable field/editor lists have bounded 200 pt heights. Pages
+can grow inside their scroll areas without pushing navigation outside the
+window. Field editing, drag ordering, preview, sort selection and editor actions
+keep their existing handlers.
+
+`SettingsContentLayoutTests` switches the real Settings view between Appearance,
+Browser, Sidebar and Editors at two window sizes and checks both the minimum
+height and the native navigation frame. The planned full E2E script could not
+open Settings through its existing local automation driver (menu/shortcut
+attempts timed out); it was not retained as a passing regression. Native UI
+acceptance instead uses the signed isolated app, process-targeted computer use
+and screenshots, because AX existence alone missed the blank rendering during
+the investigation.
+
+Validation on 2026-11-04:
+
+- 16 focused tests passed, including the real Settings layout regression at
+  900 × 600 and 1100 × 700 pt.
+- Mac Release build, signing and deep signature verification passed.
+- A separately identified, signed app using private tmux/state roots and
+  in-memory preferences/credentials passed three cycles through all 11 settings
+  pages and three close/reopen cycles in dark mode. Screenshots were inspected;
+  both previously failing pages remained visible.
+- A loopback quota fixture refreshed the visible allowance from 4 to 6 GiB
+  without losing the sidebar/detail content. Sidebar type switching/scrolling
+  and opening/cancelling the editor picker also passed.
+- Test app and fixture were stopped. The installed app, live sessions and
+  production credentials were not changed. Another-Mac and long-duration
+  acceptance remain unverified; the failed full E2E driver runs are not passing
+  tests.
+
+Local evidence is retained under
+`.build-local/diagnostics/settings-blank-20261104/fix/` (ignored), including
+`bounded-pages-unit-tests.log`, `bounded-pages-mac-build.log`, and
+`complete-manual/` screenshots/results.
+
+## Earlier mitigation (2026-10-25)
+
+The Settings `TabView` used `.tabViewStyle(.sidebarAdaptable)`. On macOS 15+
 this moves Settings navigation out of the native toolbar and into a sidebar when
 the window is wide enough. It removes the 11 text-plus-icon tab items from the
 toolbar path implicated by the crash.

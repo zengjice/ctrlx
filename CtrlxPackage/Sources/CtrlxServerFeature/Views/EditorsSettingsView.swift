@@ -17,65 +17,67 @@ struct EditorsSettingsView: View {
     var body: some View {
         @Bindable var settings = settings
 
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Editors that appear in the file context menu and the Cmd+E menu when a file tab is focused.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal)
-                .padding(.top, 12)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Editors that appear in the file context menu and the Cmd+E menu when a file tab is focused.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal)
+                    .padding(.top, 12)
 
-            List(selection: $selection) {
-                ForEach(settings.editors) { editor in
-                    editorRow(editor)
-                        .tag(editor.id)
-                }
-            }
-            .listStyle(.inset(alternatesRowBackgrounds: true))
-            .frame(minHeight: 200)
-            .accessibilityIdentifier("editors-list")
-
-            HStack(spacing: 8) {
-                Button {
-                    addEditorPickerVisible = true
-                } label: {
-                    Label("Add Editor", symbol: .plus)
-                }
-                .help("Add an editor by selecting its application")
-                .accessibilityLabel("Add Editor")
-
-                Button {
-                    if let selection {
-                        settings.removeEditor(id: selection)
-                        self.selection = nil
+                List(selection: $selection) {
+                    ForEach(settings.editors) { editor in
+                        editorRow(editor)
+                            .tag(editor.id)
                     }
-                } label: {
-                    Label("Remove", symbol: .minusCircleFill)
                 }
-                .disabled(selection == nil)
-                .accessibilityLabel("Remove Editor")
+                .listStyle(.inset(alternatesRowBackgrounds: true))
+                .frame(height: 200)
+                .accessibilityIdentifier("editors-list")
 
-                Spacer()
+                HStack(spacing: 8) {
+                    Button {
+                        addEditorPickerVisible = true
+                    } label: {
+                        Label("Add Editor", symbol: .plus)
+                    }
+                    .help("Add an editor by selecting its application")
+                    .accessibilityLabel("Add Editor")
 
-                Button("Detect Installed Editors") {
-                    @Dependency(EditorClient.self) var client
-                    Task {
-                        let detected = await client.detectInstalledKnownEditors()
-                        let existingBundles = Set(settings.editors.compactMap(\.bundleIdentifier))
-                        for editor in detected where !existingBundles.contains(editor.bundleIdentifier ?? "") {
-                            settings.addEditor(editor)
+                    Button {
+                        if let selection {
+                            settings.removeEditor(id: selection)
+                            self.selection = nil
+                        }
+                    } label: {
+                        Label("Remove", symbol: .minusCircleFill)
+                    }
+                    .disabled(selection == nil)
+                    .accessibilityLabel("Remove Editor")
+
+                    Spacer()
+
+                    Button("Detect Installed Editors") {
+                        @Dependency(EditorClient.self) var client
+                        Task {
+                            let detected = await client.detectInstalledKnownEditors()
+                            let existingBundles = Set(settings.editors.compactMap(\.bundleIdentifier))
+                            for editor in detected where !existingBundles.contains(editor.bundleIdentifier ?? "") {
+                                settings.addEditor(editor)
+                            }
                         }
                     }
+                    .help("Re-scan for known editors that are installed and add any missing ones")
                 }
-                .help("Re-scan for known editors that are installed and add any missing ones")
+                .padding(.horizontal)
+
+                Divider()
+                    .padding(.horizontal)
+
+                PromptEditorOverrideSection()
+                    .padding(.horizontal)
+                    .padding(.bottom, 12)
             }
-            .padding(.horizontal)
-
-            Divider()
-                .padding(.horizontal)
-
-            PromptEditorOverrideSection()
-                .padding(.horizontal)
-                .padding(.bottom, 12)
         }
         .fileImporter(
             isPresented: $addEditorPickerVisible,
@@ -129,20 +131,21 @@ struct EditorsSettingsView: View {
         .padding(.vertical, 2)
     }
 
+    @ViewBuilder
     private func editorIcon(for editor: EditorConfiguration) -> some View {
-        Group {
-            if let image = editor.nsIcon {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-            } else {
-                Symbols.pencil.image
-            }
+        if let image = editor.nsIcon {
+            Image(nsImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+        } else {
+            Symbols.pencil.image
         }
     }
 
     private func detailString(for editor: EditorConfiguration) -> String? {
-        if let bundleId = editor.bundleIdentifier { return bundleId }
+        if let bundleId = editor.bundleIdentifier {
+            return bundleId
+        }
         return editor.executablePath
     }
 
