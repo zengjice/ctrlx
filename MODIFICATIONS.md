@@ -7,6 +7,23 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.143 — Settings layout and process-local Codex launches
+
+- Keep Sidebar and Editors settings inside the Mac Settings window when
+  switching categories or resizing. Scroll long content without pushing the
+  category navigation outside the visible window.
+- Explicitly pass `--no-daemon` to CtrlX-managed interactive Codex launches,
+  including manual launches in newly created zsh terminals. Preserve an explicit
+  remote endpoint and omit interactive defaults for maintenance commands.
+  Existing terminals and running Agents retain their current behavior; update
+  the Host and create a new terminal to receive the shell integration change.
+  See [Codex launch behavior](docs/plugins/codex.md#manual-launch-in-a-ctrlx-terminal).
+- Validation: 319 focused Swift regressions, 120 private publication/installer/COS
+  checks and both repository boundary checks passed. Reused isolated Settings
+  UI acceptance after matching the reviewed source and test hashes. Long-duration
+  UI testing, other Mac hardware/OS versions and Apple Intelligence evaluations
+  were not rerun. This release builds macOS only.
+
 ## 3.0.142 — Relay account access and workflow controls
 
 - Add optional Relay access keys, per-pair Host/Viewer credentials and shared
