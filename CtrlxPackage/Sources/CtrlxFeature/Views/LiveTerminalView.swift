@@ -83,9 +83,11 @@
         /// Lets a parent-owned command menu fail closed while this pane is
         /// bootstrapping or reconnecting, without reading terminal pixels.
         let onTerminalInputReadinessChange: @MainActor ((@MainActor () -> Bool)?) -> Void
+        let onInputPresentationChange: @MainActor (TerminalInputPresentation.State?) -> Void
         /// Parent toolbars can place Copy without moving the pane-owned snapshot sheet.
         let onCopyActionChange: @MainActor ((@MainActor () -> Void)?) -> Void
         let onViewportGridChange: @MainActor (TerminalViewportSizing.Grid?) -> Void
+        let onKeyboardDismissed: @MainActor () -> Void
         let onPasteImage: (@MainActor (ClipboardImage?) -> Void)?
         let onSwitchWindow: (@MainActor (TerminalWindowSwipePolicy.Direction) -> Void)?
         let preparationID: UUID?
@@ -177,8 +179,10 @@
             onCursorNavigationCancellationChange: @escaping @MainActor ((@MainActor () -> Void)?) -> Void = { _ in },
             onExternalInputSenderChange: @escaping @MainActor ((@MainActor ([TmuxKey], Bool) -> Bool)?) -> Void = { _ in },
             onTerminalInputReadinessChange: @escaping @MainActor ((@MainActor () -> Bool)?) -> Void = { _ in },
+            onInputPresentationChange: @escaping @MainActor (TerminalInputPresentation.State?) -> Void = { _ in },
             onCopyActionChange: @escaping @MainActor ((@MainActor () -> Void)?) -> Void = { _ in },
             onViewportGridChange: @escaping @MainActor (TerminalViewportSizing.Grid?) -> Void = { _ in },
+            onKeyboardDismissed: @escaping @MainActor () -> Void = { },
             onSwitchWindow: (@MainActor (TerminalWindowSwipePolicy.Direction) -> Void)? = nil,
             preparationID: UUID? = nil,
             onPresentationChange: @escaping @MainActor (TerminalPresentationStatus) -> Void = { _ in }
@@ -211,8 +215,10 @@
             self.onCursorNavigationCancellationChange = onCursorNavigationCancellationChange
             self.onExternalInputSenderChange = onExternalInputSenderChange
             self.onTerminalInputReadinessChange = onTerminalInputReadinessChange
+            self.onInputPresentationChange = onInputPresentationChange
             self.onCopyActionChange = onCopyActionChange
             self.onViewportGridChange = onViewportGridChange
+            self.onKeyboardDismissed = onKeyboardDismissed
             self.onSwitchWindow = onSwitchWindow
             self.preparationID = preparationID
             self.onPresentationChange = onPresentationChange
@@ -353,6 +359,7 @@
                 await synchronizeStreamingWithConnection()
             }
             .onAppear {
+                onInputPresentationChange(currentInputPresentation)
                 onCopyActionChange(coordinator.streamState == .streaming ? presentTextSnapshot : nil)
                 publishVoiceInputContextProvider()
                 onCursorNavigationCancellationChange { [weak coordinator] in
@@ -371,6 +378,7 @@
                 }
             }
             .onDisappear {
+                onInputPresentationChange(nil)
                 onViewportGridChange(nil)
                 onVoiceInputContextProviderChange(nil)
                 onCursorNavigationCancellationChange(nil)
@@ -387,6 +395,10 @@
                 if !active {
                     linkPresentation.item = nil
                 }
+            }
+            .onChange(of: currentInputPresentation) {
+                // A queued observer must not undo synchronous modal invalidation.
+                onInputPresentationChange(currentInputPresentation)
             }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
                 // The viewport is final now. One deterministic scroll replaces
@@ -475,6 +487,9 @@
             let presentation = terminalInputPresentation(isCopyPresented: false)
             restoresTerminalInputAfterCopy = showsInputControls && presentation.keyboardRequested
             isInteractive = false
+            // Cancel a parent-owned pending Fit before resigning can emit
+            // keyboard/layout notifications or a queued Host reply is handled.
+            onInputPresentationChange(terminalInputPresentation(isCopyPresented: true))
 
             // Sheet presentation does not reliably release the terminal's
             // UIKit first responder. Resign synchronously before changing the
@@ -493,6 +508,7 @@
             guard
                 isActive, !inputSuspension.suspendsInput, textSnapshot == nil,
                 !quickActionPresentation.isPresented, linkPresentation.present(url) else { return }
+            onInputPresentationChange(currentInputPresentation)
             coordinator.terminalState?.cancelCursorNavigation?()
             UIApplication.shared.sendAction(
                 #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
@@ -551,9 +567,7 @@
                     // A presented sheet always wins over both toolbar and
                     // parent-controlled input. This prevents the underlying
                     // UIKit terminal from reclaiming first responder mid-sheet.
-                    let inputPresentation = terminalInputPresentation(
-                        isCopyPresented: textSnapshot != nil
-                    )
+                    let inputPresentation = currentInputPresentation
                     TerminalStreamContainerView(
                         terminalState: state,
                         theme: settings.terminalTheme,
@@ -596,6 +610,7 @@
                         },
                         onPasteImage: terminalImagePasteAction,
                         onViewportGridChange: onViewportGridChange,
+                        onKeyboardDismissed: onKeyboardDismissed,
                         onInitialPresentation: {
                             guard coordinator.terminalState === state else { return }
                             presentedTerminal = state
@@ -673,6 +688,10 @@
                 external: isInputSuspended,
                 quickActionEditor: isQuickActionInputSuspended || quickActionPresentation.suspendsTerminalInput
             )
+        }
+
+        private var currentInputPresentation: TerminalInputPresentation.State {
+            terminalInputPresentation(isCopyPresented: textSnapshot != nil)
         }
 
         private func terminalInputPresentation(
@@ -1512,6 +1531,7 @@
         let onPasteText: @MainActor (String) -> Void
         let onPasteImage: (@MainActor (ClipboardImage?) -> Void)?
         let onViewportGridChange: @MainActor (TerminalViewportSizing.Grid?) -> Void
+        var onKeyboardDismissed: @MainActor () -> Void = { }
         let onInitialPresentation: @MainActor () -> Void
 
         var onOpenPath: (@MainActor (String) -> Void)?
@@ -1548,7 +1568,12 @@
 
             // Wire up input callback
             terminalView.onInput = onInput
-            terminalView.onKeyboardRequest = onKeyboardRequest
+            context.coordinator.onKeyboardRequest = onKeyboardRequest
+            terminalView.onKeyboardRequest = onKeyboardRequest.map { _ in
+                { [weak coordinator = context.coordinator] requested in
+                    coordinator?.requestKeyboard(requested)
+                }
+            }
             terminalView.onRawInput = onRawInput
             terminalView.onCompositionStart = onCompositionStart
             terminalView.onPasteText = onPasteText
@@ -1638,6 +1663,7 @@
             context.coordinator.widthConstraint = widthConstraint
             context.coordinator.heightConstraint = heightConstraint
             context.coordinator.onViewportGridChange = onViewportGridChange
+            context.coordinator.onKeyboardDismissed = onKeyboardDismissed
             context.coordinator.onInitialPresentation = onInitialPresentation
             let windowSwipe = TerminalWindowSwipeGesture(viewport: scrollView, terminal: terminalView)
             windowSwipe.onSwitchWindow = onSwitchWindow
@@ -1656,8 +1682,13 @@
                 scrollView?.setNeedsLayout()
             }
             scrollView.setKeyboardTransitioning(keyboardIsTransitioning)
-            terminalState.onKeyboardTransitionChange = { [weak scrollView] transitioning in
+            terminalState.onKeyboardTransitionChange = { [weak scrollView, weak coordinator = context.coordinator] transitioning in
                 scrollView?.setKeyboardTransitioning(transitioning)
+                // The transparent input view keeps the accessory/responder,
+                // so hiding the software keyboard need not emit didHide.
+                if !transitioning, let requested = coordinator?.terminalView?.keyboardRequested {
+                    coordinator?.keyboardTransitionDidFinish(keyboardRequested: requested)
+                }
             }
 
             // Wire up data callbacks
@@ -1734,7 +1765,12 @@
             // sends through the host or pane state captured by its
             // first render.
             terminalView.onInput = onInput
-            terminalView.onKeyboardRequest = onKeyboardRequest
+            context.coordinator.onKeyboardRequest = onKeyboardRequest
+            terminalView.onKeyboardRequest = onKeyboardRequest.map { _ in
+                { [weak coordinator = context.coordinator] requested in
+                    coordinator?.requestKeyboard(requested)
+                }
+            }
             terminalView.onRawInput = onRawInput
             terminalView.onCompositionStart = onCompositionStart
             terminalView.onPasteText = onPasteText
@@ -1747,6 +1783,7 @@
             terminalView.questionExpansionEnabled = questionExpansionEnabled
             terminalView.scrollingAgentID = scrollingAgentID
             context.coordinator.onViewportGridChange = onViewportGridChange
+            context.coordinator.onKeyboardDismissed = onKeyboardDismissed
             context.coordinator.onInitialPresentation = onInitialPresentation
             context.coordinator.windowSwipe?.onSwitchWindow = onSwitchWindow
             (scrollView as? BottomAnchoredTerminalScrollView)?.setKeyboardTransitioning(keyboardIsTransitioning)
@@ -1769,6 +1806,7 @@
             coordinator.terminalView?.onOpenPath = nil
             coordinator.terminalView?.onFileLinkActions = nil
             coordinator.terminalView?.onKeyboardRequest = nil
+            coordinator.keyboardDismissalFit.cancel()
             coordinator.terminalView?.invalidateInput()
         }
 
@@ -1783,11 +1821,30 @@
             var widthConstraint: NSLayoutConstraint?
             var heightConstraint: NSLayoutConstraint?
             var onViewportGridChange: (@MainActor (TerminalViewportSizing.Grid?) -> Void)?
+            var onKeyboardRequest: (@MainActor (Bool) -> Void)?
+            var onKeyboardDismissed: (@MainActor () -> Void)?
+            var keyboardDismissalFit = TerminalKeyboardDismissalFit()
             var onInitialPresentation: (@MainActor () -> Void)?
             private(set) var presentationTask: Task<Void, Never>?
             private var reportedGrid: TerminalViewportSizing.Grid?
             private var pendingGrid: TerminalViewportSizing.Grid?
             private(set) var viewportReportTask: Task<Void, Never>?
+
+            func requestKeyboard(_ requested: Bool) {
+                keyboardDismissalFit.requestKeyboard(requested)
+                onKeyboardRequest?(requested)
+            }
+
+            func keyboardTransitionDidFinish(keyboardRequested: Bool) {
+                guard !keyboardRequested, keyboardDismissalFit.keyboardDidHide() else { return }
+                // Reject queued pre-animation measurements and force a fresh
+                // report even when the final cell grid is unchanged.
+                viewportReportTask?.cancel()
+                viewportReportTask = nil
+                pendingGrid = nil
+                reportedGrid = nil
+                outerScrollView?.setNeedsLayout()
+            }
 
             func reportViewport(_ size: CGSize?) {
                 let grid = size.flatMap { TerminalViewportSizing.grid(viewport: $0, cellSize: cellSize) }
@@ -1803,6 +1860,9 @@
                     guard pendingGrid != reportedGrid else { return }
                     reportedGrid = pendingGrid
                     onViewportGridChange?(reportedGrid)
+                    if keyboardDismissalFit.consumeIfReady(hasViewport: reportedGrid != nil) {
+                        onKeyboardDismissed?()
+                    }
                 }
             }
 
@@ -1900,6 +1960,10 @@
             }
 
             func updateInteraction(inputEnabled: Bool, keyboardRequested: Bool) {
+                let input = TerminalInputPresentation.State(inputEnabled: inputEnabled, keyboardRequested: keyboardRequested)
+                if !input.allowsKeyboardDismissalFit {
+                    keyboardDismissalFit.cancel()
+                }
                 terminalView?.updateInput(
                     isEnabled: inputEnabled,
                     keyboardRequested: keyboardRequested

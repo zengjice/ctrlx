@@ -10,6 +10,14 @@ a local CtrlX Codex/Claude Code session, use `ctrlx browser` by default, even wh
 user does not name this skill. It controls the source Host's Chromium; paired
 Mac/iOS Viewers can view those pages.
 
+If `ctrlx` is not on PATH, check the bundled CLI before reporting it unavailable:
+run `"/Applications/CtrlX.app/Contents/MacOS/CtrlXCLI" browser --help`, then use
+that quoted executable path instead of `ctrlx` in the workflow commands. If the
+app is installed elsewhere, use its `Contents/MacOS/CtrlXCLI`. `browser` is a
+subcommand, not a separate executable; a missing system `agent-browser` package
+does not mean CtrlX Browser is missing. A socket error means check the running
+Host/connection, not install another browser tool.
+
 Keep the user's explicit browser choice, including requests to use another
 browser's existing tab, login or extension. Native-app UI uses its own tools;
 ordinary information lookup can use search, fetch or a dedicated API. Source

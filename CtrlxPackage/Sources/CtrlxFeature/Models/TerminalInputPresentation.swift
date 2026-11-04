@@ -2,6 +2,10 @@ enum TerminalInputPresentation {
     struct State: Equatable {
         let inputEnabled: Bool
         let keyboardRequested: Bool
+
+        var allowsKeyboardDismissalFit: Bool {
+            inputEnabled && !keyboardRequested
+        }
     }
 
     static func resolve(
@@ -49,5 +53,37 @@ struct TerminalInitialTailPresentationPolicy: Equatable {
         guard isPending, isAttachedToWindow, hasUsableBounds else { return false }
         isPending = false
         return true
+    }
+}
+
+/// Only an explicit keyboard dismissal can arm Fit. Its final viewport must
+/// be measured after UIKit finishes hiding the keyboard.
+struct TerminalKeyboardDismissalFit {
+    private enum Phase {
+        case idle
+        case waitingForKeyboard
+        case waitingForViewport
+    }
+
+    private var phase = Phase.idle
+
+    mutating func requestKeyboard(_ requested: Bool) {
+        phase = requested ? .idle : .waitingForKeyboard
+    }
+
+    mutating func keyboardDidHide() -> Bool {
+        guard phase == .waitingForKeyboard else { return false }
+        phase = .waitingForViewport
+        return true
+    }
+
+    mutating func consumeIfReady(hasViewport: Bool) -> Bool {
+        guard phase == .waitingForViewport, hasViewport else { return false }
+        phase = .idle
+        return true
+    }
+
+    mutating func cancel() {
+        phase = .idle
     }
 }

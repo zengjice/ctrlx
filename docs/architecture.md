@@ -197,6 +197,9 @@ updates, but verify decoding, capability gating and envelope limits per change.
   a manual session-state override still wins. An idle first tab cannot hide a
   working or waiting agent in another tab. Terminal progress remains independent:
   any pane's explicit progress wins, otherwise any working agent supplies a bar.
+  The iOS Tabs sheet and Mac local/remote window-tab titles apply the same
+  progress rule to each window's panes, using the shared blue scanner while an
+  agent is working. Mac title progress sits above the selected-tab underline.
   Within the idle group, the latest task activity sorts first; ties and missing
   timestamps fall back to session-name ordering. Other groups keep name ordering.
   Activity is the latest Host receipt of a task state (working, waiting for input,

@@ -141,6 +141,10 @@ iOS Files 的图片内容预览支持本地双指缩放（适配至 4 倍）、�
 普通文件导入继续使用原有文件上传能力，不受剪贴板图片限制影响。
 
 Mac Host, Mac Viewer and iOS share `WorkspaceFileBrowserView`.
+Mac Files exposes **New Folder…**, **Upload Files…** (local **Import Files…**) and
+**Paste Image** as independent toolbar icons with tooltips and accessibility labels.
+The More menu retains source-directory navigation and hidden-file visibility;
+**Copy Directory Path** is removed from that Mac menu. iOS keeps its menu actions.
 Right-click a terminal window tab on Mac Host/Viewer and choose **Open Files**.
 On iOS, the current terminal has a compact icon row below its title:
 **New Agent…**, **New Terminal**, **Open Files**, **Open Browser on Host**,
@@ -524,9 +528,10 @@ tests do not run the iOS-only viewport test.
 
 ### Creating folders and adding files
 
-The directory toolbar's **⋯** menu offers **New Folder…** and **Import Files…**
-(local Mac Host) / **Upload Files…** (Mac Viewer and iOS). New Folder accepts one
-literal child name through a native alert and reuses `CreateSessionDirectory`.
+On Mac Host and Viewer, the directory toolbar provides independent **New Folder…**
+and **Import Files…** (local Host) / **Upload Files…** (Viewer) icons. On iOS,
+these actions remain in the directory toolbar's **⋯** menu. New Folder accepts
+one literal child name through a native alert and reuses `CreateSessionDirectory`.
 It refreshes the list without navigating into the new folder or starting a session.
 The native file picker accepts multiple ordinary files. Import is a copy, never
 a move. Remote upload always writes to the Host, never a matching Viewer path.

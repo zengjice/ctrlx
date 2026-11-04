@@ -99,6 +99,51 @@ struct TerminalTabFitTests {
         #expect(take(&fit, current: second) == grid)
     }
 
+    @Test("Reopening the keyboard cancels a dismissal Fit queued behind an in-flight resize")
+    func reopeningCancelsQueuedDismissal() {
+        var fit = TerminalTabFit()
+        fit.request(first)
+        #expect(take(&fit, current: first) == grid)
+        // The first request has been sent; its Host reply is still pending.
+        fit.request(first, requiresHiddenKeyboard: true)
+        #expect(fit.target == first)
+        fit.cancelKeyboardDismissal()
+        #expect(fit.target == nil)
+
+        let keyboardViewport = ResizeTmuxPane(width: 100, height: 20, userInitiated: true)
+        // Releasing the resize guard or publishing new geometry cannot revive it.
+        #expect(fit.takeRequest(
+            for: first,
+            isAvailable: true,
+            isPresentationReady: true,
+            measuredRequest: keyboardViewport
+        ) == nil)
+        #expect(take(&fit, current: first) == nil)
+    }
+
+    @Test("Keyboard cancellation preserves a subsequent tab-entry Fit")
+    func keyboardCancellationKeepsEntryFit() {
+        var fit = TerminalTabFit()
+        fit.request(first, requiresHiddenKeyboard: true)
+        fit.request(second)
+        fit.cancelKeyboardDismissal()
+        #expect(fit.target == second)
+        #expect(take(&fit, current: second) == grid)
+    }
+
+    @Test("A fresh dismissal after reopening can request Fit once")
+    func newDismissalAfterCancellation() {
+        var fit = TerminalTabFit()
+        fit.request(first, requiresHiddenKeyboard: true)
+        fit.cancelKeyboardDismissal()
+        fit.request(first, requiresHiddenKeyboard: true)
+        #expect(take(&fit, current: first) == grid)
+        #expect(take(&fit, current: first) == nil)
+        fit.request(first)
+        fit.cancelKeyboardDismissal()
+        #expect(take(&fit, current: first) == grid)
+    }
+
     private func take(_ fit: inout TerminalTabFit, current: TerminalTabFit.Target) -> ResizeTmuxPane? {
         fit.takeRequest(for: current, isAvailable: true, isPresentationReady: true, measuredRequest: grid)
     }

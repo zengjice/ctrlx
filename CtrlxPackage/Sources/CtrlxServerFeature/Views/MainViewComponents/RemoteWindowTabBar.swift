@@ -337,6 +337,7 @@ struct RemoteWindowTabBar: View {
             : window.id == selectedWindow?.id && selectedBrowserTabId == nil && sessionTabs?.selectedFileTabId == nil
         let isHovered = hoveredWindowId == window.id
         let windowName = windowTabLabel(windowName: window.windowName, windowIndex: window.windowIndex)
+        let progress = window.panes.effectiveProgress
 
         return HStack(spacing: 0) {
             Button {
@@ -345,13 +346,14 @@ struct RemoteWindowTabBar: View {
                 TerminalWindowTabLabel(
                     name: windowName,
                     hasAgent: window.hasClaude,
-                    needsAttention: window.needsAttention
+                    needsAttention: window.needsAttention,
+                    progress: progress
                 )
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(window.id) \(windowName)")
             .accessibilityValue(
-                windowTabAccessibilityValue(isSelected: isSelected, needsAttention: window.needsAttention)
+                windowTabAccessibilityValue(isSelected: isSelected, needsAttention: window.needsAttention, progress: progress)
             )
             .background(WindowTabDragSource(windowID: window.stableId, label: windowName) { point in
                 onDetachWindow?(window, point)

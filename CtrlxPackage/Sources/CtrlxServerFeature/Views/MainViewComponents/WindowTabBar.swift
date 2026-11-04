@@ -490,17 +490,18 @@ struct WindowTabBar: View {
         let needsAttention = window.panes.contains {
             windowManager.paneStates[$0.paneId]?.agentSession?.needsAttention == true
         }
+        let progress = window.panes.compactMap { windowManager.paneStates[$0.paneId] }.effectiveProgress
         let windowName = windowTabLabel(windowName: window.windowName, windowIndex: window.windowIndex)
 
         return HStack(spacing: 0) {
             Button {
                 onSelectWindow(window)
             } label: {
-                TerminalWindowTabLabel(name: windowName, hasAgent: hasClaude, needsAttention: needsAttention)
+                TerminalWindowTabLabel(name: windowName, hasAgent: hasClaude, needsAttention: needsAttention, progress: progress)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(window.id) \(windowName)")
-            .accessibilityValue(windowTabAccessibilityValue(isSelected: isSelected, needsAttention: needsAttention))
+            .accessibilityValue(windowTabAccessibilityValue(isSelected: isSelected, needsAttention: needsAttention, progress: progress))
             .background(WindowTabDragSource(windowID: window.stableId, label: windowName) { point in
                 onDetachWindow?(window, point)
             })

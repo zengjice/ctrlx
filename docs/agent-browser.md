@@ -459,6 +459,12 @@ reported without silently switching to Computer Use, another browser client or
 standalone Playwright. Browser switching requires the user's choice. This is
 skill guidance, not a tool-permission sandbox; no global agent settings change.
 
+The entrypoint also covers a missing PATH wrapper: agents check the App's bundled
+`Contents/MacOS/CtrlXCLI browser --help` and use its absolute path before declaring
+the CLI unavailable. Browser is a subcommand of this executable; a missing system
+`agent-browser` installation or a socket connection failure is not proof that the
+bundled command is absent.
+
 Codex and Claude Code inject this short entrypoint alongside `file-links` and
 `agent-ios` through the existing `SessionStart` hook, after lifecycle forwarding
 to the local Host succeeds. It covers startup, resume, clear, compact and fork;
@@ -468,7 +474,7 @@ workflow only when webpage interaction is needed. Each entrypoint is independent
 a missing, unreadable, malformed or oversized file is skipped without blocking
 the other guidance or lifecycle event.
 
-This requires updating the cached plugin to Codex 1.1.11 / Claude Code 1.3.12
+This guidance requires updating the cached plugin to Codex 1.1.17 / Claude Code 1.3.18
 or later and triggering `SessionStart` with hooks enabled and trusted. Repository
 edits alone do not update running agents. Isolated hook tests verify delivery and
 bundle contents; they do not guarantee a model's tool choice.

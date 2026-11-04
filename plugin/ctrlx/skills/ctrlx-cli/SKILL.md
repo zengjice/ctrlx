@@ -31,10 +31,22 @@ ctrlx list-panes --window work:0 --json
 - Socket priority: `--socket` → `$CTRLX_SOCKET` → `$TMPDIR/ctrlx.sock`.
   This is **not** the tmux socket; do not pass it to `tmux -S`.
 
-If the CLI is missing, check `/Applications/CtrlX.app/Contents/MacOS/CtrlXCLI`
-or ask for **CtrlX → Install Command Line Tool…**. If unreachable, check the
-app/socket; `wait-ready --timeout 30` waits for an expected startup. On
-`not_found`, re-list once and resolve a fresh target; do not retry stale IDs.
+Missing `ctrlx` on PATH does not mean the CLI is unavailable. Before reporting it
+missing or asking to install it, check the bundled executable:
+
+```sh
+"/Applications/CtrlX.app/Contents/MacOS/CtrlXCLI" --help
+"/Applications/CtrlX.app/Contents/MacOS/CtrlXCLI" browser --help
+```
+
+Use that quoted absolute path in place of `ctrlx` in every command when needed.
+`browser` and `ios` are subcommands of the same executable; they do not require
+separate `ctrlx-browser`, `agent-browser` or simulator CLI installations. If the
+app is installed elsewhere, use its `Contents/MacOS/CtrlXCLI`. **CtrlX → Install
+Command Line Tool…** installs the optional PATH wrapper. A socket connection
+failure means check the app/socket; `wait-ready --timeout 30` waits for an expected
+startup. On `not_found`, re-list once and resolve a fresh target; do not retry
+stale IDs.
 
 ## Common operations
 

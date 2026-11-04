@@ -1,6 +1,7 @@
 import CtrlxNetworking
 
-/// One Fit per tab entry, foreground activation or terminal focus/content click after a viewport change.
+/// One Fit per tab entry, foreground activation, keyboard dismissal or terminal
+/// focus/content click after a viewport change.
 /// Geometry and Host snapshots can finish a pending measurement, but cannot schedule a resize.
 public struct TerminalTabFit: Equatable, Sendable {
     public struct Target: Hashable, Sendable {
@@ -16,16 +17,25 @@ public struct TerminalTabFit: Equatable, Sendable {
     }
 
     public private(set) var target: Target?
+    private var requiresHiddenKeyboard = false
     private var fittedViewports: [Target: ResizeTmuxPane] = [:]
 
     public init() { }
 
-    public mutating func request(_ target: Target) {
+    public mutating func request(_ target: Target, requiresHiddenKeyboard: Bool = false) {
         self.target = target
+        self.requiresHiddenKeyboard = requiresHiddenKeyboard
     }
 
     public mutating func cancel() {
         target = nil
+        requiresHiddenKeyboard = false
+    }
+
+    /// Reopening the keyboard must not cancel unrelated tab/foreground requests.
+    public mutating func cancelKeyboardDismissal() {
+        guard requiresHiddenKeyboard else { return }
+        cancel()
     }
 
     /// Terminal focus and content clicks are deduplicated. Tab/window activation must still ask the Host
