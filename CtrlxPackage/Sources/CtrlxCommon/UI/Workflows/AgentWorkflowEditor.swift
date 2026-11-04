@@ -25,28 +25,9 @@ struct AgentWorkflowEditor: View {
     @State private var createdAgent: AgentWorkflowCreatedAgent?
     @State private var attachments: [UUID: AgentWorkflowAttachment] = [:]
     @State private var importedIDs: Set<UUID> = []
-    @State private var showingImporter = false
-    @State private var importTarget = AttachmentTarget.initial
-    @State private var importRequest: AttachmentImport?
-    @State private var importProgress = 0.0
-    @State private var importName = ""
-    @State private var imageError: (target: AttachmentTarget, message: String)?
-    #if os(iOS)
-        @State private var showingPhotos = false
-        @State private var selectedPhotos: [PhotosPickerItem] = []
-    #endif
+    @State private var importing = false
+    @State private var activeImport: AgentWorkflowImageImport?
     @State private var showingReviewTemplate = false
-
-    private enum AttachmentTarget: Equatable {
-        case initial
-        case node(UUID)
-    }
-
-    private struct AttachmentImport {
-        let id = UUID()
-        let target: AttachmentTarget
-        let sources: [AgentWorkflowImageSource]
-    }
 
     init(endpoint: AgentWorkflowEndpoint, definition: AgentWorkflowDefinition, isNew: Bool, createAgent: ((UUID) async throws -> AgentWorkflowAgentCreation)?) {
         self.endpoint = endpoint
@@ -66,9 +47,7 @@ struct AgentWorkflowEditor: View {
             Form {
                 Section("Task") {
                     TextField("Workflow name", text: $draft.name)
-                    taskInput("Initial task", text: $draft.initialInput.text, ids: draft.initialInput.attachmentIDs, target: .initial) { id in
-                        draft.initialInput.attachmentIDs.removeAll { $0 == id }
-                    }
+                    taskInput("Initial task", input: $draft.initialInput)
                     Text("Choose which steps receive the original task and attachments. The review template sends them only to initial development.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -143,9 +122,7 @@ struct AgentWorkflowEditor: View {
                             Text("Prepares text and attachments without calling an Agent. Connect an Agent step to send this material.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
-                        taskInput("Instructions or skill for this step", text: $node.input.text, ids: node.input.attachmentIDs, target: .node(node.id)) { id in
-                            node.input.attachmentIDs.removeAll { $0 == id }
-                        }
+                        taskInput("Instructions or skill for this step", input: $node.input)
                         Picker("Original task", selection: Binding(get: { draft.initialTask(for: node) }, set: { node.initialTask = $0 })) {
                             ForEach(AgentWorkflowNode.InitialTask.allCases, id: \.self) { Text($0.title).tag($0) }
                         }
@@ -177,7 +154,7 @@ struct AgentWorkflowEditor: View {
                         }
                         Text(targets.isEmpty ? "No downstream steps." : "Then: " + targets.map(\.name).joined(separator: ", "))
                             .font(.caption).foregroundStyle(.secondary)
-                        Button("Remove step", role: .destructive) { remove(node.id) }
+                        Button("Remove step", role: .destructive) { remove(node.id) }.disabled(importing)
                     } header: {
                         Text("Step \((draft.nodes.firstIndex { $0.id == node.id } ?? 0) + 1) · \(node.name)")
                     }
@@ -225,44 +202,33 @@ struct AgentWorkflowEditor: View {
                 }
             }
             .formStyle(.grouped)
-            .disabled(saving || importRequest != nil)
+            .disabled(saving)
             .navigationTitle(isNew ? "New workflow" : "Edit workflow")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(importRequest == nil ? "Cancel" : "Stop import") {
-                        if importRequest != nil {
-                            importRequest = nil
+                    Button(!importing ? "Cancel" : "Stop import") {
+                        if importing {
+                            if activeImport == nil {
+                                importing = false
+                            }
+                            activeImport = nil
                         } else {
                             cancel()
                         }
                     }.disabled(saving)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }.disabled(saving || importRequest != nil || validationIssue != nil || !endpoint.isConnected)
+                    Button("Save") { save() }.disabled(saving || importing || validationIssue != nil || !endpoint.isConnected)
                 }
             }
         }
         #if os(macOS)
         .frame(minWidth: 520, idealWidth: 640, minHeight: 500, idealHeight: 700)
         #endif
-        .interactiveDismissDisabled(saving || importRequest != nil || !importedIDs.isEmpty)
-        .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.image], allowsMultipleSelection: true) { result in
-            switch result {
-            case let .success(urls): importImages(urls.map(AgentWorkflowImageSource.file), for: importTarget)
-            case let .failure(failure): imageError = (importTarget, failure.localizedDescription)
-            }
-        }
-        #if os(iOS)
-        .photosPicker(isPresented: $showingPhotos, selection: $selectedPhotos, maxSelectionCount: max(1, AgentWorkflowWire.maximumAttachments - draft.attachmentIDs.count), matching: .images)
-        .onChange(of: selectedPhotos) { _, photos in
-            guard !photos.isEmpty else { return }
-            importImages(photos.map(AgentWorkflowImageSource.photo), for: importTarget)
-            selectedPhotos = []
-        }
-        #endif
-        .task(id: importRequest?.id) {
-            guard let request = importRequest else { return }
-            await importAttachments(request)
+        .interactiveDismissDisabled(saving || importing || !importedIDs.isEmpty)
+        .task(id: activeImport?.id) {
+            guard let activeImport else { return }
+            await activeImport.perform()
         }
         .sheet(isPresented: $showingCreation, onDismiss: { creation = nil }) {
             VStack {
@@ -421,40 +387,17 @@ struct AgentWorkflowEditor: View {
         }
     }
 
-    private func taskInput(_ title: String, text: Binding<String>, ids: [UUID], target: AttachmentTarget, remove: @escaping (UUID) -> Void) -> some View {
-        AgentWorkflowTaskInput(
-            title: title, text: text, ids: ids, attachments: attachments,
-            add: {
-                importTarget = target
-                showingImporter = true
-            }, photos: photoAction(for: target),
-            receive: { importImages($0, for: target) }, remove: remove,
-            progress: importRequest?.target == target ? (importName, importProgress) : nil,
-            error: imageError?.target == target ? imageError?.message : nil
+    private func taskInput(_ title: String, input: Binding<AgentWorkflowInput>) -> some View {
+        AgentWorkflowImageInput(
+            endpoint: endpoint,
+            hostID: draft.hostID,
+            title: title,
+            text: input.text,
+            ids: input.attachmentIDs,
+            attachments: $attachments,
+            importedIDs: $importedIDs,
+            importing: $importing, activeImport: $activeImport, totalImageCount: draft.attachmentIDs.count
         )
-    }
-
-    private func photoAction(for target: AttachmentTarget) -> (() -> Void)? {
-        #if os(iOS)
-            return {
-                importTarget = target
-                showingPhotos = true
-            }
-        #else
-            return nil
-        #endif
-    }
-
-    private func importImages(_ sources: [AgentWorkflowImageSource], for target: AttachmentTarget) {
-        guard !sources.isEmpty, importRequest == nil, !saving else { return }
-        guard draft.attachmentIDs.count + sources.count <= AgentWorkflowWire.maximumAttachments else {
-            imageError = (target, "A workflow supports up to 32 images. Choose fewer images.")
-            return
-        }
-        imageError = nil
-        importName = "Preparing image…"
-        importProgress = 0
-        importRequest = .init(target: target, sources: sources)
     }
 
     private func refreshAttachments() async {
@@ -468,45 +411,6 @@ struct AgentWorkflowEditor: View {
             if !Task.isCancelled {
                 self.error = error.localizedDescription
             }
-        }
-    }
-
-    private func importAttachments(_ request: AttachmentImport) async {
-        defer {
-            if importRequest?.id == request.id {
-                importRequest = nil
-            }
-        }
-        do {
-            for source in request.sources {
-                try Task.checkCancellation()
-                importName = "Preparing image…"
-                importProgress = 0
-                let image = try await source.load()
-                try Task.checkCancellation()
-                importName = image.name
-                let attachment = try await endpoint.importImage(image, hostID: draft.hostID) { sent, total in
-                    importProgress = total > 0 ? Double(sent) / Double(total) : 0
-                }
-                importedIDs.insert(attachment.id)
-                attachments[attachment.id] = attachment
-                try appendAttachments([attachment], to: request.target)
-            }
-        } catch {
-            if !Task.isCancelled {
-                imageError = (request.target, error.localizedDescription)
-            }
-        }
-    }
-
-    private func appendAttachments(_ values: [AgentWorkflowAttachment], to target: AttachmentTarget) throws {
-        switch target {
-        case .initial: draft.initialInput.attachmentIDs.append(contentsOf: values.map(\.id))
-        case let .node(id):
-            guard let index = draft.nodes.firstIndex(where: { $0.id == id }) else {
-                throw AgentWorkflowError("The role was removed. Import the attachment for another role.")
-            }
-            draft.nodes[index].input.attachmentIDs.append(contentsOf: values.map(\.id))
         }
     }
 

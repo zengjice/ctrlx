@@ -109,12 +109,15 @@ the `.xcodeproj`, so local packages and shared schemes resolve consistently.
 
 - macOS scheme: `CtrlxServer`
 - iOS scheme: `Ctrlx`
-- For macOS-only packaging/publication, build macOS only by default. Run an iOS
-  Simulator build only when the user explicitly requests iOS validation.
+- Build only the requested platform: macOS for Mac packaging/publication and
+  iOS device for IPA packaging or physical-iPhone installation. Do not add an
+  iOS Simulator build as an extra validation step, including for iOS code changes.
+  Run it only when the user explicitly requests Simulator validation or the full
+  cross-platform E2E suite. Prefer the device build for other iOS compile checks.
 - Before direct Mac workspace builds, prepare the native components in order:
   `bash scripts/build-device-installer.sh`, `bash scripts/build-agent-browser.sh`,
   then `bash scripts/build-agent-simulator.sh`. Local Mac packaging does this
-  automatically.
+  automatically. This builds a macOS helper, not the iOS Simulator App target.
 - Unit tests: `./scripts/unit-tests.sh` (pass filters after `--`). Uses Swift's
   `swiftbuild` backend without indexes; after success, prunes old native-backend
   outputs and test indexes. Do not alternate backends or build concurrently in
@@ -128,16 +131,21 @@ the ignored `Config/Local.xcconfig`, then set the development team and unique ap
 and notification-extension bundle identifiers there. Never hard-code a personal
 team or provisioning profile in `project.pbxproj`.
 
-For a fast simulator compile check that does not require an iPhone or device
-provisioning:
+Only for explicitly requested Simulator compile validation, use the managed
+command below. After success it removes compilation caches from the standard
+worktree-local Simulator DerivedData, retaining built apps and dependencies.
+Failed or interrupted checks retain caches for diagnosis. For a deliberately
+repeated Simulator debugging session, omit `--cleanup-ios-simulator`.
 
 ```bash
-python3 scripts/local_build.py run -- xcodebuild \
+python3 scripts/local_build.py run --cleanup-ios-simulator -- xcodebuild \
   -workspace Ctrlx.xcworkspace \
   -scheme Ctrlx \
   -configuration Debug \
   -destination 'generic/platform=iOS Simulator' \
   -derivedDataPath .build-local/DerivedData/iOS-Simulator \
+  COMPILER_INDEX_STORE_ENABLE=NO \
+  INDEX_ENABLE_DATA_STORE=NO \
   -skipMacroValidation \
   build
 ```
@@ -218,6 +226,9 @@ preview by default; inspect that output before adding `--yes`.
   signed apps, packages and downloads. `deep` also deletes built apps and downloaded
   build dependencies. Neither scans other worktrees. Scope and other modes:
   [Local build storage](RELEASE.md#local-build-storage).
+- `python3 scripts/clean-build.py ios-simulator` previews only the standard
+  iOS Simulator compilation caches; add `--yes` after checking the preview.
+  It preserves Mac/device caches, built apps, packages and downloads.
 - Mark diagnostics/backups with `.ctrlx-cleanup-ready` only after their consumers
   stop and the evidence is no longer needed. An App backup also needs a verified
   replacement and retained rollback package. See [packaging cleanup](RELEASE.md#packaging-and-test-cleanup).

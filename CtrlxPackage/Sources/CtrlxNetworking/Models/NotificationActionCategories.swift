@@ -4,7 +4,7 @@
 
     /// Builds and registers the `UNNotificationCategory` set for actionable
     /// notifications (issue #710). Shared by the iOS app (launch registration,
-    /// follow-up question notifications, live-socket fallback notifications)
+    /// follow-up question notifications)
     /// and the Notification Service Extension (per-push dynamic registration) —
     /// which is why it lives here rather than in an app-only target: the NSE
     /// links only CtrlxNetworking + CtrlxEncryption.

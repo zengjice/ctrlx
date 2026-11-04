@@ -199,7 +199,7 @@ extension EnvSerializedSuites {
             }
         }
 
-        @Test("Background and alert push bodies consume the shared allowance and are not sent after denial")
+        @Test("Queued badge and alert push bodies consume the shared allowance and are not sent after denial")
         func pushAdmission() async throws {
             let log = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-quota-push-\(UUID().uuidString).jsonl")
             defer { try? FileManager.default.removeItem(at: log) }
@@ -213,18 +213,24 @@ extension EnvSerializedSuites {
                 let host = try await connect(port: port, pairID: pair.id, role: "host", device: "host", token: hostKey, frames: frames)
                 try #require(await wait { await app.connectionHub.isHostConnected(pairId: pair.id) })
                 try await app.injectE2EPush(pairId: pair.id, hostBadge: 1, silent: true)
-                let background = try await service.status(token: key.key)
-                #expect(background.usedBytes > 0)
+                try #require(await wait { (try? String(contentsOf: log, encoding: .utf8).split(separator: "\n").count) == 1 })
+                let badge = try await service.status(token: key.key)
+                #expect(badge.usedBytes > 0)
                 try await app.injectE2EPush(pairId: pair.id, hostBadge: 2, silent: false)
+                try #require(await wait { (try? String(contentsOf: log, encoding: .utf8).split(separator: "\n").count) == 2 })
                 let alert = try await service.status(token: key.key)
-                #expect(alert.usedBytes > background.usedBytes)
+                #expect(alert.usedBytes > badge.usedBytes)
                 let principal = try await service.authenticate(hostKey)
                 _ = try await service.admit(principal, bytes: Int(alert.remainingBytes - 1))
                 try await app.injectE2EPush(pairId: pair.id, hostBadge: 3, silent: true)
                 #expect(try await service.status(token: key.key).remainingBytes == 1)
                 #expect(await wait { host.isClosed })
                 #expect(frames.failures().first?.code == .quotaExceeded)
-                #expect(try String(contentsOf: log, encoding: .utf8).split(separator: "\n").count == 2)
+                let records = try String(contentsOf: log, encoding: .utf8).split(separator: "\n").map {
+                    try JSONDecoder().decode(APNsPushLogEntry.self, from: Data($0.utf8))
+                }
+                #expect(records.count == 2)
+                #expect(records.map(\.pushType) == ["alert", "alert"])
             }
         }
 

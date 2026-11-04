@@ -53,8 +53,7 @@ public enum MarkHandledScenario {
 
         // ── Phase 3: Verify "Idle" on all three platforms ─────────────────
         //
-        // SessionStart settles to `.idle` (the "session started" push still fires,
-        // but a just-started session no longer needs attention).
+        // SessionStart settles to `.idle` without a notification or attention badge.
 
         TestStep.log("Verifying Idle state on all platforms")
 

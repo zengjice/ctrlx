@@ -63,6 +63,8 @@ final public class MirrorWindowManager {
     @ObservationIgnored
     @Dependency(AgentSessionIdentityClient.self) private var agentIdentities
 
+    @ObservationIgnored private let agentActivity = AgentActivityStore()
+
     /// Called when session metadata (description, color, or emoji) changes,
     /// to push updated state to viewers.
     public var onSessionMetadataChanged: (@MainActor @Sendable () async -> Void)?
@@ -152,18 +154,33 @@ final public class MirrorWindowManager {
 
         // Update or create entries for current panes
         for pane in panes {
-            if var state = updatedStates[pane.paneId] {
+            let previous = updatedStates[pane.paneId]
+            var state = previous ?? pane.makePaneState()
+            var paneChanged = previous == nil
+            if previous != nil {
                 let pathChanged = state.currentPath != pane.currentPath
                 if pane.updateMetadata(of: &state) {
                     if pathChanged {
                         state.gitBranch = nil
                         state.gitWorktreePath = nil
                     }
-                    updatedStates[pane.paneId] = state
-                    changed = true
+                    paneChanged = true
                 }
-            } else {
-                updatedStates[pane.paneId] = pane.makePaneState()
+            }
+            if let paneID = state.workspaceIdentity?.paneID {
+                // A hook may arrive before the first metadata snapshot supplies
+                // the durable identity. Save that event now, then restore on launch.
+                if let activity = state.lastAgentActivityAt {
+                    agentActivity.record(activity, for: paneID)
+                }
+                let restored = agentActivity.lastActivity(for: paneID)
+                if state.lastAgentActivityAt != restored {
+                    state.lastAgentActivityAt = restored
+                    paneChanged = true
+                }
+            }
+            if paneChanged {
+                updatedStates[pane.paneId] = state
                 changed = true
             }
         }
@@ -783,7 +800,8 @@ final public class MirrorWindowManager {
         state: AgentState,
         tmuxPane: String?,
         projectPath: String?,
-        permissionMode: String? = nil
+        permissionMode: String? = nil,
+        receivedAt: Date = Date()
     ) {
         guard let paneId = tmuxPane, !paneId.isEmpty else {
             logger.debug("Dropping plugin state with no tmuxPane", metadata: [
@@ -837,9 +855,15 @@ final public class MirrorWindowManager {
             paneStates[paneId]?.permissionMode = permissionMode
         }
 
-        // Plugin state is newer than (or at least as trustworthy as) tmux's
-        // window activity, and immediately re-ranks an idle session.
-        paneStates[paneId]?.lastAgentActivityAt = Date()
+        // Session discovery/start and marking handled are not task activity.
+        if state != .idle {
+            let received = Date(timeIntervalSince1970: receivedAt.timeIntervalSince1970.rounded(.down))
+            let activity = max(received, paneStates[paneId]?.lastAgentActivityAt ?? .distantPast)
+            paneStates[paneId]?.lastAgentActivityAt = activity
+            if let paneID = paneStates[paneId]?.workspaceIdentity?.paneID {
+                agentActivity.record(activity, for: paneID)
+            }
+        }
 
         // A definitive state wins over any CLI-driven override so subsequent
         // plugin activity is reflected.

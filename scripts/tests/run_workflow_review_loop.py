@@ -60,6 +60,8 @@ def image_hashes(value):
         uri = value.get("image_url", "")
         if value.get("type") == "input_image" and isinstance(uri, str) and uri.startswith("data:"):
             yield hashlib.sha256(base64.b64decode(uri.split(",", 1)[1])).hexdigest()
+        if value.get("type") == "image" and value.get("source", {}).get("type") == "base64":
+            yield hashlib.sha256(base64.b64decode(value["source"]["data"])).hexdigest()
         for key, item in value.items():
             if key not in ("image_url", "data"):
                 yield from image_hashes(item)
@@ -121,14 +123,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if invocation and "USER_IMAGE_TASK" in prompt:
                 assert codex
                 if phase == 0:
-                    call = ("exec_command", {"cmd": f"ctrlx workflow attachments --invocation {invocation} --json", "login": False})
-                elif phase == 1:
-                    attachments = result_json(previous)["attachments"]
-                    assert len(attachments) == 1
-                    state["image"] = attachments[0]
-                    call = ("view_image", {"path": attachments[0]["path"]})
-                elif phase == 2:
-                    assert state["image"]["sha256"] in list(image_hashes(messages[start + 1:])), "Image did not reach native model input"
+                    expected = hashlib.sha256((server.root / "task.png").read_bytes()).hexdigest()
+                    assert expected in list(image_hashes(messages[start:])), "Native image was missing from the first task request"
                     state["imageRead"] = True
                     command = "printf '%s\\n' 'def safe_divide(numerator, denominator):' '    return numerator / denominator' > sample.py"
                     call = ("exec_command", {"cmd": command, "login": False})
@@ -152,6 +148,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     reply = "REPAIR_DONE: added the Accepted guard and verified normal and zero inputs."
             elif invocation and "Review the current implementation" in prompt:
                 assert not codex
+                expected = hashlib.sha256((server.root / "task.png").read_bytes()).hexdigest()
+                assert expected in list(image_hashes(messages[start:])), "Claude did not receive its native preset image"
+                state["imageRead"] = True
                 assert "Initial task:" not in prompt and "Answer from" not in prompt and "Content from" not in prompt
                 if phase == 0:
                     call = ("Bash", {"command": "cat sample.py", "description": "Review the shared fixture implementation"})
@@ -225,6 +224,7 @@ def run():
     try:
         for index, model in enumerate(models):
             agent = model.agent
+            fresh = agent == "codex" and os.environ.get("CTRLX_WORKFLOW_NATIVE_FRESH") == "1"
             config = root / agent
             config.mkdir()
             private_home = root / (agent + "-home")
@@ -247,6 +247,8 @@ def run():
                 for args in (["plugin", "marketplace", "add", str(marketplace)], ["plugin", "add", "ctrlx@ctrlx"]):
                     subprocess.run(["/opt/homebrew/bin/codex", *args], env=env, check=True, capture_output=True, timeout=30)
                 args = ["/opt/homebrew/bin/codex", "--no-daemon", "--no-alt-screen", "--dangerously-bypass-hook-trust", "-C", str(project), "-a", "never", "-s", "danger-full-access", "Say fixture ready."]
+                if fresh:
+                    args.pop()
             else:
                 env["CLAUDE_CONFIG_DIR"] = str(config)
                 (config / ".claude.json").write_text(json.dumps({"hasCompletedOnboarding": True, "projects": {str(project): {"hasTrustDialogAccepted": True}}}))
@@ -270,7 +272,11 @@ def run():
                 if "Detected a custom API key" in screen and "Do you want to use this API key?" in screen:
                     # This profile contains only the dummy key for this loopback server.
                     tmux("send-keys", "-t", pane, "Up", "Enter")
-                if session and "WORKFLOW_READY" in screen:
+                if fresh and "Ask Codex to do anything" in screen:
+                    assert not model.requests, "Fresh Codex sent a model request before the workflow"
+                    session = ""
+                    break
+                if not fresh and session and "WORKFLOW_READY" in screen:
                     break
                 time.sleep(.2)
             else:

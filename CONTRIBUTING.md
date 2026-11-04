@@ -76,6 +76,13 @@ Choose checks proportional to the change:
 | Browser native runtime | Follow isolated signed-app acceptance in [Browser](docs/agent-browser.md); do not operate personal profiles or running tasks as fixtures. |
 | Scripts/packaging | Relevant `scripts/tests` tests and shell syntax checks; run packaging only when needed/requested. |
 
+Mac publication, IPA packaging and physical-iPhone installation never require an
+iOS Simulator build. Do not add one for routine validation, even after iOS code
+changes; use the device target. Simulator validation or the full cross-platform
+E2E suite requires an explicit user request. For an authorized Simulator compile
+check, use the managed command in [AGENTS.md](AGENTS.md#ios-builds-and-signing),
+which clears Simulator compilation caches after success by default.
+
 For code changes also run `bash scripts/check-ctrlx-brand-boundary.sh` and
 `bash scripts/check-ctrlx-technical-boundary.sh`. For Swift files, use
 `swiftformat --lint <changed-file.swift>` (or format the affected files with the

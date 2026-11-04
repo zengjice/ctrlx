@@ -65,7 +65,7 @@ struct AgentWorkflowRunView: View {
                         }
                         Button("End workflow", role: .destructive) { confirmingEnd = true }
                     } footer: {
-                        Text("Agent terminals are read-only while the workflow runs; viewing and scrolling remain available. Take over pauses new handoffs and enables input. Continue resumes handoffs. Ending keeps the Agent tabs and current tasks open.")
+                        Text("Questions enable input for that Agent until its current task finishes, without pausing the workflow. Otherwise, Take over pauses handoffs and enables input; Continue resumes them. Viewing and scrolling remain available. Ending keeps the Agent tabs and current tasks open.")
                     }
                     .disabled(changing || !endpoint.isConnected)
                 } else {

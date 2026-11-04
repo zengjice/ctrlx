@@ -1,8 +1,8 @@
-@testable import CtrlxCommon
 import CtrlxNetworking
 import Dependencies
 import Foundation
 import Testing
+@testable import CtrlxCommon
 
 @MainActor
 @Suite("Quick phrase synchronization")
@@ -74,7 +74,7 @@ struct QuickPhraseSyncTests {
             [.init(id: UUID(), order: -1, text: "bad")],
             [.init(id: UUID(), order: Int.max, text: "bad")],
             [.init(id: UUID(), order: 0, text: String(repeating: "\\", count: 300_000))],
-            (0..<4097).map { .init(id: UUID(), order: $0, text: nil) },
+            (0..<4_097).map { .init(id: UUID(), order: $0, text: nil) },
         ]
         for records in invalid {
             #expect(throws: (any Error).self) { try a.merge(records) }
@@ -85,7 +85,7 @@ struct QuickPhraseSyncTests {
     @Test("Corrupt v2 never falls back to stale v1 or overwrites storage")
     func corruptV2() throws {
         let prefs = PreferencesService.inMemory()
-        prefs.setData(try JSONEncoder().encode([QuickPhrase(text: "old")]), QuickPhraseStore.storageKey)
+        try prefs.setData(JSONEncoder().encode([QuickPhrase(text: "old")]), QuickPhraseStore.storageKey)
         let bad = Data("broken".utf8)
         prefs.setData(bad, QuickPhraseStore.syncStorageKey)
         let a = store(prefs)
@@ -108,7 +108,7 @@ struct QuickPhraseSyncTests {
     }
 
     @MainActor
-    private final class Link {
+    final private class Link {
         let aStore: QuickPhraseStore
         let bStore: QuickPhraseStore
         var a: QuickPhraseSyncSession!
@@ -119,11 +119,11 @@ struct QuickPhraseSyncTests {
         init(_ aStore: QuickPhraseStore, _ bStore: QuickPhraseStore, pairID: String = "pair") {
             self.aStore = aStore
             self.bStore = bStore
-            a = QuickPhraseSyncSession(store: aStore, pairID: pairID) { [weak self] message in
+            self.a = QuickPhraseSyncSession(store: aStore, pairID: pairID) { [weak self] message in
                 self?.sentA.append(message)
                 self?.b.receive(message)
             }
-            b = QuickPhraseSyncSession(store: bStore, pairID: pairID) { [weak self] message in
+            self.b = QuickPhraseSyncSession(store: bStore, pairID: pairID) { [weak self] message in
                 self?.sentB.append(message)
                 self?.a.receive(message)
             }
@@ -138,16 +138,24 @@ struct QuickPhraseSyncTests {
         }
 
         func settle() async {
-            for _ in 0..<8 { await a.flush(); await b.flush() }
+            for _ in 0..<8 {
+                await a.flush()
+                await b.flush()
+            }
         }
 
-        func disconnect() { a.reset(); b.reset() }
+        func disconnect() {
+            a.reset()
+            b.reset()
+        }
     }
 
     @Test("Edited text and its slot sync live and offline without an echo loop")
     func editing() async throws {
         let a = store(), b = store()
-        for text in ["one", "two", "three"] { try a.add(text) }
+        for text in ["one", "two", "three"] {
+            try a.add(text)
+        }
         a.setSyncEnabled(true, for: "pair")
         b.setSyncEnabled(true, for: "pair")
         let link = Link(a, b)
@@ -177,6 +185,52 @@ struct QuickPhraseSyncTests {
         ids.map { .init(pairID: $0, name: "Device", publicKey: Data(repeating: key, count: 32).base64EncodedString()) }
     }
 
+    @Test("Refreshing a changed device identity requires fresh consent and rejects the previous handshake")
+    func refreshDeviceIdentity() async throws {
+        let a = store(), b = store()
+        a.updateSyncPairings(pairings(["pair"], key: 2))
+        b.updateSyncPairings(pairings(["pair"], key: 1))
+        a.setSyncEnabled(true, for: "pair")
+        b.setSyncEnabled(true, for: "pair")
+        try a.add("shared")
+        let link = Link(a, b)
+        defer { link.disconnect() }
+        await link.connect()
+        #expect(a.records == b.records)
+
+        let originalOffer = link.a.offer
+        link.a.refreshDeviceIdentity()
+        #expect(link.a.offer == originalOffer)
+        #expect(a.syncStatus(for: a.syncDevices[0].id) == .ready)
+
+        let staleRecord = QuickPhraseRecord(id: UUID(), order: 0, text: "stale snapshot")
+        let staleMessage = QuickPhraseSyncMessage(
+            senderEpoch: link.b.offer.epoch, recipientEpoch: originalOffer.epoch,
+            enabled: true, records: [staleRecord]
+        )
+        a.updateSyncPairings(pairings(["pair"], key: 3))
+        #expect(!link.a.offer.enabled)
+        link.a.refreshDeviceIdentity()
+        #expect(link.a.offer.epoch != originalOffer.epoch)
+        #expect(!link.a.offer.enabled)
+        #expect(a.syncConsent(for: a.syncDevices[0].id) == .disabled)
+        link.a.receive(staleMessage)
+        #expect(!a.records.contains(staleRecord))
+
+        await link.connect()
+        try a.add("new local phrase")
+        await link.settle()
+        #expect(b.phrases.map(\.text) == ["shared"])
+        #expect(link.sentA.last?.enabled == false)
+        #expect(link.sentA.last?.records == nil)
+        a.setDeviceSyncEnabled(true, deviceID: a.syncDevices[0].id)
+        await link.settle()
+        #expect(a.records == b.records)
+        #expect(a.syncStatus(for: a.syncDevices[0].id) == .ready)
+        link.a.receive(staleMessage)
+        #expect(!a.records.contains(staleRecord))
+    }
+
     @Test("All 16 reciprocal legacy switch combinations preserve their sharing graph", arguments: 0..<16)
     func reciprocalMigration(mask: Int) async throws {
         let a = store(), b = store()
@@ -189,7 +243,9 @@ struct QuickPhraseSyncTests {
         try a.add("Office")
         try b.add("Home")
         let forward = Link(a, b, pairID: "forward"), reverse = Link(a, b, pairID: "reverse")
-        defer { forward.disconnect(); reverse.disconnect() }
+        defer { forward.disconnect()
+            reverse.disconnect()
+        }
         await forward.connect()
         await reverse.connect()
         await forward.settle()
@@ -212,7 +268,9 @@ struct QuickPhraseSyncTests {
         a.updateSyncPairings(pairings(["forward", "reverse"], key: 2))
         b.updateSyncPairings(pairings(["forward", "reverse"], key: 1))
         let forward = Link(a, b, pairID: "forward"), reverse = Link(a, b, pairID: "reverse")
-        defer { forward.disconnect(); reverse.disconnect() }
+        defer { forward.disconnect()
+            reverse.disconnect()
+        }
         await forward.connect()
         await reverse.connect()
         a.setDeviceSyncEnabled(true, deviceID: a.syncDevices[0].id)
@@ -245,7 +303,9 @@ struct QuickPhraseSyncTests {
         try a.add("Office")
         try b.add("Home")
         let forward = Link(a, b, pairID: "forward"), reverse = Link(a, b, pairID: "reverse")
-        defer { forward.disconnect(); reverse.disconnect() }
+        defer { forward.disconnect()
+            reverse.disconnect()
+        }
         await forward.connect()
         await reverse.connect()
         await forward.settle()
@@ -267,23 +327,43 @@ struct QuickPhraseSyncTests {
             libraries[i].updateSyncPairings(
                 pairings([ids[i]], key: UInt8(next + 1)) + pairings([ids[previous]], key: UInt8(previous + 1))
             )
-            for device in libraries[i].syncDevices { libraries[i].setDeviceSyncEnabled(true, deviceID: device.id) }
+            for device in libraries[i].syncDevices {
+                libraries[i].setDeviceSyncEnabled(true, deviceID: device.id)
+            }
             try libraries[i].add("device \(i)")
         }
         let links = (0..<4).map { Link(libraries[$0], libraries[($0 + 1) % 4], pairID: ids[$0]) }
-        defer { for link in links { link.disconnect() } }
-        for link in links { await link.connect() }
-        for _ in 0..<4 { for link in links { await link.settle() } }
+        defer { for link in links {
+            link.disconnect()
+        } }
+        for link in links {
+            await link.connect()
+        }
+        for _ in 0..<4 {
+            for link in links {
+                await link.settle()
+            }
+        }
         #expect(libraries.allSatisfy { $0.records == office.records && $0.phrases.count == 4 })
         office.setSyncEnabled(false, for: ids[0])
         try office.move(office.phrases[0].id, to: office.phrases[3].id)
-        for _ in 0..<4 { for link in links { await link.settle() } }
+        for _ in 0..<4 {
+            for link in links {
+                await link.settle()
+            }
+        }
         #expect(libraries.allSatisfy { $0.phrases == office.phrases && $0.ordering == office.ordering })
         try office.remove(office.phrases[0].id)
-        for _ in 0..<4 { for link in links { await link.settle() } }
+        for _ in 0..<4 {
+            for link in links {
+                await link.settle()
+            }
+        }
         #expect(libraries.allSatisfy { $0.records == office.records && $0.phrases.count == 3 })
         let count = links.reduce(0) { $0 + $1.sentA.count + $1.sentB.count }
-        for link in links { await link.settle() }
+        for link in links {
+            await link.settle()
+        }
         #expect(count == links.reduce(0) { $0 + $1.sentA.count + $1.sentB.count })
     }
 
@@ -303,8 +383,12 @@ struct QuickPhraseSyncTests {
         a.setSyncEnabled(true, for: "pair")
         await sync.flush()
         #expect(sent.allSatisfy { $0.records == nil && !$0.enabled })
-        sync.receive(.init(senderEpoch: peer.epoch, recipientEpoch: sync.offer.epoch, enabled: true,
-                           records: [.init(id: UUID(), order: 0, text: "old identity")]))
+        sync.receive(.init(
+            senderEpoch: peer.epoch,
+            recipientEpoch: sync.offer.epoch,
+            enabled: true,
+            records: [.init(id: UUID(), order: 0, text: "old identity")]
+        ))
         #expect(a.phrases.map(\.text) == ["private"])
     }
 
@@ -360,10 +444,14 @@ struct QuickPhraseSyncTests {
             library.setSyncEnabled(true, for: pair)
         }
         let ab = Link(a, b, pairID: "ab"), bc = Link(b, c, pairID: "bc")
-        defer { ab.disconnect(); bc.disconnect() }
-        await ab.connect(); await bc.connect()
+        defer { ab.disconnect()
+            bc.disconnect()
+        }
+        await ab.connect()
+        await bc.connect()
         try a.add("propagate")
-        await ab.settle(); await bc.settle()
+        await ab.settle()
+        await bc.settle()
         #expect(c.phrases == a.phrases)
         bc.disconnect()
         try a.remove(a.phrases[0].id)
@@ -390,8 +478,12 @@ struct QuickPhraseSyncTests {
         await sync.flush()
         #expect(sent.isEmpty)
         #expect(a.syncErrors["pair"] == "Update both devices to sync quick phrases.")
-        sync.receive(.init(senderEpoch: legacy.epoch, recipientEpoch: sync.offer.epoch, enabled: true,
-                           records: [.init(id: UUID(), order: 0, text: "legacy")]))
+        sync.receive(.init(
+            senderEpoch: legacy.epoch,
+            recipientEpoch: sync.offer.epoch,
+            enabled: true,
+            records: [.init(id: UUID(), order: 0, text: "legacy")]
+        ))
         #expect(a.phrases.map(\.text) == ["new"])
         sync.receiveHello(.init(version: 99, epoch: UUID(), enabled: true))
         await sync.flush()
@@ -401,8 +493,12 @@ struct QuickPhraseSyncTests {
         sync.reset()
         sync.didSendHello()
         sync.receiveHello(peer)
-        sync.receive(.init(senderEpoch: peer.epoch, recipientEpoch: old.epoch, enabled: true,
-                           records: [.init(id: UUID(), order: 0, text: "stale")]))
+        sync.receive(.init(
+            senderEpoch: peer.epoch,
+            recipientEpoch: old.epoch,
+            enabled: true,
+            records: [.init(id: UUID(), order: 0, text: "stale")]
+        ))
         #expect(a.phrases.map(\.text) == ["new"])
     }
 
@@ -446,13 +542,19 @@ struct QuickPhraseSyncTests {
     func wireFormat() throws {
         let old = Data(#"{"appVersion":"3.0.24","minRequiredPartnerVersion":"3.0.0"}"#.utf8)
         #expect(try JSONDecoder().decode(PeerHelloMessage.self, from: old).quickPhraseSync == nil)
-        let payload = QuickPhraseSyncMessage(senderEpoch: UUID(), recipientEpoch: UUID(), enabled: true,
-                                             records: [.init(id: UUID(), order: 0, text: "hello")])
+        let payload = QuickPhraseSyncMessage(
+            senderEpoch: UUID(),
+            recipientEpoch: UUID(),
+            enabled: true,
+            records: [.init(id: UUID(), order: 0, text: "hello")]
+        )
         let message = WebSocketMessage.quickPhraseSync(payload)
         #expect(message.shouldEncrypt)
         let data = try JSONEncoder().encode(message)
         guard case let .quickPhraseSync(decoded) = try JSONDecoder().decode(WebSocketMessage.self, from: data)
-        else { Issue.record("Wrong decoded message"); return }
+        else { Issue.record("Wrong decoded message")
+            return
+        }
         #expect(decoded == payload)
         #expect(message.messageType == "quickPhraseSync")
     }
@@ -460,7 +562,9 @@ struct QuickPhraseSyncTests {
     @Test("Drag ordering propagates live and after offline reconnect without an echo loop")
     func reordering() async throws {
         let a = store(), b = store()
-        for text in ["one", "two", "three"] { try a.add(text) }
+        for text in ["one", "two", "three"] {
+            try a.add(text)
+        }
         a.setSyncEnabled(true, for: "pair")
         b.setSyncEnabled(true, for: "pair")
         let link = Link(a, b)
@@ -486,7 +590,9 @@ struct QuickPhraseSyncTests {
     @Test("Sort order follows bilateral consent; consent-only frames contain no ordering IDs")
     func privateOrdering() async throws {
         let a = store(), b = store()
-        for text in ["one", "two"] { try a.add(text) }
+        for text in ["one", "two"] {
+            try a.add(text)
+        }
         try a.move(a.phrases[0].id, to: a.phrases[1].id)
         a.setSyncEnabled(true, for: "pair")
         let link = Link(a, b)

@@ -4,7 +4,7 @@ import Foundation
 enum AgentWorkflowTmuxSubmission {
     static let rejection = "ctrlx-workflow-input-changed"
 
-    static func commands(instance: AgentWorkflowInstance, file: URL, capture: AgentWorkflowTerminalCapture) throws -> [[String]] {
+    static func commands(instance: AgentWorkflowInstance, file: URL, capture: AgentWorkflowTerminalCapture, submit: Bool = true) throws -> [[String]] {
         let command = capture.foregroundCommand
         guard
             !command.isEmpty, command.utf8.allSatisfy({
@@ -17,11 +17,14 @@ enum AgentWorkflowTmuxSubmission {
             "#{==:#{pane_width},\(capture.width)}", "#{==:#{pane_height},\(capture.height)}",
         ]
         let condition = conditions.dropFirst().reduce(conditions[0]) { "#{&&:\($0),\($1)}" }
-        let body = [
+        var operations = [
             ["load-buffer", "-b", buffer, file.path],
             ["paste-buffer", "-p", "-r", "-d", "-b", buffer, "-t", instance.paneID],
-            ["send-keys", "-t", instance.paneID, "Enter"],
-        ].map { $0.map(\.posixSingleQuoted).joined(separator: " ") }.joined(separator: " ; ")
+        ]
+        if submit {
+            operations.append(["send-keys", "-t", instance.paneID, "Enter"])
+        }
+        let body = operations.map { $0.map(\.posixSingleQuoted).joined(separator: " ") }.joined(separator: " ; ")
         return [["if-shell", "-F", "-t", instance.paneID, condition, body, "display-message -p \(rejection)"]]
     }
 }

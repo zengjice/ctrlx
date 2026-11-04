@@ -1,5 +1,9 @@
 # CtrlX 3.1.0 Stage 6 Code Review Report
 
+> Historical record: Background Agent Monitoring has been removed. iOS alerts
+> now use APNs exclusively. See [current notification delivery](../../services-reference.md#push-notifications).
+
+
 ## Review Scope
 
 - Agent 后台监控用户意图与运行租约的状态所有权

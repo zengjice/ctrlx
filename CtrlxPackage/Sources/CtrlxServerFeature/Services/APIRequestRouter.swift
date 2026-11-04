@@ -168,7 +168,7 @@
 
         /// Parameters: (title, body, paneId, push). When `push` is true, the
         /// host also forwards an encrypted push notification to paired iOS
-        /// viewers (delivered via APNs when the viewer is offline).
+        /// viewers (delivered via APNs independently of Viewer connection state).
         let onNotify: (@Sendable (String, String, String?, Bool) async -> Void)?
 
         let onEditorOpen: (@Sendable (String, String) async throws -> Void)?

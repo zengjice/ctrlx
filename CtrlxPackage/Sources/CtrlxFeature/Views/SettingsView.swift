@@ -61,8 +61,6 @@
                     .accessibilityIdentifier("new-session-settings-link")
                 }
 
-                BackgroundMonitoringSettingsSection()
-
                 Section {
                     Toggle("Debug Mode", isOn: $settings.debugModeEnabled)
                         .accessibilityIdentifier("debug-mode-toggle")
@@ -111,44 +109,6 @@
             case .provisional: "Provisional"
             case .ephemeral: "Temporary"
             @unknown default: "Unknown"
-            }
-        }
-    }
-
-    private struct BackgroundMonitoringSettingsSection: View {
-        @Environment(IOSSettings.self) private var settings
-        @Environment(AgentBackgroundMonitoringService.self) private var backgroundMonitoring
-
-        var body: some View {
-            @Bindable var settings = settings
-
-            Section {
-                if #available(iOS 26.0, *) {
-                    Toggle("Background Agent Monitoring", isOn: $settings.agentBackgroundMonitoringEnabled)
-                        .accessibilityIdentifier("agent-background-monitoring-toggle")
-
-                    switch backgroundMonitoring.monitoringStatus {
-                    case .inactive:
-                        if let failure = backgroundMonitoring.lastStartFailure {
-                            Text("Could not start: \(failure)")
-                                .font(.caption)
-                                .foregroundStyle(.red)
-                                .textSelection(.enabled)
-                        } else if settings.agentBackgroundMonitoringEnabled {
-                            LabeledContent("Monitoring Status", value: "Ready")
-                        }
-                    case .starting:
-                        LabeledContent("Monitoring Status", value: "Starting")
-                    case .active:
-                        LabeledContent("Monitoring Status", value: "Active")
-                    }
-                } else {
-                    LabeledContent("Background Agent Monitoring", value: "Requires iOS 26")
-                }
-            } header: {
-                Text("Background Activity")
-            } footer: {
-                Text("Starts when you send Agent input; stops when Agents finish or need your reply. iOS may end monitoring early. Send another input to start again.")
             }
         }
     }

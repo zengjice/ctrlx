@@ -73,53 +73,6 @@ struct ViewerRelayClientLivenessTests {
         )
     }
 
-    @Test("A continued-processing probe replaces a stale socket without reporting Host offline")
-    func backgroundProbeSeparatesTransportFromHostDisconnect() async throws {
-        let upgrades = UpgradeCounter()
-        let server = try await MuteRelay.start(countingUpgradesInto: upgrades)
-        defer { server.stop() }
-
-        let e2eeService = try await E2EEService()
-
-        // Keep the normal watchdog out of this test; the explicit probe owns
-        // the stale-connection decision.
-        let client = ViewerRelayClient(pingIntervalSeconds: 60, pongTimeoutSeconds: 10)
-        var transportInterruptions = 0
-        var hostDisconnects = 0
-        client.onTransportInterrupted = {
-            transportInterruptions += 1
-        }
-        client.onHostDisconnected = {
-            hostDisconnects += 1
-        }
-
-        try await client.connect(
-            serverURL: #require(URL(string: "ws://127.0.0.1:\(server.port)")),
-            pairId: "probe-pair",
-            deviceId: "viewer-device",
-            deviceName: "Test Viewer",
-            publicKey: "dGVzdC1wdWJsaWMta2V5LTAxMjM0NTY3ODkwMTIzNDU2Nw==",
-            publicKeyId: "viewer-key-id",
-            e2eeService: e2eeService,
-            partnerPublicKey: nil,
-            partnerPublicKeyId: nil
-        )
-        defer { Task { await client.disconnect() } }
-
-        #expect(await waitUntil { client.state.isConnected })
-        #expect(await waitUntil { upgrades.value >= 1 })
-
-        let result = await client.probeConnection(
-            staleAfter: .zero,
-            responseTimeout: .milliseconds(100)
-        )
-
-        #expect(result == .restarted)
-        #expect(await waitUntil { upgrades.value >= 2 })
-        #expect(transportInterruptions == 1)
-        #expect(hostDisconnects == 0)
-    }
-
     @Test("Foreground recovery refreshes Host presence without replacing a live Relay socket")
     func foregroundRecoveryRefreshesMissingHostPresence() async throws {
         let upgrades = UpgradeCounter()

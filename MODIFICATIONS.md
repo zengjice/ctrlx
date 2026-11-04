@@ -7,13 +7,61 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
-## 3.0.137 — Reliable iOS push token registration
+## 3.0.141 — Browser downloads and Host workflow improvements
+
+- Save human-initiated browser downloads, including POST responses and Blob
+  exports, on the source Host. Show progress on Mac Host and Mac/iOS Viewers;
+  Viewers open completed files through the Host's Files tab. Agent downloads
+  retain their existing authorization and 6 MiB limit. See
+  [browser downloads](docs/agent-browser.md#human-downloads).
+- Guide Mac Hosts through enabling Full Disk Access from first launch and
+  Settings, with shortcuts to System Settings and the installed App in Finder.
+  Permission remains controlled by the user in macOS.
+- Sort sessions by persisted Agent task activity across restarts and Viewers,
+  and suppress session-start notifications while retaining actionable events.
+- Allow a fresh Codex Agent to join a workflow before its first native
+  conversation record exists; bind the conversation only after an authenticated
+  task receipt. Preserve process ownership and workflow history checks.
+- Make iOS Simulator validation explicit and clean its compilation caches after
+  successful managed checks. Mac publication builds macOS only.
+- Validation: focused Swift regressions, 120 private publication/installer/COS
+  checks and both repository boundary checks passed. Reused ten isolated native
+  browser-download checks after verifying unchanged native sources and fixture.
+  The opt-in live Agent loop, Apple Intelligence evaluations and paired-device
+  UI acceptance were not rerun.
+
+## 3.0.140 — Quick phrase synchronization after pairing
+
+- Refresh quick phrase synchronization with the current local device identity
+  after pairing, rather than retaining the identity captured before pairing.
+  See [quick phrase synchronization](docs/terminal-quick-actions.md).
+
+## 3.0.139 — Browser audio and Agent workflow reliability
+
+- Keep remote browser audio within bounded Host/Viewer frame budgets, prebuffer
+  playback and recover after underruns or sequence gaps. Delayed capture reads
+  drain the native ring without changing playback speed or the Relay protocol.
+- Confirm newly started Codex conversations from their first native receipts
+  before binding workflow execution. Preserve invocation ownership across
+  discovery and pause uncertain handoffs instead of replaying input.
+- Opening an IPA on Mac no longer creates an extra workspace window.
+- iOS notification source now uses APNs independently of Viewer presence and
+  removes background monitoring tasks. This policy requires updated iOS and
+  Relay builds; Mac-only publication does not deploy either component.
+- Validation: 90 focused Swift regressions, 120 private publisher/installer/COS
+  checks, the native audio ring regression and isolated signed browser audio
+  acceptance passed. Apple Intelligence evaluations were not run.
+
+## 3.0.138 — Unified iOS terminal input controls
 
 - Keep the complete iOS terminal input toolbar at the bottom. Remove the
   Top Right layout and its setting; older position preferences no longer hide
   controls or disable tapping an empty input area to toggle the keyboard.
   All 29 focused input tests and the Release device build/signing checks pass;
   the updated toolbar still requires physical-device UI acceptance.
+
+## 3.0.137 — Reliable iOS push token registration
+
 - Register paired iOS devices with APNs on launch even when automatic Host
   connection is disabled. Forward tokens when the APNs callback arrives instead
   of taking a single snapshot after a fixed delay.

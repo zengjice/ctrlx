@@ -1,6 +1,6 @@
 import CtrlxNetworking
-import Foundation
 import CtrlxPluginProtocol
+import Foundation
 import Testing
 @testable import CodexPluginCore
 
@@ -326,24 +326,25 @@ struct CodexTranslatorTests {
 
     // MARK: - SessionStart
 
-    @Test("sessionStart maps to idle and fires a Codex-flavored notification")
-    func sessionStart() async throws {
+    @Test("sessionStart initializes idle state without a notification", arguments: ["startup", "resume", "clear", "compact"])
+    func sessionStart(source: String) async throws {
         let (core, _) = try await makeCore()
         let json = """
         {
             "hook_event_name": "SessionStart",
             "session_id": "sess-start",
-            "source": "startup"
+            "source": "\(source)"
         }
         """
         let event = try #require(await core.handleIngress(frame(json)))
-        // SessionStart → idle (the "session started" push still fires; no bell).
+        // Initialization still reaches the Host, but produces no alert or form.
         #expect(event.state == .idle)
         #expect(event.state?.needsAttention == false)
         #expect(event.state?.openForm == nil)
 
-        let notification = try #require(event.notification)
-        #expect(notification.body.contains("Codex session started"))
+        #expect(event.notification == nil)
+        #expect(event.sessionID == "sess-start")
+        #expect(event.tmuxPane == "%1")
     }
 
     // MARK: - PostToolUse Write markdown

@@ -35,8 +35,7 @@ struct IOSDashboardStatus {
             self.connection = isConnecting ? .connecting : .disconnected
         }
 
-        let panesByHost = Dictionary(grouping: paneStates.filter { pairedHostIDs.contains($0.key.pairId) }, by: \.key.pairId)
-        self.pendingCount = panesByHost.values.reduce(0) { $0 + $1.map(\.value).pendingSessionCount }
+        self.pendingCount = Self.pendingCount(pairedHostIDs: pairedHostIDs, paneStates: paneStates)
 
         let hosts = dashboardHosts.filter { pairedHostIDs.contains($0.id) }.map { host in
             var host = host
@@ -46,6 +45,20 @@ struct IOSDashboardStatus {
         }
         self.lowQuotaCount = DashboardOverview.accounts(in: hosts)
             .count { DashboardQuotaSummary(group: $0, at: now).isLow }
+    }
+
+    @MainActor
+    static func badgeCount(pairedHostIDs: Set<String>, refreshedHostIDs: Set<String>, store: SessionStore) -> Int? {
+        // An absent/disconnected Host is unknown, not an empty snapshot.
+        guard
+            pairedHostIDs.isSubset(of: refreshedHostIDs),
+            pairedHostIDs.allSatisfy({ store.hasReceivedState(for: $0) }) else { return nil }
+        return pendingCount(pairedHostIDs: pairedHostIDs, paneStates: store.paneStates)
+    }
+
+    private static func pendingCount(pairedHostIDs: Set<String>, paneStates: [PaneKey: PaneState]) -> Int {
+        let panesByHost = Dictionary(grouping: paneStates.filter { pairedHostIDs.contains($0.key.pairId) }, by: \.key.pairId)
+        return panesByHost.values.reduce(0) { $0 + $1.map(\.value).pendingSessionCount }
     }
 
     var pendingText: String? {

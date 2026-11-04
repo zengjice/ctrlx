@@ -25,8 +25,25 @@ struct AgentWorkflowBridgeEvidence: Codable, Equatable, Sendable {
 }
 
 extension AgentWorkflowStore {
-    func bridgeIssue(for instance: AgentWorkflowInstance) throws -> String? {
+    func allowQuestionInput(_ event: PluginEvent, peer: PluginIngressPeer) throws {
+        let archive = try load()
+        guard
+            var instance = archive.instances.first(where: {
+                $0.pluginID == event.pluginID && $0.paneID == event.tmuxPane
+                    && peer.contains(processID: $0.processID, runtimeID: $0.processRuntimeID)
+            }) else { return }
+        instance.conversationID = event.sessionID
+        for run in archive.runs where !run.status.isTerminal && run.instances.contains(where: { $0.matchesProcess(instance) }) {
+            let observed = instance
+            try update(runID: run.id) { $0.allowQuestionInput(instance: observed) }
+        }
+    }
+
+    func bridgeIssue(for instance: AgentWorkflowInstance, allowsFirstSubmission: Bool = false) throws -> String? {
         guard let evidence = try load().bridgeEvidence?.first(where: { $0.matchesProcess(instance) }) else {
+            if allowsFirstSubmission, instance.pluginID == "codex", instance.conversationID.isEmpty {
+                return nil
+            }
             return "This Agent has not confirmed its workflow hook. Update its CtrlX plugin, then restart the Agent or submit a normal prompt before starting a workflow."
         }
         return evidence.issue

@@ -21,9 +21,7 @@ import Foundation
 /// host clear paths via hook events and asserts the silent push actually goes
 /// out over APNs. Without the fix, the Phase 5 and Phase 7 push waits time out.
 ///
-/// As in `BadgeAggregationScenario`, the iOS WebSocket is blocked so every push
-/// flows through the relay's APNs path (the relay skips APNs while the viewer
-/// is connected), and the Panes window stays closed so
+/// The iOS WebSocket stays connected. The Panes window stays closed so
 /// `markSelectedSessionsHandledIfActive` can't clear `needsAttention` before
 /// the broadcast reads `pendingSessionCount`.
 public enum BadgeClearsOnAgentResumeScenario {
@@ -33,12 +31,6 @@ public enum BadgeClearsOnAgentResumeScenario {
     ) {
         // ── Phase 1: Standard pairing (Mac0 + iOS) ─────────────────────────
         FreshPairingScenario.scenario
-
-        // ── Phase 2: Force every push through the relay's APNs path ─────────
-        // `sendEncryptedNotificationIfNeeded` is a no-op while the viewer's
-        // WebSocket is connected, so block the viewer for the badge phases.
-        TestStep.serverBlockDevice(.viewer)
-        TestStep.wait(seconds: 2)
 
         // ── Phase 3: tmux session + a live agent session (Panes window stays
         //    closed so SwiftUI's auto-handle can't race the broadcast) ───────
@@ -102,7 +94,7 @@ public enum BadgeClearsOnAgentResumeScenario {
             projectPath: "/Users/test/BadgeClearProject"
         )
         TestStep.waitForAPNSPushCount(2, timeout: 15)
-        TestStep.verifyLastAPNSPush(aggregatedBadge: 0, silent: true, pushType: "background")
+        TestStep.verifyLastAPNSPush(aggregatedBadge: 0, silent: true, pushType: "alert")
 
         // ── Phase 6: Re-raise attention (Stop) → alert push, badge = 1 ──────
         TestStep.macSendHookEvent(
@@ -137,10 +129,6 @@ public enum BadgeClearsOnAgentResumeScenario {
             projectPath: "/Users/test/BadgeClearProject"
         )
         TestStep.waitForAPNSPushCount(4, timeout: 15)
-        TestStep.verifyLastAPNSPush(aggregatedBadge: 0, silent: true, pushType: "background")
-
-        // Restore iOS connectivity so later scenarios in the same run start
-        // from a clean WebSocket state.
-        TestStep.serverUnblockDevice(.viewer)
+        TestStep.verifyLastAPNSPush(aggregatedBadge: 0, silent: true, pushType: "alert")
     }
 }

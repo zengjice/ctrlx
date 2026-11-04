@@ -145,6 +145,7 @@ struct AgentWorkflowNativeReviewLoopTests {
     private func runNativeSample() async throws {
         let manifest = try URL(fileURLWithPath: #require(ProcessInfo.processInfo.environment["CTRLX_WORKFLOW_NATIVE_FIXTURE"]))
         let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: manifest))
+        let freshCodex = ProcessInfo.processInfo.environment["CTRLX_WORKFLOW_NATIVE_FRESH"] == "1"
         let root = URL(fileURLWithPath: fixture.root)
         try #require(root.lastPathComponent.hasPrefix("cx-wf-steps-") && fixture.tmux == root.appendingPathComponent("tmux.sock").path)
         try #require(fixture.agents.count == 2)
@@ -172,6 +173,7 @@ struct AgentWorkflowNativeReviewLoopTests {
             guard try processRuntime(instance.processID) == instance.processRuntimeID else { throw AgentWorkflowError("The fixture Agent changed.") }
             let core = try #require(cores[instance.pluginID])
             var live = instance
+            live.capabilityIssue = try await store.bridgeIssue(for: instance, allowsFirstSubmission: true)
             live.readiness = try AgentWorkflowComposerInspection.readiness(capture(fixture, instance), composer: core.workflowComposer)
             if await core.isWorking(instance.conversationID) {
                 live.readiness = .busy
@@ -185,10 +187,28 @@ struct AgentWorkflowNativeReviewLoopTests {
             return live
         }
         let gate = AgentWorkflowInputGate { _ in throw AgentWorkflowError("Unexpected human input in the private fixture.") }
-        let transport = AgentWorkflowTerminalTransport(store: store, gate: gate, temporaryDirectory: root.appendingPathComponent("input"), inspect: inspect, submit: { instance, file, beforeWrite in
-            let terminal = try capture(fixture, instance)
+        let transport = AgentWorkflowTerminalTransport(store: store, gate: gate, temporaryDirectory: root.appendingPathComponent("input"), inspect: inspect, submit: { instance, file, images, beforeWrite, imagesReady in
+            var terminal = try capture(fixture, instance)
             let core = try #require(cores[instance.pluginID])
             try #require(AgentWorkflowComposerInspection.readiness(terminal, composer: core.workflowComposer) == .ready)
+            var imageNumbers: [Int] = []
+            for (index, image) in images.enumerated() {
+                let commands = try AgentWorkflowTmuxSubmission.commands(instance: instance, file: image, capture: terminal, submit: false)
+                try beforeWrite { _ = try tmux(fixture, commands.flatMap { $0 }) }
+                let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+                repeat {
+                    try await Task.sleep(for: .milliseconds(100))
+                    terminal = try capture(fixture, instance)
+                    if let numbers = AgentWorkflowComposerInspection.imageNumbers(terminal, composer: core.workflowComposer), numbers.count == index + 1, numbers.starts(with: imageNumbers) {
+                        imageNumbers = numbers
+                        break
+                    }
+                    try #require(ContinuousClock.now < deadline)
+                } while true
+            }
+            if !images.isEmpty {
+                try await imagesReady(imageNumbers)
+            }
             let commands = try AgentWorkflowTmuxSubmission.commands(instance: instance, file: file, capture: terminal)
             try beforeWrite {
                 let result = try tmux(fixture, commands.flatMap { $0 })
@@ -203,13 +223,15 @@ struct AgentWorkflowNativeReviewLoopTests {
                     throw AgentWorkflowInspectionUnavailable()
                 }
             }
-            return try await inspect(instance)
+            var live = try await inspect(instance)
+            live.capabilityIssue = try await store.bridgeIssue(for: instance)
+            return live
         }
         let router = AgentWorkflowEventRouter(store: store, runner: runner, inspect: inspectConversation)
         let monitor = AgentWorkflowCompletionMonitor(store: store, runner: runner, inspect: inspectConversation, onFailure: { Issue.record(Comment(rawValue: $0)) })
         let dispatcher = PluginEventDispatcher(onWorkflow: { event, peer in
             do {
-                if let instance = instances.first(where: { $0.paneID == event.tmuxPane && $0.conversationID == event.sessionID && $0.pluginID == event.pluginID }) {
+                if let instance = instances.first(where: { $0.paneID == event.tmuxPane && $0.pluginID == event.pluginID }) {
                     guard try processRuntime(instance.processID) == instance.processRuntimeID else { return }
                     try await store.recordBridge(event, processID: instance.processID, runtimeID: instance.processRuntimeID, peer: peer)
                 }
@@ -226,6 +248,10 @@ struct AgentWorkflowNativeReviewLoopTests {
         try await api.start(root.appendingPathComponent("api.sock").path)
         do {
             for instance in instances {
+                if freshCodex, instance.pluginID == "codex" {
+                    #expect(instance.conversationID.isEmpty)
+                    continue
+                }
                 let file = root.appendingPathComponent("warmup-\(instance.id).txt")
                 try Data("Confirm isolated workflow bridge readiness.".utf8).write(to: file)
                 let commands = try AgentWorkflowTmuxSubmission.commands(instance: instance, file: file, capture: capture(fixture, instance))
@@ -235,7 +261,7 @@ struct AgentWorkflowNativeReviewLoopTests {
             for _ in 0..<300 {
                 var current = true
                 for instance in instances {
-                    let bridgeIssue = try await store.bridgeIssue(for: instance)
+                    let bridgeIssue = try await store.bridgeIssue(for: instance, allowsFirstSubmission: true)
                     let live = try await inspect(instance)
                     if bridgeIssue != nil || live.readiness != .ready {
                         current = false
@@ -279,6 +305,7 @@ struct AgentWorkflowNativeReviewLoopTests {
             var draft = AgentWorkflowDefinition(name: "Native development and review", hostID: hostID, nodes: [], edges: [], entryNodeID: UUID(), initialInput: .init(text: "Implement the attached fixture image. USER_IMAGE_TASK", attachmentIDs: [imageID]))
             try AgentWorkflowReviewTemplate.apply(to: &draft, developerID: #require(instances.first { $0.pluginID == "codex" }?.id), reviewerID: #require(instances.first { $0.pluginID == "claude-code" }?.id))
             draft.nodes[1].input.text += "\nEnd this workflow only when there are no P0, P1, P2 or P3 findings."
+            draft.nodes[1].input.attachmentIDs = [imageID]
             let definition = try await store.saveDefinition(draft, expectedRevision: nil)
             let run = try await store.start(definitionID: definition.id, expectedRevision: definition.revision, requestID: UUID(), now: Date(), authorizationExpiresAt: Date().addingTimeInterval(180))
             await runner.schedule(runID: run.id)
@@ -296,7 +323,7 @@ struct AgentWorkflowNativeReviewLoopTests {
             try #require(latest.status == .completed, Comment(rawValue: latest.issue ?? "Native sample did not finish."))
             #expect(latest.round == 2 && latest.invocations.count == 6)
             #expect(zip(latest.instances, run.instances).allSatisfy { pair in pair.0.matchesProcess(pair.1) })
-            if clearsConversation {
+            if clearsConversation || freshCodex {
                 #expect(latest.instances.first { $0.pluginID == "codex" }?.conversationID != run.instances.first { $0.pluginID == "codex" }?.conversationID)
             } else {
                 #expect(latest.instances == run.instances)
@@ -304,10 +331,10 @@ struct AgentWorkflowNativeReviewLoopTests {
             #expect(latest.finishRequest != nil)
             #expect(latest.invocations.allSatisfy { $0.result?.text.contains("FIXTURE_ERROR") == false })
             #expect(latest.invocations.filter { $0.nodeID == definition.entryNodeID }.count == 1)
-            #expect(latest.invocations.filter { $0.delivery.input.attachmentIDs == [imageID] }.count == 1)
+            #expect(latest.invocations.filter { $0.delivery.input.attachmentIDs == [imageID] }.count == 3)
             for invocation in latest.invocations where invocation.nodeID == definition.nodes[1].id {
                 #expect(!invocation.delivery.input.text.contains("USER_IMAGE_TASK"))
-                #expect(!invocation.delivery.input.text.contains("Answer from") && invocation.delivery.input.attachmentIDs.isEmpty)
+                #expect(!invocation.delivery.input.text.contains("Answer from") && invocation.delivery.input.attachmentIDs == [imageID])
             }
             for instance in instances {
                 #expect(try processRuntime(instance.processID) == instance.processRuntimeID)

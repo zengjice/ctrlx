@@ -2,6 +2,13 @@
 
 End-to-end tests verify the full Ctrlx system: macOS app, iOS simulator app, and an in-process Vapor relay server running together on localhost.
 
+This full cross-platform suite requires an explicit request; it is not a default
+check for Mac publication, IPA packaging or physical-iPhone installation. Those
+workflows build only their requested platform. For an explicitly requested
+Simulator compile check, use the managed command in
+[AGENTS.md](../AGENTS.md#ios-builds-and-signing), which removes the standard
+Simulator compilation caches after success while retaining built apps.
+
 ## Architecture
 
 ```

@@ -7,8 +7,7 @@ import Foundation
 ///
 /// Built Mac-side from the `awaiting*` `AgentState` that accompanies a
 /// permission / question notification, and carried inside the encrypted
-/// `NotificationContent` (APNs path) and `AgentNotificationMessage`
-/// (live-socket fallback path). iOS turns it into notification categories and,
+/// `NotificationContent` (APNs path). iOS turns it into notification categories and,
 /// on an action tap, into the same `AgentResponseSubmissionMessage` the in-app
 /// forms produce. The relay never sees it.
 public struct NotificationActionContext: Codable, Sendable, Equatable {
@@ -102,10 +101,10 @@ public struct QuestionActions: Codable, Sendable, Equatable {
 
 // MARK: - Building from AgentState
 
-extension NotificationActionContext {
+public extension NotificationActionContext {
     /// Truncation limits keeping the encrypted push payload well inside the
     /// APNs 4 KB budget. Labels/questions beyond these render with an ellipsis.
-    public enum Limits {
+    enum Limits {
         public static let questionLength = 150
         public static let optionLabelLength = 60
         public static let maxOptionsPerQuestion = 6
@@ -122,13 +121,13 @@ extension NotificationActionContext {
         /// rejected wholesale by APNs (the user would get NO notification),
         /// so this errs low. Verified end-to-end by
         /// `NotificationActionWireTests.worstCaseAPNsEnvelopeFitsBudget`.
-        public static let maxEncodedBytes = 1200
+        public static let maxEncodedBytes = 1_200
     }
 
     /// Builds the action context for a notification that accompanies `state`,
     /// or `nil` when the state carries no form that maps onto notification
     /// buttons (plain notification).
-    public static func make(
+    static func make(
         state: AgentState,
         sessionId: String,
         pluginId: String
@@ -205,7 +204,7 @@ private extension String {
     }
 }
 
-extension NotificationActionContext {
+public extension NotificationActionContext {
     /// A notification body line presenting the question at `index` of a
     /// multi-question form, numbered so the user can see where they are:
     /// `"(2/3) Pick a size"`. Returns `nil` for non-question forms,
@@ -215,7 +214,7 @@ extension NotificationActionContext {
     /// The Mac-baked body for a multi-question form only says "Claude has N
     /// questions" — without this line the expanded notification shows option
     /// buttons with no visible question (issue #710 manual testing).
-    public func numberedQuestionBody(at index: Int) -> String? {
+    func numberedQuestionBody(at index: Int) -> String? {
         guard
             case let .askUserQuestion(actions) = form,
             actions.questions.count > 1,

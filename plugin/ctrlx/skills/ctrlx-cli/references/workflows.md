@@ -77,12 +77,14 @@ setting instead.
 
 The task's `[CtrlX workflow invocation: …]` block identifies the current
 invocation. It includes a completion command only when that step is authorized
-to end the workflow, and an attachment command only when files are present.
+to end the workflow. Workflow images are delivered as native image attachments
+with the task; use those images directly.
 The task and step instructions determine the response; the workflow block adds
 no answer format.
 
-When the current task includes workflow attachments, use the invocation UUID
-supplied with that task. Check `ctrlx workflow attachments --help` first if the
+The attachment lookup below is available for an explicit file lookup. It is not
+required to receive native workflow images. Use the invocation UUID supplied
+with the current task. Check `ctrlx workflow attachments --help` first if the
 installed CLI's capabilities are unknown.
 
 ```bash

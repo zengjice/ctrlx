@@ -64,7 +64,7 @@ For learning and community use, you can connect to the official Relay at
 `wss://ctrlx.zengjice.com:7001`.
 
 The iOS app currently requires a locally signed Xcode build. APNs credentials
-matching that build are needed only for background notifications.
+matching that build are required for iOS system notifications.
 
 ## Security and self-hosting
 

@@ -56,7 +56,7 @@ tmux attach -t coding
 
 学习交流可以使用官方提供的 Relay：`wss://ctrlx.zengjice.com:7001`。
 
-iOS App 目前需要使用 Xcode 本地签名安装；只有后台通知需要 Relay 配置与该构建匹配的
+iOS App 目前需要使用 Xcode 本地签名安装；iOS 系统通知需要 Relay 配置与该构建匹配的
 APNs 凭据。
 
 ## 安全与自托管

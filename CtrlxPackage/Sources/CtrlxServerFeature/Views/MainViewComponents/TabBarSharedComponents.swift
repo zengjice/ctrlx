@@ -1,10 +1,12 @@
 import CtrlxCommon
+import CtrlxNetworking
 import SwiftUI
 
 struct TerminalWindowTabLabel: View {
     let name: String
     let hasAgent: Bool
     let needsAttention: Bool
+    let progress: TerminalProgressState?
 
     var body: some View {
         HStack(spacing: 4) {
@@ -26,17 +28,30 @@ struct TerminalWindowTabLabel: View {
         .padding(.leading, 12)
         .padding(.trailing, 4)
         .padding(.vertical, 6)
+        .overlay(alignment: .bottom) {
+            if let progress {
+                TerminalProgressBar(state: progress)
+                    .padding(.leading, 12)
+                    .padding(.trailing, 4)
+                    .padding(.bottom, 3)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
         .contentShape(Rectangle())
     }
 }
 
-func windowTabAccessibilityValue(isSelected: Bool, needsAttention: Bool) -> String {
+func windowTabAccessibilityValue(isSelected: Bool, needsAttention: Bool, progress: TerminalProgressState?) -> String {
     var values: [String] = []
     if isSelected {
         values.append("selected")
     }
     if needsAttention {
         values.append("needs attention")
+    }
+    if let progress {
+        values.append("Terminal progress \(progress.accessibilityValueString)")
     }
     return values.joined(separator: ", ")
 }

@@ -92,13 +92,10 @@ public struct PluginPresentationsMessage: Codable, Sendable, Equatable {
     }
 }
 
-/// A pre-baked notification (title/body) delivered over the live WebSocket so a
-/// backgrounded-but-connected viewer can materialize a local notification. The
-/// relay drops the parallel `.encryptedPush` (APNs) while the viewer is
-/// WS-connected, so this is the only alert path during the backgrounded window;
-/// once the socket drops, APNs takes over. `sessionId` carries the pane id.
-/// This message is presentation-only. Agent lifecycle remains owned by
-/// `AgentSessionStatusMessage` and the full session-state snapshot.
+/// A pre-baked notification delivered over the live WebSocket to Mac Viewers.
+/// iOS system notifications use APNs independently of WebSocket presence.
+/// This message is presentation-only; lifecycle remains owned by Agent status
+/// and session-state snapshots. `sessionId` carries the pane ID.
 public struct AgentNotificationMessage: Codable, Sendable, Equatable {
     public let pairId: String
     public let sessionId: String?
@@ -110,8 +107,7 @@ public struct AgentNotificationMessage: Codable, Sendable, Equatable {
 
     /// Action-button context when the notification accompanies an open
     /// permission / question form (issue #710), mirroring
-    /// `NotificationContent.action` on the APNs path so the local-notification
-    /// fallback is equally actionable. Optional/additive for version skew.
+    /// `NotificationContent.action` on the APNs path.
     public let action: NotificationActionContext?
 
     public init(
@@ -148,7 +144,14 @@ public struct AgentNotificationMessage: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case pairId, sessionId, title, subtitle, body, timestamp, action, isQuestion
+        case pairId
+        case sessionId
+        case title
+        case subtitle
+        case body
+        case timestamp
+        case action
+        case isQuestion
     }
 
     public init(from decoder: Decoder) throws {
@@ -164,19 +167,5 @@ public struct AgentNotificationMessage: Codable, Sendable, Equatable {
         // from a newer host degrades to a plain notification rather than
         // dropping the whole message.
         self.action = (try? container.decodeIfPresent(NotificationActionContext.self, forKey: .action)) ?? nil
-    }
-
-    public var isQuestionNotification: Bool {
-        if isQuestion == true {
-            return true
-        }
-        if case .askUserQuestion = action?.form {
-            return true
-        }
-        return false
-    }
-
-    public func shouldPresent(isAppActive: Bool) -> Bool {
-        !isAppActive || isQuestionNotification
     }
 }

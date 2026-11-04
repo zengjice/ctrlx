@@ -217,7 +217,7 @@ enum TerminalCursorTapNavigation {
             return view
         }()
 
-        private var keyboardRequested = false
+        private(set) var keyboardRequested = false
         private var cursorNavigation = TerminalCursorNavigation()
         private var isSendingCursorNavigation = false
         private var isForwardingProxyInput = false

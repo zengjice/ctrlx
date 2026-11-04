@@ -16,7 +16,7 @@ public func configure(_ app: Application, env: [String: String]? = nil) async th
     // Configure server. CtrlX configuration is file-driven in the executable;
     // tests inject an explicit dictionary to keep global process state untouched.
     app.http.server.configuration.hostname = env["CTRLX_RELAY_BIND_ADDRESS"] ?? "0.0.0.0"
-    if let rawPort = env["CTRLX_RELAY_PORT"], let port = Int(rawPort), (1 ... 65_535).contains(port) {
+    if let rawPort = env["CTRLX_RELAY_PORT"], let port = Int(rawPort), (1...65_535).contains(port) {
         app.http.server.configuration.port = port
     } else if env["CTRLX_RELAY_PORT"] == nil {
         app.http.server.configuration.port = 8_080
@@ -134,7 +134,9 @@ public func configure(_ app: Application, env: [String: String]? = nil) async th
     let relayService = RelayService(
         pairingService: pairingService,
         connectionHub: connectionHub,
-        apnsService: apnsService,
+        pushQueue: APNsSendQueue { payload, pairId in
+            await apnsService.sendEncryptedNotification(payload: payload, pairId: pairId)
+        },
         metricsService: metricsService
     )
 
@@ -142,7 +144,10 @@ public func configure(_ app: Application, env: [String: String]? = nil) async th
     app.storage[PairingServiceKey.self] = pairingService
     app.storage[ConnectionHubKey.self] = connectionHub
     app.storage[APNsServiceKey.self] = apnsService
-    app.storage[RelayServiceKey.self] = relayService
+    await app.storage.setWithAsyncShutdown(RelayServiceKey.self, to: relayService) { service in
+        await service.shutdown()
+        await apnsService.shutdown()
+    }
     app.storage[MetricsServiceKey.self] = metricsService
     app.storage[LicensingServiceKey.self] = licensingService
     if licensingConfig != nil {
@@ -476,7 +481,7 @@ public extension Application {
     /// device token. The encrypted body is a placeholder (iOS would decrypt
     /// nothing real, but the E2E path skips the network entirely).
     func injectE2EPush(pairId: String, hostBadge: Int?, silent: Bool) async throws {
-        guard let service = apnsService else {
+        guard apnsService != nil else {
             throw E2EHelperError.injectPushFailed("APNsService not configured")
         }
         let placeholder = EncryptedPayload(
@@ -489,10 +494,7 @@ public extension Application {
             badge: hostBadge,
             silent: silent
         )
-        await service.sendEncryptedNotificationIfNeeded(
-            payload: payload,
-            pairId: pairId
-        )
+        await relayService.handleHostMessage(.encryptedPush(payload), pairId: pairId)
     }
 }
 

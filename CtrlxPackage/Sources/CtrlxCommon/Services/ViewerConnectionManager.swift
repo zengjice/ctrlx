@@ -38,7 +38,7 @@ final public class ViewerConnectionManager {
     public var onPluginPresentations: ((PluginPresentationsMessage) -> Void)?
 
     /// Called when a host pushes a pre-baked notification over the live socket
-    /// (used to show a local notification while the app is backgrounded).
+    /// (used for Mac Viewer desktop notifications).
     public var onAgentNotification: ((AgentNotificationMessage) -> Void)?
 
     /// Called when session state is received from any host
@@ -69,9 +69,7 @@ final public class ViewerConnectionManager {
     }
 
     /// Every Host for which this manager owns a connection, including one that
-    /// is currently reconnecting. A global background monitor must probe both
-    /// healthy and interrupted transports; filtering to connected Hosts would
-    /// make recovery impossible precisely when it is needed.
+    /// is currently reconnecting, so its workspace remains retained.
     public var managedHostIDs: [String] {
         connections.keys.sorted()
     }
@@ -243,30 +241,6 @@ final public class ViewerConnectionManager {
         for connection in connections.values {
             await connection.reconnectImmediately()
         }
-    }
-
-    /// Maintain the one existing connection used by a finite background Agent
-    /// monitor. Healthy connections receive one liveness ping and, when asked,
-    /// one current-state snapshot. Stale connections are replaced in place.
-    @discardableResult
-    public func maintainBackgroundConnection(
-        for hostId: String,
-        requestSessionState: Bool,
-        staleAfter: Duration
-    ) async -> Bool {
-        guard let connection = connections[hostId] else {
-            logger.debug("Cannot maintain missing host connection: \(hostId)")
-            return false
-        }
-
-        let result = await connection.probeConnection(staleAfter: staleAfter)
-        guard
-            requestSessionState,
-            result == .alive,
-            connection.isHostConnected
-        else { return false }
-
-        return await connection.requestSessionState()
     }
 
     /// Re-enable reconnection on every connection that stopped after a terminal

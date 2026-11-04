@@ -22,7 +22,6 @@
         @Environment(SessionStore.self) private var sessionStore
         @Environment(IOSFileBrowserWorkspaceStore.self) private var fileWorkspaces
         @Environment(ViewerConnectionManager.self) private var connectionManager
-        @Environment(AgentBackgroundMonitoringService.self) private var backgroundMonitoring
         @Environment(\.dismiss) private var dismiss
         @Environment(\.agentWorkflowNavigation) private var workflowNavigation
 
@@ -62,6 +61,7 @@
 
         @State private var pendingSimulatorRequest: SimulatorOpenRequest?
         @State private var pendingFilesRequest: FilesOpenRequest?
+        @State private var pendingBrowserDownload: String?
         @State private var pendingResourceRequest: ResourceTabRequest?
         @State private var pendingFilesCloseID: UUID?
         @State private var pendingBrowserLink: TerminalBrowserLinkRequest?
@@ -82,10 +82,11 @@
         @State private var isKeyboardActive: Bool
 
         /// Ordered sender shared by keyboard and one-shot toolbar input.
-        @State private var externalInputSenders: [String: @MainActor ([TmuxKey], Bool, @escaping @MainActor () -> Void) -> Bool] = [:]
+        @State private var externalInputSenders: [String: @MainActor ([TmuxKey], Bool) -> Bool] = [:]
         @State private var voiceInputContextProviders: [String: TerminalVoiceInputContextProvider] = [:]
         @State private var cursorNavigationCancellations: [String: @MainActor () -> Void] = [:]
         @State private var terminalInputReadiness: [String: @MainActor () -> Bool] = [:]
+        @State private var keyboardDismissalInputs = TerminalKeyboardDismissalInputs()
         @State private var terminalCopyActions: [String: @MainActor () -> Void] = [:]
         @State private var terminalInputRevision: UInt64 = 0
         @State private var voiceSession = TerminalVoiceInputSession()
@@ -328,6 +329,22 @@
             selectedBrowser == nil && selectedSimulator == nil && fileWorkspace.selected == nil
         }
 
+        private var terminalInputSuspension: TerminalInputSuspension {
+            .init(
+                external: !terminalIsVisible || artifactPreview != nil,
+                quickActionEditor: quickActionPresentation.suspendsTerminalInput
+            )
+        }
+
+        private var canFitAfterKeyboardDismissal: Bool {
+            guard
+                isViewVisible, terminalIsVisible, scenePhase == .active,
+                !isKeyboardActive, !terminalInputSuspension.suspendsInput,
+                !showsWindowTabs, !creationSheetIsPresented,
+                let activePaneId else { return false }
+            return keyboardDismissalInputs.allowsFit(paneID: activePaneId)
+        }
+
         private var canAcknowledgeCompletion: Bool {
             isViewVisible && terminalIsVisible && scenePhase == .active
         }
@@ -371,7 +388,7 @@
                         .background(Color(.systemBackground))
                         .id(tab.id)
                 } else if let tab = selectedBrowser {
-                    RemoteBrowserView(tab: tab, client: relayClient) { opened in
+                    RemoteBrowserView(tab: tab, client: relayClient, onOpenFile: { pendingBrowserDownload = $0 }) { opened in
                         cancelCreationFollowUp()
                         isKeyboardActive = false
                         quickActionPresentation.dismiss()
@@ -555,6 +572,31 @@
                         pendingSimulatorRequest = nil
                         commandError = error.localizedDescription
                     }
+                }
+                .task(id: pendingBrowserDownload) {
+                    guard let path = pendingBrowserDownload else { return }
+                    defer {
+                        if pendingBrowserDownload == path {
+                            pendingBrowserDownload = nil
+                        }
+                    }
+                    guard let browser = selectedBrowser else { return }
+                    do {
+                        let request = try resourceRequest(.files, location: (path as NSString).deletingLastPathComponent)
+                        let result = try await ResourceTabClient.request(request, client: relayClient)
+                        try Task.checkCancellation()
+                        guard pendingBrowserDownload == path, selectedBrowser?.id == browser.id, let file = result.file else { return }
+                        let tab = fileWorkspace.adopt(file)
+                        tab.selectedFile = path
+                        tab.lastSelectedAt = Date()
+                        cancelCreationFollowUp()
+                        isKeyboardActive = false
+                        quickActionPresentation.dismiss()
+                        browserSelection.selectedID = nil
+                        simulatorSelection.selectedID = nil
+                        fileWorkspace.selectedID = tab.id
+                    } catch is CancellationError { }
+                    catch { commandError = error.localizedDescription }
                 }
                 .task(id: pendingResourceRequest) {
                     guard let request = pendingResourceRequest else { return }
@@ -955,6 +997,11 @@
                 .onChange(of: viewportGrids) {
                     fitTerminalIfReady()
                 }
+                .onChange(of: canFitAfterKeyboardDismissal) {
+                    if !canFitAfterKeyboardDismissal {
+                        automaticTabFit.cancelKeyboardDismissal()
+                    }
+                }
                 .onChange(of: window?.windowLayout, initial: true) {
                     fitTerminalIfReady()
                 }
@@ -1099,6 +1146,15 @@
                 .accessibilityIdentifier("window-tabs-picker")
             }
             if terminalIsVisible, let window {
+                if
+                    let pane = window.panes.first(where: { $0.paneId == activePaneId }) ?? window.activePane,
+                    pane.agentSession != nil, let identity = pane.workspaceIdentity,
+                    let host = settings.pairedHosts.first(where: { $0.id == hostId }) {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        AgentWorkflowControlButton(endpoint: .remote(host, manager: connectionManager), pane: identity)
+                            .id("\(hostId):\(identity.paneID)")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         if
@@ -1808,28 +1864,11 @@
                     responseState.request.responseView(
                         isConnected: relayClient.isHostConnected,
                         submit: { response in
-                            let shouldMonitor = settings.agentBackgroundMonitoringEnabled
-                                && AgentBackgroundMonitoringPolicy.shouldStart(for: response)
-                            if shouldMonitor {
-                                backgroundMonitoring.startIfNeeded(
-                                    for: response,
-                                    hostId: hostId,
-                                    paneId: activeService.paneId,
-                                    sessionName: sessionName,
-                                    windowName: window.windowName
-                                )
-                            }
                             let succeeded = await activeService.submitResponse(
                                 response,
                                 pluginID: responseState.pluginID,
                                 requestID: responseState.requestID
                             )
-                            if !succeeded, shouldMonitor {
-                                backgroundMonitoring.removePane(
-                                    hostId: hostId,
-                                    paneId: activeService.paneId
-                                )
-                            }
                             if !succeeded {
                                 commandError = "Couldn't send the response. Check the current request and try again."
                             }
@@ -1959,6 +1998,7 @@
 
         private func paneTerminal(pane: PaneState, windowName: String, windowID: String) -> some View {
             let preparationID = annotationHandoff.request?.id
+            let fitWindowID = window?.stableId
             return LiveTerminalView(
                 paneId: pane.paneId,
                 hostId: hostId,
@@ -1979,31 +2019,25 @@
                 showsInputControls: false,
                 showCopyButton: false,
                 isActive: terminalIsVisible && pane.paneId == activePaneId,
-                isInputSuspended: !terminalIsVisible || artifactPreview != nil,
-                isQuickActionInputSuspended: quickActionPresentation.suspendsTerminalInput,
+                isInputSuspended: terminalInputSuspension.external,
+                isQuickActionInputSuspended: terminalInputSuspension.quickActionEditor,
                 parentKeyboardRequested: isKeyboardActive,
                 mouseReportingEnabled: mouseReportingPaneIDs.contains(pane.paneId),
-                onKeyboardRequest: { isKeyboardActive = $0 },
+                onKeyboardRequest: { requested in
+                    if requested {
+                        automaticTabFit.cancelKeyboardDismissal()
+                    }
+                    isKeyboardActive = requested
+                },
                 settings: settings,
                 telemetry: pane.telemetry,
                 // Tiled panes pass `responseState: .constant(nil)`, so no response
                 // form is shown here and the submit closure is never invoked.
                 submitResponse: { _ in false },
-                onTerminalInput: { keys in
-                    observeTerminalInput(
-                        keys,
-                        paneId: pane.paneId,
-                        windowName: windowName
-                    )
-                },
                 onTerminalInputQueued: { terminalInputRevision &+= 1 },
                 onCancelVoiceInput: {
                     guard terminalIsVisible, pane.paneId == activePaneId else { return false }
                     return voiceSession.cancelIfPresented()
-                },
-                onTerminalPaste: { text in
-                    guard settings.agentBackgroundMonitoringEnabled, relayClient.isHostConnected else { return }
-                    backgroundMonitoring.handleTerminalPaste(text, hostId: hostId, paneId: pane.paneId)
                 },
                 onPasteImage: { image in
                     guard terminalIsVisible, activePaneId == pane.paneId else { return }
@@ -2025,6 +2059,12 @@
                 onTerminalInputReadinessChange: { readiness in
                     terminalInputReadiness[pane.paneId] = readiness
                 },
+                onInputPresentationChange: { input in
+                    keyboardDismissalInputs.update(
+                        input, paneID: pane.paneId, activePaneID: activePaneId,
+                        fit: &automaticTabFit
+                    )
+                },
                 onCopyActionChange: { action in
                     terminalCopyActions[pane.paneId] = action
                 },
@@ -2032,6 +2072,13 @@
                     if viewportGrids[pane.paneId] != grid {
                         viewportGrids[pane.paneId] = grid
                     }
+                },
+                onKeyboardDismissed: {
+                    guard
+                        canFitAfterKeyboardDismissal,
+                        activePaneId == pane.paneId, let fitWindowID,
+                        window?.stableId == fitWindowID else { return }
+                    requestAutomaticTabFit(windowID: fitWindowID, requiresHiddenKeyboard: true)
                 },
                 onSwitchWindow: { selectAdjacentWindow(from: windowID, direction: $0) },
                 preparationID: preparationID,
@@ -2042,32 +2089,6 @@
                 }
             )
             .environment(relayClient)
-        }
-
-        private func observeTerminalInput(
-            _ keys: [TmuxKey],
-            paneId: String,
-            windowName: String
-        ) {
-            guard
-                settings.agentBackgroundMonitoringEnabled,
-                relayClient.isHostConnected
-            else {
-                backgroundMonitoring.resetTerminalInput(
-                    hostId: hostId,
-                    paneId: paneId
-                )
-                return
-            }
-
-            backgroundMonitoring.handleTerminalInput(
-                keys,
-                hostId: hostId,
-                paneId: paneId,
-                sessionName: sessionName,
-                windowName: windowName,
-                currentState: sessionStore.session(for: paneId, hostId: hostId)?.state
-            )
         }
 
         // MARK: - Status Bar
@@ -2124,11 +2145,18 @@
             fitTerminalIfReady()
         }
 
-        private func requestAutomaticTabFit(windowID: String? = nil) {
-            automaticTabFit.request(.init(hostID: hostId, sessionName: sessionName, windowID: windowID))
+        private func requestAutomaticTabFit(windowID: String? = nil, requiresHiddenKeyboard: Bool = false) {
+            automaticTabFit.request(
+                .init(hostID: hostId, sessionName: sessionName, windowID: windowID),
+                requiresHiddenKeyboard: requiresHiddenKeyboard
+            )
         }
 
         private func fitTerminalIfReady() {
+            // A delayed Host reply may have just released the resize guard.
+            if !canFitAfterKeyboardDismissal {
+                automaticTabFit.cancelKeyboardDismissal()
+            }
             guard artifactPreview == nil else { return }
             fitCreatedTerminalIfReady()
             guard terminalIsVisible, !isResizing else { return }
@@ -2267,13 +2295,7 @@
                 request.isValid(in: activePhraseContext, savedPhrases: settings.quickPhrases.phrases),
                 let paneId = request.context.target.paneID
             else { return false }
-            let windowName = window?.windowName ?? ""
-            guard
-                enqueueToolbarKeys(request.phrase.keys, paneId: paneId, immediately: true, onSent: {
-                    // Phrases are ordinary user input; retain normal prompt monitoring.
-                    observeTerminalInput(request.phrase.keys, paneId: paneId, windowName: windowName)
-                }) else { return false }
-            return true
+            return enqueueToolbarKeys(request.phrase.keys, paneId: paneId, immediately: true)
         }
 
         private func sendCustomButton(_ request: TerminalCustomButtonRequest) -> Bool {
@@ -2282,10 +2304,7 @@
                 request.isValid(in: activePhraseContext, savedButtons: settings.customButtons.buttons),
                 let paneId = request.context.target.paneID else { return false }
             let keys = request.button.action.keys
-            let windowName = window?.windowName ?? ""
-            return enqueueToolbarKeys(keys, paneId: paneId, immediately: true, onSent: {
-                observeTerminalInput(keys, paneId: paneId, windowName: windowName)
-            })
+            return enqueueToolbarKeys(keys, paneId: paneId, immediately: true)
         }
 
         private var activeAgentCommandContext: AgentCommandContext? {
@@ -2305,19 +2324,7 @@
         private func sendAgentCommand(_ request: AgentCommandRequest) -> Bool {
             guard request.isValid(in: activeAgentCommandContext) else { return false }
 
-            // Update the draft only after the ordered input succeeds. Executing
-            // a bare command does not arm the background-turn monitor.
-            let windowName = window?.windowName ?? ""
-            guard
-                enqueueToolbarKeys(request.keys, paneId: request.context.target.paneID, immediately: true, onSent: {
-                    if request.submission == .execute {
-                        backgroundMonitoring.resetTerminalInput(hostId: hostId, paneId: request.context.target.paneID)
-                    } else {
-                        observeTerminalInput(request.keys, paneId: request.context.target.paneID, windowName: windowName)
-                    }
-                })
-            else { return false }
-            return true
+            return enqueueToolbarKeys(request.keys, paneId: request.context.target.paneID, immediately: true)
         }
 
         private func sendCommand(_ command: CommandType, paneId: String, inputBinding: ViewerWorkspaceInputBinding? = nil) async {
@@ -2335,10 +2342,7 @@
                 let activePaneId
             else { return }
 
-            let windowName = window?.windowName ?? ""
-            enqueueToolbarKeys(keys, paneId: activePaneId, onSent: {
-                observeTerminalInput(keys, paneId: activePaneId, windowName: windowName)
-            })
+            enqueueToolbarKeys(keys, paneId: activePaneId)
         }
 
         private func insertVoiceTranscript(_ text: String) -> Bool {
@@ -2346,18 +2350,14 @@
                 terminalIsVisible, !quickActionPresentation.isPresented,
                 activePhraseContext.canSend, let activePaneId else { return false }
             let keys: [TmuxKey] = [.text(text)]
-            let windowName = window?.windowName ?? ""
-            return enqueueToolbarKeys(keys, paneId: activePaneId, immediately: true, onSent: {
-                observeTerminalInput(keys, paneId: activePaneId, windowName: windowName)
-            })
+            return enqueueToolbarKeys(keys, paneId: activePaneId, immediately: true)
         }
 
         @discardableResult
         private func enqueueToolbarKeys(
-            _ keys: [TmuxKey], paneId: String, immediately: Bool = false,
-            onSent: @escaping @MainActor () -> Void = { }
+            _ keys: [TmuxKey], paneId: String, immediately: Bool = false
         ) -> Bool {
-            guard externalInputSenders[paneId]?(keys, immediately, onSent) == true else { return false }
+            guard externalInputSenders[paneId]?(keys, immediately) == true else { return false }
             terminalInputRevision &+= 1
             return true
         }

@@ -2,9 +2,8 @@ import CtrlxNetworking
 import Foundation
 import SwiftUI
 
-/// Slim progress bar shown at the bottom of a session row when any of its
-/// panes is emitting `OSC 9;4` progress. Used identically by the macOS host
-/// sidebar, the macOS viewer's remote-host sidebar, and the iOS session list.
+/// Slim progress bar shared by session rows and window-tab labels on Mac and
+/// iOS. Shows explicit terminal progress or a working-agent fallback.
 ///
 /// Visuals follow the OSC 9;4 state convention:
 /// - `.normal(percent)`: blue bar filled to `percent%`.

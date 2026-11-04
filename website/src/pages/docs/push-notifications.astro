@@ -40,16 +40,17 @@ import Guide from "../../layouts/Guide.astro";
 
   <h2>Connected vs. away</h2>
   <p>
-    Pushes exist for when the app isn't actively connected. With CtrlX open and
-    streaming, state changes show up live over the WebSocket; backgrounded but still
-    connected, a local notification fills the same role without a round-trip through
-    APNs.
+    iOS system notifications always arrive through APNs, whether the app is
+    connected, backgrounded or suspended. With CtrlX open, ordinary activity
+    updates appear in the session UI; questions can still show a notification.
+    The app does not keep a background WebSocket alive for notifications.
   </p>
 
   <h2>Self-hosting?</h2>
   <p>
     A self-hosted relay needs your own APNs key — see
     <a href="/docs/self-hosting/">the self-hosting guide</a>. Without
-    one, everything else works; you just won't get pushes while the phone is away.
+    one, everything else works; iOS system notifications require APNs. Mac Viewer desktop notifications
+    continue to use the live connection.
   </p>
 </Guide>

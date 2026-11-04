@@ -5,7 +5,7 @@ import Foundation
 ///
 /// The Agent plugin owns the event copy, while CtrlX adds the tmux location
 /// already present in `PaneState`. Keeping this transformation pure lets the
-/// Mac push path and the iOS live-socket fallback render the same notification.
+/// Mac local, Mac Viewer and iOS APNs paths share the same notification copy.
 public struct AgentNotificationPresentation: Equatable, Sendable {
     public let title: String
     public let subtitle: String?

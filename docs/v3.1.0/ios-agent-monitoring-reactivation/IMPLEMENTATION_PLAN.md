@@ -1,5 +1,9 @@
 # CtrlX 3.1.0 Stage 6：iOS Agent 监控自恢复
 
+> Historical record: Background Agent Monitoring has been removed. iOS alerts
+> now use APNs exclusively. See [current notification delivery](../../services-reference.md#push-notifications).
+
+
 ## 问题
 
 `Background Agent Monitoring` 开关曾同时表示用户意图和当前

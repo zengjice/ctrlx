@@ -398,13 +398,13 @@ Return to Source and Close controls and use the same five-item creation menu.
 
 ## iOS settings organization
 
-The Settings home groups connection, preferences, background activity and other
+The Settings home groups connection, preferences and other
 settings. **Hosts & Connection** contains connection controls, automatic connection,
 device name, paired Hosts and the Relay address. **Appearance & Terminal** keeps
 app appearance separate from terminal colors/font. **Keyboard & Input** contains
 keyboard placement/entry, Agent Quick Input and image-upload confirmation.
 **Voice Input**, **Quick Phrase Sync** and **New Session Defaults** have dedicated
-pages. Background Agent Monitoring and the global Debug Mode remain on the home
+pages. The global Debug Mode remains on the home
 page. **About CtrlX** groups version/device information, provenance and licenses.
 
 On iOS, Voice Input shows language and correction availability before provider
@@ -892,6 +892,11 @@ message only after the version handshake. Until both sides opt in, frames contai
 consent only, no phrases. Connection epochs bind messages to the current handshake;
 disconnect clears peer consent and cancels pending work. Plaintext sync messages
 are rejected by both clients. Notification-only connections don't opt into sync.
+After E2EE establishes and the peer's public key is saved, Host and Viewer refresh
+the sync session's device identity before hello. This replaces a new pairing's
+empty-key placeholder without requiring an app restart. A changed key resets the
+sync epoch and peer consent; the replacement identity uses its own local consent.
+Repeated announcements of the same key preserve the current sync handshake.
 Sync offer v2 requires versioned-edit support on both devices. Legacy v1 and
 unknown peers receive no frames and show an update hint; local phrase management
 and ordinary terminal access remain available.

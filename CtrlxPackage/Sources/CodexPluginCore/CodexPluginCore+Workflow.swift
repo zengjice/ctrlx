@@ -11,7 +11,7 @@ extension CodexPluginCore: AgentWorkflowProviding {
     }
 
     public nonisolated var workflowCapabilities: AgentWorkflowCapabilities {
-        .init(maximumInputBytes: 256 * 1_024, mediaTypes: ["image/png", "image/jpeg", "text/plain", "text/markdown"])
+        .init(maximumInputBytes: 256 * 1_024, mediaTypes: ["image/png", "image/jpeg"])
     }
 
     public nonisolated func workflowTranscript(conversationID: String, nativeTurnID: String, prompt: String, candidate: String) -> any AgentWorkflowTranscriptParser {

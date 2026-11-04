@@ -23,6 +23,7 @@
         }
 
         @State private var extensionRequest: ExtensionRequest?
+        private let onOpenFile: (String) -> Void
         private let onOpenBrowser: (RemoteBrowserTab) -> Void
         @FocusState private var editingAddress: Bool
         @Environment(\.scenePhase) private var scenePhase
@@ -30,8 +31,9 @@
         @Environment(\.browserAnnotationContext) private var annotationContext
         private let client: ViewerRelayClient
 
-        public init(tab: RemoteBrowserTab, client: ViewerRelayClient, onOpenBrowser: @escaping (RemoteBrowserTab) -> Void) {
+        public init(tab: RemoteBrowserTab, client: ViewerRelayClient, onOpenFile: @escaping (String) -> Void, onOpenBrowser: @escaping (RemoteBrowserTab) -> Void) {
             self.client = client
+            self.onOpenFile = onOpenFile
             self.onOpenBrowser = onOpenBrowser
             _session = State(initialValue: RemoteBrowserSession(tab: tab, client: client))
         }
@@ -81,6 +83,9 @@
                 HStack {
                     Label("Host · Chromium", symbol: .globe).font(.caption).foregroundStyle(.secondary)
                     Spacer()
+                    if let downloads = session.tab.downloads, !downloads.isEmpty {
+                        BrowserDownloadsButton(downloads: downloads, open: onOpenFile)
+                    }
                     if client.hostSupportsResourceAuthorization, let sessionID = session.tab.resourceSessionID {
                         ResourceAgentMenu(kind: .browser, tabID: session.tab.id, sessionID: sessionID, grant: session.tab.grant) {
                             try await ResourceTabClient.request($0, client: client)

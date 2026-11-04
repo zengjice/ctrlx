@@ -18,7 +18,7 @@
     /// rides each follow-up notification's `userInfo`, so the flow survives
     /// app relaunches with no local storage.
     @MainActor
-    public final class NotificationActionService {
+    final public class NotificationActionService {
         public static let shared = NotificationActionService()
 
         private let logger = Logger(label: "com.jicezeng.ctrlx.notificationaction")
@@ -52,10 +52,11 @@
         /// the regular deep-link handling.
         public func handle(_ response: UNNotificationResponse) async -> Bool {
             let userInfo = response.notification.request.content.userInfo
-            guard let context = decode(
-                NotificationActionContext.self,
-                from: userInfo[NotificationUserInfoKey.actionContext]
-            ) else { return false }
+            guard
+                let context = decode(
+                    NotificationActionContext.self,
+                    from: userInfo[NotificationUserInfoKey.actionContext]
+                ) else { return false }
 
             let progress = decode(
                 NotificationActionProgress.self,
@@ -87,12 +88,13 @@
             originalTitle: String,
             originalSubtitle: String?
         ) async -> Bool {
-            guard let plan = NotificationActionPlanner.plan(
-                context: context,
-                progress: progress,
-                actionIdentifier: actionIdentifier,
-                userText: userText
-            ) else { return false }
+            guard
+                let plan = NotificationActionPlanner.plan(
+                    context: context,
+                    progress: progress,
+                    actionIdentifier: actionIdentifier,
+                    userText: userText
+                ) else { return false }
 
             // Action taps run without UI — ask for background time so iOS
             // doesn't suspend the process mid-submission.
@@ -153,42 +155,42 @@
             backgroundTaskID = .invalid
         }
 
-        // MARK: - Incoming actionable notifications
-
-        /// The last actionable agent notification received over the live
-        /// socket, kept so the E2E harness can simulate an action-button tap
-        /// through the real submission path (notification UI itself lives in
-        /// SpringBoard, out of the harness's reach).
-        public struct IncomingActionNotification {
-            public let title: String
-            public let subtitle: String?
-            public let pairId: String
-            public let paneId: String?
-            public let context: NotificationActionContext
-        }
-
-        public private(set) var lastIncomingAction: IncomingActionNotification?
-
-        /// Records an actionable agent notification as it arrives over the
-        /// live socket — including while the app is active, when no local
-        /// notification is materialized.
-        public func noteIncomingAgentNotification(
-            title: String,
-            subtitle: String?,
-            pairId: String,
-            paneId: String?,
-            action: NotificationActionContext
-        ) {
-            lastIncomingAction = IncomingActionNotification(
-                title: title,
-                subtitle: subtitle,
-                pairId: pairId,
-                paneId: paneId,
-                context: action
-            )
-        }
-
         #if DEBUG
+            // MARK: - E2E action context capture
+
+            /// The last actionable agent notification received over the live
+            /// socket, kept so the E2E harness can simulate an action-button tap
+            /// through the real submission path (notification UI itself lives in
+            /// SpringBoard, out of the harness's reach).
+            public struct IncomingActionNotification {
+                public let title: String
+                public let subtitle: String?
+                public let pairId: String
+                public let paneId: String?
+                public let context: NotificationActionContext
+            }
+
+            public private(set) var lastIncomingAction: IncomingActionNotification?
+
+            /// Records an actionable agent notification as it arrives over the
+            /// live socket — including while the app is active, when no local
+            /// notification is materialized.
+            public func noteIncomingAgentNotification(
+                title: String,
+                subtitle: String?,
+                pairId: String,
+                paneId: String?,
+                action: NotificationActionContext
+            ) {
+                lastIncomingAction = IncomingActionNotification(
+                    title: title,
+                    subtitle: subtitle,
+                    pairId: pairId,
+                    paneId: paneId,
+                    context: action
+                )
+            }
+
             /// The notification the last simulated tap acted on, kept so a
             /// stale-tap simulation (`reuseLast`) can act on it again.
             private var lastSimulatedAction: IncomingActionNotification?
@@ -240,67 +242,6 @@
             }
         #endif
 
-        // MARK: - Live-socket fallback notifications
-
-        /// Materializes an actionable local notification for a host
-        /// notification that arrived over the live WebSocket while the app was
-        /// backgrounded (the relay drops the APNs push while we're connected,
-        /// so this path mirrors what the NSE does for pushes).
-        public func scheduleActionableLocalNotification(
-            title: String,
-            subtitle: String?,
-            body: String,
-            paneId: String?,
-            hostId: String,
-            action: NotificationActionContext
-        ) async {
-            guard PushNotificationService.shared.permissionStatus == .authorized else { return }
-            guard
-                let contextJSON = encodeJSONString(action),
-                // A context with no offerable actions (wire skew) falls back to
-                // the caller's plain-notification path.
-                let (categoryId, dynamicCategory) = NotificationActionCategories.initialCategory(for: action)
-            else {
-                PushNotificationService.shared.scheduleLocalNotification(
-                    title: title,
-                    subtitle: subtitle,
-                    body: body,
-                    paneId: paneId,
-                    hostId: hostId
-                )
-                return
-            }
-
-            if let dynamicCategory {
-                await NotificationActionCategories.registerMerging([dynamicCategory])
-            }
-
-            let content = UNMutableNotificationContent()
-            content.title = title
-            content.subtitle = subtitle ?? ""
-            // Multi-question forms: the baked body only says "Claude has N
-            // questions" — append the first question so the expanded
-            // notification's buttons have a visible question (mirrors the NSE).
-            if let questionLine = action.numberedQuestionBody(at: 0) {
-                content.body = "\(body)\n\(questionLine)"
-            } else {
-                content.body = body
-            }
-            content.sound = .default
-            content.badge = 1
-            content.categoryIdentifier = categoryId
-            var userInfo: [String: Any] = [
-                NotificationUserInfoKey.actionContext: contextJSON,
-                "pairId": hostId,
-            ]
-            if let paneId {
-                userInfo["paneId"] = paneId
-            }
-            content.userInfo = userInfo
-
-            await addNotification(content)
-        }
-
         // MARK: - Submission
 
         /// Submits the structured response for the context's request, reusing
@@ -321,9 +262,8 @@
             }
 
             // Prefer the app's live manager. A temporary one is created only
-            // when the app process was launched straight into this handler —
-            // in that case the socket was down anyway (that's why the APNs
-            // push existed), so a fresh connection is required regardless.
+            // when a notification action launched the app before its UI
+            // initialized a connection manager.
             var temporary: ViewerConnectionManager?
             let manager: ViewerConnectionManager
             if let live = connectionManager {

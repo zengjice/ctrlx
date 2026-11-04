@@ -1,6 +1,7 @@
 import Foundation
 
 public enum AgentWorkflowAttachmentUpload: Codable, Equatable, Sendable {
+    case image(id: UUID, name: String, mediaType: String, data: Data, sha256: String)
     case begin(id: UUID, name: String, mediaType: String, size: Int)
     case append(id: UUID, offset: Int, data: Data)
     case finish(id: UUID, sha256: String)
@@ -8,7 +9,8 @@ public enum AgentWorkflowAttachmentUpload: Codable, Equatable, Sendable {
 
     public var id: UUID {
         switch self {
-        case let .begin(id, _, _, _),
+        case let .image(id, _, _, _, _),
+             let .begin(id, _, _, _),
              let .append(id, _, _),
              let .finish(id, _),
              let .cancel(id): id

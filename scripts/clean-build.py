@@ -545,6 +545,8 @@ def main():
     tests = modes.add_parser("tests", help="Remove obsolete native backend outputs and test indexes; keep swiftbuild caches")
     tests.add_argument("--save-space", action="store_true", help="Also remove test compilation caches; keep products and downloads")
     tests.add_argument("--yes", action="store_true", help="Delete the listed test caches")
+    simulator = modes.add_parser("ios-simulator", help="Remove standard iOS Simulator compilation caches; keep products and downloads")
+    simulator.add_argument("--yes", action="store_true", help="Delete only this worktree's iOS Simulator compilation caches")
     idle = modes.add_parser("idle", help="Remove compilation caches in an idle worktree; keep signed apps, packages and downloads")
     idle.add_argument("--yes", action="store_true", help="Delete the listed caches after stopping this worktree's builds and installs")
     temporary = modes.add_parser("system-temp", help="Clean stale CtrlX signing clones and legacy E2E compilation caches in macOS user temp")
@@ -571,7 +573,7 @@ def main():
     with contextlib.ExitStack() as locks:
         if args.yes:
             locks.enter_context(worktree_lock(root))
-        if args.mode in ("deep", "idle", "tests"):
+        if args.mode in ("deep", "idle", "tests", "ios-simulator"):
             print("Stop builds, packaging and device installs in this worktree before deleting caches.")
             if args.mode == "deep":
                 print("Built installable apps will be removed; IPA/DMG files in dist are preserved.")
@@ -580,6 +582,8 @@ def main():
                 targets = idle_targets(root)
                 targets += retained_targets(root, locks, report_unmanaged=True)
                 targets += receipt_targets(root, locks)
+            elif args.mode == "ios-simulator":
+                targets = derived_cache_targets(root, root / ".build-local/DerivedData/iOS-Simulator", save_space=True)
             else:
                 targets = test_cache_targets(root, args.save_space)
         elif args.mode == "prune":

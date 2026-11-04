@@ -8,7 +8,6 @@ import SwiftUI
 @main
 struct CtrlxApp: App {
     @UIApplicationDelegateAdaptor(AppDelegateHandler.self) var appDelegate
-    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         // Bootstrap logging FIRST, before any Logger instances are created
@@ -53,11 +52,6 @@ struct CtrlxApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-        }
-        .onChange(of: scenePhase) { _, newPhase in
-            if newPhase == .active {
-                PushNotificationService.shared.clearBadge()
-            }
         }
     }
 }

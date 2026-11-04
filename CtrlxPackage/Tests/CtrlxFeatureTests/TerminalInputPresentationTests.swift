@@ -125,3 +125,62 @@ struct TerminalInitialTailPresentationPolicyTests {
         #expect(secondConsumption)
     }
 }
+
+@Suite("Terminal keyboard dismissal Fit")
+struct TerminalKeyboardDismissalFitTests {
+    @Test("A measurement before keyboard dismissal cannot trigger Fit")
+    func waitsForKeyboardAndViewport() {
+        var fit = TerminalKeyboardDismissalFit()
+        fit.requestKeyboard(false)
+        #expect(fit.consumeIfReady(hasViewport: true) == false)
+        #expect(fit.keyboardDidHide() == true)
+        #expect(fit.consumeIfReady(hasViewport: false) == false)
+        #expect(fit.consumeIfReady(hasViewport: true) == true)
+        #expect(fit.consumeIfReady(hasViewport: true) == false)
+    }
+
+    @Test("Passive keyboard notifications and geometry cannot arm Fit")
+    func requiresExplicitDismissal() {
+        var fit = TerminalKeyboardDismissalFit()
+        #expect(fit.keyboardDidHide() == false)
+        #expect(fit.consumeIfReady(hasViewport: true) == false)
+        fit.requestKeyboard(true)
+        #expect(fit.keyboardDidHide() == false)
+        #expect(fit.consumeIfReady(hasViewport: true) == false)
+    }
+
+    @Test("Reopening the keyboard cancels before or after dismissal", arguments: [false, true])
+    func reopeningCancels(dismissed: Bool) {
+        var fit = TerminalKeyboardDismissalFit()
+        fit.requestKeyboard(false)
+        if dismissed {
+            #expect(fit.keyboardDidHide() == true)
+        }
+        fit.requestKeyboard(true)
+        #expect(fit.keyboardDidHide() == false)
+        #expect(fit.consumeIfReady(hasViewport: true) == false)
+    }
+
+    @Test("Leaving or suspending the input cancels the pending Fit", arguments: [false, true])
+    func cancellation(dismissed: Bool) {
+        var fit = TerminalKeyboardDismissalFit()
+        fit.requestKeyboard(false)
+        if dismissed {
+            #expect(fit.keyboardDidHide() == true)
+        }
+        fit.cancel()
+        #expect(fit.keyboardDidHide() == false)
+        #expect(fit.consumeIfReady(hasViewport: true) == false)
+    }
+
+    @Test("Repeated completion notifications do not reset a ready request")
+    func repeatedNotifications() {
+        var fit = TerminalKeyboardDismissalFit()
+        fit.requestKeyboard(false)
+        #expect(fit.keyboardDidHide() == true)
+        #expect(fit.keyboardDidHide() == false)
+        #expect(fit.consumeIfReady(hasViewport: true) == true)
+        #expect(fit.keyboardDidHide() == false)
+        #expect(fit.consumeIfReady(hasViewport: true) == false)
+    }
+}

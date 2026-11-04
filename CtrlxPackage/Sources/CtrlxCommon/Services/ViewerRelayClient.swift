@@ -36,16 +36,6 @@ public enum ViewerRelayClientError: Error, LocalizedError {
     }
 }
 
-/// Result of a caller-initiated liveness probe. The probe reuses the
-/// existing viewer socket and reconnect machinery; it never creates a parallel
-/// transport.
-public enum ViewerRelayProbeResult: Sendable, Equatable {
-    case alive
-    case reconnecting
-    case restarted
-    case unavailable
-}
-
 /// Client for connecting to a remote host via the external relay server as a "viewer" device.
 ///
 /// This is the shared implementation used by both macOS and iOS
@@ -251,8 +241,6 @@ final public class ViewerRelayClient {
     private var activeSendCount = 0
     private var activeSendBytes = 0
     private var livenessPolicy = ConnectionLivenessPolicy()
-    private var lastInboundAt = ContinuousClock.now
-    private var inboundFrameCount: UInt64 = 0
 
     // MARK: - E2EE Properties
 
@@ -284,7 +272,7 @@ final public class ViewerRelayClient {
     public var onPluginPresentations: (@Sendable (PluginPresentationsMessage) -> Void)?
 
     /// Called when the host pushes a pre-baked notification over the live socket
-    /// (so a backgrounded-but-connected viewer can show a local notification).
+    /// (used for Mac Viewer desktop notifications).
     public var onAgentNotification: (@Sendable (AgentNotificationMessage) -> Void)?
 
     /// Called when session state is received from host
@@ -350,9 +338,8 @@ final public class ViewerRelayClient {
     /// Called when the host device disconnects (but pairing is still active)
     public var onHostDisconnected: (@MainActor @Sendable () async -> Void)?
 
-    /// Called when this viewer's Relay transport is interrupted. Unlike a real
-    /// `.hostDisconnected` frame, this must not end an in-flight Agent monitor:
-    /// the monitor is what drives the reconnect.
+    /// Called when this Viewer loses its Relay transport, without implying
+    /// that the Host itself went offline.
     public var onTransportInterrupted: (@MainActor @Sendable () async -> Void)?
 
     /// Called when the server notifies that this pairing was removed by the other side
@@ -498,54 +485,6 @@ final public class ViewerRelayClient {
 
         reconnectionAttempt = 0
         await performConnect()
-    }
-
-    /// Verify that the existing Relay transport still receives frames. A normal
-    /// probe is a single ping. If the socket was already stale, give that ping a
-    /// short response window and replace only the still-silent generation.
-    public func probeConnection(
-        staleAfter: Duration = .seconds(30),
-        responseTimeout: Duration = .seconds(2)
-    ) async -> ViewerRelayProbeResult {
-        guard shouldReconnect else { return .unavailable }
-
-        guard state.isConnected else {
-            await reconnectImmediately()
-            return state.isConnected ? .restarted : .reconnecting
-        }
-
-        let generation = connectionGeneration.current
-        guard let task = webSocketTask else { return .reconnecting }
-
-        let inboundCountBeforeProbe = inboundFrameCount
-        let wasStale = ContinuousClock.now - lastInboundAt >= staleAfter
-        guard await send(.ping, using: task, generation: generation) else {
-            return .reconnecting
-        }
-        guard wasStale else { return .alive }
-
-        do {
-            try await Task.sleep(for: responseTimeout)
-        } catch {
-            return .unavailable
-        }
-
-        guard
-            connectionGeneration.isCurrent(generation),
-            webSocketTask === task,
-            inboundFrameCount == inboundCountBeforeProbe
-        else {
-            return .alive
-        }
-
-        logger.warning("Background probe found a stale Relay connection; replacing it")
-        await cleanupConnection()
-        await onTransportInterrupted?()
-        guard shouldReconnect else { return .unavailable }
-
-        reconnectionAttempt = 0
-        await performConnect()
-        return .restarted
     }
 
     /// Re-enable reconnection after a terminal failure (e.g. version mismatch) and
@@ -1098,7 +1037,6 @@ final public class ViewerRelayClient {
         guard connectionGeneration.isCurrent(credentialGeneration) else { return }
         let task = session.webSocketTask(with: request)
         webSocketTask = task
-        lastInboundAt = ContinuousClock.now
         task.resume()
 
         receiveTask = Task { [weak self] in
@@ -1202,8 +1140,6 @@ final public class ViewerRelayClient {
     ) async {
         guard connectionGeneration.isCurrent(generation), webSocketTask === task else { return }
         // Any inbound frame proves the socket is alive; clear the keep-alive watchdog.
-        lastInboundAt = ContinuousClock.now
-        inboundFrameCount &+= 1
         awaitingPong = false
         livenessPolicy.receivedInboundFrame()
 
@@ -1292,6 +1228,7 @@ final public class ViewerRelayClient {
                         if let onPartnerKeyReceived {
                             await onPartnerKeyReceived(hostPublicKey, hostPublicKeyId)
                         }
+                        quickPhraseSync?.refreshDeviceIdentity()
                     } catch {
                         logger.error("Failed to establish E2EE session: \(error)")
                     }
@@ -1426,6 +1363,7 @@ final public class ViewerRelayClient {
                     if let onPartnerKeyReceived {
                         await onPartnerKeyReceived(hostPublicKey, hostPublicKeyId)
                     }
+                    quickPhraseSync?.refreshDeviceIdentity()
                 } catch {
                     logger.error("Failed to establish E2EE session: \(error)")
                 }

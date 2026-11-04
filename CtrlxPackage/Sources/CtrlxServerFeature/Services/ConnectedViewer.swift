@@ -436,9 +436,8 @@ final public class ConnectedViewer: Identifiable {
             // scenarios can tell notification kinds apart — the wire `eventType`
             // is agent-blind ("agent.question" or "cli.notify"); this is a test-only signal.
             pushNotificationLog.logPushSent(title, paneId)
-            // Also deliver over the live WebSocket so a backgrounded-but-connected
-            // viewer — whose APNs push the relay just dropped — can still show a
-            // local notification. iOS gates on app state to avoid double-alerting.
+            // Mac Viewers receive desktop alerts over the live socket.
+            // iOS does not display this message; its alerts arrive via APNs.
             await sendAgentNotification(
                 title: title,
                 subtitle: subtitle,
@@ -452,11 +451,8 @@ final public class ConnectedViewer: Identifiable {
         }
     }
 
-    /// Deliver a pre-baked notification (title/body) to this viewer over the
-    /// live WebSocket (encrypted), paired with `sendCustomPushNotification`'s
-    /// APNs push. The relay drops the APNs push while the viewer is connected,
-    /// so this is the only alert path during the backgrounded-but-connected
-    /// window. Questions also alert while iOS is active.
+    /// Deliver a pre-baked desktop notification over the encrypted live
+    /// WebSocket for Mac Viewers, alongside the independent iOS APNs delivery.
     private func sendAgentNotification(
         title: String,
         subtitle: String?,
@@ -481,8 +477,8 @@ final public class ConnectedViewer: Identifiable {
         await sendEncrypted(message)
     }
 
-    /// Send a silent (background) APNs push that only updates the iOS app
-    /// badge — no alert, no sound, no Notification Service Extension. Used when
+    /// Send a badge-only APNs push — no banner, sound, background wake or
+    /// Notification Service Extension. Used when
     /// the host clears a session from the "needs attention" state so the iOS
     /// badge tracks the new lower count.
     public func sendBadgeUpdate(badge: Int) async {
@@ -1111,6 +1107,7 @@ final public class ConnectedViewer: Identifiable {
             if let onPartnerKeyReceived {
                 await onPartnerKeyReceived(publicKey, keyId)
             }
+            quickPhraseSync?.refreshDeviceIdentity()
             return true
         } catch {
             logger.error("Failed to establish E2EE session: \(error)")

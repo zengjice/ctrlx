@@ -56,7 +56,7 @@ public struct AgentWorkflowsView: View {
                     let create = createAgent.map { action in { hostID in try await action(endpoint.id, hostID) } }
                     switch destination {
                     case .host:
-                        AgentWorkflowHostView(endpoint: endpoint, createAgent: create)
+                        AgentWorkflowHostView(endpoint: endpoint, createAgent: create, navigation: navigation)
                     case let .configuration(_, hostID, id):
                         AgentWorkflowConfigurationView(endpoint: endpoint, hostID: hostID, definitionID: id, openAgent: open, createAgent: create, navigation: navigation)
                     case let .run(_, hostID, id):
@@ -81,6 +81,8 @@ private struct AgentWorkflowHostView: View {
     let endpoint: AgentWorkflowEndpoint
     let createAgent: ((UUID) async throws -> AgentWorkflowAgentCreation)?
     @Environment(\.scenePhase) private var scenePhase
+    let navigation: AgentWorkflowNavigation
+    @State private var starting: AgentWorkflowDefinitionSummary?
     @State private var overview: AgentWorkflowOverview?
     @State private var editing: AgentWorkflowDefinition?
     @State private var error: String?
@@ -94,11 +96,17 @@ private struct AgentWorkflowHostView: View {
             if let overview {
                 Section("Configurations") {
                     ForEach(overview.definitions) { definition in
-                        NavigationLink(value: AgentWorkflowNavigation.Destination.configuration(route: endpoint.id, hostID: overview.hostID, id: definition.id)) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(definition.name)
-                                Text("\(definition.nodeCount) steps").font(.caption).foregroundStyle(.secondary)
+                        HStack {
+                            NavigationLink(value: AgentWorkflowNavigation.Destination.configuration(route: endpoint.id, hostID: overview.hostID, id: definition.id)) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(definition.name)
+                                    Text("\(definition.nodeCount) steps").font(.caption).foregroundStyle(.secondary)
+                                }
                             }
+                            Button { starting = definition } label: { Label("Start workflow", symbol: .playFill).labelStyle(.iconOnly) }
+                                .buttonStyle(.borderless)
+                                .disabled(!endpoint.isConnected)
+                                .accessibilityIdentifier("workflow-quick-start-\(definition.id)")
                         }
                     }
                     if overview.definitions.isEmpty {
@@ -157,6 +165,11 @@ private struct AgentWorkflowHostView: View {
         }
         .sheet(item: $editing, onDismiss: { Task { await refresh() } }) { draft in
             AgentWorkflowEditor(endpoint: endpoint, definition: draft, isNew: true, createAgent: createAgent)
+        }
+        .sheet(item: $starting, onDismiss: { Task { await refresh() } }) { definition in
+            if let hostID = overview?.hostID {
+                AgentWorkflowStartView(endpoint: endpoint, hostID: hostID, definitionID: definition.id, navigation: navigation)
+            }
         }
         .confirmationDialog("Delete this run and its handoff history?", isPresented: $confirmingDelete, presenting: pendingDeletion) { run in
             Button("Delete run", role: .destructive) { delete(run) }
@@ -227,9 +240,7 @@ struct AgentWorkflowConfigurationView: View {
     @State private var attachments: [UUID: AgentWorkflowAttachment] = [:]
     @State private var editing: AgentWorkflowDefinition?
     @State private var instances: [AgentWorkflowInstance] = []
-    @State private var startRequestID = UUID()
-    @State private var pendingStart: ManageAgentWorkflows.Operation?
-    @State private var expiresAt = Date().addingTimeInterval(86_400)
+    @State private var showingStart = false
     @State private var busy = false
     @State private var error: String?
     @State private var confirmingDelete = false
@@ -281,20 +292,14 @@ struct AgentWorkflowConfigurationView: View {
                     } else {
                         Text("Run once after all dependencies finish.")
                     }
-                    DatePicker("Authorization expires", selection: $expiresAt, in: Date()..., displayedComponents: [.date, .hourAndMinute])
-                        .disabled(pendingStart != nil)
-                    Button(pendingStart == nil ? "Start workflow" : "Retry original start") { start(definition) }
+                    Button("Start workflow…") { showingStart = true }
                         .disabled(busy || !endpoint.isConnected)
-                    if pendingStart != nil, !busy {
-                        Text("The previous start has not been confirmed. Retrying uses the same request and configuration; check Runs before starting another workflow.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
                 } footer: {
                     Text("Starting authorizes these Agent instances to exchange task results and the listed roles to request completion. Other instances receive no access.")
                 }
                 Section {
                     Button("Delete configuration", role: .destructive) { confirmingDelete = true }
-                        .disabled(busy || pendingStart != nil || !endpoint.isConnected)
+                        .disabled(busy || !endpoint.isConnected)
                 }
             } else if error == nil {
                 ProgressView("Loading configuration…")
@@ -307,11 +312,14 @@ struct AgentWorkflowConfigurationView: View {
         .navigationTitle(definition?.name ?? "Configuration")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button("Edit") { editing = definition }.disabled(definition == nil || busy || pendingStart != nil || !endpoint.isConnected)
+                Button("Edit") { editing = definition }.disabled(definition == nil || busy || !endpoint.isConnected)
             }
         }
         .sheet(item: $editing, onDismiss: { Task { await load() } }) {
             AgentWorkflowEditor(endpoint: endpoint, definition: $0, isNew: false, createAgent: createAgent)
+        }
+        .sheet(isPresented: $showingStart) {
+            AgentWorkflowStartView(endpoint: endpoint, hostID: hostID, definitionID: definitionID, navigation: navigation)
         }
         .confirmationDialog("Delete this configuration?", isPresented: $confirmingDelete) {
             if let definition {
@@ -375,25 +383,6 @@ struct AgentWorkflowConfigurationView: View {
         } catch {
             guard !Task.isCancelled else { return }
             self.error = error.localizedDescription
-        }
-    }
-
-    private func start(_ definition: AgentWorkflowDefinition) {
-        guard !busy else { return }
-        let attempt = pendingStart ?? .start(
-            definitionID: definition.id, expectedRevision: definition.revision,
-            requestID: startRequestID, authorizationExpiresAt: expiresAt
-        )
-        pendingStart = attempt
-        busy = true
-        Task {
-            defer { busy = false }
-            do {
-                _ = try await navigation.startRun(attempt, endpoint: endpoint, hostID: hostID, configurationID: definition.id)
-                startRequestID = UUID()
-                pendingStart = nil
-                error = nil
-            } catch { self.error = error.localizedDescription }
         }
     }
 }

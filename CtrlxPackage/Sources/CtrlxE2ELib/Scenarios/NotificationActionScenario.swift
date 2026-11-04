@@ -7,7 +7,8 @@ import Foundation
 /// harness's reach — so the `iosNotificationAction` step simulates the action
 /// tap through the app's real `NotificationActionService.performAction` path,
 /// using the action context that ACTUALLY arrived over the encrypted
-/// live-socket notification. Everything else is the production pipeline:
+/// live-socket notification (DEBUG capture only, with no local alert). This
+/// tests action submission, not APNs/NSE delivery. The remaining path is production:
 /// Mac bakes the `NotificationActionContext` from the `awaitingPermission`
 /// state, iOS plans the tap and submits `agentResponseSubmission`, the host
 /// gate checks the open form, and the core delivers the keystroke. A

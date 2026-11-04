@@ -209,6 +209,8 @@ def main():
     modes = parser.add_subparsers(dest="mode", required=True)
     modes.add_parser("lock-held")
     runner = modes.add_parser("run")
+    runner.add_argument("--cleanup-ios-simulator", action="store_true",
+                        help="After success, remove only standard iOS Simulator compilation caches; keep products and downloads")
     runner.add_argument("command", nargs=argparse.REMAINDER)
     for name in ("invalidate-app", "record-app"):
         command = modes.add_parser(name)
@@ -230,6 +232,8 @@ def main():
             if not command:
                 raise ValueError("Missing command after --")
             run_child(command, descriptor)
+            if args.cleanup_ios_simulator:
+                run_child([sys.executable, root / "scripts/clean-build.py", "ios-simulator", "--yes"], descriptor)
         elif args.mode == "invalidate-app":
             invalidate_app(root, args.platform, args.configuration)
         elif args.mode == "record-app":

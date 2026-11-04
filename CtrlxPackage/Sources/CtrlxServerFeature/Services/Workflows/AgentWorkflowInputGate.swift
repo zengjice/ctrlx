@@ -3,7 +3,8 @@ import Foundation
 import Synchronization
 
 /// Serializes terminal mutations from local keys, Viewer input and workflow
-/// submissions. Running workflows reject edits until an operator takes over.
+/// submissions. Running workflows allow edits only after takeover or a native
+/// question in the current invocation.
 @MainActor
 final class AgentWorkflowInputGate {
     struct Claim: Sendable {
@@ -140,6 +141,6 @@ final class AgentWorkflowHumanInputAuthorization: Sendable {
 
 struct AgentWorkflowInputReadOnlyError: LocalizedError {
     var errorDescription: String? {
-        "This Agent is read-only while its workflow is running. Open View Workflow and choose Take over to enter input."
+        "This Agent is read-only while its workflow is running. Use the control button in the Agent tab to take over before entering input."
     }
 }

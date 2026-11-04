@@ -97,6 +97,12 @@ public struct AgentWorkflowInvocation: Codable, Equatable, Identifiable, Sendabl
     public var status: AgentWorkflowInvocationStatus
     public var nativeTurnID: String?
     public var nativeTranscriptPath: String?
+    /// Older in-flight calls received attachment lookup instructions as text.
+    /// Native image numbers can continue across turns in the same CLI.
+    public var nativeImageNumbers: [Int]?
+    /// A native question permits human input for this invocation, even while
+    /// the Agent continues working. Absent on older records.
+    public var allowsQuestionInput: Bool?
     public var result: AgentWorkflowResult?
     public var issue: String?
 
@@ -107,6 +113,13 @@ public struct AgentWorkflowInvocation: Codable, Equatable, Identifiable, Sendabl
         self.delivery = delivery
         self.createdAt = createdAt
         self.status = .pending
+    }
+
+    public func submissionText(pluginID: String) -> String {
+        if let nativeImageNumbers {
+            return AgentWorkflowPrompt.submittedText(delivery.input, pluginID: pluginID, imageNumbers: nativeImageNumbers)
+        }
+        return delivery.input.text
     }
 }
 

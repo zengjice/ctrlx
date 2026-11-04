@@ -29,23 +29,17 @@ struct PaneInfoTests {
         #expect(PaneInfo(fromTmuxOutput: Self.currentLine)?.workspaceIdentity == nil)
     }
 
-    @Test("Window activity parses and advances sorting without overwriting newer plugin activity")
+    @Test("Terminal output timestamps never seed or advance task recency")
     func windowActivity() throws {
-        let activity = 1_793_005_165
-        let line = Self.currentLine + String(repeating: Self.sep, count: 6) + String(activity)
+        let line = Self.currentLine + String(repeating: Self.sep, count: 6) + "1793005165"
         let pane = try #require(PaneInfo(fromTmuxOutput: line))
-        #expect(pane.lastActivityAt == Date(timeIntervalSince1970: TimeInterval(activity)))
-
-        var state = PaneState(
-            paneId: pane.paneId,
-            lastAgentActivityAt: Date(timeIntervalSince1970: 100)
-        )
-        #expect(pane.updateMetadata(of: &state))
-        #expect(state.lastAgentActivityAt == Date(timeIntervalSince1970: TimeInterval(activity)))
-
-        state.lastAgentActivityAt = Date(timeIntervalSince1970: TimeInterval(activity + 10))
-        #expect(!pane.updateMetadata(of: &state))
-        #expect(state.lastAgentActivityAt == Date(timeIntervalSince1970: TimeInterval(activity + 10)))
+        var state = pane.makePaneState()
+        #expect(state.lastAgentActivityAt == nil)
+        let taskTime = Date(timeIntervalSince1970: 100)
+        state.lastAgentActivityAt = taskTime
+        let redraw = try #require(PaneInfo(fromTmuxOutput: line.replacingOccurrences(of: "1793005165", with: "1793006000")))
+        #expect(!redraw.updateMetadata(of: &state))
+        #expect(state.lastAgentActivityAt == taskTime)
     }
 
     @Test("The physical server identity survives incomplete recovery metadata")

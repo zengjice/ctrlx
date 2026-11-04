@@ -51,13 +51,13 @@ extension AppCoordinator {
                     guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
                     return try await inspectWorkflowInput(instance)
                 },
-                submit: { [weak self] instance, file, beforeWrite in
+                submit: { [weak self] instance, file, images, beforeWrite, imagesReady in
                     guard
                         let self,
                         let provider = pluginRegistry?.core(instance.pluginID) as? any AgentWorkflowProviding else {
                         throw AgentWorkflowError("The workflow Agent plugin is unavailable.")
                     }
-                    try await tmuxService.submitWorkflowInput(instance, file: file, composer: provider.workflowComposer) { launch in
+                    try await tmuxService.submitWorkflowInput(instance, file: file, images: images, composer: provider.workflowComposer, imagesReady: imagesReady) { launch in
                         @Dependency(AgentSessionIdentityClient.self) var identities
                         guard identities.runtimeID(String(instance.processID)) == instance.processRuntimeID else {
                             throw AgentWorkflowError("The Agent process exited before submission. Nothing was sent.")
@@ -131,6 +131,17 @@ extension AppCoordinator {
         catch { workflowLogger.error("Could not pause a workflow: \(error)") }
     }
 
+    func handleAgentWorkflowState(_ state: AgentState, paneID: String?) async {
+        guard let paneID else { return }
+        switch state {
+        case .awaitingPermission,
+             .awaitingPlanApproval:
+            await pauseAgentWorkflows(paneID: paneID, reason: "The Agent needs a human response. Resolve it before continuing the workflow.")
+        default:
+            break
+        }
+    }
+
     private func pauseAgentWorkflowInput(paneID: String, reason: String) async throws {
         guard let store = agentWorkflowStore else { return }
         for run in try await store.snapshot().runs where (run.status == .running || run.status == .finishing) && run.instances.contains(where: { $0.paneID == paneID }) {
@@ -148,6 +159,10 @@ extension AppCoordinator {
         }
         if pane.agentSession?.state.openForm != nil {
             live.readiness = .awaitingHuman
+        } else if try await agentWorkflowStore?.allowsQuestionInput(for: live) == true {
+            live.readiness = .busy
+        } else if try await agentWorkflowStore?.isStagingInput(for: live) == true {
+            live.readiness = .busy
         } else if pane.agentSession?.state.isActiveWorking == true {
             live.readiness = .busy
         } else if pane.editorSession != nil || !recoveredWorkspaceDrafts.localDrafts(paneID: instance.paneID).isEmpty {
@@ -206,7 +221,7 @@ extension AppCoordinator {
             guard await identities.codexOwnsSession(String(instance.processID), instance.processRuntimeID, instance.conversationID) else {
                 throw AgentWorkflowInspectionUnavailable()
             }
-        } else {
+        } else if !instance.conversationID.isEmpty || instance.pluginID != "codex" {
             guard
                 let native = await identities.load(instance.paneID),
                 native.processID == String(instance.processID), native.runtimeID == instance.processRuntimeID,
@@ -229,7 +244,7 @@ extension AppCoordinator {
         }
         if live.capabilityIssue == nil {
             guard let store = agentWorkflowStore else { throw AgentWorkflowError("Workflow storage is not ready.") }
-            live.capabilityIssue = try await store.bridgeIssue(for: live)
+            live.capabilityIssue = try await store.bridgeIssue(for: live, allowsFirstSubmission: !verifyNativeWriter)
         }
         live.capabilities = live.capabilityIssue == nil ? provider.workflowCapabilities : nil
         if live.capabilityIssue != nil {

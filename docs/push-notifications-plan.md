@@ -8,6 +8,11 @@
 > shared `CodingAgent` enum or raw HTTP hooks. Verify provider setup against its
 > current instructions before changing signing or APNs configuration.
 
+> Current delivery uses APNs for all iOS system alerts, including while a Viewer
+> WebSocket is connected. Background Agent Monitoring and live-socket local-alert
+> fallback have been removed; the earlier disconnected-only design below is
+> historical. See the [current contract](services-reference.md#push-notifications).
+
 ## Overview
 
 This document outlines the implementation plan for sending push notifications from the Ctrlx external server to paired iOS devices. Push notifications will alert users to important coding-agent events (Claude Code or Codex CLI) when the iOS app is not actively connected via WebSocket.

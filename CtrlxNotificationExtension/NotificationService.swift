@@ -1,6 +1,6 @@
+import Crypto
 import CtrlxEncryption
 import CtrlxNetworking
-import Crypto
 import UserNotifications
 
 /// Notification Service Extension that decrypts encrypted push notification payloads.
@@ -115,7 +115,7 @@ class NotificationService: UNNotificationServiceExtension {
             // Remove previous notifications for this session before showing the new one
             // This keeps only the most recent notification per pane/session
             if let paneId = notificationContent.paneId {
-                await removePreviousNotifications(forPaneId: paneId)
+                await removePreviousNotifications(pairId: notificationContent.pairId, paneId: paneId)
             }
 
             // Update the notification with decrypted content
@@ -200,12 +200,16 @@ class NotificationService: UNNotificationServiceExtension {
 
     /// Removes any previously delivered notifications for the same pane/session.
     /// This ensures only the most recent notification per session is shown.
-    private func removePreviousNotifications(forPaneId paneId: String) async {
+    private func removePreviousNotifications(pairId: String, paneId: String) async {
         let center = UNUserNotificationCenter.current()
         let deliveredNotifications = await center.deliveredNotifications()
 
         let identifiersToRemove = deliveredNotifications
-            .filter { $0.request.content.userInfo["paneId"] as? String == paneId }
+            .filter {
+                NotificationDelivery.matchesPane(
+                    userInfo: $0.request.content.userInfo, pairId: pairId, paneId: paneId
+                )
+            }
             .map(\.request.identifier)
 
         if !identifiersToRemove.isEmpty {

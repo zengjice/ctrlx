@@ -378,14 +378,9 @@ public enum CodexGuardianSuppressionScenario {
             """,
             tmuxPane: "${codexGuardianPaneB}"
         )
-        // The hook endpoint replies before ingress dispatch runs, so wait for
-        // B's session-started push — emitted during dispatch, after the
-        // snapshot is recorded — before flipping the file underneath it.
-        TestStep.waitForFileContains(
-            path: "${pushLogPath}",
-            substring: "Session Started|${codexGuardianPaneB}",
-            storeAs: "pushLogSessionStartB"
-        )
+        // SessionStart is silent. Its project metadata appears only after the
+        // core records B's posture and dispatches the initialized session state.
+        TestStep.macWaitForElementQuery(.labelContains("GuardianSecond"), timeout: 15)
 
         // "Approve for me" is toggled somewhere: only the file flips. B's
         // runtime posture is still `user` — Codex never re-reads mid-session.

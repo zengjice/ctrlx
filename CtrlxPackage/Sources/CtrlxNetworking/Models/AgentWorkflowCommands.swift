@@ -1,8 +1,9 @@
 import Foundation
 
 public enum AgentWorkflowWire {
-    public static let version = 3
+    public static let version = 4
     public static let maximumEncodedBytes = 256 * 1_024
+    public static let imageEncodedBytes = 576 * 1_024
     public static let maximumDefinitionBytes = 128 * 1_024
     public static let maximumNodes = 32
     public static let maximumPageItems = 40
@@ -33,11 +34,12 @@ public struct ManageAgentWorkflows: CommandSpec, Equatable {
 
     public enum Operation: Codable, Equatable, Sendable {
         case catalog(offset: Int)
+        case terminal(WorkspacePaneIdentity)
         case definitions(offset: Int)
         case definition(UUID)
         case save(AgentWorkflowDefinition, expectedRevision: Int?)
         case deleteDefinition(UUID, expectedRevision: Int)
-        case start(definitionID: UUID, expectedRevision: Int, requestID: UUID, authorizationExpiresAt: Date)
+        case start(definitionID: UUID, expectedRevision: Int, requestID: UUID, authorizationExpiresAt: Date, initialInput: AgentWorkflowInput? = nil)
         case runs(offset: Int)
         case run(UUID)
         case runDefinition(UUID)
@@ -81,6 +83,13 @@ public struct ManageAgentWorkflows: CommandSpec, Equatable {
 
     public var commandType: CommandType {
         .manageAgentWorkflows(self)
+    }
+
+    public var maximumEncodedBytes: Int {
+        if case .uploadAttachment(.image) = operation {
+            return AgentWorkflowWire.imageEncodedBytes
+        }
+        return AgentWorkflowWire.maximumEncodedBytes
     }
 }
 

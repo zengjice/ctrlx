@@ -115,9 +115,8 @@ public enum WebSocketMessage: Codable, Sendable {
     /// on enable/disable/upgrade).
     case pluginPresentations(PluginPresentationsMessage)
 
-    /// Host pushes a pre-baked notification over the live WebSocket so a
-    /// backgrounded-but-connected viewer can show a local notification (the
-    /// parallel APNs `.encryptedPush` is dropped by the relay while connected).
+    /// Host pushes a pre-baked desktop notification to Mac Viewers.
+    /// iOS receives system alerts through the independent APNs path.
     case agentNotification(AgentNotificationMessage)
 }
 

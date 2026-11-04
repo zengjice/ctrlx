@@ -18,9 +18,13 @@ if CommandLine.arguments.dropFirst().first == "relay-admin" {
         }
         try await configure(app, env: loadedEnvironment.values)
         try await app.execute()
-        try await app.asyncShutdown()
     } catch {
-        try await app.asyncShutdown()
+        do {
+            try await app.asyncShutdown()
+        } catch let shutdownError {
+            app.logger.error("Relay shutdown failed: \(shutdownError)")
+        }
         throw error
     }
+    try await app.asyncShutdown()
 }

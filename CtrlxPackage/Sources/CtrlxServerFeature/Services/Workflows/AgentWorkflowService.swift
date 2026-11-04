@@ -69,15 +69,17 @@ actor AgentWorkflowService {
         for run in runs {
             if
                 let blocked = run.instances.compactMap({ binding in instances.first { binding.matchesBinding($0) } })
-                    .first(where: { $0.readiness == .draft || $0.readiness == .awaitingHuman }) {
-                try await store.update(runID: run.id) {
-                    $0.pause(reason: "\(blocked.displayName) needs human input or has a draft. Resolve it before continuing.")
+                    .first(where: { ($0.readiness == .draft || $0.readiness == .awaitingHuman) && !run.allowsQuestionInput(for: $0) }) {
+                try await store.update(runID: run.id) { execution in
+                    guard !execution.run.allowsQuestionInput(for: blocked) else { return }
+                    execution.pause(reason: "\(blocked.displayName) needs human input or has a draft. Resolve it before continuing.")
                 }
                 continue
             }
             for invocation in run.invocations where invocation.status == .running {
                 guard
                     let bound = run.instances.first(where: { $0.id == invocation.delivery.toAgentID }),
+                    !run.allowsQuestionInput(for: bound),
                     instances.contains(where: { bound.matchesBinding($0) && $0.readiness == .ready }) else { continue }
                 observedIdle.insert(invocation.id)
                 let since = idleSince[invocation.id] ?? timestamp
@@ -86,6 +88,7 @@ actor AgentWorkflowService {
                 // A submission hook can reject a task after emitting a receipt,
                 // or a final hook may be missing. Idle is never success evidence.
                 try await store.update(runID: run.id) { execution in
+                    guard !execution.run.allowsQuestionInput(for: bound) else { return }
                     guard execution.run.invocations.contains(where: { $0.id == invocation.id && $0.status == .running }) else { return }
                     execution.pause(reason: "\(bound.displayName) returned to its input without a verified final result. Check its terminal; this task will not be resent automatically.")
                 }
@@ -113,10 +116,19 @@ actor AgentWorkflowService {
             return try await refreshing.value
         }
         let task = Task { [store, scan] in
-            let previous = try await store.snapshot().instances
-            let observations = try await scan(previous)
-            try Task.checkCancellation()
-            return try await store.reconcile(observations)
+            func scanAndReconcile() async throws -> [AgentWorkflowInstance] {
+                try Task.checkCancellation()
+                let previous = try await store.snapshot().instances
+                let observations = try await scan(previous)
+                try Task.checkCancellation()
+                return try await store.reconcile(observations)
+            }
+            do { return try await scanAndReconcile() }
+            catch is AgentWorkflowCatalogChanged {
+                // A first receipt can bind the conversation while scanning.
+                // Retry once from the confirmed identity; never patch readiness.
+                return try await scanAndReconcile()
+            }
         }
         refreshing = task
         defer { refreshing = nil }
@@ -132,11 +144,13 @@ actor AgentWorkflowService {
         try await store.deleteDefinition(id: id, expectedRevision: expectedRevision)
     }
 
-    func start(definitionID: UUID, expectedRevision: Int, requestID: UUID, authorizationExpiresAt: Date) async throws -> AgentWorkflowRun {
+    func start(definitionID: UUID, expectedRevision: Int, requestID: UUID, authorizationExpiresAt: Date, initialInput: AgentWorkflowInput? = nil) async throws -> AgentWorkflowRun {
         // A retry after a lost reply must return the original run even when the
         // Agent is now busy, the template changed, or a new scan is unavailable.
         if let existing = try await store.snapshot().runs.first(where: { $0.id == requestID }) {
-            guard existing.definition.id == definitionID, existing.definition.revision == expectedRevision else {
+            guard
+                existing.definition.id == definitionID, existing.definition.revision == expectedRevision,
+                initialInput == nil || initialInput == existing.definition.initialInput else {
                 throw AgentWorkflowError("This request ID already belongs to a different workflow start.")
             }
             return existing
@@ -144,11 +158,11 @@ actor AgentWorkflowService {
         if try await store.snapshot().definitions.first(where: { $0.id == definitionID })?.agentInstanceIDs.isEmpty == false {
             _ = try await refreshInstancesCatalog()
         }
-        let attachments = try await store.definitionAttachments(id: definitionID, revision: expectedRevision)
+        let attachments = try await store.definitionAttachments(id: definitionID, revision: expectedRevision, initialInput: initialInput)
         try await attachmentReader.validate(attachments)
         let run = try await store.start(
             definitionID: definitionID, expectedRevision: expectedRevision,
-            requestID: requestID, now: now(), authorizationExpiresAt: authorizationExpiresAt
+            requestID: requestID, now: now(), authorizationExpiresAt: authorizationExpiresAt, initialInput: initialInput
         )
         await schedule(run.id)
         return run

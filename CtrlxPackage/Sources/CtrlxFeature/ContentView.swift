@@ -2,6 +2,7 @@
     import CtrlxCommon
     import CtrlxNetworking
     import SwiftUI
+    import UIKit
     import UserNotifications
 
     /// Main entry point for the Ctrlx iOS app.
@@ -10,7 +11,6 @@
     /// - Shows pairing view if no hosts are paired
     /// - Shows main session view once at least one host is paired
     /// - Handles WebSocket connections for all paired hosts
-    /// - Manages background task to keep connections alive when backgrounded
     public struct ContentView: View {
         @State private var settings = IOSSettings()
         @State private var connectionManager: ViewerConnectionManager?
@@ -18,11 +18,10 @@
         @State private var dashboardStore = DashboardStore()
         @State private var fileWorkspaces = IOSFileBrowserWorkspaceStore()
         @State private var initializationError: String?
+        @State private var foregroundBadgeHosts: Set<String> = []
 
         @Environment(\.scenePhase) private var scenePhase
         @State private var pushService = PushNotificationService.shared
-        @State private var backgroundTaskService = BackgroundTaskService.shared
-        @State private var agentBackgroundMonitoring = AgentBackgroundMonitoringService.shared
 
         public init() { }
 
@@ -64,7 +63,6 @@
             .environment(sessionStore)
             .environment(dashboardStore)
             .environment(fileWorkspaces)
-            .environment(agentBackgroundMonitoring)
             .preferredColorScheme(settings.appearanceMode.colorScheme)
             .fileBrowserCacheMaintenance()
             .task {
@@ -73,8 +71,6 @@
                         selectedModelID: settings.voiceCorrection.modelID
                     )
                 #endif
-                agentBackgroundMonitoring.noteSceneActive(scenePhase == .active)
-                agentBackgroundMonitoring.prepare()
                 await fileWorkspaces.prepareRecovery()
                 fileWorkspaces.retainHosts(Set(settings.pairedHosts.map(\.id)))
                 await initializeConnectionManager()
@@ -105,8 +101,10 @@
             .onChange(of: scenePhase) { _, newPhase in
                 handleScenePhaseChange(newPhase)
             }
-            .onChange(of: settings.agentBackgroundMonitoringEnabled) { _, enabled in
-                handleAgentBackgroundMonitoringPreferenceChange(enabled)
+            .onChange(of: foregroundBadgeCount, initial: true) { _, count in
+                if let count {
+                    pushService.applyBadge(count)
+                }
             }
             .alert("Workspace Recovery", isPresented: .init(
                 get: { fileWorkspaces.recoveryError != nil },
@@ -122,6 +120,14 @@
             }
         }
 
+        private var foregroundBadgeCount: Int? {
+            guard scenePhase == .active else { return nil }
+            let pairedHostIDs = Set(settings.pairedHosts.map(\.id))
+            return IOSDashboardStatus.badgeCount(
+                pairedHostIDs: pairedHostIDs, refreshedHostIDs: foregroundBadgeHosts, store: sessionStore
+            )
+        }
+
         /// Only foreground/readiness changes restart polling; ordinary session
         /// updates must not restart the timer or repeatedly query the Host.
         private var dashboardMonitorHosts: [String: Bool]? {
@@ -132,51 +138,15 @@
             })
         }
 
-        private func handleAgentBackgroundMonitoringPreferenceChange(_ enabled: Bool) {
-            // Enabling stores intent only. The next foreground Agent submission
-            // starts the user-initiated system task; disabling still stops now.
-            guard !enabled else { return }
-            agentBackgroundMonitoring.stopAll()
-        }
-
-        /// Handle scene phase changes to manage background task lifecycle.
-        ///
-        /// When the app enters the background, we start a background task to keep
-        /// the WebSocket connections alive for ~30 seconds. This allows receiving
-        /// any pending events before iOS suspends the app.
-        ///
-        /// When returning to foreground, we immediately attempt reconnection to avoid
-        /// waiting for exponential backoff timers.
         private func handleScenePhaseChange(_ phase: ScenePhase) {
             if phase != .active {
+                foregroundBadgeHosts.removeAll()
                 Task { await fileWorkspaces.flushRecovery() }
-            }
-            // Keep the notification service's foreground flag in sync so the
-            // backgrounded-only local-notification fallback fires correctly.
-            pushService.setAppActive(phase == .active)
-            switch phase {
-            case .background:
-                agentBackgroundMonitoring.noteSceneActive(false)
-                // Bridge the foreground-to-background transition immediately.
-                // A continued-processing task may launch later and therefore
-                // cannot replace this short lease for fast Agent completions.
-                if connectionManager?.anyHostConnected == true {
-                    backgroundTaskService.startBackgroundTask()
-                }
-            case .active:
-                agentBackgroundMonitoring.noteSceneActive(true)
-                // End background task when returning to foreground
-                backgroundTaskService.endBackgroundTask()
-
-                // Immediately try to reconnect all connections
+            } else {
                 Task {
                     await connectionManager?.reconnectAllImmediately()
+                    await connectionManager?.requestAllSessionStates()
                 }
-            case .inactive:
-                // Transitional state - no action needed
-                break
-            @unknown default:
-                break
             }
         }
 
@@ -189,29 +159,12 @@
             // answers — issue #710) reuse the app's live sockets instead of
             // spinning up their own connection.
             NotificationActionService.shared.connectionManager = connectionManager
-            agentBackgroundMonitoring.connectionManager = connectionManager
 
             // High-frequency per-session state updates drive the sidebar badges.
             // The `AgentState` carries the open response form (no separate channel).
-            connectionManager.onAgentSessionStatus = {
-                [pushService, sessionStore, agentBackgroundMonitoring] status in
+            connectionManager.onAgentSessionStatus = { [sessionStore] status in
                 Task { @MainActor in
                     sessionStore.handleAgentStatus(status)
-                    agentBackgroundMonitoring.handle(status) { notification in
-                        guard
-                            agentBackgroundMonitoring.reserveNotificationDelivery(
-                                for: notification
-                            ) else { return }
-                        pushService.scheduleLocalNotification(
-                            title: notification.title,
-                            subtitle: notification.subtitle,
-                            body: notification.body,
-                            paneId: notification.paneId,
-                            hostId: notification.hostId,
-                            delay: 1,
-                            backgroundOnly: true
-                        )
-                    }
                 }
             }
 
@@ -222,83 +175,27 @@
                 }
             }
 
-            // Backgrounded fallback: the relay drops the APNs push while we're
-            // WS-connected, so a host's live-socket notification is the only
-            // alert during the backgrounded-but-connected window. Questions also
-            // alert while active, including when the user is viewing another pane.
-            // Notifications carrying an open-form action context become
-            // actionable local notifications, mirroring the NSE's push path.
-            connectionManager.onAgentNotification = {
-                [pushService, sessionStore, agentBackgroundMonitoring] notification in
-                Task { @MainActor in
-                    agentBackgroundMonitoring.noteNotificationReceived(notification)
-                    let paneState = notification.sessionId.flatMap {
-                        sessionStore.paneStates[PaneKey(pairId: notification.pairId, paneId: $0)]
-                    }
-                    let presentation = AgentNotificationPresentation(
+            #if DEBUG
+                // The action E2E harness captures context without displaying a
+                // notification. Production iOS alerts arrive only through APNs.
+                connectionManager.onAgentNotification = { notification in
+                    guard let action = notification.action else { return }
+                    NotificationActionService.shared.noteIncomingAgentNotification(
                         title: notification.title,
                         subtitle: notification.subtitle,
-                        body: notification.body,
-                        paneState: paneState
+                        pairId: notification.pairId,
+                        paneId: notification.sessionId,
+                        action: action
                     )
-                    // Record actionable notifications even while active — the
-                    // E2E harness simulates action-button taps off this record
-                    // (the notification UI itself lives in SpringBoard).
-                    if let action = notification.action {
-                        NotificationActionService.shared.noteIncomingAgentNotification(
-                            title: presentation.title,
-                            subtitle: presentation.subtitle,
-                            pairId: notification.pairId,
-                            paneId: notification.sessionId,
-                            action: action
-                        )
-                    }
-                    guard notification.shouldPresent(isAppActive: pushService.isAppActive) else { return }
-                    guard
-                        agentBackgroundMonitoring.reserveNotificationDelivery(
-                            for: notification
-                        ) else { return }
-                    if let action = notification.action {
-                        await NotificationActionService.shared.scheduleActionableLocalNotification(
-                            title: presentation.title,
-                            subtitle: presentation.subtitle,
-                            body: presentation.body,
-                            paneId: notification.sessionId,
-                            hostId: notification.pairId,
-                            action: action
-                        )
-                    } else {
-                        pushService.scheduleLocalNotification(
-                            title: presentation.title,
-                            subtitle: presentation.subtitle,
-                            body: presentation.body,
-                            paneId: notification.sessionId,
-                            hostId: notification.pairId
-                        )
-                    }
-                    agentBackgroundMonitoring.noteLocalNotificationScheduled(notification)
                 }
-            }
+            #endif
 
-            connectionManager.onSessionState = {
-                [weak connectionManager, pushService, sessionStore, fileWorkspaces, agentBackgroundMonitoring] state in
+            connectionManager.onSessionState = { [weak connectionManager, sessionStore, fileWorkspaces] state in
                 guard let client = connectionManager?.connection(for: state.pairId)?.relayClient else { return }
                 fileWorkspaces.update(state, client: client)
                 sessionStore.handleStateUpdate(state)
-                agentBackgroundMonitoring.handle(state) { notification in
-                    guard
-                        agentBackgroundMonitoring.reserveNotificationDelivery(
-                            for: notification
-                        ) else { return }
-                    pushService.scheduleLocalNotification(
-                        title: notification.title,
-                        subtitle: notification.subtitle,
-                        body: notification.body,
-                        paneId: notification.paneId,
-                        hostId: notification.hostId,
-                        delay: 1,
-                        backgroundOnly: true
-                    )
+                if UIApplication.shared.applicationState == .active {
+                    foregroundBadgeHosts.insert(state.pairId)
                 }
             }
 
@@ -317,22 +214,18 @@
                 }
             }
 
-            connectionManager.onHostDisconnected = { [sessionStore, fileWorkspaces, agentBackgroundMonitoring] hostId in
-                agentBackgroundMonitoring.removeHost(hostId)
+            connectionManager.onHostDisconnected = { [sessionStore, fileWorkspaces] hostId in
                 fileWorkspaces.suspendHost(hostId)
                 sessionStore.clearSessions(for: hostId)
             }
 
             connectionManager.onTransportInterrupted = { [sessionStore, fileWorkspaces] hostId in
-                // The Host may still be running. Clear stale UI state, but leave
-                // the finite Agent monitor alive so it can drive reconnection.
                 fileWorkspaces.suspendHost(hostId)
                 sessionStore.clearSessions(for: hostId)
             }
 
             connectionManager.onUnpaired = {
-                [settings, sessionStore, fileWorkspaces, agentBackgroundMonitoring] hostId in
-                agentBackgroundMonitoring.removeHost(hostId)
+                [settings, sessionStore, fileWorkspaces] hostId in
                 fileWorkspaces.removeHost(hostId)
                 sessionStore.clearSessions(for: hostId)
                 settings.removePairing(id: hostId)

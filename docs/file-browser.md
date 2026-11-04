@@ -1,5 +1,25 @@
 # Host-backed Files tabs
 
+## Mac Host file access
+
+The first foreground Sessions window, after tmux and launch-at-login setup,
+offers a Full Disk Access guide. It opens a separate, non-modal window that does
+not block application quit or remote updates. Closing it skips further automatic
+prompts, including after relaunch; Settings → General → Host File Access always
+offers the guide again. Background launch defers the introduction until CtrlX is
+active, and isolated E2E apps suppress it.
+
+The guide opens System Settings → Privacy & Security → Full Disk Access and can
+reveal the running CtrlX app in Finder so the user can add the correct copy.
+macOS requires the user to enable access; CtrlX does not grant it or automatically
+restart. The stored flag records only that the guide was presented, not that
+permission was granted. There is no supported public Full Disk Access status API;
+CtrlX does not probe private TCC databases or display an inferred authorization
+status. Existing file error handling and macOS folder consent remain effective
+until the user grants access.
+See Apple's [permission guidance](https://developer.apple.com/forums/thread/114452)
+and [Privacy & Security settings](https://support.apple.com/guide/mac-help/mchl211c911f/mac).
+
 ## Independent human resource tabs
 
 Capable Hosts publish `independentResources` separately from the legacy pane
@@ -121,6 +141,10 @@ iOS Files 的图片内容预览支持本地双指缩放（适配至 4 倍）、�
 普通文件导入继续使用原有文件上传能力，不受剪贴板图片限制影响。
 
 Mac Host, Mac Viewer and iOS share `WorkspaceFileBrowserView`.
+Mac Files exposes **New Folder…**, **Upload Files…** (local **Import Files…**) and
+**Paste Image** as independent toolbar icons with tooltips and accessibility labels.
+The More menu retains source-directory navigation and hidden-file visibility;
+**Copy Directory Path** is removed from that Mac menu. iOS keeps its menu actions.
 Right-click a terminal window tab on Mac Host/Viewer and choose **Open Files**.
 On iOS, the current terminal has a compact icon row below its title:
 **New Agent…**, **New Terminal**, **Open Files**, **Open Browser on Host**,
@@ -504,9 +528,10 @@ tests do not run the iOS-only viewport test.
 
 ### Creating folders and adding files
 
-The directory toolbar's **⋯** menu offers **New Folder…** and **Import Files…**
-(local Mac Host) / **Upload Files…** (Mac Viewer and iOS). New Folder accepts one
-literal child name through a native alert and reuses `CreateSessionDirectory`.
+On Mac Host and Viewer, the directory toolbar provides independent **New Folder…**
+and **Import Files…** (local Host) / **Upload Files…** (Viewer) icons. On iOS,
+these actions remain in the directory toolbar's **⋯** menu. New Folder accepts
+one literal child name through a native alert and reuses `CreateSessionDirectory`.
 It refreshes the list without navigating into the new folder or starting a session.
 The native file picker accepts multiple ordinary files. Import is a copy, never
 a move. Remote upload always writes to the Host, never a matching Viewer path.

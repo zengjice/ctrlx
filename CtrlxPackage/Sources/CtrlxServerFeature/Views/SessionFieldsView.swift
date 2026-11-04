@@ -137,9 +137,7 @@ extension SessionSortData {
             gitBranch: metadata.gitBranch
         )
 
-        // Recency = the latest activity across the session's panes. Hosts seed
-        // this from tmux window activity so a Host restart does not reset every
-        // idle session to name order; plugin state can advance it further.
+        // Recency = the latest persisted task event across the session's panes.
         // Not `.lazy`: max() consumes every element anyway, and a lazy chain
         // would escape the non-escaping `lastActivity` closure.
         let latestActivity = session.windows

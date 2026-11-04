@@ -1,5 +1,29 @@
 # Agent Browser
 
+## Human downloads
+
+Clicks in the embedded Chromium page can save downloads to the source Host's
+Downloads folder, including POST responses and Blob exports. Mac Host, Mac Viewer
+and iOS show per-page progress and results in the Downloads button. On the Host,
+completed files can be revealed in Finder; Viewers open them in the Host's Files
+tab and use the existing file transfer actions. Files remain on the Host until
+explicitly transferred.
+
+The native runtime requires a one-use observed Host/Viewer input activation;
+Agent input cannot authorize this path. It retains the original Agent-command
+download grant and 6 MiB limit. Human downloads use private partial files,
+collision-safe final names and macOS quarantine metadata. Closing the source tab
+cancels active transfers. Each page retains up to 20 results in memory and allows
+four simultaneous downloads; download history and interrupted transfers are not
+restored after restarting CtrlX.
+
+`BrowserDownloadsLocation` supplies the destination, including the existing
+`--downloads-dir` isolated-test override. `RemoteBrowserTab.downloads` is optional
+display-only data; older peers continue decoding browser descriptors.
+`AgentBrowser/tests/human_downloads.py` exercises the native callbacks and real
+AppKit input in an isolated signed acceptance app with the existing probe build
+flag. It never uses the installed app or personal Downloads directory.
+
 ## Host bookmarks
 
 The browser toolbar's **Bookmarks** button opens a Mac popover or an iOS sheet.
@@ -435,6 +459,12 @@ reported without silently switching to Computer Use, another browser client or
 standalone Playwright. Browser switching requires the user's choice. This is
 skill guidance, not a tool-permission sandbox; no global agent settings change.
 
+The entrypoint also covers a missing PATH wrapper: agents check the App's bundled
+`Contents/MacOS/CtrlXCLI browser --help` and use its absolute path before declaring
+the CLI unavailable. Browser is a subcommand of this executable; a missing system
+`agent-browser` installation or a socket connection failure is not proof that the
+bundled command is absent.
+
 Codex and Claude Code inject this short entrypoint alongside `file-links` and
 `agent-ios` through the existing `SessionStart` hook, after lifecycle forwarding
 to the local Host succeeds. It covers startup, resume, clear, compact and fork;
@@ -444,7 +474,7 @@ workflow only when webpage interaction is needed. Each entrypoint is independent
 a missing, unreadable, malformed or oversized file is skipped without blocking
 the other guidance or lifecycle event.
 
-This requires updating the cached plugin to Codex 1.1.11 / Claude Code 1.3.12
+This guidance requires updating the cached plugin to Codex 1.1.17 / Claude Code 1.3.18
 or later and triggering `SessionStart` with hooks enabled and trusted. Repository
 edits alone do not update running agents. Isolated hook tests verify delivery and
 bundle contents; they do not guarantee a model's tool choice.

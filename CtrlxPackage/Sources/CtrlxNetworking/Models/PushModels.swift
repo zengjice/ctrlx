@@ -64,7 +64,14 @@ public struct NotificationContent: Codable, Sendable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case title, subtitle, body, eventType, pairId, paneId, timestamp, action
+        case title
+        case subtitle
+        case body
+        case eventType
+        case pairId
+        case paneId
+        case timestamp
+        case action
     }
 
     public init(from decoder: Decoder) throws {
@@ -110,8 +117,8 @@ public struct EncryptedPushPayload: Codable, Sendable, Equatable {
     /// badge unchanged. Unencrypted because the APS payload needs it in the clear.
     public let badge: Int?
 
-    /// When `true`, server sends a background (silent) APNs push: no alert, no
-    /// sound, no Notification Service Extension — only the `badge` is applied.
+    /// When `true`, server sends a badge-only APNs alert push: no banner,
+    /// sound, background wake or Notification Service Extension.
     /// Used to update the badge after `markSessionHandled` clears a session.
     public let silent: Bool
 

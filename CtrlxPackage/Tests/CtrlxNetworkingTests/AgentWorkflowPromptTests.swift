@@ -76,8 +76,29 @@ struct AgentWorkflowPromptTests {
         let summary = AgentWorkflowPrompt.compose(definition: definition, node: definition.nodes[3], answers: answers, invocationReference: "id")
         #expect(entry.attachmentIDs == [preset, initial, result])
         #expect(summary.attachmentIDs == [preset, result])
-        #expect(entry.text.contains("ctrlx workflow attachments --invocation id --json"))
-        #expect(summary.text.contains("ctrlx workflow attachments --invocation id --json"))
+        #expect(!entry.text.contains("ctrlx workflow attachments"))
+        #expect(!summary.text.contains("ctrlx workflow attachments"))
+    }
+
+    @Test
+    func oldInFlightImageCallsKeepTheirOriginalReceiptTextAfterDecoding() throws {
+        let input = AgentWorkflowInput(text: "Legacy task\n[CtrlX workflow invocation: id]", attachmentIDs: [UUID()])
+        let invocationID = UUID()
+        let delivery = AgentWorkflowDelivery(runID: UUID(), round: 1, invocationID: invocationID, toAgentID: UUID(), sources: [], input: input)
+        var invocation = AgentWorkflowInvocation(id: invocationID, nodeID: UUID(), round: 1, delivery: delivery, createdAt: Date())
+        let legacy = try JSONDecoder().decode(AgentWorkflowInvocation.self, from: JSONEncoder().encode(invocation))
+        #expect(legacy.submissionText(pluginID: "codex") == input.text)
+        invocation.nativeImageNumbers = [3]
+        let native = try JSONDecoder().decode(AgentWorkflowInvocation.self, from: JSONEncoder().encode(invocation))
+        #expect(native.submissionText(pluginID: "codex") == "[Image #3] " + input.text)
+    }
+
+    @Test(arguments: ["codex", "claude-code"])
+    func nativeImagesHaveExactProviderReceiptText(plugin: String) {
+        let text = "$skill\nTask\n[CtrlX workflow invocation: exact-id]"
+        let input = AgentWorkflowInput(text: text, attachmentIDs: [UUID(), UUID()])
+        #expect(AgentWorkflowPrompt.submittedText(input, pluginID: plugin, imageNumbers: [3, 5]) == "[Image #3] [Image #5]" + (plugin == "codex" ? " " : "") + text)
+        #expect(AgentWorkflowPrompt.submittedText(.init(text: text), pluginID: plugin, imageNumbers: []) == text)
     }
 
     @Test

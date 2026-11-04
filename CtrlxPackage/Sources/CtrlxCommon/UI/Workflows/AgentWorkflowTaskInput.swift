@@ -14,6 +14,7 @@ struct AgentWorkflowTaskInput: View {
     let remove: (UUID) -> Void
     let progress: (name: String, value: Double)?
     let error: String?
+    var thumbnails: [UUID: Data] = [:]
     @State private var targeted = false
 
     var body: some View {
@@ -24,7 +25,7 @@ struct AgentWorkflowTaskInput: View {
                         Text(title).foregroundStyle(.tertiary).padding(.top, 8).allowsHitTesting(false)
                     }
                 }
-            AgentWorkflowAttachmentRows(ids: ids, attachments: attachments, remove: remove)
+            AgentWorkflowAttachmentRows(ids: ids, attachments: attachments, remove: remove, thumbnails: thumbnails)
             HStack(spacing: 16) {
                 if let photos {
                     Menu {

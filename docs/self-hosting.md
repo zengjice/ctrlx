@@ -10,7 +10,7 @@ requirement.
 - Docker with Compose v2
 - A domain with TLS termination for public WSS access
 - Approximately 1 CPU and 1 GB RAM for a small deployment
-- Optional Apple APNs key for background iOS notifications
+- Optional Apple APNs key for iOS system notifications
 
 ## Local development
 
@@ -171,7 +171,8 @@ TestFlight/App Store builds use `APNS_ENVIRONMENT=production`; development-signe
 builds use the development environment.
 
 If APNs values are absent, the Relay continues to provide pairing and live WSS
-transport without background push.
+transport without iOS system notifications. There is no background-monitor or
+local-alert fallback; Mac Viewer desktop notifications still use the live socket.
 
 ## Security notes
 

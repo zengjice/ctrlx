@@ -51,6 +51,8 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     private var workspaces: [UUID: AgentBrowserWorkspace] = [:]
     private(set) var tabs: [String: AgentBrowserTabState] = [:]
     lazy var bookmarks = BrowserBookmarkStore()
+    @Dependency(BrowserDownloadsLocation.self) private var downloadsLocation
+    lazy var downloadStore = HostBrowserDownloadStore(directory: downloadsLocation.directory())
     var resolveResourceSession: ((UUID) throws -> ResourceSession)?
     private let parkingID = UUID()
     private lazy var parkingWindow: NSWindow = {
@@ -901,6 +903,7 @@ final class AgentBrowserTabState {
     var sourceAgent: AgentImageTarget?
     var externalApplicationNotice: BrowserExternalApplicationNotice?
     var networkPermission: BrowserNetworkPermission?
+    var downloads: [BrowserDownloadItem] = []
 
     init(
         id: UUID,

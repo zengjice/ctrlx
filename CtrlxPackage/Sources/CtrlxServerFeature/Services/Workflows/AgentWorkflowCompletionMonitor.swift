@@ -70,7 +70,7 @@ actor AgentWorkflowCompletionMonitor {
             let parser = provider.workflowTranscript(
                 conversationID: context.instance.conversationID,
                 nativeTurnID: context.candidate.nativeTurnID,
-                prompt: context.invocation.delivery.input.text,
+                prompt: context.invocation.submissionText(pluginID: context.instance.pluginID),
                 candidate: submissionOnly ? "" : context.candidate.text
             )
             let clock = ContinuousClock()

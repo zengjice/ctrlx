@@ -1,5 +1,9 @@
 # Stage 4 Code Review Report
 
+> Historical record: Background Agent Monitoring has been removed. iOS alerts
+> now use APNs exclusively. See [current notification delivery](../../services-reference.md#push-notifications).
+
+
 ## Review scope
 
 - iOS 26 `BGContinuedProcessingTask` 封装和系统生命周期

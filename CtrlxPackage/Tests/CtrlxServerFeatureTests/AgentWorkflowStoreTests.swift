@@ -69,6 +69,41 @@ struct AgentWorkflowStoreTests {
     }
 
     @Test
+    func freshCodexIsSelectableAndKeepsItsUUIDWithoutNativeConversation() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        var observations = f.observations
+        observations[0].processRuntimeID = "new-process"
+        observations[0].conversationID = ""
+        let catalog = try await f.store.reconcile(observations)
+        #expect(catalog.count == 2 && catalog[0].conversationID.isEmpty)
+        #expect(catalog[0].id != f.instances[0].id)
+        #expect(try await f.store.reconcile(observations).map(\.id) == catalog.map(\.id))
+        var definition = f.definition
+        definition.nodes[0].agentInstanceID = catalog[0].id
+        let saved = try await f.store.saveDefinition(definition, expectedRevision: definition.revision)
+        let run = try await f.store.start(definitionID: saved.id, expectedRevision: saved.revision, requestID: UUID(), now: now, authorizationExpiresAt: now.addingTimeInterval(60))
+        #expect(run.instances[0].id == catalog[0].id)
+        #expect(run.instances[0].conversationID.isEmpty)
+        let restarted = AgentWorkflowStore(fileURL: f.file, hostID: f.hostID)
+        let restored = try await restarted.snapshot()
+        #expect(restored.instances[0].id == catalog[0].id)
+        #expect(restored.runs[0].status == .paused)
+        #expect(restored.runs[0].instances[0].conversationID.isEmpty)
+    }
+
+    @Test
+    func emptyConversationDoesNotEnableOtherPlugins() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        var observations = f.observations
+        observations[0].pluginID = "claude-code"
+        observations[0].conversationID = ""
+        await #expect(throws: AgentWorkflowError.self) { try await f.store.reconcile(observations) }
+        #expect(try await f.store.snapshot().instances == f.instances)
+    }
+
+    @Test
     func sameProcessKeepsUUIDThroughMovesAndHostRestart() async throws {
         let fixture = try await fixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }

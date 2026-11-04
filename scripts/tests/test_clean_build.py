@@ -343,6 +343,30 @@ class BuildCleanupTests(unittest.TestCase):
         self.assertFalse(removed.exists())
         self.assertTrue(kept.exists())
 
+    def test_ios_simulator_cli_previews_and_cleans_only_standard_simulator_caches(self):
+        command = self.install_cleanup_cli()
+        removed = [self.file(f".build-local/DerivedData/iOS-Simulator/{name}/fixture")
+                   for name in (*storage.COMPILATION_CACHE_DIRS, "Index.noindex", "SourcePackages")]
+        preserved = [self.file(name) for name in (
+            ".build-local/SourcePackages/checkouts/dependency.swift",
+            ".build-local/DerivedData/iOS-Simulator/Build/Products/CtrlX.app/executable",
+            ".build-local/DerivedData/iOS-Simulator/Logs/build.log",
+            ".build-local/DerivedData/macOS/CompilationCache.noindex/fixture",
+            ".build-local/DerivedData/iOS/ModuleCache.noindex/module.pcm",
+            ".build-local/DerivedData/E2E/ModuleCache.noindex/module.pcm",
+            "custom-simulator-derived-data/ModuleCache.noindex/module.pcm",
+            "dist/CtrlX-3.0.3.ipa",
+        )]
+        outside = self.file(".build-local/DerivedData/iOS-Simulator/ModuleCache.noindex/module.pcm", self.other)
+        result = subprocess.run([*command, "ios-simulator"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Preview only", result.stdout)
+        self.assertTrue(all(path.exists() for path in removed))
+        result = subprocess.run([*command, "ios-simulator", "--yes"], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(all(not path.exists() for path in removed))
+        self.assertTrue(all(path.exists() for path in preserved + [outside]))
+
     def test_derived_dependencies_preserved_without_shared_cache(self):
         current = self.artifact("3.0.3")
         kept = self.file(".build-local/DerivedData/iOS/SourcePackages/fixture")

@@ -89,6 +89,41 @@ struct AgentWorkflowServiceTests {
     }
 
     @Test
+    func perRunTaskOverrideIsFrozenAndRetryDoesNotChangeTheTemplate() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let input = AgentWorkflowInput(text: "This run only: inspect the changed implementation")
+        let id = UUID(), expires = now.addingTimeInterval(3_600)
+        let run = try await f.service.start(
+            definitionID: f.definition.id,
+            expectedRevision: f.definition.revision,
+            requestID: id,
+            authorizationExpiresAt: expires,
+            initialInput: input
+        )
+        #expect(run.definition.initialInput == input)
+        #expect(try await f.store.snapshot().definitions == [f.definition])
+        f.backend.failScan = true
+        #expect(try await f.service.start(
+            definitionID: f.definition.id,
+            expectedRevision: f.definition.revision,
+            requestID: id,
+            authorizationExpiresAt: expires,
+            initialInput: input
+        ) == run)
+        await #expect(throws: AgentWorkflowError.self) {
+            try await f.service.start(
+                definitionID: f.definition.id,
+                expectedRevision: f.definition.revision,
+                requestID: id,
+                authorizationExpiresAt: expires,
+                initialInput: .init(text: "A different task")
+            )
+        }
+        #expect(f.backend.scheduled == [id])
+    }
+
+    @Test
     func unavailableProcessScanKeepsCatalogAndRunUntouched() async throws {
         let f = try await fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
@@ -98,6 +133,38 @@ struct AgentWorkflowServiceTests {
         await #expect(throws: AgentWorkflowError.self) { try await f.service.snapshot(refreshInstances: true) }
         #expect(try await f.service.snapshot() == before)
         #expect(f.backend.scheduled.count == 1)
+    }
+
+    @Test(arguments: [false, true])
+    func failedCatalogRecheckKeepsSavedStateAndDoesNotLoop(failScan: Bool) async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        _ = try await start(f)
+        let before = try await f.store.snapshot()
+        let scans = LockIsolated(0)
+        let service = AgentWorkflowService(store: f.store, scan: { previous in
+            let scan = scans.withValue { $0 += 1
+                return $0
+            }
+            #expect(scan <= 2)
+            if scan > 1, failScan {
+                throw AgentWorkflowError("Process inspection unavailable")
+            }
+            var observations = previous.map { AgentWorkflowObservation($0) }
+            observations[0].conversationID = ""
+            observations[0].readiness = .unavailable
+            observations[1].displayName = "Uncommitted scan"
+            return observations
+        }, schedule: { _ in Issue.record("A failed scan must not schedule tasks.") })
+        if failScan {
+            await #expect(throws: AgentWorkflowError.self) { try await service.refreshInstancesCatalog() }
+        } else {
+            await #expect(throws: AgentWorkflowCatalogChanged.self) { try await service.refreshInstancesCatalog() }
+        }
+        #expect(scans.value == 2)
+        #expect(try await f.store.snapshot() == before)
+        #expect(f.backend.scheduled.count == 1)
+        await service.shutdown()
     }
 
     @Test

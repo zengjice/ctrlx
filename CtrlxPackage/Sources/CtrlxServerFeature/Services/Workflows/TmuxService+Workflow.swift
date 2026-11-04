@@ -21,12 +21,37 @@ extension TmuxService {
     }
 
     func submitWorkflowInput(
-        _ instance: AgentWorkflowInstance, file: URL, composer: AgentWorkflowComposer,
+        _ instance: AgentWorkflowInstance, file: URL, images: [URL] = [], composer: AgentWorkflowComposer,
+        imagesReady: @escaping @MainActor @Sendable ([Int]) async throws -> Void,
         launch: @escaping @MainActor @Sendable (@Sendable () throws -> Void) throws -> Void
     ) async throws {
-        let capture = try await captureWorkflowTerminal(instance, composer: composer)
+        var capture = try await captureWorkflowTerminal(instance, composer: composer)
         guard AgentWorkflowComposerInspection.readiness(capture, composer: composer) == .ready else {
             throw AgentWorkflowError("The terminal input changed before submission. Nothing was sent.")
+        }
+        var imageNumbers: [Int] = []
+        for (index, image) in images.enumerated() {
+            let commands = try AgentWorkflowTmuxSubmission.commands(instance: instance, file: image, capture: capture, submit: false)
+            let result = try await runWorkspaceCommand(commands, target: instance.paneID, identity: instance.workspacePane, launch: launch)
+            guard result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines) != AgentWorkflowTmuxSubmission.rejection else {
+                throw AgentWorkflowError("The terminal changed while preparing images. Check the draft before continuing.")
+            }
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            repeat {
+                try Task.checkCancellation()
+                try await Task.sleep(for: .milliseconds(100))
+                capture = try await captureAgentTerminal(paneID: instance.paneID, identity: instance.workspacePane)
+                if let numbers = AgentWorkflowComposerInspection.imageNumbers(capture, composer: composer), numbers.count == index + 1, numbers.starts(with: imageNumbers) {
+                    imageNumbers = numbers
+                    break
+                }
+                guard ContinuousClock.now < deadline else {
+                    throw AgentWorkflowError("The Agent did not confirm its image attachments. Check the draft; nothing will be resent.")
+                }
+            } while true
+        }
+        if !images.isEmpty {
+            try await imagesReady(imageNumbers)
         }
         let commands = try AgentWorkflowTmuxSubmission.commands(instance: instance, file: file, capture: capture)
         let result = try await runWorkspaceCommand(commands, target: instance.paneID, identity: instance.workspacePane, launch: launch)

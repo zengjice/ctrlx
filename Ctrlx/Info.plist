@@ -12,18 +12,9 @@
 	<string>CtrlX uses the microphone only while you hold the voice input button.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>CtrlX converts speech into editable text on your device.</string>
-	<key>NSSupportsLiveActivities</key>
-	<true/>
-	<key>BGTaskSchedulerPermittedIdentifiers</key>
-	<array>
-		<string>$(PRODUCT_BUNDLE_IDENTIFIER).refresh</string>
-		<string>$(PRODUCT_BUNDLE_IDENTIFIER).agent-monitor.*</string>
-	</array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>
-		<string>fetch</string>
-		<string>processing</string>
 	</array>
 	<key>UTExportedTypeDeclarations</key>
 	<array>

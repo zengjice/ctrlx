@@ -23,16 +23,6 @@
 
         /// Set the app badge count.
         public var setBadgeCount: @Sendable (_ count: Int) -> Void
-
-        /// Schedule a local notification immediately.
-        public var scheduleLocalNotification: @Sendable (
-            _ title: String,
-            _ subtitle: String?,
-            _ body: String,
-            _ userInfo: [String: String],
-            _ delay: TimeInterval?,
-            _ backgroundOnly: Bool
-        ) -> Void
     }
 
     // MARK: - DependencyKey
@@ -43,8 +33,7 @@
                 requestAuthorization: { true },
                 registerForRemoteNotifications: { },
                 getAuthorizationStatus: { .authorized },
-                setBadgeCount: { _ in },
-                scheduleLocalNotification: { _, _, _, _, _, _ in }
+                setBadgeCount: { _ in }
             )
         }
 
@@ -62,38 +51,6 @@
                 },
                 setBadgeCount: { count in
                     UNUserNotificationCenter.current().setBadgeCount(count)
-                },
-                scheduleLocalNotification: { title, subtitle, body, userInfo, delay, backgroundOnly in
-                    let content = UNMutableNotificationContent()
-                    content.title = title
-                    content.subtitle = subtitle ?? ""
-                    content.body = body
-                    content.sound = .default
-                    content.badge = 1
-                    var metadata = userInfo
-                    if backgroundOnly {
-                        metadata[PushNotificationService.backgroundOnlyUserInfoKey] = "true"
-                    }
-                    content.userInfo = metadata
-
-                    let trigger = delay.map {
-                        UNTimeIntervalNotificationTrigger(
-                            timeInterval: max(1, $0),
-                            repeats: false
-                        )
-                    }
-
-                    let request = UNNotificationRequest(
-                        identifier: UUID().uuidString,
-                        content: content,
-                        trigger: trigger
-                    )
-
-                    UNUserNotificationCenter.current().add(request) { error in
-                        if let error {
-                            print("Failed to schedule local notification: \(error)")
-                        }
-                    }
                 }
             )
         }
@@ -106,7 +63,6 @@
         // MARK: - Singleton
 
         public static let shared = PushNotificationService()
-        public nonisolated static let backgroundOnlyUserInfoKey = "ctrlxBackgroundOnly"
 
         // MARK: - Properties
 
@@ -120,17 +76,6 @@
 
         /// Current notification permission status
         public private(set) var permissionStatus: UNAuthorizationStatus = .notDetermined
-
-        /// Whether the app is currently foregrounded (`scenePhase == .active`).
-        /// Drives the backgrounded-only local-notification fallback: a host's
-        /// notification pushed over the live socket is only materialized locally
-        /// when the user can't already see the app. Updated from the scene phase.
-        public private(set) var isAppActive = true
-
-        /// Update the foreground/active flag from the app's scene phase.
-        public func setAppActive(_ active: Bool) {
-            isAppActive = active
-        }
 
         /// Deep link info from a tapped notification.
         public var pendingDeepLink: DeepLinkInfo?
@@ -224,51 +169,9 @@
             tokenString = nil
         }
 
-        /// Clear the app badge
-        public func clearBadge() {
-            client.setBadgeCount(0)
-        }
-
-        /// Apply an absolute badge count to the app icon. Used when a silent
-        /// (`apns-push-type: background`) push carries an `aps.badge` value —
-        /// iOS only auto-applies the badge for alert notifications, so the
-        /// relay's silent decrement path relies on us reading the badge in
-        /// `application(_:didReceiveRemoteNotification:fetchCompletionHandler:)`
-        /// and pushing it through here.
+        /// Reconcile the app icon with the foreground's complete Host snapshots.
         public func applyBadge(_ count: Int) {
             client.setBadgeCount(count)
-        }
-
-        // MARK: - Local Notifications
-
-        /// Schedule a local notification immediately.
-        public func scheduleLocalNotification(
-            title: String,
-            subtitle: String? = nil,
-            body: String,
-            paneId: String? = nil,
-            hostId: String? = nil,
-            delay: TimeInterval? = nil,
-            backgroundOnly: Bool = false
-        ) {
-            guard permissionStatus == .authorized else { return }
-
-            var userInfo: [String: String] = [:]
-            if let paneId {
-                userInfo["paneId"] = paneId
-            }
-            if let hostId {
-                userInfo["pairId"] = hostId
-            }
-
-            client.scheduleLocalNotification(
-                title,
-                subtitle,
-                body,
-                userInfo,
-                delay,
-                backgroundOnly
-            )
         }
 
         // MARK: - Deep Linking

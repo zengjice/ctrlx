@@ -51,6 +51,11 @@ struct AgentBrowserTabContentView: View {
                     }
                 )
                 .disabled(state.isClosed)
+                if !state.downloads.isEmpty {
+                    BrowserDownloadsButton(downloads: state.downloads, openTitle: "Show in Finder") { path in
+                        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+                    }
+                }
                 if state.isRemotelyControlled {
                     Button { state.service.releaseBrowserControl(state.id) } label: {
                         Label("Take Back Control", symbol: .eye)
