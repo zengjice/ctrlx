@@ -228,38 +228,30 @@
                         ResourceAgentMenu(kind: .files, tabID: descriptor.id, sessionID: sessionID, grant: nil, path: path, request: actions.request)
                     }
                     Button { tab.refresh += 1 } label: { Label("Refresh", symbol: .arrowClockwise).labelStyle(.iconOnly) }
+                    #if os(macOS)
+                        fileWriteActions.labelStyle(.iconOnly)
+                    #endif
                     Menu {
-                        Button {
-                            guard captureDestination() else { return }
-                            folderName = ""
-                            showsFolderPrompt = true
-                        } label: { Label("New Folder…", symbol: .folderBadgePlus) }
-                            .accessibilityIdentifier("file-browser-new-folder")
-                            .disabled(writesBusy || tab.path == nil || tab.isLoading || source.creationUnavailableReason != nil)
-                        Button {
-                            guard captureDestination() else { return }
-                            showsImporter = true
-                        } label: {
-                            Label(source.localFileURL == nil ? "Upload Files…" : "Import Files…", symbol: .squareAndArrowUp)
-                        }
-                        .accessibilityIdentifier("file-browser-upload")
-                        .disabled(writesBusy || tab.path == nil || tab.isLoading || source.uploadUnavailableReason != nil)
-                        Button("Paste Image", action: pasteImage)
-                            .disabled(writesBusy || tab.path == nil || source.uploadUnavailableReason != nil)
-                            .accessibilityIdentifier("file-browser-paste-image")
+                        #if os(iOS)
+                            fileWriteActions
+                        #endif
                         if let reason = source.creationUnavailableReason ?? source.uploadUnavailableReason {
                             Text(reason)
                         }
-                        Divider()
+                        #if os(iOS)
+                            Divider()
+                        #endif
                         if tab.sourcePaneID != nil {
                             Button { tab.navigate(nil) } label: { Label("Source Pane Directory", symbol: .terminal) }
                         }
                         Toggle("Show Hidden Files", isOn: $tab.includeHidden)
-                        Button("Copy Directory Path") {
-                            if let path = tab.path {
-                                clipboard.setString(path)
+                        #if os(iOS)
+                            Button("Copy Directory Path") {
+                                if let path = tab.path {
+                                    clipboard.setString(path)
+                                }
                             }
-                        }
+                        #endif
                     } label: { Label("File Browser Options", symbol: .ellipsisCircle).labelStyle(.iconOnly) }
                 }
                 HStack {
@@ -285,6 +277,33 @@
             }
             .padding(10)
             .disabled(source.unavailableReason != nil)
+        }
+
+        @ViewBuilder
+        private var fileWriteActions: some View {
+            Button {
+                guard captureDestination() else { return }
+                folderName = ""
+                showsFolderPrompt = true
+            } label: { Label("New Folder…", symbol: .folderBadgePlus) }
+                .help(source.creationUnavailableReason ?? "New Folder…")
+                .accessibilityIdentifier("file-browser-new-folder")
+                .disabled(writesBusy || tab.path == nil || tab.isLoading || source.creationUnavailableReason != nil)
+            Button {
+                guard captureDestination() else { return }
+                showsImporter = true
+            } label: {
+                Label(source.localFileURL == nil ? "Upload Files…" : "Import Files…", symbol: .squareAndArrowUp)
+            }
+            .help(source.uploadUnavailableReason ?? (source.localFileURL == nil ? "Upload Files…" : "Import Files…"))
+            .accessibilityIdentifier("file-browser-upload")
+            .disabled(writesBusy || tab.path == nil || tab.isLoading || source.uploadUnavailableReason != nil)
+            Button(action: pasteImage) {
+                Label("Paste Image", symbol: .photoBadgePlus)
+            }
+            .help(source.uploadUnavailableReason ?? "Paste Image")
+            .disabled(writesBusy || tab.path == nil || source.uploadUnavailableReason != nil)
+            .accessibilityIdentifier("file-browser-paste-image")
         }
 
         private var writesBusy: Bool {

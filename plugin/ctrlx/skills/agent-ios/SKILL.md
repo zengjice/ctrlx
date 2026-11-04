@@ -10,6 +10,12 @@ first, even when the user does not name this skill. Choose its native observatio
 and input before Simulator.app desktop automation, raw `simctl`, or another iOS
 automation tool. The device appears in the calling agent's CtrlX workbench.
 
+If `ctrlx` is not on PATH, check the bundled CLI before reporting it unavailable:
+run `"/Applications/CtrlX.app/Contents/MacOS/CtrlXCLI" ios --help`, then use that
+quoted executable path instead of `ctrlx` in the workflow commands. If the app is
+installed elsewhere, use its `Contents/MacOS/CtrlXCLI`. `ios` is a subcommand of
+this CLI, not a separately installed tool. Checking help does not start a device.
+
 Keep the user's explicitly chosen tool, device or test harness. Physical iPhones,
 Mac UI, app compilation/signing and existing automated test suites keep their
 own workflows. Source edits or analysis of an attached image alone do not require
