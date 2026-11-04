@@ -113,16 +113,16 @@ public enum BadgeAggregationScenario {
         // — so the relay's `lastBadge` decrement is exercised identically.
         TestStep.serverInjectPush(pairIdKey: "viewerPairId", hostBadge: 0, silent: true)
         TestStep.waitForAPNSPushCount(4, timeout: 5)
-        TestStep.verifyLastAPNSPush(aggregatedBadge: 2, silent: true, pushType: "background")
+        TestStep.verifyLastAPNSPush(aggregatedBadge: 2, silent: true, pushType: "alert")
 
         // ── Phase 8: Mac1 clears one session → aggregated = 1 ──────────────
         TestStep.serverInjectPush(pairIdKey: "mac1PairId", hostBadge: 1, silent: true)
         TestStep.waitForAPNSPushCount(5, timeout: 5)
-        TestStep.verifyLastAPNSPush(aggregatedBadge: 1, silent: true, pushType: "background")
+        TestStep.verifyLastAPNSPush(aggregatedBadge: 1, silent: true, pushType: "alert")
 
         // ── Phase 9: Mac1 clears the last session → aggregated = 0 ─────────
         TestStep.serverInjectPush(pairIdKey: "mac1PairId", hostBadge: 0, silent: true)
         TestStep.waitForAPNSPushCount(6, timeout: 5)
-        TestStep.verifyLastAPNSPush(aggregatedBadge: 0, silent: true, pushType: "background")
+        TestStep.verifyLastAPNSPush(aggregatedBadge: 0, silent: true, pushType: "alert")
     }
 }

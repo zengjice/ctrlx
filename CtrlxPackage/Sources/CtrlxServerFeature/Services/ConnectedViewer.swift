@@ -468,8 +468,8 @@ final public class ConnectedViewer: Identifiable {
         await sendEncrypted(message)
     }
 
-    /// Send a silent (background) APNs push that only updates the iOS app
-    /// badge — no alert, no sound, no Notification Service Extension. Used when
+    /// Send a badge-only APNs push — no banner, sound, background wake or
+    /// Notification Service Extension. Used when
     /// the host clears a session from the "needs attention" state so the iOS
     /// badge tracks the new lower count.
     public func sendBadgeUpdate(badge: Int) async {

@@ -94,7 +94,7 @@ public enum BadgeClearsOnAgentResumeScenario {
             projectPath: "/Users/test/BadgeClearProject"
         )
         TestStep.waitForAPNSPushCount(2, timeout: 15)
-        TestStep.verifyLastAPNSPush(aggregatedBadge: 0, silent: true, pushType: "background")
+        TestStep.verifyLastAPNSPush(aggregatedBadge: 0, silent: true, pushType: "alert")
 
         // ── Phase 6: Re-raise attention (Stop) → alert push, badge = 1 ──────
         TestStep.macSendHookEvent(
@@ -129,6 +129,6 @@ public enum BadgeClearsOnAgentResumeScenario {
             projectPath: "/Users/test/BadgeClearProject"
         )
         TestStep.waitForAPNSPushCount(4, timeout: 15)
-        TestStep.verifyLastAPNSPush(aggregatedBadge: 0, silent: true, pushType: "background")
+        TestStep.verifyLastAPNSPush(aggregatedBadge: 0, silent: true, pushType: "alert")
     }
 }

@@ -530,7 +530,7 @@ extension EnvSerializedSuites {
                 }
                 #expect(records.map(\.pairId) == [first, second, first])
                 #expect(records.map(\.aggregatedBadge) == [2, 5, 3])
-                #expect(records.map(\.pushType) == ["alert", "alert", "background"])
+                #expect(records.map(\.pushType) == ["alert", "alert", "alert"])
                 #expect(records.map(\.silent) == [false, false, true])
                 if let socket {
                     try await socket.close()

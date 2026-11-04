@@ -161,13 +161,18 @@ actor APNsService {
             return
         }
 
+        let badgeRequest = payload.silent ? EncryptedBadgeNotification(
+            badge: aggregatedBadge, payload: encryptedPayload
+        ).request(deviceToken: deviceToken, topic: bundleId) : nil
+
         if isE2EMode {
             recordE2EPush(
                 pairId: pairId,
                 deviceToken: deviceToken,
                 hostBadge: payload.badge,
                 aggregatedBadge: aggregatedBadge,
-                silent: payload.silent
+                silent: payload.silent,
+                pushType: badgeRequest?.headers["apns-push-type"] ?? "alert"
             )
             await metricsService.incrementPushNotifications()
             return
@@ -176,28 +181,8 @@ actor APNsService {
         guard let client else { return } // Cannot happen here — guarded above.
 
         do {
-            if payload.silent {
-                // Silent badge-only updates (e.g. after `markSessionHandled`)
-                // ship as `apns-push-type: background` so they're delivered
-                // under APNs' background-push rules — not gated by alert
-                // permission or Focus filtering. APNSwift's stock
-                // `APNSBackgroundNotification` only emits `content-available`,
-                // so we use our own message type to also set `aps.badge`.
-                let bgMessage = EncryptedBackgroundNotification(
-                    badge: aggregatedBadge,
-                    payload: encryptedPayload
-                )
-                let request = APNSRequest(
-                    message: bgMessage,
-                    deviceToken: deviceToken,
-                    pushType: .background,
-                    expiration: .immediately,
-                    priority: .consideringDevicePower,
-                    apnsID: nil,
-                    topic: bundleId,
-                    collapseID: nil
-                )
-                _ = try await client.send(request)
+            if let badgeRequest {
+                _ = try await client.send(badgeRequest)
             } else {
                 let alert = APNSAlertNotificationContent(
                     // Agent-neutral placeholder; the iOS Notification Service
@@ -241,7 +226,8 @@ actor APNsService {
         deviceToken: String,
         hostBadge: Int?,
         aggregatedBadge: Int?,
-        silent: Bool
+        silent: Bool,
+        pushType: String
     ) {
         guard let path = e2eLogPath else { return }
         let entry = APNsPushLogEntry(
@@ -251,7 +237,7 @@ actor APNsService {
             hostBadge: hostBadge,
             aggregatedBadge: aggregatedBadge,
             silent: silent,
-            pushType: silent ? "background" : "alert"
+            pushType: pushType
         )
         do {
             let encoder = JSONEncoder()
@@ -327,7 +313,7 @@ public struct APNsPushLogEntry: Codable, Sendable, Equatable {
     public let hostBadge: Int?
     public let aggregatedBadge: Int?
     public let silent: Bool
-    public let pushType: String // "alert" or "background"
+    public let pushType: String
 
     public init(
         timestamp: TimeInterval,
@@ -361,19 +347,10 @@ struct EncryptedCtrlxPayload: Codable {
     let pairId: String
 }
 
-/// Background notification that combines `content-available: 1` with an
-/// `aps.badge` value plus our encrypted payload at the root. APNSwift's
-/// `APNSBackgroundNotification` only emits `content-available`, so we roll our
-/// own `APNSMessage` to support badge-only silent updates over
-/// `apns-push-type: background`.
-struct EncryptedBackgroundNotification: APNSMessage {
+/// A badge is a user-visible update, so APNs requires the alert push type.
+/// Omitting alert, sound and content-available lets iOS apply it without a wake.
+struct EncryptedBadgeNotification: APNSMessage {
     struct APS: Encodable {
-        enum CodingKeys: String, CodingKey {
-            case contentAvailable = "content-available"
-            case badge
-        }
-
-        let contentAvailable = 1
         let badge: Int?
     }
 
@@ -383,6 +360,14 @@ struct EncryptedBackgroundNotification: APNSMessage {
 
     let badge: Int?
     let payload: EncryptedCtrlxPayload
+
+    func request(deviceToken: String, topic: String) -> APNSRequest<Self> {
+        APNSRequest(
+            message: self, deviceToken: deviceToken, pushType: .alert,
+            expiration: .immediately, priority: .consideringDevicePower,
+            apnsID: nil, topic: topic, collapseID: nil
+        )
+    }
 
     func encode(to encoder: Encoder) throws {
         try payload.encode(to: encoder)

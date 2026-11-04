@@ -2,6 +2,7 @@
     import CtrlxCommon
     import CtrlxNetworking
     import SwiftUI
+    import UIKit
     import UserNotifications
 
     /// Main entry point for the Ctrlx iOS app.
@@ -17,6 +18,7 @@
         @State private var dashboardStore = DashboardStore()
         @State private var fileWorkspaces = IOSFileBrowserWorkspaceStore()
         @State private var initializationError: String?
+        @State private var foregroundBadgeHosts: Set<String> = []
 
         @Environment(\.scenePhase) private var scenePhase
         @State private var pushService = PushNotificationService.shared
@@ -99,6 +101,11 @@
             .onChange(of: scenePhase) { _, newPhase in
                 handleScenePhaseChange(newPhase)
             }
+            .onChange(of: foregroundBadgeCount, initial: true) { _, count in
+                if let count {
+                    pushService.applyBadge(count)
+                }
+            }
             .alert("Workspace Recovery", isPresented: .init(
                 get: { fileWorkspaces.recoveryError != nil },
                 set: {
@@ -113,6 +120,14 @@
             }
         }
 
+        private var foregroundBadgeCount: Int? {
+            guard scenePhase == .active else { return nil }
+            let pairedHostIDs = Set(settings.pairedHosts.map(\.id))
+            return IOSDashboardStatus.badgeCount(
+                pairedHostIDs: pairedHostIDs, refreshedHostIDs: foregroundBadgeHosts, store: sessionStore
+            )
+        }
+
         /// Only foreground/readiness changes restart polling; ordinary session
         /// updates must not restart the timer or repeatedly query the Host.
         private var dashboardMonitorHosts: [String: Bool]? {
@@ -125,9 +140,13 @@
 
         private func handleScenePhaseChange(_ phase: ScenePhase) {
             if phase != .active {
+                foregroundBadgeHosts.removeAll()
                 Task { await fileWorkspaces.flushRecovery() }
             } else {
-                Task { await connectionManager?.reconnectAllImmediately() }
+                Task {
+                    await connectionManager?.reconnectAllImmediately()
+                    await connectionManager?.requestAllSessionStates()
+                }
             }
         }
 
@@ -175,6 +194,9 @@
                 guard let client = connectionManager?.connection(for: state.pairId)?.relayClient else { return }
                 fileWorkspaces.update(state, client: client)
                 sessionStore.handleStateUpdate(state)
+                if UIApplication.shared.applicationState == .active {
+                    foregroundBadgeHosts.insert(state.pairId)
+                }
             }
 
             connectionManager.onPartnerKeyReceived = { [settings] hostId, publicKey, keyId in

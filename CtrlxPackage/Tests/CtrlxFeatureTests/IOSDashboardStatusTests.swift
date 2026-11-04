@@ -76,6 +76,48 @@ struct IOSDashboardStatusTests {
         #expect(status(panes: panes).accessibilityValue.contains("120 need attention"))
     }
 
+    @Test("App badge waits for complete Host snapshots and follows the toolbar count")
+    @MainActor
+    func badgeWaitsForSnapshots() {
+        let store = SessionStore()
+        let paired: Set = ["office", "home"]
+        #expect(IOSDashboardStatus.badgeCount(pairedHostIDs: paired, refreshedHostIDs: paired, store: store) == nil)
+        let done = PaneState(paneId: "%1", sessionName: "work", agentSession: .init(paneId: "%1", state: .doneWorking(summary: nil)))
+        store.handleStateUpdate(.init(pairId: "office", paneStates: ["%1": done]))
+        #expect(IOSDashboardStatus.badgeCount(pairedHostIDs: paired, refreshedHostIDs: paired, store: store) == nil)
+        store.handleStateUpdate(.init(pairId: "home", paneStates: ["%1": done]))
+        // A previous foreground period's complete snapshots are still stale on return.
+        #expect(IOSDashboardStatus.badgeCount(pairedHostIDs: paired, refreshedHostIDs: [], store: store) == nil)
+        #expect(IOSDashboardStatus.badgeCount(pairedHostIDs: paired, refreshedHostIDs: ["office"], store: store) == nil)
+        #expect(IOSDashboardStatus.badgeCount(pairedHostIDs: paired, refreshedHostIDs: paired, store: store) == 2)
+        #expect(IOSDashboardStatus.badgeCount(pairedHostIDs: paired, refreshedHostIDs: paired, store: store) == status(panes: store.paneStates).pendingCount)
+
+        store.handleAgentStatus(.init(pairId: "office", sessionId: "%1", pluginId: "codex", state: .working, timestamp: now))
+        #expect(IOSDashboardStatus.badgeCount(pairedHostIDs: paired, refreshedHostIDs: paired, store: store) == 1)
+        store.handleStateUpdate(.init(pairId: "home", paneStates: [:]))
+        #expect(IOSDashboardStatus.badgeCount(pairedHostIDs: paired, refreshedHostIDs: paired, store: store) == 0)
+        #expect(IOSDashboardStatus.badgeCount(pairedHostIDs: paired, refreshedHostIDs: paired, store: store) == status(panes: store.paneStates).pendingCount)
+
+        store.clearSessions(for: "office")
+        #expect(IOSDashboardStatus.badgeCount(pairedHostIDs: paired, refreshedHostIDs: paired, store: store) == nil)
+        store.handleStateUpdate(.init(pairId: "office", paneStates: [:]))
+        #expect(IOSDashboardStatus.badgeCount(pairedHostIDs: paired, refreshedHostIDs: paired, store: store) == 0)
+    }
+
+    @Test("Unpairing excludes the removed Host's attention from the app badge")
+    @MainActor
+    func badgeFollowsPairing() {
+        let store = SessionStore()
+        store.handleStateUpdate(.init(pairId: "removed", paneStates: [
+            "%1": .init(paneId: "%1", sessionName: "shell", cliSessionState: .waiting),
+        ]))
+        #expect(IOSDashboardStatus.badgeCount(pairedHostIDs: ["removed"], refreshedHostIDs: ["removed"], store: store) == 1)
+        #expect(IOSDashboardStatus.badgeCount(pairedHostIDs: ["home"], refreshedHostIDs: ["home"], store: store) == nil)
+        store.handleStateUpdate(.init(pairId: "home", paneStates: [:]))
+        #expect(IOSDashboardStatus.badgeCount(pairedHostIDs: ["home"], refreshedHostIDs: ["home"], store: store) == 0)
+        #expect(IOSDashboardStatus.badgeCount(pairedHostIDs: [], refreshedHostIDs: [], store: store) == 0)
+    }
+
     @Test("Low accounts deduplicate across Hosts and support both built-in providers")
     func lowQuotas() {
         #expect(status(hosts: [host("office"), host("home")]).lowQuotaCount == 1)

@@ -1579,6 +1579,13 @@ traffic or reorder badge updates. Pending pushes are bounded to 256 entries and
 total timeout. On timeout, the active request is cancelled and joined before the
 next push starts; the failure is logged without retrying. Shutdown cancels the
 sender and discards pending pushes. Delivery requires a registered token.
+Badge-only updates use the APNs `alert` push type with only `aps.badge`: no
+banner, sound, `content-available` or Notification Service Extension. iOS applies
+the badge without waking the app. Foreground iOS reconciles the app icon using
+the Dashboard toolbar's pending-attention calculation after receiving full
+snapshots from all paired Hosts in that foreground period. Missing or disconnected
+Hosts do not become zero counts; returning to the app no longer clears the badge
+unconditionally. This badge delivery change requires both the Relay and iOS update.
 The Notification Service Extension decrypts alerts and scopes
 replacement to `(pairId, paneId)`. Foreground remote alerts are shown only for
 `agent.question` or a structured `askUserQuestion` action from older Hosts;
