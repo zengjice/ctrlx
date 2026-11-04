@@ -7,6 +7,35 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.141 — Browser downloads and Host workflow improvements
+
+- Save human-initiated browser downloads, including POST responses and Blob
+  exports, on the source Host. Show progress on Mac Host and Mac/iOS Viewers;
+  Viewers open completed files through the Host's Files tab. Agent downloads
+  retain their existing authorization and 6 MiB limit. See
+  [browser downloads](docs/agent-browser.md#human-downloads).
+- Guide Mac Hosts through enabling Full Disk Access from first launch and
+  Settings, with shortcuts to System Settings and the installed App in Finder.
+  Permission remains controlled by the user in macOS.
+- Sort sessions by persisted Agent task activity across restarts and Viewers,
+  and suppress session-start notifications while retaining actionable events.
+- Allow a fresh Codex Agent to join a workflow before its first native
+  conversation record exists; bind the conversation only after an authenticated
+  task receipt. Preserve process ownership and workflow history checks.
+- Make iOS Simulator validation explicit and clean its compilation caches after
+  successful managed checks. Mac publication builds macOS only.
+- Validation: focused Swift regressions, 120 private publication/installer/COS
+  checks and both repository boundary checks passed. Reused ten isolated native
+  browser-download checks after verifying unchanged native sources and fixture.
+  The opt-in live Agent loop, Apple Intelligence evaluations and paired-device
+  UI acceptance were not rerun.
+
+## 3.0.140 — Quick phrase synchronization after pairing
+
+- Refresh quick phrase synchronization with the current local device identity
+  after pairing, rather than retaining the identity captured before pairing.
+  See [quick phrase synchronization](docs/terminal-quick-actions.md).
+
 ## 3.0.139 — Browser audio and Agent workflow reliability
 
 - Keep remote browser audio within bounded Host/Viewer frame budgets, prebuffer
