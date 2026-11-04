@@ -196,7 +196,8 @@
         }
 
         private func windowSelection(_ window: TmuxWindow, name: String) -> some View {
-            Button { choose(.window(stableID: window.stableId, operation: .select)) } label: {
+            let progress = window.panes.effectiveProgress
+            return Button { choose(.window(stableID: window.stableId, operation: .select)) } label: {
                 HStack {
                     Label(name, symbol: window.hasClaude ? .sparkles : .terminal)
                         .labelStyle(.titleAndIcon)
@@ -214,9 +215,17 @@
                     }
                 }
                 .frame(minHeight: 44)
+                .overlay(alignment: .bottom) {
+                    if let progress {
+                        TerminalProgressBar(state: progress)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityValue(progress.map { "Terminal progress \($0.accessibilityValueString)" } ?? "")
             .accessibilityIdentifier("select-window-\(window.stableId)")
         }
 
