@@ -173,7 +173,8 @@ Help, version, maintenance and noninteractive subcommands receive neither
 automatic hook bypass nor `--no-daemon`.
 `auto_run` only governs UI auto-launch, not an explicit manual command.
 
-- Applies to new sessions, New Terminal and ordinary split panes, including those
+- Applies to new sessions, New Terminal, ordinary split panes and the shell
+  opened after a recovered Agent exits, including those
   created from a Mac Viewer or iOS. This requires updating the **target Host Mac**
   and creating a new terminal there; an iOS-only update cannot retrofit an old
   Host or existing shell. No initialization keystrokes are sent to existing panes.

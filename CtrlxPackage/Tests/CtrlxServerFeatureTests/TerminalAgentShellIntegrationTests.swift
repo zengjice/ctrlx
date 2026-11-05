@@ -286,7 +286,8 @@ struct TerminalAgentShellIntegrationTests {
         let process = TmuxService.recoveryProcess(
             loginShell: "/bin/zsh",
             invocation: launch.command,
-            prefix: nil
+            prefix: nil,
+            shellCommand: "exec /bin/zsh -l"
         )
         #expect(!process.joined(separator: " ").contains(secret))
         #expect(!process.joined(separator: " ").contains(launch.payload ?? ""))
@@ -428,6 +429,93 @@ struct TerminalAgentShellIntegrationTests {
         }
         let cleanup = try await runner.run(binary, ["-S", socket, "kill-server"], nil, nil)
         #expect(cleanup.isSuccess)
+    }
+
+    @Test("Recovered Agent exits leave an instrumented shell without the resume environment", arguments: [false, true])
+    @MainActor
+    func recoveredAgentExit(interrupt: Bool) async throws {
+        let fixture = try Fixture(extraRC: "export CODEX_HOME='/normal config root'")
+        defer { fixture.cleanup() }
+        let binary = try #require(TmuxBinaryLocator.liveValue.find())
+        let socket = fixture.root.appendingPathComponent("tmux.sock").path
+        let runner = ProcessRunner.liveValue
+        let store = TerminalAgentShellFileStore(root: fixture.root.appendingPathComponent("recovery-init"))
+        let agent = fixture.root.appendingPathComponent("resume-agent")
+        // Like the native TUI, consume Ctrl-C as input rather than a shell SIGINT.
+        try Data("""
+        #!/usr/bin/python3
+        import os, termios, tty
+        waiting = \(interrupt ? "True" : "False")
+        if waiting:
+            previous = termios.tcgetattr(0)
+            tty.setraw(0)
+        try:
+            print('RECOVERY_ROOT[' + os.environ['CODEX_HOME'] + ']', flush=True)
+            if waiting:
+                while os.read(0, 1) != b'\\x03':
+                    pass
+        finally:
+            if waiting:
+                termios.tcsetattr(0, termios.TCSADRAIN, previous)
+        """.utf8).write(to: agent)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: agent.path)
+        do {
+            try await withDependencies {
+                $0[ProcessRunner.self] = runner
+                $0[WorkspaceRecoverySystem.self] = .liveValue
+                $0[TerminalAgentShellFiles.self].prepare = { try await store.prepare($0) }
+                $0.continuousClock = ContinuousClock()
+            } operation: {
+                let tmux = TmuxService(tmuxPath: binary, socketPath: socket)
+                tmux.zdotDirOverride = fixture.dotfiles.path
+                tmux.terminalCodexArguments = { defaults }
+                var saved = WorkspaceRecoveryStoreTests.snapshot().sessions[0]
+                saved.windows[0].panes[0].directory = fixture.root.path
+                saved.windows[0].panes[0].unavailableAgentReason = "Fixture awaiting resume"
+                let restored = try await tmux.workspaceRecoveryClient().restore([saved])
+                try #require(restored.failures.isEmpty)
+                let pane = try #require(restored.state.sessions.first?.windows.first?.panes.first)
+                for _ in 0..<50 {
+                    if try await tmux.workspaceAgentPane(pane.runtimeID).isDead {
+                        break
+                    }
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+                let record = try WorkspaceRecoveryAgentLaunch(serverID: #require(restored.state.serverID), runtimePaneID: pane.runtimeID, kind: .resume)
+                try await tmux.launchWorkspaceAgent(runtimeID: pane.runtimeID, pane: pane, record: record, command: AgentForkLaunch(
+                    command: LaunchCommand(command: agent.path, args: ["resume", "exact-session"], env: ["CODEX_HOME": "/saved config root"])
+                ))
+                try #require(await waitForPane(tmux, paneID: pane.runtimeID, marker: "RECOVERY_ROOT[/saved config root]").contains("RECOVERY_ROOT[/saved config root]"))
+                if interrupt {
+                    try await tmux.sendBatchKeys(pane.runtimeID, keys: ["C-c"])
+                }
+                try #require(await waitForPane(tmux, paneID: pane.runtimeID, marker: "TEST_READY>").contains("TEST_READY>"))
+                try await tmux.sendKeys(pane.runtimeID, keys: "codex resume exact-session", literal: true)
+                try await tmux.sendKeys(pane.runtimeID, keys: "Enter")
+                let screen = try await waitForPane(tmux, paneID: pane.runtimeID, marker: "<exact-session>")
+                #expect(screen.contains("<exact-session>"))
+                #expect(screen.contains("<--no-daemon>"))
+                #expect(screen.contains("<--dangerously-bypass-hook-trust>"))
+                #expect(screen.contains("<\(defaults[1])>"))
+                #expect(screen.contains("CONFIG_ROOT[/normal config root]"))
+            }
+        } catch {
+            _ = try? await runner.run(binary, ["-S", socket, "kill-server"], nil, nil)
+            throw error
+        }
+        #expect(try await runner.run(binary, ["-S", socket, "kill-server"], nil, nil).isSuccess)
+    }
+
+    @MainActor
+    private func waitForPane(_ tmux: TmuxService, paneID: String, marker: String) async throws -> String {
+        for _ in 0..<50 {
+            let screen = try await tmux.capturePaneText(paneID)
+            if screen.contains(marker) {
+                return screen
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        return try await tmux.capturePaneText(paneID)
     }
 
     @Test("New shells use current arguments; explicit split commands and disabled integration are untouched")

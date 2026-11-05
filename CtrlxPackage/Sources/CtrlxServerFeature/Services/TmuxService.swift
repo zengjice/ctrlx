@@ -311,9 +311,9 @@ final public class TmuxService {
         try preparation.agentLaunch(shell: loginShellPath, tmuxExecutable: tmuxPath)
     }
 
-    static func recoveryProcess(loginShell: String, invocation: String, prefix: String?) -> [String] {
+    static func recoveryProcess(loginShell: String, invocation: String, prefix: String?, shellCommand: String) -> [String] {
         let line = prefix.map { "\($0); \(invocation)" } ?? invocation
-        return [loginShell, "-l", "-i", "-c", line + " && exec " + loginShell.posixSingleQuoted + " -l"]
+        return [loginShell, "-l", "-i", "-c", line + " && exec /bin/sh -c " + shellCommand.posixSingleQuoted]
     }
 
     /// The `$VISUAL` value CtrlX wants agents to see: the bundled CLI invoked
@@ -369,7 +369,8 @@ final public class TmuxService {
             process = Self.recoveryProcess(
                 loginShell: loginShellPath,
                 invocation: launch.command,
-                prefix: overrideCommandPrefix()
+                prefix: overrideCommandPrefix(),
+                shellCommand: await recoveryShell().command
             )
         } else {
             process = ["/bin/sh", "-c", await recoveryShell().command]
