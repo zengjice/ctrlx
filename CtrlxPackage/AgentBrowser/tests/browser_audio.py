@@ -61,7 +61,7 @@ class Audio(Managed):
         await asyncio.sleep(.1)
         stable = await audio()
         assert stable['remote'] and stable['local'] == remote['local'], (remote, stable)
-        assert stable['buffered'] <= 8192
+        assert stable['buffered'] <= 24576
         self.passed('remote output suppresses the Host sink and slow reads remain bounded')
 
         wrong = await audio('route', lease=str(uuid.uuid4()), enabled=True)

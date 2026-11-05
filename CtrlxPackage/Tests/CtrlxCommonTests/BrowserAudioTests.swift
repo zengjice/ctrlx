@@ -7,6 +7,69 @@ import Testing
 
 @Suite("Browser audio", .serialized)
 struct BrowserAudioTests {
+    @Test(arguments: [44_100.0, 48_000.0, 96_000.0]) @MainActor
+    func jitteredDeliveryPreservesContinuousStereoAtDeviceSampleRate(rate: Double) async throws {
+        let (output, engine, format, owner) = try outputFixture(rate: rate)
+        defer { output.stop(owner) }
+        let encoder = BrowserAudioCodec()
+        var events: [(tick: Int, message: RemoteBrowserAudio)] = []
+        var produced = 0
+        for block in 1...250 {
+            // CEF produces 1024-frame packets; the Host polls every 40 ms.
+            let frames = block * 1_920 / 1_024 * 1_024 - produced
+            var samples = [Float](repeating: 0, count: frames * 2)
+            for frame in 0..<frames {
+                let phase = 2 * Double.pi * Double(produced + frame) / 48_000
+                samples[frame * 2] = Float(0.25 * sin(phase * 440))
+                samples[frame * 2 + 1] = Float(0.25 * sin(phase * 880))
+            }
+            produced += frames
+            let encoded = try await encoder.encode(samples.withUnsafeBytes { Data($0) })
+            let group = (block - 1) / 5
+            // Five messages arrive together, with up to 80 ms extra jitter.
+            events.append(((group + 1) * 20 + [0, 8, 0, 4][group % 4], .init(
+                tabID: owner, surfaceID: owner, controlID: owner, streamID: owner,
+                sequence: UInt64(block), packets: encoded.packets, magicCookie: encoded.cookie
+            )))
+        }
+        let rendered = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: UInt32(rate / 100)))
+        var next = 0, renderedFrames = 0
+        var crossings = [0, 0], previous: [Float] = [0, 0]
+        for tick in 0..<1_000 {
+            while next < events.count, events[next].tick <= tick {
+                output.receive(owner, message: events[next].message)
+                next += 1
+            }
+            if output.pendingFrames > 0 {
+                try await wait { output.pendingFrames == 0 }
+            }
+            guard engine.isRunning else { continue }
+            #expect(try engine.renderOffline(rendered.frameCapacity, to: rendered) == .success)
+            if tick >= 100 {
+                for channel in 0..<2 {
+                    let samples = try #require(rendered.floatChannelData)[channel]
+                    for frame in 0..<Int(rendered.frameLength) {
+                        if samples[frame] > 0, previous[channel] <= 0 {
+                            crossings[channel] += 1
+                        }
+                        previous[channel] = samples[frame]
+                    }
+                }
+                renderedFrames += Int(rendered.frameLength)
+            }
+            // Offline rendering outruns Core Audio's asynchronous completion
+            // callbacks; allow them to arrive between simulated 10 ms quanta.
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        #expect(output.underruns == 0)
+        #expect(output.droppedFrames == 0)
+        #expect(output.resynchronizations == 0)
+        for (channel, expected) in [440.0, 880.0].enumerated() {
+            let frequency = Double(crossings[channel]) * rate / Double(renderedFrames)
+            #expect(abs(frequency - expected) < 2)
+        }
+    }
+
     @Test @MainActor
     func renderedAudioLeavesTheQueueWithoutWaitingForTheOutputDevice() async throws {
         let (output, engine, format, owner) = try outputFixture()
@@ -113,14 +176,14 @@ struct BrowserAudioTests {
         #expect(output.resynchronizations == 1)
         #expect(output.droppedFrames == 2_048)
         output.stop(owner)
-        try await Task.sleep(for: .milliseconds(150))
+        try await Task.sleep(for: .milliseconds(300))
         #expect(!output.isPlaying && output.queuedFrames == 0 && output.pendingFrames == 0)
     }
 
     @MainActor
-    private func outputFixture() throws -> (BrowserAudioOutput, AVAudioEngine, AVAudioFormat, UUID) {
+    private func outputFixture(rate: Double = 48_000) throws -> (BrowserAudioOutput, AVAudioEngine, AVAudioFormat, UUID) {
         let engine = AVAudioEngine()
-        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2))
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2))
         try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 8_192)
         let output = BrowserAudioOutput(makeEngine: { engine }), owner = UUID()
         try output.start(owner) {

@@ -4,10 +4,11 @@
 #include <mutex>
 #include <vector>
 
-// One page, one destination, at most 170 ms. A slow consumer loses old sound.
+// Keep a bounded half-second through brief Host UI stalls. Reads remain small
+// enough for one AAC batch; subsequent polls drain it without changing sample rate.
 class BrowserAudioBuffer {
  public:
-  static constexpr size_t channels = 2, capacity = 8192, maximumReadFrames = 8192;
+  static constexpr size_t channels = 2, capacity = 24576, maximumReadFrames = 8192;
   static constexpr int sampleRate = 48000;
   void Route(bool remote, bool enabled) {
     std::lock_guard guard(lock_);

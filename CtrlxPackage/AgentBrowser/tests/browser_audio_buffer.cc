@@ -4,10 +4,11 @@
 
 int main() {
   BrowserAudioBuffer buffer;
-  std::vector<float> left(10000), right(10000), output(8192 * 2);
-  for (int i = 0; i < 10000; ++i) { left[i] = i; right[i] = -i; }
+  const size_t overflowFrames = BrowserAudioBuffer::capacity + 1808;
+  std::vector<float> left(overflowFrames), right(overflowFrames), output(8192 * 2);
+  for (size_t i = 0; i < overflowFrames; ++i) { left[i] = i; right[i] = -static_cast<float>(i); }
   const float* input[] = {left.data(), right.data()};
-  buffer.Push(input, 10000);
+  buffer.Push(input, overflowFrames);
   assert(buffer.Read(output.data(), 8192, true) == 0);
   assert(buffer.Read(output.data(), 8192, false) == 8192);
   assert(output[0] == 1808 && output[1] == -1808 && output[16382] == 9999);
@@ -39,6 +40,25 @@ int main() {
     for (size_t i = 0; i < count; ++i) assert(output[i * 2] == consumed++);
   }
   assert(consumed == produced && delayed.Status().dropped == 0);
+  // A 280 ms UI stall must not splice out syllables. The normal 40 ms polls
+  // drain the backlog in bounded AAC-sized reads once the Host resumes.
+  BrowserAudioBuffer stalled;
+  stalled.Route(true, true);
+  produced = consumed = 0;
+  for (int tick = 1; tick <= 250; ++tick) {
+    while (produced + 1024 <= tick * 1920) {
+      for (int i = 0; i < 1024; ++i) { left[i] = produced + i; right[i] = -left[i]; }
+      stalled.Push(input, 1024);
+      produced += 1024;
+    }
+    if (tick % 25 >= 10 && tick % 25 <= 16) continue;
+    const auto count = stalled.Read(output.data(), BrowserAudioBuffer::maximumReadFrames, true);
+    for (size_t i = 0; i < count; ++i) {
+      assert(output[i * 2] == consumed && output[i * 2 + 1] == -consumed);
+      ++consumed;
+    }
+  }
+  assert(consumed == produced && stalled.Status().dropped == 0);
   assert(buffer.Status().dropped == 1808);
   std::cout << "Browser audio bounded buffer and destination switching passed\n";
 }

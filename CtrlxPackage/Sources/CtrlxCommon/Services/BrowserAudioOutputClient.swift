@@ -201,7 +201,9 @@
                 } else if prebufferTask == nil {
                     // A short sound must still play even if it never fills the buffer.
                     prebufferTask = Task { [weak self] in
-                        do { try await Task.sleep(for: .milliseconds(128)) } catch { return }
+                        do {
+                            try await Task.sleep(for: .seconds(Double(BrowserAudioBuffering.prebufferFrames) / RemoteBrowserAudio.sampleRate))
+                        } catch { return }
                         guard let self, self.owner == id, self.playbackEpoch == epoch else { return }
                         self.beginPlayback()
                     }

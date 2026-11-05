@@ -705,8 +705,10 @@ Host and Viewer need the new capability; the Relay forwards existing ciphertext.
 
 Audio uses system AAC-LC encoding at 48 kHz stereo and 96 kbit/s. The Host polls
 its private native PCM ring on a 40 ms cadence, independently of screenshot and
-network sends. Each read can drain all 8192 frames (171 ms) in the ring; each wire
-batch still holds up to 8 packets/16 KiB. A single sender per stream keeps pending
+network sends. The native ring retains 24,576 frames (512 ms) so a brief Host UI
+stall does not splice out audio. Each read drains up to 8192 frames (171 ms),
+allowing subsequent polls to catch up; each wire batch still holds up to
+8 packets/16 KiB. A single sender per stream keeps pending
 and in-flight audio within 24,576 frames (512 ms). It discards the oldest unsent
 batches only when that budget is exceeded; ordinary terminal send-queue bursts
 no longer discard audio at the connection boundary. Stopping a stream cancels
@@ -714,7 +716,9 @@ both capture and delivery and clears unsent batches.
 
 The Viewer budgets pending decode and unrendered playback together at 24,576
 frames (512 ms), rather than dropping by message count. It starts playback after
-6144 frames (128 ms) accumulate, with a 128 ms deadline so short sounds also play.
+12,288 frames (256 ms) accumulate, with the same 256 ms deadline so short sounds
+also play. This absorbs grouped network delivery at the cost of a modest start
+delay; it does not change pitch or playback speed.
 An empty player pauses and prebuffers again. Overflow or a sequence gap resets
 the decoder and playback epoch before buffering the newest batch. Retired decode
 results, playback callbacks and timers cannot affect the replacement epoch.
@@ -733,9 +737,16 @@ isolated probe App. Swift `BrowserAudio` tests cover AAC, wire/control identity
 and playback lifecycle. Offline-engine regressions verify six-batch bursts, the combined frame budget,
 prebuffer deadlines, underrun recovery, sequence gaps and queue draining without
 device-playback callbacks. A slow-send Host test checks bounded capture progress
-and cancellation; the native ring regression checks 100 ms polling without loss.
-Codec tests also
-check stereo pitch and duration. On a Mac with a working audio output device, set
+and cancellation; the native ring regression checks 100 ms polling and recovery
+after a 280 ms polling stall without loss. Continuous offline playback checks
+200 ms delivery bursts with up to 80 ms additional jitter at 44.1, 48 and 96 kHz
+device rates. Codec tests also check stereo pitch and duration.
+Unlike Files video playback (original media, about three seconds of forward
+buffering), Browser audio is recaptured and encoded live with a bounded
+low-latency queue. Its continuity depends on timely capture and delivery, not
+only available bandwidth. Longer stalls or transport outages can still exceed
+the queue budget.
+On a Mac with a working audio output device, set
 `CTRLX_BROWSER_AUDIO_PLAYBACK_TEST=1` to include the native output test; it
 decodes and schedules encoded silence. The default suite keeps this device
 check disabled. These checks do not establish physical-iPhone listening or
