@@ -7,6 +7,26 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.144 — Workflow interaction, browser audio and recovered terminals
+
+- Allow manual typing, pasting and answers while Agent workflows run. Pause and
+  Continue control new task delivery; completion stays bound to the original
+  invocation and native turn. Read growing transcripts incrementally when
+  verifying completion. See [workflow behavior](docs/multi-agent-design.md).
+- Buffer browser audio through brief Host stalls and grouped network delivery,
+  with a 256 ms playback prebuffer and bounded queues. Longer interruptions can
+  still exhaust the buffer. See [browser audio](docs/agent-browser.md#viewer-page-sound).
+- Preserve Codex shell integration after a recovered Agent exits, including
+  hook trust and process-local launch defaults in supported zsh terminals.
+  See [Codex launches](docs/plugins/codex.md#manual-launch-in-a-ctrlx-terminal).
+- Keep incremental iOS build caches by default; explicit `--save-space` remains
+  available. This release packages macOS only.
+- Validation: the filtered Swift run reported 376 tests with four opt-in native
+  Agent/audio checks skipped. All 120 private publication/installer/COS checks,
+  59 local packaging-script checks, the native audio-buffer regression and both
+  repository boundary checks passed. Full real-Agent workflows, paired-device
+  UI acceptance and Apple Intelligence evaluations were not rerun.
+
 ## 3.0.143 — Settings layout and process-local Codex launches
 
 - Keep Sidebar and Editors settings inside the Mac Settings window when
