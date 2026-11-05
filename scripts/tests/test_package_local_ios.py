@@ -108,13 +108,13 @@ log_info() {
             with self.subTest(arguments=arguments):
                 self.assert_configuration(arguments, configuration, artifact)
 
-    def test_cache_policy_defaults_to_cleanup_with_explicit_opt_out(self):
+    def test_cache_policy_defaults_to_retention_with_explicit_cleanup(self):
         common = self.root / "scripts/common.sh"
         common.write_text(common.read_text().replace(
             'printf \'%s\\n\' "$CONFIGURATION" "$APP_PATH" "$EXTENSION_PATH" "$IPA_PATH"',
             'printf \'%s\\n\' "$SAVE_SPACE"'
         ))
-        for arguments, expected in (([], "true"), (["--keep-build-cache"], "false"),
+        for arguments, expected in (([], "false"), (["--keep-build-cache"], "false"),
                                     (["--save-space"], "true"),
                                     (["--configuration", "Debug", "--keep-build-cache"], "false")):
             with self.subTest(arguments=arguments):

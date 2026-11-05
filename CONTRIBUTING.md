@@ -83,6 +83,9 @@ E2E suite requires an explicit user request. For an authorized Simulator compile
 check, use the managed command in [AGENTS.md](AGENTS.md#ios-builds-and-signing),
 which clears Simulator compilation caches after success by default.
 
+Mac and iOS device packaging/installation retain incremental caches by default.
+Use `--save-space` explicitly when disk space takes priority over the next build.
+
 For code changes also run `bash scripts/check-ctrlx-brand-boundary.sh` and
 `bash scripts/check-ctrlx-technical-boundary.sh`. For Swift files, use
 `swiftformat --lint <changed-file.swift>` (or format the affected files with the

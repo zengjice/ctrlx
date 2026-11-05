@@ -11,7 +11,7 @@ LOCAL_CONFIG="$PROJECT_ROOT/Config/Local.xcconfig"
 source "$SCRIPT_DIR/common.sh"
 
 CONFIGURATION=Release
-SAVE_SPACE=true
+SAVE_SPACE=false
 APP_ONLY=false
 SIGNING_MODE=""
 LOCAL_BUILD_ARGUMENTS=("$@")
@@ -43,9 +43,9 @@ while [ "$#" -gt 0 ]; do
             printf '%s\n' 'Usage: package-local-ios.sh [--configuration Release|Debug] [--signing-mode development|ad-hoc] [--app-only] [--save-space|--keep-build-cache]' \
                 '--app-only: build and verify the signed device App without producing an IPA.' \
                 '--signing-mode: override CTRLX_IOS_SIGNING_MODE in Local.xcconfig (default development). Ad Hoc uses production APNs.' \
-                'Default: Release; remove compilation caches after success. Debug writes a separate -Debug.ipa for comparison.' \
-                '--save-space: explicitly select the default; keep App, IPA and downloads. Next build is slower.' \
-                '--keep-build-cache: retain compilation caches for repeated iOS builds.'
+                'Default: Release; retain compilation caches for repeated builds. Debug writes a separate -Debug.ipa for comparison.' \
+                '--save-space: remove compilation caches after success; keep App, IPA and downloads. Next build is slower.' \
+                '--keep-build-cache: explicitly retain compilation caches (the default).'
             exit 0
             ;;
         *) log_error "Unknown argument: $1" ;;

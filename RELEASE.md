@@ -315,11 +315,12 @@ the signed device App directly with `devicectl`, then launches its bundle ID; it
 does not uninstall, clear App data, or create another host-side App copy.
 
 After a successful install/launch, the existing worktree-local pruning runs even
-with `--skip-build`. Mac keeps incremental caches by default. iOS defaults to
-`--save-space`; use `--keep-build-cache` to retain them for repeated device builds.
-Compiler-cache removal waits until install/launch succeeds; failure keeps those
-caches and diagnostic backups. The nested App build defers retention to this outer success
-boundary, so cleanup runs once, after installation and launch.
+with `--skip-build`. Both Mac and iOS keep incremental caches by default. Use
+`--save-space` to remove them explicitly; iOS also accepts `--keep-build-cache`
+to select the default. Compiler-cache removal waits until install/launch succeeds;
+failure keeps those caches and diagnostic backups. The nested App build defers
+retention to this outer success boundary, so cleanup runs once, after installation
+and launch.
 Local packaging, formal release, native-browser preparation, package tests,
 installation and worktree cleanup share `.build-local/operation.lock`; a
 conflicting operation fails before writing or deleting. Nested script calls borrow
@@ -379,9 +380,9 @@ formal Mac releases, but never prunes Qcloud or Inbox files.
 Command-line packaging disables index generation. After success, local Mac/iOS
 packaging removes that platform's old `Index.noindex` and duplicate DerivedData
 `SourcePackages` directory (when the shared dependency directory exists).
-Mac keeps build intermediates and compilation/module caches by default. iOS
-removes its compilation caches after successful packaging or installation;
-`--keep-build-cache` opts out for repeated device builds. Signed installable apps,
+Mac and iOS keep build intermediates and compilation/module caches by default.
+`--save-space` removes them after successful packaging or installation;
+iOS also accepts `--keep-build-cache` to explicitly retain them. Signed installable apps,
 IPA/DMG files and shared downloads are kept in either case. Mac publication does
 not build an iOS Simulator. Simulator validation is separate and requires
 an explicit user request.
@@ -418,15 +419,17 @@ below 20 GiB. This is an advisory threshold, not a guarantee or a hard minimum;
 packaging still proceeds and never deletes caches to make room before a build.
 Formal releases also check their temporary build volume.
 
-Mac and package tests keep incremental caches for frequent releases and regression
-runs. iOS device packaging defaults to post-success cache removal for occasional
-IPA builds and phone installs. Control the policy per invocation:
+Mac, iOS device builds and package tests keep incremental caches for repeated
+builds and regression runs. Prefer cleaning finished verification copies and
+separate test outputs before evicting the active Mac/device build caches.
+Control compilation-cache removal per invocation:
 
 ```bash
-./scripts/package-local-macos.sh --save-space
-./scripts/package-local-ios.sh                         # Default: clear iOS caches after success
-./scripts/package-local-ios.sh --keep-build-cache      # Repeated device builds
-python3 scripts/install-local.py ios --device '<CoreDevice UUID>' --keep-build-cache
+./scripts/package-local-macos.sh                        # Keep Mac caches
+./scripts/package-local-ios.sh                          # Keep iOS device caches
+python3 scripts/install-local.py ios --device '<CoreDevice UUID>'  # Keep caches
+./scripts/package-local-ios.sh --save-space              # Explicitly trade next-build speed for space
+python3 scripts/install-local.py ios --device '<CoreDevice UUID>' --save-space
 ```
 
 Only after the requested workflow succeeds (verified App, package, or install/launch),
@@ -437,8 +440,8 @@ Chromium SDKs/runtime and logs. The next build recompiles and will be slower;
 downloads need not repeat. Failed builds do not trigger this cleanup, and other
 platforms/worktrees and the separate Swift package test cache are untouched.
 `--save-space` does not solve insufficient space for the current build.
-Formal releases already remove their temporary DerivedData on exit and remain
-zero-parameter.
+Formal releases remove their successful staging directory, retain Mac DerivedData
+for incremental builds and remain zero-parameter.
 
 For an explicitly requested Simulator compile check, use
 `python3 scripts/local_build.py run --cleanup-ios-simulator -- <command>` and

@@ -152,10 +152,10 @@ def parser():
         command = platforms.add_parser(platform)
         command.add_argument("--skip-build", action="store_true", help="Install a recorded, signed App build; no DMG/IPA required")
         caches = command.add_mutually_exclusive_group()
-        caches.add_argument("--save-space", action="store_true", help="Remove compilation caches only after installation/launch succeeds (default for iOS)")
-        command.set_defaults(save_space=platform == "ios")
+        caches.add_argument("--save-space", action="store_true", help="Remove compilation caches only after installation/launch succeeds")
+        command.set_defaults(save_space=False)
         if platform == "ios":
-            caches.add_argument("--keep-build-cache", dest="save_space", action="store_false", help="Retain compilation caches for repeated iOS builds")
+            caches.add_argument("--keep-build-cache", dest="save_space", action="store_false", help="Retain compilation caches for repeated iOS builds (default)")
             command.add_argument("--device", required=True, type=uuid.UUID, help="CoreDevice UUID from xcrun devicectl list devices")
             command.add_argument("--configuration", choices=("Release", "Debug"), default="Release")
             command.add_argument('--signing-mode', choices=('development', 'ad-hoc'),
@@ -189,8 +189,7 @@ def main(argv=None):
                 command += ["--configuration", args.configuration]
                 if args.signing_mode is not None:
                     command += ['--signing-mode', args.signing_mode]
-                if not args.save_space:
-                    command.append("--keep-build-cache")
+                command.append("--save-space" if args.save_space else "--keep-build-cache")
             # Keep compile caches on install failure, even with --save-space.
             build.run_child(command, descriptor, defer_cleanup=True, cwd=root)
         app, info = build.built_app(root, args.platform, args.configuration)

@@ -362,7 +362,7 @@ class LocalInstallTests(unittest.TestCase):
         calls = self.children.call_args_list
         self.assertEqual(len(calls), 2)
         self.assertEqual(calls[0].args[0], ["bash", self.root / "scripts/package-local-ios.sh",
-                                         "--app-only", "--configuration", "Debug"])
+                                         "--app-only", "--configuration", "Debug", "--save-space"])
         self.assertTrue(calls[0].kwargs["defer_cleanup"])
         self.assertIn("--save-space", calls[-1].args[0])
         self.assertIn("prune", calls[-1].args[0])
@@ -389,7 +389,7 @@ class LocalInstallTests(unittest.TestCase):
         self.workflow(['ios', '--device', DEVICE, '--skip-build'])
         self.assertIn('iOS signing: development · APNs: development', self.output.getvalue())
 
-    def test_ios_defaults_to_cleanup_only_after_install_and_launch(self):
+    def test_ios_defaults_to_retention_including_after_skip_build(self):
         for skip_build in ([], ["--skip-build"]):
             with self.subTest(skip_build=skip_build):
                 self.children.reset_mock()
@@ -397,8 +397,20 @@ class LocalInstallTests(unittest.TestCase):
                 calls = self.children.call_args_list
                 if not skip_build:
                     self.assertTrue(calls[0].kwargs["defer_cleanup"])
-                self.assertIn("--save-space", calls[-1].args[0])
+                    self.assertIn("--keep-build-cache", calls[0].args[0])
+                self.assertNotIn("--save-space", calls[-1].args[0])
                 self.assertIn("iOS", calls[-1].args[0])
+
+    def test_ios_explicit_save_space_runs_only_after_install_and_launch(self):
+        for skip_build in ([], ["--skip-build"]):
+            with self.subTest(skip_build=skip_build):
+                self.children.reset_mock()
+                self.workflow(["ios", "--device", DEVICE, "--save-space", *skip_build])
+                calls = self.children.call_args_list
+                self.assertIn("--save-space", calls[-1].args[0])
+                if not skip_build:
+                    self.assertTrue(calls[0].kwargs["defer_cleanup"])
+                    self.assertIn("--save-space", calls[0].args[0])
 
     def test_ios_can_keep_caches_including_after_skip_build(self):
         for skip_build in ([], ["--skip-build"]):
@@ -420,7 +432,7 @@ class LocalInstallTests(unittest.TestCase):
 
     def test_install_failure_does_not_prune_caches_or_packages(self):
         with self.assertRaisesRegex(RuntimeError, "install failure"):
-            self.workflow(["ios", "--device", DEVICE], RuntimeError("install failure"))
+            self.workflow(["ios", "--device", DEVICE, "--save-space"], RuntimeError("install failure"))
         self.assertFalse(any("prune" in call.args[0] for call in self.children.call_args_list))
 
 
