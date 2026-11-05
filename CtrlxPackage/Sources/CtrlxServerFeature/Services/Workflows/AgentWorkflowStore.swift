@@ -79,7 +79,6 @@ actor AgentWorkflowStore {
     private let hostID: UUID
     private var archive: AgentWorkflowArchive?
     private var writeAuthorizations: [UUID: AgentWorkflowWriteAuthorization] = [:]
-    private var humanInputAuthorizations: [String: AgentWorkflowHumanInputAuthorization] = [:]
     let attachmentUploads = HostFileUploads()
     var pendingAttachments: [UUID: PendingAttachment] = [:]
     var busyAttachmentUploads: Set<UUID> = []
@@ -95,21 +94,8 @@ actor AgentWorkflowStore {
         try load()
     }
 
-    func authorizeHumanInput(paneID: String) throws -> AgentWorkflowHumanInputAuthorization {
-        let archive = try load()
-        if archive.readOnlyPaneIDs.contains(paneID) {
-            throw AgentWorkflowInputReadOnlyError()
-        }
-        if let authorization = humanInputAuthorizations[paneID] {
-            return authorization
-        }
-        let authorization = AgentWorkflowHumanInputAuthorization()
-        humanInputAuthorizations[paneID] = authorization
-        return authorization
-    }
-
-    func allowsQuestionInput(for instance: AgentWorkflowInstance) throws -> Bool {
-        try load().runs.contains { $0.allowsQuestionInput(for: instance) }
+    func hasAskedQuestion(for instance: AgentWorkflowInstance) throws -> Bool {
+        try load().runs.contains { $0.hasAskedQuestion(for: instance) }
     }
 
     /// Call only with a complete, verified process snapshot. Failed inspection
@@ -384,13 +370,7 @@ actor AgentWorkflowStore {
             attributes: [.posixPermissions: 0o700]
         )
         try data.write(to: fileURL, options: .atomic)
-        let closedQuestions = (archive?.questionInputPaneIDs ?? []).subtracting(updated.questionInputPaneIDs)
         archive = updated
-        let readOnlyPanes = updated.readOnlyPaneIDs.union(closedQuestions)
-        for (paneID, authorization) in humanInputAuthorizations where readOnlyPanes.contains(paneID) {
-            authorization.revoke()
-            humanInputAuthorizations.removeValue(forKey: paneID)
-        }
         let writable = Set(updated.runs.filter { $0.status == .running }.flatMap {
             $0.invocations.filter { $0.status == .writing }.map(\.id)
         })
@@ -402,23 +382,11 @@ actor AgentWorkflowStore {
 }
 
 extension AgentWorkflowRun {
-    func allowsQuestionInput(for instance: AgentWorkflowInstance) -> Bool {
+    func hasAskedQuestion(for instance: AgentWorkflowInstance) -> Bool {
         !status.isTerminal && instances.contains { $0.matchesBinding(instance) }
             && invocations.contains {
-                $0.delivery.toAgentID == instance.id && $0.allowsQuestionInput == true
+                $0.delivery.toAgentID == instance.id && $0.hasAskedQuestion == true
                     && [.writing, .awaitingAcceptance, .running].contains($0.status)
             }
-    }
-}
-
-private extension AgentWorkflowArchive {
-    var readOnlyPaneIDs: Set<String> {
-        Set(runs.filter { $0.status == .running || $0.status == .finishing }.flatMap { run in
-            run.instances.filter { !run.allowsQuestionInput(for: $0) }.map(\.paneID)
-        })
-    }
-
-    var questionInputPaneIDs: Set<String> {
-        Set(runs.flatMap { run in run.instances.filter { run.allowsQuestionInput(for: $0) }.map(\.paneID) })
     }
 }

@@ -58,9 +58,9 @@ actor AgentWorkflowEventRouter {
     func receive(_ event: PluginEvent, peer: PluginIngressPeer) async throws -> AgentWorkflowTurnContext? {
         guard !stopped else { return nil }
         if case .awaitingReplies = event.state {
-            try await store.allowQuestionInput(event, peer: peer)
+            try await store.recordQuestion(event, peer: peer)
         } else if event.notification?.isQuestion == true {
-            try await store.allowQuestionInput(event, peer: peer)
+            try await store.recordQuestion(event, peer: peer)
         }
         guard let native = event.workflow else { return nil }
         let archive = try await store.snapshot()
@@ -87,8 +87,7 @@ actor AgentWorkflowEventRouter {
         guard native.kind == .submitted || process.matchesBinding(observed) else { return nil }
         // Submission identity is checked by verifySubmission, which retains
         // authenticated evidence through temporary process-scan outages.
-        let instance = native.kind == .failed ? try await inspect(observed) : observed
-        guard observed.matchesBinding(instance) else { return nil }
+        let instance = observed
 
         for run in archive.runs where run.instances.contains(where: {
             native.kind == .submitted ? $0.matchesProcess(instance) : $0.matchesBinding(instance)
@@ -99,6 +98,7 @@ actor AgentWorkflowEventRouter {
                 if
                     let invocation = invocations.first(where: {
                         $0.submissionText(pluginID: instance.pluginID) == native.text
+                            && ($0.nativeTurnID == nil || $0.nativeTurnID == native.nativeTurnID)
                             && [.writing, .awaitingAcceptance, .uncertain, .running, .succeeded, .failed].contains($0.status)
                     }) {
                     guard pending[invocation.id] == nil else { return nil }
@@ -117,30 +117,9 @@ actor AgentWorkflowEventRouter {
                         throw error
                     }
                 }
-                // A human answer may arrive as input in the same native turn.
-                // Use the original receipt even while its identity is being
-                // verified; an answer must never replace or confirm it.
-                if
-                    invocations.contains(where: { invocation in
-                        guard invocation.allowsQuestionInput == true else { return false }
-                        if invocation.status == .running {
-                            return run.instances.contains { $0.matchesBinding(instance) }
-                                && invocation.nativeTurnID == native.nativeTurnID && invocation.nativeTranscriptPath == native.transcriptPath
-                        }
-                        guard
-                            [.writing, .awaitingAcceptance].contains(invocation.status),
-                            let receipt = pending[invocation.id]?.context else { return false }
-                        return receipt.instance.matchesBinding(instance)
-                            && receipt.candidate.nativeTurnID == native.nativeTurnID
-                            && receipt.candidate.transcriptPath == native.transcriptPath
-                    }) {
-                    continue
-                }
-                if !run.status.isTerminal {
-                    try await store.update(runID: run.id) {
-                        $0.pause(reason: "The Agent received input outside the current workflow. Verify the task before continuing.")
-                    }
-                }
+                // Human input may supplement this turn or start another one.
+                // It neither pauses the run nor replaces the task's receipt.
+                continue
             case .failed,
                  .stopCandidate:
                 guard
@@ -148,7 +127,9 @@ actor AgentWorkflowEventRouter {
                         $0.nativeTurnID == native.nativeTurnID && $0.nativeTranscriptPath == native.transcriptPath
                             && [.running, .uncertain].contains($0.status)
                     }) else { continue }
-                return try await routeFollowing(.init(runID: run.id, invocation: invocation, instance: instance, candidate: native))
+                let live = native.kind == .failed ? try await inspect(instance) : instance
+                guard instance.matchesBinding(live) else { return nil }
+                return try await routeFollowing(.init(runID: run.id, invocation: invocation, instance: live, candidate: native))
             }
         }
         return nil

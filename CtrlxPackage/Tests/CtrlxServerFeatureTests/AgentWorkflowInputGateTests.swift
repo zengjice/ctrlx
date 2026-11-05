@@ -1,4 +1,3 @@
-import ConcurrencyExtras
 import Foundation
 import Testing
 @testable import CtrlxServerFeature
@@ -28,11 +27,11 @@ struct AgentWorkflowInputGateTests {
     }
 
     @Test
-    func authorizedHumanInputInvalidatesPreparationBeforeWriting() async throws {
+    func humanInputInvalidatesPreparationBeforeWriting() async throws {
         var events: [String] = []
-        let gate = AgentWorkflowInputGate { _ in .init() }
+        let gate = AgentWorkflowInputGate()
         let prepared = gate.claim(paneID: "%1")
-        try await gate.human(paneID: "%1") { _ in events.append("human") }
+        try await gate.human(paneID: "%1") { events.append("human") }
         await #expect(throws: (any Error).self) {
             try await gate.workflow(prepared) { events.append("unexpected workflow") }
         }
@@ -43,7 +42,7 @@ struct AgentWorkflowInputGateTests {
     func humanInputDuringFinalInspectionPreventsAutomaticWrite() async throws {
         var events: [String] = []
         let barrier = Barrier()
-        let gate = AgentWorkflowInputGate { _ in .init() }
+        let gate = AgentWorkflowInputGate()
         let claim = gate.claim(paneID: "%1")
         let automatic = Task {
             try await gate.workflow(claim) {
@@ -53,7 +52,7 @@ struct AgentWorkflowInputGateTests {
             }
         }
         await barrier.waitUntilEntered()
-        let human = Task { try await gate.human(paneID: "%1") { _ in events.append("human") } }
+        let human = Task { try await gate.human(paneID: "%1") { events.append("human") } }
         while (try? gate.validate(claim)) != nil {
             await Task.yield()
         }
@@ -67,7 +66,7 @@ struct AgentWorkflowInputGateTests {
     func committedPasteAndEnterCannotInterleaveWithHumanKeys() async throws {
         var events: [String] = []
         let barrier = Barrier()
-        let gate = AgentWorkflowInputGate { _ in .init() }
+        let gate = AgentWorkflowInputGate()
         let claim = gate.claim(paneID: "%1")
         let automatic = Task {
             try await gate.workflow(claim) {
@@ -77,7 +76,7 @@ struct AgentWorkflowInputGateTests {
             }
         }
         await barrier.waitUntilEntered()
-        let human = Task { try await gate.human(paneID: "%1") { _ in events.append("human") } }
+        let human = Task { try await gate.human(paneID: "%1") { events.append("human") } }
         await Task.yield()
         #expect(events == ["paste"])
         barrier.release()
@@ -88,26 +87,23 @@ struct AgentWorkflowInputGateTests {
 
     @Test
     func independentPanesDoNotBlockEachOtherAndScrollDoesNotInvalidate() async throws {
-        let gate = AgentWorkflowInputGate { _ in
-            Issue.record("Scrolling must not pause")
-            return .init()
-        }
+        let gate = AgentWorkflowInputGate()
         let barrier = Barrier()
         let claim = gate.claim(paneID: "%1")
         let first = Task { try await gate.workflow(claim) { await barrier.wait() } }
         await barrier.waitUntilEntered()
-        try await gate.human(paneID: "%2", editsInput: false) { _ in }
+        try await gate.human(paneID: "%2", editsInput: false) { }
         barrier.release()
         try await first.value
-        try await gate.human(paneID: "%1", editsInput: false) { _ in }
+        try await gate.human(paneID: "%1", editsInput: false) { }
         try gate.validate(claim)
     }
 
     @Test
     func cancelledQueuedWriteNeverExecutesOrBlocksLaterInput() async throws {
-        let gate = AgentWorkflowInputGate { _ in .init() }
+        let gate = AgentWorkflowInputGate()
         let barrier = Barrier()
-        let first = Task { try await gate.human(paneID: "%1") { _ in await barrier.wait() } }
+        let first = Task { try await gate.human(paneID: "%1") { await barrier.wait() } }
         await barrier.waitUntilEntered()
         let claim = gate.claim(paneID: "%1")
         let cancelled = Task { try await gate.workflow(claim) { Issue.record("Cancelled write executed") } }
@@ -116,43 +112,7 @@ struct AgentWorkflowInputGateTests {
         barrier.release()
         try await first.value
         await #expect(throws: CancellationError.self) { try await cancelled.value }
-        try await gate.human(paneID: "%1") { _ in }
-    }
-
-    @Test
-    func rejectedInputDoesNotInvalidatePreparedWorkflow() async throws {
-        let gate = AgentWorkflowInputGate { _ in throw AgentWorkflowInputReadOnlyError() }
-        let claim = gate.claim(paneID: "%1")
-        await #expect(throws: AgentWorkflowInputReadOnlyError.self) {
-            try await gate.human(paneID: "%1") { _ in Issue.record("Read-only input was sent") }
-        }
-        try gate.validate(claim)
-        try await gate.workflow(claim) { }
-    }
-
-    @Test
-    func queuedEditRechecksOwnershipBeforeWriting() async throws {
-        let readOnly = LockIsolated(false)
-        let gate = AgentWorkflowInputGate { _ in
-            if readOnly.value {
-                throw AgentWorkflowInputReadOnlyError()
-            }
-            return .init()
-        }
-        let barrier = Barrier()
-        let claim = gate.claim(paneID: "%1")
-        let first = Task { try await gate.workflow(claim) { await barrier.wait() } }
-        await barrier.waitUntilEntered()
-        let queued = Task {
-            try await gate.human(paneID: "%1") { _ in Issue.record("Input was sent after workflow resumed") }
-        }
-        while gate.claim(paneID: "%1").generation == claim.generation {
-            await Task.yield()
-        }
-        readOnly.setValue(true)
-        barrier.release()
-        try await first.value
-        await #expect(throws: AgentWorkflowInputReadOnlyError.self) { try await queued.value }
+        try await gate.human(paneID: "%1") { }
     }
 
     @Test(arguments: [

@@ -186,7 +186,7 @@ struct AgentWorkflowNativeReviewLoopTests {
             }
             return live
         }
-        let gate = AgentWorkflowInputGate { _ in throw AgentWorkflowError("Unexpected human input in the private fixture.") }
+        let gate = AgentWorkflowInputGate()
         let transport = AgentWorkflowTerminalTransport(store: store, gate: gate, temporaryDirectory: root.appendingPathComponent("input"), inspect: inspect, submit: { instance, file, images, beforeWrite, imagesReady in
             var terminal = try capture(fixture, instance)
             let core = try #require(cores[instance.pluginID])

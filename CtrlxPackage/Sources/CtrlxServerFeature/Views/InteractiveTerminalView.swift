@@ -778,33 +778,6 @@
 
         /// Avoids forcing a full SwiftTerm redraw on unrelated SwiftUI updates.
         private var appliedTheme: TerminalTheme?
-        private var readOnlyNotice: NSTextField?
-        private var readOnlyNoticeTask: Task<Void, Never>?
-
-        func showWorkflowReadOnlyNotice(_ message: String) {
-            guard readOnlyNotice == nil else { return }
-            let field = NSTextField(wrappingLabelWithString: message)
-            field.identifier = .init("workflow-read-only-notice")
-            field.font = .systemFont(ofSize: 12)
-            field.textColor = .labelColor
-            field.backgroundColor = .windowBackgroundColor
-            field.drawsBackground = true
-            field.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(field)
-            NSLayoutConstraint.activate([
-                field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-                field.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12),
-                field.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            ])
-            readOnlyNotice = field
-            readOnlyNoticeTask = Task { [weak self] in
-                do { try await Task.sleep(for: .seconds(4)) } catch { return }
-                self?.readOnlyNotice?.removeFromSuperview()
-                self?.readOnlyNotice = nil
-                self?.readOnlyNoticeTask = nil
-            }
-        }
-
         private var isFocused = false {
             didSet {
                 focusBorderView?.isFocused = isFocused

@@ -83,6 +83,19 @@ struct ClaudeWorkflowTranscriptTests {
     }
 
     @Test
+    func lateCompletionRemainsBoundToItsTaskAfterHumanStartsAnother() throws {
+        var parser = try started()
+        #expect(parser.updateCandidate("") == nil)
+        _ = try parser.consume(answer("answer", parent: "user"))
+        #expect(try parser.consume(summary("stop", parent: "answer")) == nil)
+        #expect(try parser.consume(record("human", parent: "stop", ["type": "user", "promptId": "new"])) == nil)
+        #expect(try parser.consume(answer("new-answer", parent: "human", text: "Unrelated answer")) == nil)
+        #expect(try parser.consume(summary("new-stop", parent: "new-answer")) == nil)
+        #expect(parser.updateCandidate("Unrelated answer") == nil)
+        #expect(parser.updateCandidate("Final answer") == .succeeded("Final answer"))
+    }
+
+    @Test
     func blockedStopContinuesSamePromptUntilNewFinalAnswer() throws {
         var parser = try started()
         #expect(try parser.consume(answer("first", parent: "user", text: "Partial")) == nil)

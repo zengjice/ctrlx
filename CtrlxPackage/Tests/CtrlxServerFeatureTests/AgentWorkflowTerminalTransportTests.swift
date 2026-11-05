@@ -44,7 +44,7 @@ struct AgentWorkflowTerminalTransportTests {
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         var sent = false
         let inputRoot = fixture.root.appendingPathComponent("input")
-        let delivery = AgentWorkflowTerminalTransport(store: fixture.store, gate: .init { _ in .init() }, temporaryDirectory: inputRoot, inspect: { $0 }, submit: { _, file, _, validate, _ in
+        let delivery = AgentWorkflowTerminalTransport(store: fixture.store, gate: .init(), temporaryDirectory: inputRoot, inspect: { $0 }, submit: { _, file, _, validate, _ in
             try validate { }
             #expect(try String(contentsOf: file, encoding: .utf8) == fixture.invocation.delivery.input.text)
             #expect(try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? Int == 0o600)
@@ -63,16 +63,16 @@ struct AgentWorkflowTerminalTransportTests {
     func humanInputDuringFinalCaptureStopsSubmission() async throws {
         let fixture = try await fixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
-        let gate = AgentWorkflowInputGate { _ in .init() }
+        let gate = AgentWorkflowInputGate()
         let claim = gate.claim(paneID: fixture.instance.paneID)
         var human: Task<Void, any Error>?
         let delivery = AgentWorkflowTerminalTransport(store: fixture.store, gate: gate, temporaryDirectory: fixture.root.appendingPathComponent("input"), inspect: { $0 }, submit: { _, _, _, validate, _ in
-            human = Task { try await gate.human(paneID: fixture.instance.paneID) { _ in } }
+            human = Task { try await gate.human(paneID: fixture.instance.paneID) { } }
             while (try? gate.validate(claim)) != nil {
                 await Task.yield()
             }
             try validate { }
-            Issue.record("Input reached an Agent after human takeover")
+            Issue.record("Automatic input reached an Agent after manual input")
         }, onFailure: { Issue.record("\($0)") })
         let transport = delivery.transport
         try await transport.prepare(fixture.invocation, fixture.instance)
@@ -87,7 +87,7 @@ struct AgentWorkflowTerminalTransportTests {
         for pause in [false, true] {
             let fixture = try await fixture()
             defer { try? FileManager.default.removeItem(at: fixture.root) }
-            let delivery = AgentWorkflowTerminalTransport(store: fixture.store, gate: .init { _ in .init() }, temporaryDirectory: fixture.root.appendingPathComponent("input"), inspect: {
+            let delivery = AgentWorkflowTerminalTransport(store: fixture.store, gate: .init(), temporaryDirectory: fixture.root.appendingPathComponent("input"), inspect: {
                 var live = $0
                 if !pause {
                     live.readiness = .draft
@@ -110,7 +110,7 @@ struct AgentWorkflowTerminalTransportTests {
         let fixture = try await fixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let delivery = AgentWorkflowTerminalTransport(
-            store: fixture.store, gate: .init { _ in .init() }, temporaryDirectory: fixture.root.appendingPathComponent("input"),
+            store: fixture.store, gate: .init(), temporaryDirectory: fixture.root.appendingPathComponent("input"),
             inspect: { $0 }, submit: { _, _, _, validate, _ in
                 // The transport passed its asynchronous state check. The final
                 // terminal capture now suspends while the operator acts.
@@ -220,7 +220,7 @@ struct AgentWorkflowTerminalTransportTests {
     func terminalControlCharactersAreNotPasted() async throws {
         let fixture = try await fixture(text: "text\u{1b}[201~\rcommand")
         defer { try? FileManager.default.removeItem(at: fixture.root) }
-        let delivery = AgentWorkflowTerminalTransport(store: fixture.store, gate: .init { _ in .init() }, temporaryDirectory: fixture.root.appendingPathComponent("input"), inspect: { $0 }, submit: { _, _, _, _, _ in Issue.record("Unexpected submission") }, onFailure: { Issue.record("\($0)") })
+        let delivery = AgentWorkflowTerminalTransport(store: fixture.store, gate: .init(), temporaryDirectory: fixture.root.appendingPathComponent("input"), inspect: { $0 }, submit: { _, _, _, _, _ in Issue.record("Unexpected submission") }, onFailure: { Issue.record("\($0)") })
         await #expect(throws: (any Error).self) { try await delivery.transport.prepare(fixture.invocation, fixture.instance) }
         #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("input").path))
     }

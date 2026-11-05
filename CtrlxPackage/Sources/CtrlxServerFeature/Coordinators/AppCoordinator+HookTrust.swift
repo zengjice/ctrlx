@@ -23,8 +23,8 @@ extension AppCoordinator {
             throw AgentHookTrustError("No supported Agent is ready in this pane.")
         }
         let identity = request.workspacePane
-        return try await gate.human(paneID: paneID) { [self] authorization in
-            let claim = gate.claim(paneID: paneID, humanAuthorization: authorization)
+        return try await gate.human(paneID: paneID) { [self] in
+            let claim = gate.claim(paneID: paneID)
             let terminal = AgentHookTrustTerminal(read: { [self] in
                 try await MainActor.run {
                     try gate.validate(claim)
@@ -42,16 +42,16 @@ extension AppCoordinator {
             } catch {
                 // A newer human claim is still queued behind us. Close our
                 // recognized panel before releasing it, so Return cannot toggle
-                // a hook. With no queued takeover, keep failed restoration visible.
+                // a hook. With no queued input, keep failed restoration visible.
                 if (error as? AgentHookTrustError)?.preservePanel != true || gate.claim(paneID: paneID).generation != claim.generation {
-                    await closeHookTrustPanels(paneID: paneID, identity: identity, processID: pid, runtimeID: runtime, provider: provider, authorization: authorization)
+                    await closeHookTrustPanels(paneID: paneID, identity: identity, processID: pid, runtimeID: runtime, provider: provider)
                 }
                 throw error
             }
         }
     }
 
-    private func closeHookTrustPanels(paneID: String, identity: WorkspacePaneIdentity, processID: String, runtimeID: String, provider: any AgentHookTrustProviding, authorization: AgentWorkflowHumanInputAuthorization?) async {
+    private func closeHookTrustPanels(paneID: String, identity: WorkspacePaneIdentity, processID: String, runtimeID: String, provider: any AgentHookTrustProviding) async {
         @Dependency(AgentSessionIdentityClient.self) var identities
         for _ in 0..<2 {
             guard
@@ -61,11 +61,7 @@ extension AppCoordinator {
             guard isDetail || provider.hookTrustPanel(lines: screen.plainLines) != nil else { return }
             let result = try? await tmuxService.runWorkspaceCommand([["send-keys", "-t", paneID, "Escape"]], target: paneID, identity: identity) { launch in
                 guard identities.runtimeID(processID) == runtimeID else { throw AgentHookTrustError("The Agent process changed.") }
-                if let authorization {
-                    try authorization.perform(launch)
-                } else {
-                    try launch()
-                }
+                try launch()
             }
             guard result != nil else { return }
             for _ in 0..<30 {

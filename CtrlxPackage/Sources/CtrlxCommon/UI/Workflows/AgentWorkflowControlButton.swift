@@ -21,13 +21,16 @@ public struct AgentWorkflowControlButton: View {
     public var body: some View {
         Group {
             if let run, !run.summary.status.isTerminal {
-                let manual = run.summary.status == .paused
-                RemoteControlButton(
-                    title: manual ? "Return control and continue workflow" : "Take over · pauses the entire workflow",
-                    isControlled: manual,
-                    isDisabled: changing || unavailableReason != nil || !endpoint.isConnected || !endpoint.isSupported
-                ) { change() }
-                    .accessibilityIdentifier("workflow-terminal-control")
+                let paused = run.summary.status == .paused
+                let title = paused ? "Continue workflow" : "Pause workflow"
+                Button(action: change) {
+                    Label(title, symbol: paused ? .play : .pause)
+                        .labelStyle(.iconOnly)
+                }
+                .disabled(changing || unavailableReason != nil || !endpoint.isConnected || !endpoint.isSupported)
+                .help(title)
+                .accessibilityValue(run.summary.status.title)
+                .accessibilityIdentifier("workflow-terminal-control")
             }
         }
         .task(id: "\(endpoint.id):\(pane.serverID):\(pane.paneID):\(scenePhase):\(endpoint.isConnected)") {
@@ -63,12 +66,12 @@ public struct AgentWorkflowControlButton: View {
 
     private func change() {
         guard !changing, let hostID else { return }
-        let manual = run?.summary.status != .paused
+        let paused = run?.summary.status != .paused
         changing = true
         Task {
             defer { changing = false }
             do {
-                run = try await endpoint.setManualControl(manual, pane: pane, hostID: hostID)
+                run = try await endpoint.setWorkflowPaused(paused, pane: pane, hostID: hostID)
                 error = nil
             } catch { self.error = error.localizedDescription }
         }
@@ -76,15 +79,15 @@ public struct AgentWorkflowControlButton: View {
 }
 
 extension AgentWorkflowEndpoint {
-    func setManualControl(_ manual: Bool, pane: WorkspacePaneIdentity, hostID: UUID) async throws -> AgentWorkflowRunState? {
+    func setWorkflowPaused(_ paused: Bool, pane: WorkspacePaneIdentity, hostID: UUID) async throws -> AgentWorkflowRunState? {
         let current = try await request(.terminal(pane), hostID: hostID)
         guard let state = current.run, !state.summary.status.isTerminal else { return nil }
         // Another operator may already have applied the same intent. A stale
-        // icon must not turn a takeover click into an unintended resume.
-        if (state.summary.status == .paused) == manual {
+        // button must not turn a pause click into an unintended resume.
+        if (state.summary.status == .paused) == paused {
             return state
         }
-        let operation: ManageAgentWorkflows.Operation = manual
+        let operation: ManageAgentWorkflows.Operation = paused
             ? .pause(state.summary.id, expectedRevision: state.summary.revision)
             : .resume(state.summary.id, expectedRevision: state.summary.revision, roundLimit: nil)
         return try await request(operation, hostID: hostID).run

@@ -434,7 +434,7 @@ struct AgentWorkflowExecutionTests {
     }
 
     @Test(arguments: [AgentWorkflowReadiness.draft, .awaitingHuman])
-    func continueWaitsForHumanInputWithoutBlockingOtherBusyBranches(readiness: AgentWorkflowReadiness) throws {
+    func continueDoesNotRequireHumanInputToFinish(readiness: AgentWorkflowReadiness) throws {
         var execution = try execution()
         let developer = try start(0, in: &execution)
         try finish(0, invocation: developer, text: "Changes ready", in: &execution)
@@ -446,12 +446,6 @@ struct AgentWorkflowExecutionTests {
         live[1].readiness = readiness
         live[2].readiness = .busy
 
-        #expect(throws: AgentWorkflowError.self) {
-            try execution.resume(instances: live, now: now)
-        }
-        #expect(execution.run == paused)
-
-        live[1].readiness = .ready
         try execution.resume(instances: live, now: now)
         #expect(execution.run.status == .running)
         #expect(execution.run.invocations == paused.invocations)

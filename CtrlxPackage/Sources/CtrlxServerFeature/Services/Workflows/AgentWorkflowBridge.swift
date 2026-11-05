@@ -25,7 +25,7 @@ struct AgentWorkflowBridgeEvidence: Codable, Equatable, Sendable {
 }
 
 extension AgentWorkflowStore {
-    func allowQuestionInput(_ event: PluginEvent, peer: PluginIngressPeer) throws {
+    func recordQuestion(_ event: PluginEvent, peer: PluginIngressPeer) throws {
         let archive = try load()
         guard
             var instance = archive.instances.first(where: {
@@ -35,7 +35,7 @@ extension AgentWorkflowStore {
         instance.conversationID = event.sessionID
         for run in archive.runs where !run.status.isTerminal && run.instances.contains(where: { $0.matchesProcess(instance) }) {
             let observed = instance
-            try update(runID: run.id) { $0.allowQuestionInput(instance: observed) }
+            try update(runID: run.id) { $0.recordQuestion(instance: observed) }
         }
     }
 

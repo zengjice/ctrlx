@@ -237,7 +237,7 @@ struct AgentWorkflowAttachmentAccessTests {
         }
         let temporary = f.root.appendingPathComponent("input")
         var submitted: String?
-        let transport = AgentWorkflowTerminalTransport(store: f.store, gate: .init { _ in .init() }, temporaryDirectory: temporary, inspect: { $0 }, submit: { _, file, images, validate, imagesReady in
+        let transport = AgentWorkflowTerminalTransport(store: f.store, gate: .init(), temporaryDirectory: temporary, inspect: { $0 }, submit: { _, file, images, validate, imagesReady in
             #expect(images.count == 1)
             #expect(try String(contentsOf: #require(images.first), encoding: .utf8) == DroppedPathFormatter.escape(path: f.file.path))
             try validate { }

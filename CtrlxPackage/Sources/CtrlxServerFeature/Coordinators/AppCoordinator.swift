@@ -780,7 +780,6 @@
                         projectPath: projectPath,
                         permissionMode: permissionMode
                     )
-                    await self?.handleAgentWorkflowState(state, paneID: tmuxPane)
                     // (handlePluginState also forwards agent_session_status to iOS;
                     // the open form rides AgentSession.state so it's in the snapshot.)
                 },

@@ -74,19 +74,19 @@ public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
             return nil
         }
         guard
-            let parent = record["parentUuid"] as? String, ancestors.contains(parent),
-            ancestors.insert(id).inserted else { return nil }
+            let parent = record["parentUuid"] as? String, ancestors.contains(parent) else { return nil }
+        if type == "user", record["promptId"] as? String != nativeTurnID {
+            // A later human task must not invalidate a completed turn while its
+            // Stop notification is in flight, or join that turn's ancestry.
+            return completedAnswer == nil ? .failed("A different user prompt interrupted this workflow turn.") : nil
+        }
+        guard ancestors.insert(id).inserted else { return nil }
         guard ancestors.count <= 100_000 else {
             throw AgentWorkflowError("The native turn is too large to verify automatically.")
         }
 
         if type == "user" {
             completedAnswer = nil
-            // Stop-hook feedback belongs to this prompt, but a new human prompt
-            // must never complete the workflow invocation that preceded it.
-            guard record["promptId"] as? String == nativeTurnID else {
-                return .failed("A different user prompt interrupted this workflow turn.")
-            }
             messageID = nil
             answer = []
             isEndTurn = false
