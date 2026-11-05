@@ -66,6 +66,23 @@ struct ClaudeWorkflowTranscriptTests {
     }
 
     @Test
+    func lateCandidateReusesUnblockedSummaryAndRejectsSupersededAnswer() throws {
+        var parser = try started()
+        #expect(parser.updateCandidate("") == nil)
+        _ = try parser.consume(answer("first", parent: "user", text: "First"))
+        #expect(try parser.consume(summary("first-stop", parent: "first")) == nil)
+        #expect(parser.updateCandidate("Wrong") == nil)
+        #expect(parser.updateCandidate("First") == .succeeded("First"))
+        _ = try parser.consume(record("feedback", parent: "first-stop", ["type": "user", "promptId": "prompt"]))
+        #expect(parser.updateCandidate("First") == nil)
+        _ = try parser.consume(answer("second", parent: "feedback"))
+        #expect(try parser.consume(summary("blocked", parent: "second", errors: ["Continue"])) == nil)
+        #expect(parser.updateCandidate("Final answer") == nil)
+        _ = try parser.consume(answer("third", parent: "blocked"))
+        #expect(try parser.consume(summary("last-stop", parent: "third")) == .succeeded("Final answer"))
+    }
+
+    @Test
     func blockedStopContinuesSamePromptUntilNewFinalAnswer() throws {
         var parser = try started()
         #expect(try parser.consume(answer("first", parent: "user", text: "Partial")) == nil)

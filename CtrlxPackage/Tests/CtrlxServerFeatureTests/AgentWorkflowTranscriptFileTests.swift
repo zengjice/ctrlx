@@ -89,6 +89,121 @@ struct AgentWorkflowTranscriptFileTests {
         #expect(try await outcome(transcript, parser: parser) == .succeeded("Final"))
     }
 
+    @Test(arguments: ["codex", "claude"])
+    func skipsOldOversizedTextAndRetainsPartialCurrentRecord(plugin: String) async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-turn-offset-\(UUID()).jsonl")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let turn = "current-native-turn"
+        var bytes = Data("{\"type\":\"session_meta\",\"payload\":{\"id\":\"session\"}}\n".utf8)
+        // Historical tool output exceeds the parser's retained-record budget.
+        bytes.append(Data("{\"old\":\"".utf8))
+        bytes.append(Data(repeating: 120, count: 3 * 1_024 * 1_024))
+        bytes.append(Data("\"}\n".utf8))
+        let parser: any AgentWorkflowTranscriptParser
+        let current: Data
+        let completion: Data
+        if plugin == "codex" {
+            parser = CodexWorkflowTranscript(conversationID: "session", nativeTurnID: turn)
+            current = Data("{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"\(turn)\"}}\n".utf8)
+            completion = Data("{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"\(turn)\",\"last_agent_message\":\"Final\"}}\n".utf8)
+        } else {
+            parser = ClaudeWorkflowTranscript(conversationID: "session", nativeTurnID: turn, prompt: "Review", candidate: "")
+            current = Data("{\"type\":\"user\",\"sessionId\":\"session\",\"isSidechain\":false,\"uuid\":\"u\",\"promptId\":\"\(turn)\"}\n".utf8)
+            completion = Data((
+                "{\"type\":\"assistant\",\"sessionId\":\"session\",\"isSidechain\":false,\"uuid\":\"a\",\"parentUuid\":\"u\",\"message\":{\"id\":\"m\",\"stop_reason\":\"end_turn\",\"content\":[{\"type\":\"text\",\"text\":\"Final\"}]}}\n" +
+                    "{\"type\":\"system\",\"sessionId\":\"session\",\"isSidechain\":false,\"uuid\":\"s\",\"parentUuid\":\"a\",\"subtype\":\"stop_hook_summary\",\"hookErrors\":[],\"hookAdditionalContext\":[],\"preventedContinuation\":false,\"stopReason\":\"\"}\n"
+            ).utf8)
+        }
+        // A native ID straddles the reader's 64 KiB boundary.
+        let markerIndex = try #require(current.range(of: Data(turn.utf8))).lowerBound
+        let padding = (64 * 1_024 - (bytes.count + markerIndex + 4) % (64 * 1_024)) % (64 * 1_024)
+        if padding > 0 {
+            bytes.append(Data(repeating: 32, count: padding - 1))
+            bytes.append(10)
+        }
+        bytes.append(current.dropLast(3))
+        try bytes.write(to: path)
+        let reader = try AgentWorkflowTranscriptFile(path: path.path, parser: parser)
+        while try await !reader.poll().reachedEnd { }
+        let writer = try FileHandle(forWritingTo: path)
+        try writer.seekToEnd()
+        try writer.write(contentsOf: current.suffix(3) + completion)
+        try writer.close()
+        // Read completion before the Stop callback, then reuse its evidence.
+        while try await !reader.poll().reachedEnd { }
+        await reader.updateCandidate("Final")
+        #expect(try await reader.poll().outcome == .succeeded("Final"))
+        #expect(try await reader.poll().reachedEnd)
+    }
+
+    @Test(arguments: [false, true])
+    func largeStartRecordSharesPollBudgetAndIsNotParsedTwice(markerAtEnd: Bool) async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-start-budget-\(UUID()).jsonl")
+        defer { try? FileManager.default.removeItem(at: path) }
+        // A quoted ID must not select an unrelated record or discard the next
+        // record's bytes when both occur in the same chunk.
+        try Data(#"{"text":"quoted native-turn-identifier"}"#.utf8).write(to: path)
+        let writer = try FileHandle(forWritingTo: path)
+        try writer.seekToEnd()
+        try writer.write(contentsOf: Data([10]))
+        let identity = #""type":"user","sessionId":"session","isSidechain":false,"uuid":"user","promptId":"native-turn-identifier""#
+        let image = #""message":{"content":[{"type":"image","source":{"type":"base64","data":""#
+        try writer.write(contentsOf: Data(("{" + (markerAtEnd ? "" : identity + ",") + image).utf8))
+        var remaining = (20 * 1_024 * 1_024 + 2) / 3 * 4
+        let chunk = Data(repeating: 65, count: 64 * 1_024)
+        while remaining > 0 {
+            let count = min(remaining, chunk.count)
+            try writer.write(contentsOf: chunk.prefix(count))
+            remaining -= count
+        }
+        try writer.write(contentsOf: Data((#""}}]}"# + (markerAtEnd ? "," + identity : "") + "}\n").utf8))
+        for record: [String: Any] in [
+            ["type": "assistant", "uuid": "answer", "parentUuid": "user", "message": ["id": "message", "stop_reason": "end_turn", "content": [["type": "text", "text": "Final"]]]],
+            ["type": "system", "uuid": "summary", "parentUuid": "answer", "subtype": "stop_hook_summary", "hookErrors": [], "hookAdditionalContext": [], "preventedContinuation": false, "stopReason": ""],
+        ] {
+            try writer.write(contentsOf: JSONSerialization.data(withJSONObject: record.merging(["sessionId": "session", "isSidechain": false]) { value, _ in value }))
+            try writer.write(contentsOf: Data([10]))
+        }
+        let size = try writer.offset()
+        try writer.close()
+        let reader = try AgentWorkflowTranscriptFile(path: path.path, parser: ClaudeWorkflowTranscript(
+            conversationID: "session", nativeTurnID: "native-turn-identifier", prompt: "Review", candidate: ""
+        ))
+        var result: AgentWorkflowTranscriptOutcome?
+        for index in 0..<128 {
+            let before = await reader.bytesRead
+            let poll = try await reader.poll()
+            #expect(await reader.bytesRead - before <= 1_024 * 1_024)
+            if index == 2 {
+                // Stop can update the candidate between bounded polls, while
+                // the large user record is still incomplete.
+                await reader.updateCandidate("Final")
+            }
+            if let outcome = poll.outcome {
+                result = outcome
+                break
+            }
+            if poll.reachedEnd {
+                break
+            }
+        }
+        #expect(result == .succeeded("Final"))
+        // A late marker requires one byte scan then one streamed parse. An
+        // early marker can reuse the buffered prefix and read the record once.
+        #expect(await reader.bytesRead <= size * (markerAtEnd ? 2 : 1) + 64 * 1_024)
+    }
+
+    @Test
+    func locatingTurnStillRequiresMatchingCodexSessionHeader() async throws {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-wrong-session-\(UUID()).jsonl")
+        defer { try? FileManager.default.removeItem(at: path) }
+        try Data((
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"other\"}}\n" +
+                "{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"current\",\"last_agent_message\":\"Wrong\"}}\n"
+        ).utf8).write(to: path)
+        #expect(try await outcome(path, parser: CodexWorkflowTranscript(conversationID: "session", nativeTurnID: "current")) == nil)
+    }
+
     @Test
     func mediaPayloadIsStreamedWithoutRetainingIt() throws {
         var record = AgentWorkflowTranscriptRecord()

@@ -8,11 +8,17 @@ import Testing
 
 private struct NativeWorkflowTestParser: AgentWorkflowTranscriptParser {
     var onOutcome: @Sendable () -> Void = { }
+    var outcome: AgentWorkflowTranscriptOutcome?
+    mutating func updateCandidate(_: String) -> AgentWorkflowTranscriptOutcome? {
+        outcome
+    }
+
     mutating func consume(_ line: Data) throws -> AgentWorkflowTranscriptOutcome? {
         let value = try JSONDecoder().decode([String: String].self, from: line)
         let result = value["failure"].map { AgentWorkflowTranscriptOutcome.failed($0) }
             ?? value["final"].map { .succeeded($0) }
         if result != nil {
+            outcome = result
             onOutcome()
         }
         return result
@@ -593,18 +599,17 @@ struct AgentWorkflowNativeEventsTests {
         defer { try? FileManager.default.removeItem(at: f.directory) }
         let submission = try #require(await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer))
         try Data("{\"final\":\"Final\"}\n".utf8).write(to: f.transcript)
-        let observed = LockIsolated(false)
-        let provider = NativeWorkflowTestProvider { observed.setValue(true) }
+        let observed = LockIsolated(0)
+        let provider = NativeWorkflowTestProvider { observed.withValue { $0 += 1 } }
         let monitor = AgentWorkflowCompletionMonitor(store: f.store, runner: f.runner, inspect: { $0 }, onFailure: { Issue.record(Comment(rawValue: $0)) })
         await monitor.verify(submission, provider: provider)
         for _ in 0..<200 {
-            if observed.value {
+            if observed.value > 0 {
                 break
             }
             try await Task.sleep(for: .milliseconds(10))
         }
-        #expect(observed.value)
-        await monitor.shutdown()
+        #expect(observed.value == 1)
         let pending = try await f.store.snapshot().runs[0]
         #expect(pending.status == .running && pending.invocations[0].result == nil)
         let stop = try #require(await f.router.receive(f.event(.stopCandidate, text: "Final"), peer: f.peer))
@@ -616,6 +621,7 @@ struct AgentWorkflowNativeEventsTests {
             try await Task.sleep(for: .milliseconds(10))
         }
         #expect(try await f.store.snapshot().runs[0].invocations[0].result?.text == "Final")
+        #expect(observed.value == 1) // Stop reuses evidence, without parsing again.
         await monitor.shutdown()
         await f.runner.shutdown()
     }
@@ -851,6 +857,109 @@ struct AgentWorkflowNativeEventsTests {
         #expect(run.status == .paused && run.invocations[0].result == nil)
         #expect(run.invocations[0].status == .running)
         await monitor.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test
+    func catchUpDoesNotSpendFinalWaitBudgetOrInspectEveryChunk() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        let stop = try #require(await f.router.receive(f.event(.stopCandidate, text: "Final"), peer: f.peer))
+        let old = try JSONSerialization.data(withJSONObject: ["old": String(repeating: "x", count: 500_000)]) + Data([10])
+        let writer = try FileHandle(forWritingTo: f.transcript)
+        for _ in 0..<10 {
+            try writer.write(contentsOf: old)
+        }
+        try writer.write(contentsOf: Data("{\"final\":\"Final\"}\n".utf8))
+        try writer.close()
+        let inspected = LockIsolated(0)
+        let monitor = AgentWorkflowCompletionMonitor(store: f.store, runner: f.runner, inspect: {
+            inspected.withValue { $0 += 1 }
+            try await Task.sleep(for: .milliseconds(20))
+            return $0
+        }, verificationTimeout: .milliseconds(10), onFailure: { Issue.record(Comment(rawValue: $0)) })
+        await monitor.verify(stop, provider: NativeWorkflowTestProvider())
+        for _ in 0..<500 {
+            if try await f.store.snapshot().runs[0].invocations[0].result != nil {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(try await f.store.snapshot().runs[0].invocations[0].result?.text == "Final")
+        #expect(inspected.value == 2) // Initial check and the final commit boundary.
+        await monitor.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test
+    func finalIdentityCheckRetriesAlreadyConsumedEvidence() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        let stop = try #require(await f.router.receive(f.event(.stopCandidate, text: "Final"), peer: f.peer))
+        try Data("{\"final\":\"Final\"}\n".utf8).write(to: f.transcript)
+        let inspected = LockIsolated(0)
+        let parsed = LockIsolated(0)
+        let monitor = AgentWorkflowCompletionMonitor(store: f.store, runner: f.runner, inspect: {
+            let count = inspected.withValue { $0 += 1
+                return $0
+            }
+            if count == 2 {
+                throw AgentWorkflowInspectionUnavailable()
+            }
+            return $0
+        }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        await monitor.verify(stop, provider: NativeWorkflowTestProvider { parsed.withValue { $0 += 1 } })
+        for _ in 0..<200 {
+            if try await f.store.snapshot().runs[0].invocations[0].result != nil {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let run = try await f.store.snapshot().runs[0]
+        #expect(run.status == .paused && run.invocations[0].result?.text == "Final")
+        #expect(parsed.value == 1)
+        await monitor.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test
+    func missingFinalRecordStillTimesOutAfterCatchUp() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        let stop = try #require(await f.router.receive(f.event(.stopCandidate, text: "Final"), peer: f.peer))
+        let monitor = AgentWorkflowCompletionMonitor(
+            store: f.store,
+            runner: f.runner,
+            inspect: { $0 },
+            verificationTimeout: .milliseconds(30),
+            onFailure: { Issue.record(Comment(rawValue: $0)) }
+        )
+        await monitor.verify(stop, provider: NativeWorkflowTestProvider())
+        for _ in 0..<200 {
+            if try await f.store.snapshot().runs[0].status == .paused {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let run = try await f.store.snapshot().runs[0]
+        #expect(run.status == .paused && run.invocations[0].result == nil)
+        #expect(run.issue == "The Agent's final completion could not be verified. Nothing was handed downstream.")
+        await monitor.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test
+    func readerPreservesRecordsAfterAnOutcomeInTheSameChunk() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try Data("{\"final\":\"First\"}\n{\"failure\":\"Later\"}\n".utf8).write(to: f.transcript)
+        let reader = try AgentWorkflowTranscriptFile(path: f.transcript.path, parser: NativeWorkflowTestParser())
+        #expect(try await reader.poll().outcome == .succeeded("First"))
+        #expect(try await reader.poll().outcome == .failed("Later"))
+        #expect(try await reader.poll().reachedEnd)
         await f.runner.shutdown()
     }
 
