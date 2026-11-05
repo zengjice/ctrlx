@@ -175,7 +175,7 @@ struct AgentWorkflowRequestTests {
 
     @MainActor
     @Test
-    func terminalsRequireExplicitTakeoverWithoutPausingOnRejectedInput() async throws {
+    func terminalsAllowInputWhileRunningPausedAndResumed() async throws {
         let f = try await fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
         let running = try await start(f)
@@ -186,57 +186,43 @@ struct AgentWorkflowRequestTests {
                 writes.withValue { $0 += 1 }
                 return ProcessResult(exitCode: 0, stdout: Data(), stderr: Data())
             }
-            $0[ProcessRunner.self].runWithLaunch = { _, _, _, _, launch in
-                try await launch { writes.withValue { $0 += 1 } }
-                return ProcessResult(exitCode: 0, stdout: Data(), stderr: Data())
-            }
         } operation: {
-            let gate = AgentWorkflowInputGate { try await f.store.authorizeHumanInput(paneID: $0) }
+            let gate = AgentWorkflowInputGate()
             let tmux = TmuxService(tmuxPath: "/unused")
             tmux.workflowInputGate = gate
             let control = TmuxControlClientManager(tmuxPath: "/must/not/run")
             control.workflowInputGate = gate
             let claim = gate.claim(paneID: "%0")
             for _ in 0..<4 {
-                await #expect(throws: AgentWorkflowInputReadOnlyError.self) {
-                    try await tmux.sendKeys("%0", keys: "a", literal: true)
-                }
+                try await tmux.sendKeys("%0", keys: "a", literal: true)
             }
-            await #expect(throws: AgentWorkflowInputReadOnlyError.self) {
-                try await control.sendKeystrokesIfConnected(paneId: "%0", sessionName: "missing", keys: [.enter])
-            }
-            let click = Data("\u{1b}[<0;10;20M".utf8)
-            await #expect(throws: AgentWorkflowInputReadOnlyError.self) {
-                try await tmux.sendRawBytes("%0", data: click)
-            }
-            #expect(writes.value == 0)
-            try gate.validate(claim)
-            let scroll = Data(String(repeating: "\u{1b}[<64;10;20M", count: 5).utf8)
-            try await tmux.sendRawBytes("%0", data: scroll)
-            #expect(writes.value == 1)
-            try gate.validate(claim)
+            // A disconnected pipe returns false for the ordinary fallback,
+            // without denying input based on the workflow state.
+            #expect(try await !control.sendKeystrokesIfConnected(paneId: "%0", sessionName: "missing", keys: [.enter]))
+            try await tmux.sendRawBytes("%0", data: Data("\u{1b}[<0;10;20M".utf8))
+            #expect(writes.value == 5)
+            #expect(throws: AgentWorkflowError.self) { try gate.validate(claim) }
+            let beforeScroll = gate.claim(paneID: "%0")
+            try await tmux.sendRawBytes("%0", data: Data("\u{1b}[<64;10;20M".utf8))
+            #expect(writes.value == 6)
+            try gate.validate(beforeScroll)
             #expect(try await f.store.snapshot() == before)
 
-            let paused = try #require(try await f.service.handle(.init(.pause(running.summary.id, expectedRevision: running.summary.revision), expectedHostID: f.hostID)).run)
+            let paused = try await f.service.pause(runID: running.summary.id, expectedRevision: running.summary.revision)
             try await tmux.sendKeys("%0", keys: "a", literal: true)
-            #expect(writes.value == 2)
-            #expect(try await f.store.snapshot().runs.first?.status == .paused)
-
-            let resumed = try #require(try await f.service.handle(.init(.resume(running.summary.id, expectedRevision: paused.summary.revision, roundLimit: nil), expectedHostID: f.hostID)).run)
-            await #expect(throws: AgentWorkflowInputReadOnlyError.self) {
-                try await tmux.sendKeys("%0", keys: "Enter")
-            }
-            try await tmux.sendKeys("%99", keys: "unrelated", literal: true)
-            #expect(writes.value == 3)
-            _ = try await f.service.handle(.init(.end(running.summary.id, expectedRevision: resumed.summary.revision), expectedHostID: f.hostID))
+            #expect(try await f.store.snapshot().runs[0].status == .paused)
+            let resumed = try await f.service.resume(runID: paused.id, expectedRevision: paused.revision)
+            try await tmux.sendKeys("%0", keys: "Enter")
+            #expect(try await f.store.snapshot().runs[0].status == .running)
+            _ = try await f.service.end(runID: resumed.id, expectedRevision: resumed.revision)
             try await tmux.sendKeys("%0", keys: "a", literal: true)
-            #expect(writes.value == 4)
+            #expect(writes.value == 9)
         }
     }
 
     @MainActor
     @Test(arguments: [false, true])
-    func continueRevokesHumanInputBeforeProcessLaunch(takeOverAgain: Bool) async throws {
+    func continuingDoesNotDiscardQueuedHumanInput(pauseAgain: Bool) async throws {
         let f = try await fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
         let running = try await start(f)
@@ -244,14 +230,14 @@ struct AgentWorkflowRequestTests {
         let boundary = WriteBoundary()
         let writes = LockIsolated(0)
         try await withDependencies {
-            $0[ProcessRunner.self].runWithLaunch = { _, _, _, _, launch in
+            $0[ProcessRunner.self].run = { _, _, _, _ in
                 await boundary.wait()
-                try await launch { writes.withValue { $0 += 1 } }
+                writes.withValue { $0 += 1 }
                 return ProcessResult(exitCode: 0, stdout: Data(), stderr: Data())
             }
         } operation: {
             let tmux = TmuxService(tmuxPath: "/must/not/run")
-            tmux.workflowInputGate = AgentWorkflowInputGate { try await f.store.authorizeHumanInput(paneID: $0) }
+            tmux.workflowInputGate = AgentWorkflowInputGate()
             let pending = Task { try await tmux.sendKeys("%0", keys: "C-c") }
             defer { boundary.release()
                 pending.cancel()
@@ -261,19 +247,14 @@ struct AgentWorkflowRequestTests {
                 await Task.yield()
             }
             try #require(boundary.entered)
-            let resumed = try await f.service.resume(runID: running.summary.id, expectedRevision: paused.revision)
-            if takeOverAgain {
+            let resumed = try await f.service.resume(runID: paused.id, expectedRevision: paused.revision)
+            if pauseAgain {
                 _ = try await f.service.pause(runID: resumed.id, expectedRevision: resumed.revision)
             }
             boundary.release()
-            await #expect(throws: AgentWorkflowInputReadOnlyError.self) { try await pending.value }
-            #expect(writes.value == 0)
-            #expect(try await f.store.snapshot().runs[0].status == (takeOverAgain ? .paused : .running))
-            if takeOverAgain {
-                let fresh = try await f.store.authorizeHumanInput(paneID: "%0")
-                try fresh.perform { writes.withValue { $0 += 1 } }
-                #expect(writes.value == 1)
-            }
+            try await pending.value
+            #expect(writes.value == 1)
+            #expect(try await f.store.snapshot().runs[0].status == (pauseAgain ? .paused : .running))
         }
     }
 

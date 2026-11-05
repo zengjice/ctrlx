@@ -6,10 +6,31 @@ public struct CodexWorkflowTranscript: AgentWorkflowTranscriptParser {
     private let conversationID: String
     private let nativeTurnID: String
     private var sessionMatches = false
+    private var outcome: AgentWorkflowTranscriptOutcome?
 
     public init(conversationID: String, nativeTurnID: String) {
         self.conversationID = conversationID
         self.nativeTurnID = nativeTurnID
+    }
+
+    public var startMarkers: [String] {
+        [nativeTurnID]
+    }
+
+    public var readsSessionHeader: Bool {
+        true
+    }
+
+    public mutating func updateCandidate(_: String) -> AgentWorkflowTranscriptOutcome? {
+        outcome
+    }
+
+    public func isTurnStart(_ line: Data) throws -> Bool {
+        guard
+            let record = try JSONSerialization.jsonObject(with: line) as? [String: Any],
+            record["type"] as? String == "event_msg",
+            let payload = record["payload"] as? [String: Any] else { return false }
+        return payload["turn_id"] as? String == nativeTurnID
     }
 
     public mutating func consume(_ line: Data) throws -> AgentWorkflowTranscriptOutcome? {
@@ -29,14 +50,18 @@ public struct CodexWorkflowTranscript: AgentWorkflowTranscriptParser {
             if let error = payload["error"], !(error is NSNull) {
                 let reason = (error as? [String: Any])?["message"] as? String
                     ?? "The native Codex turn completed with an error."
-                return .failed(reason)
+                outcome = .failed(reason)
+                return outcome
             }
             guard let answer = payload["last_agent_message"] as? String, !answer.isEmpty else {
-                return .failed("The native Codex turn has no final answer to hand off.")
+                outcome = .failed("The native Codex turn has no final answer to hand off.")
+                return outcome
             }
-            return .succeeded(answer)
+            outcome = .succeeded(answer)
+            return outcome
         case "turn_aborted":
-            return .failed("The native Codex turn was interrupted.")
+            outcome = .failed("The native Codex turn was interrupted.")
+            return outcome
         default:
             return nil
         }

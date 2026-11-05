@@ -2,11 +2,12 @@ import CtrlxNetworking
 import CtrlxPluginProtocol
 import Foundation
 
-/// Transcript polling runs independently from hook ingress and keyboard input.
-/// A newer Stop candidate supersedes the earlier verification for the same turn.
+/// One reader follows a native turn from its receipt through its final Stop.
+/// Updating a Stop candidate preserves both the file cursor and parser state.
 actor AgentWorkflowCompletionMonitor {
     private struct Watch {
-        let submissionOnly: Bool
+        var context: AgentWorkflowTurnContext
+        var revision = 0
         let token: UUID
         let task: Task<Void, Never>
     }
@@ -34,15 +35,22 @@ actor AgentWorkflowCompletionMonitor {
 
     func verify(_ context: AgentWorkflowTurnContext, provider: any AgentWorkflowProviding) {
         let id = context.invocation.id
-        // A deferred receipt can arrive after its Stop was already routed.
-        // Never replace final-answer verification with submission-only watching.
-        if context.candidate.kind == .submitted, watches[id]?.submissionOnly == false {
-            return
+        if let previous = watches[id] {
+            // A deferred receipt must not supersede a Stop. A changed native
+            // binding cannot inherit the old reader's completion evidence.
+            guard context.candidate.kind != .submitted else { return }
+            if
+                previous.context.instance.matchesBinding(context.instance),
+                previous.context.candidate.nativeTurnID == context.candidate.nativeTurnID,
+                previous.context.candidate.transcriptPath == context.candidate.transcriptPath {
+                watches[id]?.context = context
+                watches[id]?.revision += 1
+                return
+            }
+            previous.task.cancel()
         }
-        watches.removeValue(forKey: id)?.task.cancel()
-        guard !context.candidate.hasPendingWork else { return }
         let token = UUID()
-        watches[id] = Watch(submissionOnly: context.candidate.kind == .submitted, token: token, task: Task {
+        watches[id] = Watch(context: context, token: token, task: Task {
             await monitor(context, provider: provider, token: token)
         })
     }
@@ -58,107 +66,134 @@ actor AgentWorkflowCompletionMonitor {
         }
     }
 
-    private func monitor(_ context: AgentWorkflowTurnContext, provider: any AgentWorkflowProviding, token: UUID) async {
-        let id = context.invocation.id
+    private func monitor(_ initial: AgentWorkflowTurnContext, provider: any AgentWorkflowProviding, token: UUID) async {
+        let id = initial.invocation.id
         defer {
             if watches[id]?.token == token {
                 watches.removeValue(forKey: id)
             }
         }
         do {
-            let submissionOnly = context.candidate.kind == .submitted
             let parser = provider.workflowTranscript(
-                conversationID: context.instance.conversationID,
-                nativeTurnID: context.candidate.nativeTurnID,
-                prompt: context.invocation.submissionText(pluginID: context.instance.pluginID),
-                candidate: submissionOnly ? "" : context.candidate.text
+                conversationID: initial.instance.conversationID,
+                nativeTurnID: initial.candidate.nativeTurnID,
+                prompt: initial.invocation.submissionText(pluginID: initial.instance.pluginID),
+                candidate: ""
             )
             let clock = ContinuousClock()
-            let deadline = clock.now.advanced(by: verificationTimeout)
+            let openDeadline = clock.now.advanced(by: verificationTimeout)
             var transcript: AgentWorkflowTranscriptFile?
             while transcript == nil {
                 try Task.checkCancellation()
                 do {
-                    transcript = try AgentWorkflowTranscriptFile(path: context.candidate.transcriptPath, parser: parser)
-                } catch let error as CocoaError where error.code == .fileNoSuchFile && submissionOnly && clock.now < deadline {
+                    transcript = try AgentWorkflowTranscriptFile(path: initial.candidate.transcriptPath, parser: parser)
+                } catch let error as CocoaError where error.code == .fileNoSuchFile && clock.now < openDeadline {
                     // Claude creates its first transcript after UserPromptSubmit.
                     try await Task.sleep(for: .milliseconds(200))
                 }
             }
             guard let file = transcript else { return }
+            var revision = -1
+            var deadline: ContinuousClock.Instant?
             var inspectionDeadline: ContinuousClock.Instant?
-            while watches[id]?.token == token, !Task.isCancelled {
+            var nextInspection = clock.now
+            while let watch = watches[id], watch.token == token, !Task.isCancelled {
+                let context = watch.context
+                let submissionOnly = context.candidate.kind == .submitted || context.candidate.hasPendingWork
+                let archive = try await store.snapshot()
+                guard isCurrent(id, token: token, revision: watch.revision) else { continue }
                 guard
-                    let run = try await store.snapshot().runs.first(where: { $0.id == context.runID }),
-                    // A verified Stop can still archive an accepted task after
-                    // the workflow ends; its scheduler remains stopped.
+                    let run = archive.runs.first(where: { $0.id == context.runID }),
                     !run.status.isTerminal || !submissionOnly,
                     run.invocations.contains(where: {
                         $0.id == id && ($0.status == .running || (!submissionOnly && $0.status == .uncertain))
                     }) else { return }
+                if revision != watch.revision {
+                    revision = watch.revision
+                    deadline = nil
+                    await file.updateCandidate(submissionOnly ? "" : context.candidate.text)
+                }
                 if let inspectionDeadline, clock.now >= inspectionDeadline {
                     throw AgentWorkflowError("Agent process inspection did not recover in time. The task remains unverified and was not sent again.")
                 }
-                let live: AgentWorkflowInstance
+                // Inspect periodically while catching up, not once per MiB.
+                // Completion is always checked against a fresh identity below.
                 do {
-                    live = try await inspect(context.instance)
-                    inspectionDeadline = nil
+                    if clock.now >= nextInspection {
+                        let live = try await inspect(context.instance)
+                        guard live.matchesBinding(context.instance) else {
+                            throw AgentWorkflowError("The Agent identity changed while verifying its final answer.")
+                        }
+                        inspectionDeadline = nil
+                        nextInspection = clock.now.advanced(by: .seconds(10))
+                    }
+                    guard isCurrent(id, token: token, revision: revision) else { continue }
+                    let poll = try await file.poll()
+                    guard isCurrent(id, token: token, revision: revision) else { continue }
+                    if let outcome = poll.outcome {
+                        if case .succeeded = outcome, submissionOnly {
+                            // Keep the parser and its evidence for the Stop;
+                            // transcript completion alone cannot authorize handoff.
+                            continue
+                        }
+                        let live = try await inspect(context.instance)
+                        guard isCurrent(id, token: token, revision: revision) else { continue }
+                        guard live.matchesBinding(context.instance) else {
+                            throw AgentWorkflowError("The Agent identity changed while verifying its final answer.")
+                        }
+                        switch outcome {
+                        case let .succeeded(answer):
+                            try await runner.succeeded(runID: context.runID, result: .init(
+                                invocationID: id, nativeTurnID: context.candidate.nativeTurnID,
+                                text: answer, completedAt: Date()
+                            ), instance: live)
+                        case let .failed(reason):
+                            try await runner.failed(
+                                runID: context.runID, invocationID: id, instance: live,
+                                nativeTurnID: context.candidate.nativeTurnID, reason: reason
+                            )
+                        }
+                        return
+                    }
+                    // Historical catch-up is not time spent waiting for native
+                    // completion. Start that deadline only after reaching EOF.
+                    if !submissionOnly, poll.reachedEnd, deadline == nil {
+                        deadline = clock.now.advanced(by: verificationTimeout)
+                    }
+                    if let deadline, clock.now >= deadline {
+                        throw AgentWorkflowError("The Agent's final completion could not be verified. Nothing was handed downstream.")
+                    }
+                    if poll.reachedEnd {
+                        try await Task.sleep(for: .milliseconds(200))
+                    } else {
+                        await Task.yield()
+                    }
                 } catch let error as AgentWorkflowInspectionUnavailable {
-                    try Task.checkCancellation()
-                    guard watches[id]?.token == token else { return }
+                    guard isCurrent(id, token: token, revision: revision) else { continue }
                     if inspectionDeadline == nil {
-                        inspectionDeadline = submissionOnly ? clock.now.advanced(by: verificationTimeout) : deadline
+                        inspectionDeadline = clock.now.advanced(by: verificationTimeout)
                         try await store.update(runID: context.runID) { $0.pause(reason: error.localizedDescription) }
                     }
+                    nextInspection = clock.now
+                    // A completed record may already have been consumed.
+                    await file.updateCandidate(submissionOnly ? "" : context.candidate.text)
                     try await Task.sleep(for: .milliseconds(200))
-                    continue
-                }
-                guard watches[id]?.token == token, !Task.isCancelled else { return }
-                guard live.matchesBinding(context.instance) else {
-                    throw AgentWorkflowError("The Agent identity changed while verifying its final answer.")
-                }
-                let poll = try await file.poll()
-                guard watches[id]?.token == token, !Task.isCancelled else { return }
-                if let outcome = poll.outcome {
-                    switch outcome {
-                    case let .succeeded(answer):
-                        // Submission evidence can fail a call, but only a Stop
-                        // candidate may authorize successful handoff.
-                        guard !submissionOnly else { return }
-                        try await runner.succeeded(runID: context.runID, result: .init(
-                            invocationID: id, nativeTurnID: context.candidate.nativeTurnID,
-                            text: answer, completedAt: Date()
-                        ), instance: live)
-                    case let .failed(reason):
-                        try await runner.failed(
-                            runID: context.runID,
-                            invocationID: id,
-                            instance: live,
-                            nativeTurnID: context.candidate.nativeTurnID,
-                            reason: reason
-                        )
-                    }
-                    return
-                }
-                guard submissionOnly || clock.now < deadline else {
-                    throw AgentWorkflowError("The Agent's final completion could not be verified. Nothing was handed downstream.")
-                }
-                if poll.reachedEnd {
-                    try await Task.sleep(for: submissionOnly ? .seconds(10) : .milliseconds(200))
-                } else {
-                    await Task.yield()
                 }
             }
         } catch is CancellationError {
-            // A newer native candidate or shutdown owns the next decision.
+            // Shutdown or a different binding owns the next decision.
         } catch {
             guard watches[id]?.token == token else { return }
             do {
                 let reason = error.localizedDescription
-                try await store.update(runID: context.runID) { $0.pause(reason: reason) }
+                try await store.update(runID: initial.runID) { $0.pause(reason: reason) }
             } catch {
                 onFailure("Could not save workflow verification failure: \(error.localizedDescription)")
             }
         }
+    }
+
+    private func isCurrent(_ id: UUID, token: UUID, revision: Int) -> Bool {
+        !Task.isCancelled && watches[id]?.token == token && watches[id]?.revision == revision
     }
 }

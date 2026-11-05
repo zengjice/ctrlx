@@ -219,9 +219,9 @@
 
         @Suite("Process Lifecycle")
         struct ProcessLifecycleTests {
-            @Test("Revoked human input never reaches the control pipe or corrupts its response queue")
+            @Test("A rejected write never reaches the control pipe or corrupts its response queue")
             @MainActor
-            func revokedInputIsRejectedAtPipeWrite() async throws {
+            func rejectedInputDoesNotCorruptThePipe() async throws {
                 let tmuxPath = try #require(TmuxBinaryLocator.liveValue.find())
                 let socketPath = "/tmp/ctrlx-input-\(UUID().uuidString.prefix(8)).sock"
                 defer { killTmuxServer(tmuxPath: tmuxPath, socketPath: socketPath) }
@@ -233,12 +233,10 @@
                     let client = TmuxControlClient(tmuxPath: tmuxPath, socketPath: socketPath)
                     do {
                         try await client.connect(sessionTarget: created.sessionName)
-                        let authorization = AgentWorkflowHumanInputAuthorization()
-                        authorization.revoke()
                         let written = LockIsolated(false)
-                        await #expect(throws: AgentWorkflowInputReadOnlyError.self) {
-                            try await client.sendCommand("set-option -g @ctrlx_late_input unexpected", onWritten: { written.setValue(true) }, beforeWrite: { write in
-                                try authorization.perform(write)
+                        await #expect(throws: CancellationError.self) {
+                            try await client.sendCommand("set-option -g @ctrlx_late_input unexpected", onWritten: { written.setValue(true) }, beforeWrite: { _ in
+                                throw CancellationError()
                             })
                         }
                         #expect(!written.value)

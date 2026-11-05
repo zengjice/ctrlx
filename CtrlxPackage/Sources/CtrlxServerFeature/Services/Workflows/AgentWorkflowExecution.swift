@@ -217,7 +217,7 @@ struct AgentWorkflowExecution: Sendable {
                     && [.writing, .awaitingAcceptance, .running, .uncertain].contains($0.status)
             }) else { throw AgentWorkflowError("Another step is still using this Agent. Resolve it before sending more input.") }
         run.invocations[index].status = .writing
-        run.invocations[index].allowsQuestionInput = nil
+        run.invocations[index].hasAskedQuestion = nil
         changed()
     }
 
@@ -354,14 +354,14 @@ struct AgentWorkflowExecution: Sendable {
         changed()
     }
 
-    mutating func allowQuestionInput(instance: AgentWorkflowInstance) {
+    mutating func recordQuestion(instance: AgentWorkflowInstance) {
         guard
             !run.status.isTerminal,
             run.instances.contains(where: { $0.matchesBinding(instance) }) || canBindFirstConversation(instance),
             let index = run.invocations.firstIndex(where: {
                 $0.delivery.toAgentID == instance.id && [.writing, .awaitingAcceptance, .running].contains($0.status)
-            }), run.invocations[index].allowsQuestionInput != true else { return }
-        run.invocations[index].allowsQuestionInput = true
+            }), run.invocations[index].hasAskedQuestion != true else { return }
+        run.invocations[index].hasAskedQuestion = true
         changed()
     }
 
@@ -378,11 +378,8 @@ struct AgentWorkflowExecution: Sendable {
             throw AgentWorkflowError("Only a paused workflow with valid authorization can continue.")
         }
         for bound in run.instances {
-            guard let live = instances.first(where: { bound.matchesBinding($0) && $0.readiness != .unavailable }) else {
+            guard instances.contains(where: { bound.matchesBinding($0) && $0.readiness != .unavailable }) else {
                 throw AgentWorkflowError("An Agent instance changed. End this run and bind the replacement explicitly.")
-            }
-            if run.finishRequest == nil, live.readiness == .draft || live.readiness == .awaitingHuman {
-                throw AgentWorkflowError("\(live.displayName) needs human input or has a draft. Resolve it before continuing.")
             }
         }
         guard !run.invocations.contains(where: { $0.status == .uncertain || $0.status == .failed }) else {

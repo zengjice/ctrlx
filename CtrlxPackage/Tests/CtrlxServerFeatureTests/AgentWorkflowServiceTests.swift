@@ -342,14 +342,14 @@ struct AgentWorkflowServiceTests {
     }
 
     @Test(arguments: [AgentWorkflowReadiness.draft, .awaitingHuman])
-    func backgroundMonitorPausesForHumanWork(readiness: AgentWorkflowReadiness) async throws {
+    func backgroundMonitorAllowsHumanWork(readiness: AgentWorkflowReadiness) async throws {
         let f = try await fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
         _ = try await start(f)
         f.backend.observations[1].readiness = readiness
         try await f.service.checkActiveRuns()
-        #expect(try await f.store.snapshot().runs[0].status == .paused)
-        #expect(try await f.store.snapshot().runs[0].issue?.contains("human input") == true)
+        #expect(try await f.store.snapshot().runs[0].status == .running)
+        #expect(try await f.store.snapshot().runs[0].issue == nil)
         #expect(f.backend.scheduled.count == 1)
     }
 }

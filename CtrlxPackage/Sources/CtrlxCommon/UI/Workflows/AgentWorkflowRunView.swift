@@ -60,12 +60,12 @@ struct AgentWorkflowRunView: View {
                                 change(.resume(runID, expectedRevision: state.summary.revision, roundLimit: roundLimit))
                             }
                         } else {
-                            Button("Take over") { change(.pause(runID, expectedRevision: state.summary.revision)) }
-                                .accessibilityIdentifier("workflow-take-over")
+                            Button("Pause workflow") { change(.pause(runID, expectedRevision: state.summary.revision)) }
+                                .accessibilityIdentifier("workflow-pause")
                         }
                         Button("End workflow", role: .destructive) { confirmingEnd = true }
                     } footer: {
-                        Text("Questions enable input for that Agent until its current task finishes, without pausing the workflow. Otherwise, Take over pauses handoffs and enables input; Continue resumes them. Viewing and scrolling remain available. Ending keeps the Agent tabs and current tasks open.")
+                        Text("You can use the Agent terminals at any time. Pausing stops new task deliveries; current tasks can still finish. Continue resumes deliveries. Ending keeps the Agent tabs and current tasks open.")
                     }
                     .disabled(changing || !endpoint.isConnected)
                 } else {

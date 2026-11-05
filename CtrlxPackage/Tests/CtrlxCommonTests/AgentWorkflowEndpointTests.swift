@@ -22,7 +22,7 @@ struct AgentWorkflowEndpointTests {
     }
 
     @Test(arguments: [false, true], [AgentWorkflowRunStatus.running, .paused])
-    func terminalControlPreservesIntentWhenAnotherOperatorChangedTheState(manual: Bool, status: AgentWorkflowRunStatus) async throws {
+    func terminalControlPreservesIntentWhenAnotherOperatorChangedTheState(paused: Bool, status: AgentWorkflowRunStatus) async throws {
         let transport = Transport(), hostID = transport.response.hostID
         let instance = AgentWorkflowInstance(
             hostID: hostID,
@@ -42,12 +42,12 @@ struct AgentWorkflowEndpointTests {
         var run = AgentWorkflowRun(definition: definition, instances: [instance], createdAt: Date(), authorizationExpiresAt: Date().addingTimeInterval(3_600))
         run.status = status
         transport.response.run = .init(run, currentInstances: [instance])
-        _ = try await transport.endpoint.setManualControl(manual, pane: instance.workspacePane, hostID: hostID)
+        _ = try await transport.endpoint.setWorkflowPaused(paused, pane: instance.workspacePane, hostID: hostID)
         #expect(transport.requests[0].operation == .terminal(instance.workspacePane))
-        let alreadyApplied = (status == .paused) == manual
+        let alreadyApplied = (status == .paused) == paused
         #expect(transport.requests.count == (alreadyApplied ? 1 : 2))
         if !alreadyApplied {
-            #expect(transport.requests[1].operation == (manual ? .pause(run.id, expectedRevision: run.revision) : .resume(run.id, expectedRevision: run.revision, roundLimit: nil)))
+            #expect(transport.requests[1].operation == (paused ? .pause(run.id, expectedRevision: run.revision) : .resume(run.id, expectedRevision: run.revision, roundLimit: nil)))
         }
     }
 

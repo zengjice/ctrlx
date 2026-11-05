@@ -8,7 +8,8 @@ public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
     private let conversationID: String
     private let nativeTurnID: String
     private let prompt: String
-    private let candidate: String
+    private var candidate: String
+    private var completedAnswer: String?
     private var ancestors: Set<String> = []
     private var messageID: String?
     private var answer: [String] = []
@@ -19,6 +20,28 @@ public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
         self.nativeTurnID = nativeTurnID
         self.prompt = prompt
         self.candidate = candidate
+    }
+
+    public var startMarkers: [String] {
+        guard
+            let start = prompt.range(of: "[CtrlX workflow invocation: ", options: .backwards),
+            let end = prompt[start.lowerBound...].firstIndex(of: "]") else { return [nativeTurnID] }
+        return [nativeTurnID, String(prompt[start.lowerBound...end])]
+    }
+
+    public func isTurnStart(_ line: Data) throws -> Bool {
+        guard
+            let record = try JSONSerialization.jsonObject(with: line) as? [String: Any],
+            record["sessionId"] as? String == conversationID,
+            record["isSidechain"] as? Bool == false else { return false }
+        return (record["type"] as? String == "user" && record["promptId"] as? String == nativeTurnID)
+            || (record["type"] as? String == "system"
+                && (record["content"] as? String)?.hasSuffix("\nOriginal prompt: " + prompt) == true)
+    }
+
+    public mutating func updateCandidate(_ candidate: String) -> AgentWorkflowTranscriptOutcome? {
+        self.candidate = candidate
+        return !candidate.isEmpty && completedAnswer == candidate ? .succeeded(candidate) : nil
     }
 
     public mutating func consume(_ line: Data) throws -> AgentWorkflowTranscriptOutcome? {
@@ -51,22 +74,24 @@ public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
             return nil
         }
         guard
-            let parent = record["parentUuid"] as? String, ancestors.contains(parent),
-            ancestors.insert(id).inserted else { return nil }
+            let parent = record["parentUuid"] as? String, ancestors.contains(parent) else { return nil }
+        if type == "user", record["promptId"] as? String != nativeTurnID {
+            // A later human task must not invalidate a completed turn while its
+            // Stop notification is in flight, or join that turn's ancestry.
+            return completedAnswer == nil ? .failed("A different user prompt interrupted this workflow turn.") : nil
+        }
+        guard ancestors.insert(id).inserted else { return nil }
         guard ancestors.count <= 100_000 else {
             throw AgentWorkflowError("The native turn is too large to verify automatically.")
         }
 
         if type == "user" {
-            // Stop-hook feedback belongs to this prompt, but a new human prompt
-            // must never complete the workflow invocation that preceded it.
-            guard record["promptId"] as? String == nativeTurnID else {
-                return .failed("A different user prompt interrupted this workflow turn.")
-            }
+            completedAnswer = nil
             messageID = nil
             answer = []
             isEndTurn = false
         } else if type == "assistant", let message = record["message"] as? [String: Any] {
+            completedAnswer = nil
             guard let nextMessageID = message["id"] as? String else { return nil }
             if nextMessageID != messageID {
                 messageID = nextMessageID
@@ -80,13 +105,16 @@ public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
                 }
             }
         } else if type == "system", record["subtype"] as? String == "stop_hook_summary" {
+            completedAnswer = nil
             guard
-                isEndTurn, !candidate.isEmpty, answer.joined(separator: "\n") == candidate,
+                isEndTurn,
                 let errors = record["hookErrors"] as? [Any], errors.isEmpty,
                 let context = record["hookAdditionalContext"] as? [Any], context.isEmpty,
                 record["preventedContinuation"] as? Bool == false,
                 record["stopReason"] as? String == "" else { return nil }
-            return .succeeded(candidate)
+            let final = answer.joined(separator: "\n")
+            completedAnswer = final
+            return !candidate.isEmpty && final == candidate ? .succeeded(final) : nil
         }
         return nil
     }

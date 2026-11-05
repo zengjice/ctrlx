@@ -9,7 +9,28 @@ public enum AgentWorkflowTranscriptOutcome: Equatable, Sendable {
 /// Consume complete JSONL records in file order. A partial trailing record is
 /// retained by the reader, never interpreted as an empty or completed answer.
 public protocol AgentWorkflowTranscriptParser: Sendable {
+    /// Cheap byte markers locate candidate records without decoding old history.
+    var startMarkers: [String] { get }
+    var readsSessionHeader: Bool { get }
+    func isTurnStart(_ line: Data) throws -> Bool
+    /// Update Stop text without resetting the turn; return matching evidence
+    /// already consumed so a late callback or inspection retry needs no replay.
+    mutating func updateCandidate(_ candidate: String) -> AgentWorkflowTranscriptOutcome?
     mutating func consume(_ line: Data) throws -> AgentWorkflowTranscriptOutcome?
+}
+
+public extension AgentWorkflowTranscriptParser {
+    var startMarkers: [String] {
+        []
+    }
+
+    var readsSessionHeader: Bool {
+        false
+    }
+
+    func isTurnStart(_: Data) throws -> Bool {
+        false
+    }
 }
 
 /// Optional capability implemented by native Agent plugins. The Host owns I/O

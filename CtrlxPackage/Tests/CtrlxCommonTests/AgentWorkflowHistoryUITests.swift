@@ -55,7 +55,7 @@
         private enum UIError: Error { case missing(String) }
 
         @Test
-        func terminalControlTakesOverAndReturnsInOneClickEach() async throws {
+        func terminalButtonPausesAndContinuesWithoutControlOwnership() async throws {
             _ = NSApplication.shared
             NSApp.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
             let hostID = UUID()
@@ -89,13 +89,21 @@
             window.contentView = hosting
             window.orderBack(nil)
             defer { window.close() }
-            for _ in 0..<100 where element("workflow-terminal-control", in: window) == nil {
+            for _ in 0..<100 {
+                if element("workflow-terminal-control", in: window) != nil {
+                    break
+                }
                 try await Task.sleep(for: .milliseconds(20))
             }
-            for expected in [AgentWorkflowRunStatus.paused, .running] {
+            for (title, expected) in [("Pause workflow", AgentWorkflowRunStatus.paused), ("Continue workflow", .running)] {
                 let button = try #require(element("workflow-terminal-control", in: window))
+                #expect(attribute("accessibilityLabel", from: button) as? String == title)
+                #expect(attribute("accessibilityValue", from: button) as? String == run.status.title)
                 #expect(press(button))
-                for _ in 0..<100 where run.status != expected {
+                for _ in 0..<100 {
+                    if run.status == expected {
+                        break
+                    }
                     try await Task.sleep(for: .milliseconds(20))
                 }
                 #expect(run.status == expected)

@@ -38,7 +38,7 @@ struct AgentHookTrustNativeTests {
             settings.tmuxPath = "/opt/homebrew/bin/tmux"
             settings.tmuxSocket = socket
             let coordinator = AppCoordinator(settings: settings)
-            coordinator.tmuxService.workflowInputGate = AgentWorkflowInputGate(authorizeHumanInput: { _ in .init() })
+            coordinator.tmuxService.workflowInputGate = AgentWorkflowInputGate()
             let target = try await coordinator.tmuxService.captureWorkspacePane(target: "probe")
             let paneID = target.info.paneId
             coordinator.windowManager.setPaneStatesForPreview([.init(paneId: paneID, agentSession: .init(paneId: paneID, pluginID: "codex"), workspaceIdentity: target.identity)])
@@ -122,7 +122,7 @@ struct AgentHookTrustNativeTests {
             settings.tmuxPath = "/opt/homebrew/bin/tmux"
             settings.tmuxSocket = socket
             let coordinator = AppCoordinator(settings: settings)
-            let inputGate = AgentWorkflowInputGate(authorizeHumanInput: { _ in .init() })
+            let inputGate = AgentWorkflowInputGate()
             coordinator.tmuxService.workflowInputGate = inputGate
             let target = try await coordinator.tmuxService.captureWorkspacePane(target: "probe:first")
             let paneID = target.info.paneId
@@ -137,7 +137,7 @@ struct AgentHookTrustNativeTests {
                 onToggle.setValue {
                     let generation = inputGate.claim(paneID: paneID).generation
                     humanTask.setValue(Task { @MainActor in
-                        try await inputGate.human(paneID: paneID) { _ in
+                        try await inputGate.human(paneID: paneID) {
                             let screen = try await coordinator.tmuxService.captureAgentTerminal(paneID: paneID, identity: target.identity)
                             return AgentWorkflowComposerInspection.readiness(screen, composer: CodexPluginCore().hookTrustComposer) == .ready
                         }
