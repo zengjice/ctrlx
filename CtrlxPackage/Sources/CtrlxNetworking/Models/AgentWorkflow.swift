@@ -11,6 +11,18 @@ public struct AgentWorkflowInput: Codable, Equatable, Sendable {
 }
 
 public struct AgentWorkflowNode: Codable, Equatable, Identifiable, Sendable {
+    public enum Completion: String, Codable, CaseIterable, Sendable {
+        case replyEnded
+        case explicit
+
+        public var title: String {
+            switch self {
+            case .replyEnded: "When the reply ends"
+            case .explicit: "When the Agent completes the step"
+            }
+        }
+    }
+
     public enum Kind: String, Codable, Sendable { case agent, content }
     public enum InitialTask: String, Codable, CaseIterable, Sendable {
         case omit
@@ -32,6 +44,7 @@ public struct AgentWorkflowNode: Codable, Equatable, Identifiable, Sendable {
     public var agentInstanceID: UUID?
     public var input: AgentWorkflowInput
     public var allowsFinish: Bool
+    public var completion: Completion
     /// Nil preserves the input policy of configurations saved before steps.
     public var initialTask: InitialTask?
 
@@ -41,7 +54,8 @@ public struct AgentWorkflowNode: Codable, Equatable, Identifiable, Sendable {
         agentInstanceID: UUID,
         input: AgentWorkflowInput = .init(),
         allowsFinish: Bool = false,
-        initialTask: InitialTask? = nil
+        initialTask: InitialTask? = nil,
+        completion: Completion = .replyEnded
     ) {
         self.id = id
         self.kind = .agent
@@ -49,6 +63,7 @@ public struct AgentWorkflowNode: Codable, Equatable, Identifiable, Sendable {
         self.agentInstanceID = agentInstanceID
         self.input = input
         self.allowsFinish = allowsFinish
+        self.completion = completion
         self.initialTask = initialTask
     }
 
@@ -59,10 +74,11 @@ public struct AgentWorkflowNode: Codable, Equatable, Identifiable, Sendable {
         self.agentInstanceID = nil
         self.input = content
         self.allowsFinish = false
+        self.completion = .replyEnded
         self.initialTask = initialTask
     }
 
-    private enum CodingKeys: String, CodingKey { case id, kind, name, agentInstanceID, input, allowsFinish, initialTask }
+    private enum CodingKeys: String, CodingKey { case id, kind, name, agentInstanceID, input, allowsFinish, initialTask, completion }
 
     public init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -72,6 +88,7 @@ public struct AgentWorkflowNode: Codable, Equatable, Identifiable, Sendable {
         self.agentInstanceID = try values.decodeIfPresent(UUID.self, forKey: .agentInstanceID)
         self.input = try values.decode(AgentWorkflowInput.self, forKey: .input)
         self.allowsFinish = try values.decode(Bool.self, forKey: .allowsFinish)
+        self.completion = try values.decodeIfPresent(Completion.self, forKey: .completion) ?? .replyEnded
         self.initialTask = try values.decodeIfPresent(InitialTask.self, forKey: .initialTask)
     }
 }
@@ -245,7 +262,7 @@ public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendabl
         guard !nodes.isEmpty, nodeIDs.count == nodes.count, nodeIDs.contains(entryNodeID) else {
             throw AgentWorkflowError("Choose an entry and distinct workflow nodes.")
         }
-        guard nodes.allSatisfy({ $0.kind == .agent ? $0.agentInstanceID != nil : $0.agentInstanceID == nil && !$0.allowsFinish }) else {
+        guard nodes.allSatisfy({ $0.kind == .agent ? $0.agentInstanceID != nil : $0.agentInstanceID == nil && !$0.allowsFinish && $0.completion == .replyEnded }) else {
             throw AgentWorkflowError("Agent nodes need an instance. Content nodes cannot bind an Agent or request completion.")
         }
         guard

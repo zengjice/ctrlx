@@ -62,8 +62,16 @@ struct AgentWorkflowExecution: Sendable {
                 attachments.count <= AgentWorkflowWire.maximumAttachments,
                 Set(attachments).count == attachments.count,
                 (invocation.status == .succeeded) == (invocation.result != nil),
-                invocation.result.map({ $0.invocationID == invocation.id && $0.nativeTurnID == invocation.nativeTurnID }) ?? true else {
+                invocation.result.map({ $0.invocationID == invocation.id && $0.nativeTurnID == invocation.resultTurnID }) ?? true else {
                 throw AgentWorkflowError("The saved workflow contains an invalid invocation.")
+            }
+            if let turn = invocation.stepTurn {
+                guard
+                    node.completion == .explicit, invocation.nativeTurnID != nil,
+                    !turn.id.isEmpty, !turn.transcriptPath.isEmpty,
+                    invocation.result == nil || turn.completionRequested else {
+                    throw AgentWorkflowError("The saved step completion has no matching native turn.")
+                }
             }
             if node.kind == .content {
                 guard
@@ -92,6 +100,10 @@ struct AgentWorkflowExecution: Sendable {
         try self.init(validating: run)
         if !run.status.isTerminal {
             for index in self.run.invocations.indices {
+                let invocation = self.run.invocations[index]
+                if invocation.status == .running, let turn = invocation.stepTurn, !turn.completionRequested {
+                    continue // Accepted multi-reply work is waiting, not an uncertain delivery.
+                }
                 switch self.run.invocations[index].status {
                 case .writing,
                      .awaitingAcceptance,
@@ -302,6 +314,11 @@ struct AgentWorkflowExecution: Sendable {
         run.invocations[index].nativeTurnID = nativeTurnID
         run.invocations[index].nativeTranscriptPath = transcriptPath
         run.invocations[index].status = .running
+        if
+            run.definition.nodes.first(where: { $0.id == invocation.nodeID })?.completion == .explicit,
+            let transcriptPath {
+            run.invocations[index].stepTurn = .init(id: nativeTurnID, transcriptPath: transcriptPath, prompt: invocation.submissionText(pluginID: instance.pluginID))
+        }
         run.invocations[index].issue = nil
         changed()
     }
@@ -311,8 +328,11 @@ struct AgentWorkflowExecution: Sendable {
         let index = try index(of: result.invocationID)
         let invocation = run.invocations[index]
         try validate(instance, for: invocation)
-        guard let nativeTurnID = result.nativeTurnID, !nativeTurnID.isEmpty, invocation.nativeTurnID == nativeTurnID else {
+        guard let nativeTurnID = result.nativeTurnID, !nativeTurnID.isEmpty, invocation.resultTurnID == nativeTurnID else {
             throw AgentWorkflowError("The result has no matching accepted native turn.")
+        }
+        if run.definition.nodes.first(where: { $0.id == invocation.nodeID })?.completion == .explicit {
+            guard invocation.stepTurn?.completionRequested == true else { return false }
         }
         if invocation.status == .succeeded {
             return false
@@ -336,7 +356,7 @@ struct AgentWorkflowExecution: Sendable {
     mutating func fail(invocationID: UUID, instance: AgentWorkflowInstance, nativeTurnID: String, reason: String) throws {
         let index = try index(of: invocationID)
         try validate(instance, for: run.invocations[index])
-        guard run.invocations[index].nativeTurnID == nativeTurnID, !nativeTurnID.isEmpty else {
+        guard run.invocations[index].resultTurnID == nativeTurnID, !nativeTurnID.isEmpty else {
             throw AgentWorkflowError("The failure has no matching accepted native turn.")
         }
         if [.failed, .succeeded].contains(run.invocations[index].status) {
@@ -351,6 +371,52 @@ struct AgentWorkflowExecution: Sendable {
             run.status = .paused
             run.issue = reason
         }
+        changed()
+    }
+
+    /// Human turns are observed, not treated as new workflow deliveries.
+    mutating func observeStepTurn(invocationID: UUID, instance: AgentWorkflowInstance, turn: AgentWorkflowStepTurn) throws {
+        let index = try index(of: invocationID)
+        let invocation = run.invocations[index]
+        try validate(instance, for: invocation)
+        guard
+            !run.status.isTerminal, invocation.status == .running,
+            run.definition.nodes.first(where: { $0.id == invocation.nodeID })?.completion == .explicit,
+            invocation.nativeTurnID != nil, invocation.stepTurn?.completionRequested != true else { return }
+        if invocation.stepTurn?.id == turn.id {
+            guard invocation.stepTurn?.transcriptPath == turn.transcriptPath else {
+                throw AgentWorkflowError("The native turn changed its transcript path.")
+            }
+            // An answer to an asynchronous question may continue the same turn.
+            // Keep that turn's original prompt for transcript verification.
+            run.invocations[index].stepTurn?.stopped = false
+        } else {
+            run.invocations[index].stepTurn = turn
+        }
+        changed()
+    }
+
+    mutating func stopStepTurn(invocationID: UUID, turnID: String) throws {
+        let index = try index(of: invocationID)
+        guard run.invocations[index].stepTurn?.id == turnID else { return }
+        run.invocations[index].stepTurn?.stopped = true
+        changed()
+    }
+
+    mutating func requestStepCompletion(invocationID: UUID, instance: AgentWorkflowInstance, turnID: String?, now: Date) throws {
+        let index = try index(of: invocationID)
+        let invocation = run.invocations[index]
+        try validate(instance, for: invocation)
+        guard
+            !run.status.isTerminal, now < run.authorizationExpiresAt,
+            invocation.round == run.round, invocation.status == .running,
+            run.definition.nodes.first(where: { $0.id == invocation.nodeID })?.completion == .explicit,
+            let turn = invocation.stepTurn, turn.id == turnID,
+            !turn.stopped || turn.completionRequested else {
+            throw AgentWorkflowError("This step needs a current accepted Agent turn before it can be completed.")
+        }
+        guard !turn.completionRequested else { return }
+        run.invocations[index].stepTurn?.completionRequested = true
         changed()
     }
 
@@ -419,6 +485,9 @@ struct AgentWorkflowExecution: Sendable {
         }
         guard run.finishRequest == nil else {
             throw AgentWorkflowError("Another invocation already requested workflow completion.")
+        }
+        if run.definition.nodes.first(where: { $0.id == invocation.nodeID })?.completion == .explicit {
+            try requestStepCompletion(invocationID: invocationID, instance: instance, turnID: invocation.stepTurn?.id, now: now)
         }
         run.finishRequest = .init(invocationID: invocationID, reason: reason, requestedAt: now)
         if run.status != .paused {

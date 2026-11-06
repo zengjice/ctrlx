@@ -76,8 +76,8 @@ setting instead.
 ## Agent collaboration
 
 The task's `[CtrlX workflow invocation: …]` block identifies the current
-invocation. It includes a completion command only when that step is authorized
-to end the workflow. Workflow images are delivered as native image attachments
+invocation. It includes `complete-step` for steps requiring explicit completion,
+and `finish` only when that step may end the whole workflow. Workflow images are delivered as native image attachments
 with the task; use those images directly.
 The task and step instructions determine the response; the workflow block adds
 no answer format.
@@ -118,6 +118,28 @@ Save code, reports and other files in the working directory agreed by the task.
 Downstream Agents read them through those workspace paths. Text answers follow
 the configured connections; images supplied by the workflow use the attachment
 reader above. The workflow does not upload files mentioned in an answer.
+
+### Completing a multi-reply step
+
+When the task supplies `ctrlx workflow complete-step`, the step can span multiple
+native turns in the same Agent conversation. A design proposal, clarification or
+ordinary final reply does not hand off downstream. Continue discussing with the
+user in the same terminal and keep the supplied invocation ID until this step ends.
+
+When the task's own completion requirements are satisfied, run this command from
+that working turn, then provide its final result:
+
+```bash
+ctrlx workflow complete-step --invocation '<UUID from this task>'
+```
+
+The Host binds the request to the current native turn and verifies its final
+result before handing off. Do not call it merely because a reply is ending, reuse
+an invocation from a previous step, or report success when the command failed.
+This command completes one step; `finish` ends the workflow. A step authorized to
+finish the workflow can use `finish` directly without a separate `complete-step`.
+The task defines what completion means; this skill does not impose coding, test,
+report or approval requirements. Steps without this command keep reply-end handoff.
 
 ### Requesting completion
 

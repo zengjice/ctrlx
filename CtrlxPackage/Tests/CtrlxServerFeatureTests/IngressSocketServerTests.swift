@@ -8,6 +8,26 @@
     import Testing
     @testable import CtrlxServerFeature
 
+    /// Yield while the real socket server runs on Swift's executor; a blocking
+    /// read here can starve ingress when parameterized tests run concurrently.
+    func awaitIngressAcknowledgement(_ fd: Int32) async throws {
+        let flags = fcntl(fd, F_GETFL)
+        try #require(flags >= 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0)
+        defer { _ = fcntl(fd, F_SETFL, flags) }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        var ack: UInt8 = 0
+        while ContinuousClock.now < deadline {
+            let count = Darwin.read(fd, &ack, 1)
+            if count == 1 {
+                try #require(ack == 1)
+                return
+            }
+            try #require(count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw POSIXError(.ETIMEDOUT)
+    }
+
     /// Collects every `PluginEvent` that reaches the dispatcher so the round-trip
     /// test can assert the echo core's event arrived.
     private actor EventCollector {
@@ -136,14 +156,52 @@
                     "TMUX_PANE": "%1", "CTRLX_INGRESS_ACK": "1", "PEER_PID": "1",
                 ])))
                 #expect(shutdown(fd, SHUT_WR) == 0)
-                var receipt: UInt8 = 0
-                #expect(Darwin.read(fd, &receipt, 1) == 1 && receipt == 1)
+                try await awaitIngressAcknowledgement(fd)
                 let peer = try #require(captured.withLock { $0 })
                 #expect(peer.processes.first?.processID == getpid())
                 #expect(peer.processes.first?.userID == getuid())
                 #expect(await waitForEvents(collector, atLeast: 1).count == 1)
                 await server.stop()
             }
+        }
+
+        @Test(arguments: [false, true])
+        func pendingBarrierIsReleasedOnShutdownOrCancellation(cancelWait: Bool) async throws {
+            let gate = AsyncStream<Void>.makeStream()
+            defer { gate.continuation.finish() }
+            let core = EchoPluginCore()
+            let server = IngressSocketServer(socketPath: makeSocketPath(), coreLookup: { _ in
+                for await _ in gate.stream {
+                    break
+                }
+                return core
+            }, dispatcher: makeDispatcher(EventCollector()))
+            try await server.start()
+            defer { Task { await server.stop() } }
+            let fd = try #require(connectClient(to: await pathOf(server), deadline: Date().addingTimeInterval(5)))
+            defer { close(fd) }
+            var timeout = timeval(tv_sec: 5, tv_usec: 0)
+            try #require(setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout))) == 0)
+            try #require(writeAll(fd, echoFrameData(directive: .init(sessionID: "blocked", state: .working), context: ["CTRLX_INGRESS_ACK": "1"])))
+            try await awaitIngressAcknowledgement(fd)
+            let waiter = Task {
+                do {
+                    try await server.waitForPendingFrames()
+                    Issue.record("The blocked ingress barrier completed early")
+                } catch is CancellationError {
+                    return
+                } catch { Issue.record(Comment(rawValue: error.localizedDescription)) }
+            }
+            try await Task.sleep(for: .milliseconds(20))
+            if cancelWait {
+                waiter.cancel()
+            } else {
+                await server.stop()
+            }
+            await waiter.value
+            gate.continuation.finish()
+            await server.stop()
+            await #expect(throws: CancellationError.self) { try await server.waitForPendingFrames() }
         }
 
         @Test("round-trip: an echo frame produces a PluginEvent that reaches the dispatcher")

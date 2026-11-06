@@ -10,9 +10,23 @@ struct AgentWorkflowStepsTests {
     }
 
     @Test
+    func oldNodesDefaultToReplyCompletionAndNewPromptsDescribeOnlySelectedMode() throws {
+        let definition = sample()
+        var raw = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(definition.nodes[0])) as? [String: Any])
+        raw.removeValue(forKey: "completion")
+        let old = try JSONDecoder().decode(AgentWorkflowNode.self, from: JSONSerialization.data(withJSONObject: raw))
+        #expect(old.completion == .replyEnded)
+        for node in definition.nodes {
+            let prompt = AgentWorkflowPrompt.preview(definition: definition, node: node, round: 1).text
+            #expect(prompt.contains("ctrlx workflow complete-step") == (node.completion == .explicit))
+        }
+    }
+
+    @Test
     func templateUsesTwoParticipantsAndRepeatsOnlyTheReviewRepairSection() throws {
         let definition = sample()
         try definition.validate()
+        #expect(definition.nodes.map(\.completion) == [.explicit, .replyEnded, .replyEnded, .replyEnded, .explicit])
         #expect(definition.agents.map(\.name) == ["Developer", "Reviewer"])
         #expect(definition.agentInstanceIDs.count == 2)
         #expect(definition.nodes.filter { $0.agentInstanceID == definition.agents[0].id }.count == 3)

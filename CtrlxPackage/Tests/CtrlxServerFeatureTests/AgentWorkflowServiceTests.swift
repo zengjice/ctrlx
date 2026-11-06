@@ -46,7 +46,7 @@ struct AgentWorkflowServiceTests {
         let definition: AgentWorkflowDefinition
     }
 
-    private func fixture(clock: (@Sendable () -> Date)? = nil) async throws -> Fixture {
+    private func fixture(clock: (@Sendable () -> Date)? = nil, completion: AgentWorkflowNode.Completion = .replyEnded) async throws -> Fixture {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-workflow-service-\(UUID())")
         let hostID = UUID()
         let store = AgentWorkflowStore(fileURL: root.appendingPathComponent("ledger.json"), hostID: hostID)
@@ -56,7 +56,7 @@ struct AgentWorkflowServiceTests {
             schedule: { id in await MainActor.run { backend.scheduled.append(id) } }, now: clock ?? { now }
         )
         let instances = try await service.refreshInstancesCatalog()
-        let nodes = instances.map { AgentWorkflowNode(name: $0.displayName, agentInstanceID: $0.id) }
+        let nodes = instances.map { AgentWorkflowNode(name: $0.displayName, agentInstanceID: $0.id, completion: completion) }
         let definition = try await service.save(.init(
             name: "Review", hostID: hostID, nodes: nodes,
             edges: [.init(source: nodes[0].id, target: nodes[1].id)], entryNodeID: nodes[0].id,
@@ -260,6 +260,28 @@ struct AgentWorkflowServiceTests {
         let scans = f.backend.scans
         try await Task.sleep(for: .milliseconds(30))
         #expect(f.backend.scans == scans)
+    }
+
+    @Test
+    func explicitStepCanWaitForDiscussionWithoutIdleTimeout() async throws {
+        let clock = LockIsolated(now)
+        let f = try await fixture(clock: { clock.value }, completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let run = try await start(f)
+        let instance = run.instances[0]
+        _ = try await f.store.update(runID: run.id) { execution in
+            let task = try execution.prepareInvocation(nodeID: run.definition.entryNodeID, now: now)
+            try execution.beginWriting(invocationID: task.id, instance: instance, now: now)
+            try execution.accept(invocationID: task.id, instance: instance, nativeTurnID: "proposal", transcriptPath: "/fixture/native.jsonl")
+            try execution.stopStepTurn(invocationID: task.id, turnID: "proposal")
+        }
+        try await f.service.checkActiveRuns()
+        clock.setValue(now.addingTimeInterval(120))
+        try await f.service.checkActiveRuns()
+        let waiting = try await f.store.snapshot().runs[0]
+        #expect(waiting.status == .running && waiting.invocations[0].result == nil)
+        #expect(f.backend.scheduled == [run.id])
+        #expect(try AgentWorkflowExecution(validating: waiting).readyNodeIDs.isEmpty)
     }
 
     @Test

@@ -77,7 +77,7 @@ actor AgentWorkflowCompletionMonitor {
             let parser = provider.workflowTranscript(
                 conversationID: initial.instance.conversationID,
                 nativeTurnID: initial.candidate.nativeTurnID,
-                prompt: initial.invocation.submissionText(pluginID: initial.instance.pluginID),
+                prompt: initial.invocation.stepTurn?.prompt ?? initial.invocation.submissionText(pluginID: initial.instance.pluginID),
                 candidate: ""
             )
             let clock = ContinuousClock()
@@ -106,7 +106,7 @@ actor AgentWorkflowCompletionMonitor {
                     let run = archive.runs.first(where: { $0.id == context.runID }),
                     !run.status.isTerminal || !submissionOnly,
                     run.invocations.contains(where: {
-                        $0.id == id && ($0.status == .running || (!submissionOnly && $0.status == .uncertain))
+                        $0.id == id && $0.resultTurnID == context.candidate.nativeTurnID && ($0.status == .running || (!submissionOnly && $0.status == .uncertain))
                     }) else { return }
                 if revision != watch.revision {
                     revision = watch.revision

@@ -88,6 +88,22 @@ public struct AgentWorkflowDelivery: Codable, Equatable, Identifiable, Sendable 
     }
 }
 
+/// The current native turn of a multi-reply step. The initial receipt remains
+/// on the invocation; only an explicitly selected turn can supply its result.
+public struct AgentWorkflowStepTurn: Codable, Equatable, Sendable {
+    public let id: String
+    public let transcriptPath: String
+    public let prompt: String
+    public var completionRequested = false
+    public var stopped = false
+
+    public init(id: String, transcriptPath: String, prompt: String) {
+        self.id = id
+        self.transcriptPath = transcriptPath
+        self.prompt = prompt
+    }
+}
+
 public struct AgentWorkflowInvocation: Codable, Equatable, Identifiable, Sendable {
     public let id: UUID
     public let nodeID: UUID
@@ -97,6 +113,16 @@ public struct AgentWorkflowInvocation: Codable, Equatable, Identifiable, Sendabl
     public var status: AgentWorkflowInvocationStatus
     public var nativeTurnID: String?
     public var nativeTranscriptPath: String?
+    public var stepTurn: AgentWorkflowStepTurn?
+
+    public var resultTurnID: String? {
+        stepTurn?.id ?? nativeTurnID
+    }
+
+    public var resultTranscriptPath: String? {
+        stepTurn?.transcriptPath ?? nativeTranscriptPath
+    }
+
     /// Older in-flight calls received attachment lookup instructions as text.
     /// Native image numbers can continue across turns in the same CLI.
     public var nativeImageNumbers: [Int]?

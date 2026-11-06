@@ -279,7 +279,7 @@
                     // Evidence stays outside JSON, so a caller cannot forge it
                     // through _peerPID, TMUX_PANE or a claimed instance UUID.
                     @Dependency(PluginIngressPeerClient.self) var peers
-                    let peer = ["workflow.finish", "workflow.attachments"].contains(request.method) ? peers.capture(fd) : nil
+                    let peer = ["workflow.finish", "workflow.completeStep", "workflow.attachments"].contains(request.method) ? peers.capture(fd) : nil
                     if let handler {
                         response = await handler(request, peer)
                     } else {

@@ -60,7 +60,7 @@ struct AgentWorkflowRecoveryTests {
         try JSONEncoder().encode(saved).write(to: file)
         let restored = try await AgentWorkflowStore(fileURL: file, hostID: saved.hostID).snapshot()
         let run = try #require(restored.runs.first)
-        #expect(restored.schemaVersion == 4)
+        #expect(restored.schemaVersion == 5)
         #expect(restored.definitions == saved.definitions)
         #expect(run.id == saved.runs[0].id)
         #expect(run.status == (completed ? .completed : .paused))
@@ -75,7 +75,7 @@ struct AgentWorkflowRecoveryTests {
         ))
         #expect(try JSONDecoder().decode(AgentWorkflowArchive.self, from: Data(contentsOf: file)) == restored)
         let reloaded = try await AgentWorkflowStore(fileURL: file, hostID: saved.hostID).snapshot()
-        #expect(reloaded.schemaVersion == 4)
+        #expect(reloaded.schemaVersion == 5)
         #expect(reloaded.definitions == restored.definitions)
         #expect(reloaded.runs[0].status == run.status)
         #expect(reloaded.runs[0].invocations == run.invocations)
@@ -92,7 +92,7 @@ struct AgentWorkflowRecoveryTests {
             saved.schemaVersion = 4
         }
         if scenario == "future-schema" {
-            saved.schemaVersion = 5
+            saved.schemaVersion = 6
         }
         if scenario == "missing-turn" {
             saved.runs[0].invocations[1].nativeTurnID = nil

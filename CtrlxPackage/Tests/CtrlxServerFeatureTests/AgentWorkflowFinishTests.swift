@@ -23,6 +23,7 @@ struct AgentWorkflowFinishTests {
 
     private func fixture(
         allowsFinish: Bool = true,
+        completion: AgentWorkflowNode.Completion = .replyEnded,
         loop: Bool = false,
         maximumRounds: Int = 5,
         inspect: @escaping @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance = { $0 }
@@ -36,7 +37,7 @@ struct AgentWorkflowFinishTests {
             paneID: "%1", conversationID: "conversation", displayName: "Reviewer", workingDirectory: directory.path,
             capabilities: .init(maximumInputBytes: 10_000), readiness: .ready
         )]).first)
-        let node = AgentWorkflowNode(name: "Reviewer", agentInstanceID: instance.id, allowsFinish: allowsFinish)
+        let node = AgentWorkflowNode(name: "Reviewer", agentInstanceID: instance.id, allowsFinish: allowsFinish, completion: completion)
         let definition = try await store.saveDefinition(.init(
             name: "Review", hostID: hostID, nodes: [node], edges: [], entryNodeID: node.id,
             loop: loop ? .init(finalNodeID: node.id, maximumRounds: maximumRounds) : nil
@@ -48,7 +49,7 @@ struct AgentWorkflowFinishTests {
         let active = try await store.update(runID: run.id) {
             let invocation = try $0.prepareInvocation(nodeID: node.id, now: Date())
             try $0.beginWriting(invocationID: invocation.id, instance: instance, now: Date())
-            try $0.accept(invocationID: invocation.id, instance: instance, nativeTurnID: "turn-1")
+            try $0.accept(invocationID: invocation.id, instance: instance, nativeTurnID: "turn-1", transcriptPath: "/fixture/native.jsonl")
         }
         let peer = try #require(PluginIngressPeer.capture(peerPID: 11, userID: 501) { pid in
             switch pid {
@@ -59,9 +60,43 @@ struct AgentWorkflowFinishTests {
         })
         return try .init(
             directory: directory, store: store,
-            service: AgentWorkflowAgentService(store: store, inspect: inspect),
+            service: AgentWorkflowAgentService(store: store, inspect: inspect, synchronizeEvents: { _ in }),
             instance: instance, run: active, invocation: #require(active.invocations.first), peer: peer
         )
+    }
+
+    @Test(arguments: [false, true])
+    func explicitCompletionRespectsPauseAndFinishEndsTheWholeRun(finishesWorkflow: Bool) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.store.update(runID: f.run.id) { $0.pause(reason: "Operator pause") }
+        let request = finishesWorkflow ? f.request() : JSONRPCRequest(id: "step", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        try #require(await f.service.handle(request, peer: f.peer).ok)
+        let completed = try await f.store.update(runID: f.run.id) {
+            try $0.succeed(.init(invocationID: f.invocation.id, nativeTurnID: "turn-1", text: "Done", completedAt: .now), instance: f.instance, now: .now)
+        }
+        #expect(completed.status == .paused && completed.invocations[0].status == .succeeded)
+        let resumed = try await f.store.update(runID: f.run.id) { try $0.resume(instances: [f.instance], now: .now) }
+        #expect(resumed.status == .completed)
+        #expect((resumed.finishRequest != nil) == finishesWorkflow)
+    }
+
+    @Test(arguments: [false, true])
+    func explicitCompletionRejectsExpiredEndedOrChangedTurns(ended: Bool) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let request = JSONRPCRequest(id: "step", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        let expired = AgentWorkflowAgentService(store: f.store, inspect: { $0 }, synchronizeEvents: { _ in }, now: { f.run.authorizationExpiresAt })
+        #expect(await expired.handle(request, peer: f.peer).error?.code == "workflow_denied")
+        if ended {
+            _ = try await f.store.update(runID: f.run.id) { $0.end() }
+            #expect(await f.service.handle(request, peer: f.peer).error?.code == "workflow_denied")
+        } else {
+            _ = try await f.store.update(runID: f.run.id) { try $0.observeStepTurn(invocationID: f.invocation.id, instance: f.instance, turn: .init(id: "next", transcriptPath: "/fixture/native.jsonl", prompt: "Continue")) }
+            await #expect(throws: AgentWorkflowError.self) {
+                try await f.store.update(runID: f.run.id) { try $0.requestStepCompletion(invocationID: f.invocation.id, instance: f.instance, turnID: "turn-1", now: .now) }
+            }
+        }
     }
 
     @Test
@@ -153,7 +188,7 @@ struct AgentWorkflowFinishTests {
         if paused {
             _ = try await f.store.update(runID: f.run.id) { $0.pause(reason: "Human input") }
         }
-        let expired = AgentWorkflowAgentService(store: f.store, inspect: { $0 }, now: { f.run.authorizationExpiresAt })
+        let expired = AgentWorkflowAgentService(store: f.store, inspect: { $0 }, synchronizeEvents: { _ in }, now: { f.run.authorizationExpiresAt })
         #expect(await expired.handle(f.request(), peer: f.peer).error?.code == "workflow_denied")
         _ = try await f.store.update(runID: f.run.id) { $0.end() }
         #expect(await f.service.handle(f.request(), peer: f.peer).error?.code == "workflow_denied")

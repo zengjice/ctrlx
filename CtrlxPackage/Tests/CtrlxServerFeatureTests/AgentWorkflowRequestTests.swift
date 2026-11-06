@@ -168,7 +168,7 @@ struct AgentWorkflowRequestTests {
         }
         #expect(!methods.contains(.string("workflow.artifact")))
         let store = AgentWorkflowStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("removed-artifact-\(UUID()).json"), hostID: UUID())
-        let service = AgentWorkflowAgentService(store: store, inspect: { $0 })
+        let service = AgentWorkflowAgentService(store: store, inspect: { $0 }, synchronizeEvents: { _ in })
         let response = await service.handle(.init(id: "removed", method: "workflow.artifact", params: [:]), peer: nil)
         #expect(response.error?.code == "method_not_found")
     }

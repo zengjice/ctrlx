@@ -4,8 +4,8 @@ import Foundation
 struct WorkflowCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "workflow",
-        abstract: "Read task attachments or request workflow completion",
-        subcommands: [WorkflowFinishCommand.self, WorkflowAttachmentsCommand.self]
+        abstract: "Read task attachments, complete a step or finish a workflow",
+        subcommands: [WorkflowFinishCommand.self, WorkflowCompleteStepCommand.self, WorkflowAttachmentsCommand.self]
     )
 }
 
@@ -46,7 +46,7 @@ struct WorkflowAttachmentsCommand: ParsableCommand {
 struct WorkflowFinishCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "finish",
-        abstract: "Request completion of an authorized workflow invocation",
+        abstract: "Request completion of the entire authorized workflow",
         discussion: """
         Available only when the current step grants completion permission. The Host validates the calling Agent, invocation and grant; knowing a UUID does not grant authority.
         Completion conditions come from the workflow's configured task or step instructions. This command does not define business criteria.
@@ -83,5 +83,30 @@ struct WorkflowFinishCommand: ParsableCommand {
         } else if let message = response.result?["message"]?.stringValue {
             print(message)
         }
+    }
+}
+
+struct WorkflowCompleteStepCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "complete-step", abstract: "Complete the current multi-reply workflow step",
+        discussion: "Call from the current Agent turn when the configured step task is complete, then provide its final result. Proposals and discussion can end without this command. This does not end the entire workflow."
+    )
+
+    @Option(name: .long, help: "Invocation UUID supplied with this workflow task") var invocation: String
+    @OptionGroup var options: GlobalOptions
+
+    func parameters() throws -> [String: JSONValue] {
+        guard options.pane == nil, options.session == nil, options.window == nil else {
+            throw ValidationError("Workflow authority comes from the calling Agent; target overrides are not supported.")
+        }
+        guard let id = UUID(uuidString: invocation) else {
+            throw ValidationError("--invocation must be the UUID supplied with this workflow task.")
+        }
+        return ["invocationId": .string(id.uuidString)]
+    }
+
+    func run() throws {
+        let response = try executeRequest(method: "workflow.completeStep", params: parameters(), options: options, timeoutSeconds: 30, responseLimit: 64 * 1_024)
+        printResponse(response, json: options.json)
     }
 }

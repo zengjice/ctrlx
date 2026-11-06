@@ -243,7 +243,10 @@ struct AgentWorkflowNativeReviewLoopTests {
         let ingress = IngressSocketServer(socketPath: root.appendingPathComponent("ingress.sock").path, coreLookup: { cores[$0] }, dispatcher: dispatcher)
         try await ingress.start()
         let api = APISocketServer.liveValue
-        let agentService = AgentWorkflowAgentService(store: store, inspect: inspectConversation)
+        let agentService = AgentWorkflowAgentService(store: store, inspect: inspectConversation, synchronizeEvents: {
+            try await ingress.waitForPendingFrames()
+            try await router.requireVerifiedSubmission($0)
+        })
         await api.setRequestHandler { request, peer in await agentService.handle(request, peer: peer) }
         try await api.start(root.appendingPathComponent("api.sock").path)
         do {

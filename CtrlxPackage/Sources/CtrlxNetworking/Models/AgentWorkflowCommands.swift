@@ -1,7 +1,7 @@
 import Foundation
 
 public enum AgentWorkflowWire {
-    public static let version = 4
+    public static let version = 5
     public static let maximumEncodedBytes = 256 * 1_024
     public static let imageEncodedBytes = 576 * 1_024
     public static let maximumDefinitionBytes = 128 * 1_024
@@ -150,6 +150,7 @@ public struct AgentWorkflowInvocationSummary: Codable, Equatable, Identifiable, 
     public let nodeID: UUID
     public let round: Int
     public let status: AgentWorkflowInvocationStatus
+    public let awaitingStepCompletion: Bool
     public let createdAt: Date
     public let completedAt: Date?
     public let issue: String?
@@ -161,6 +162,7 @@ public struct AgentWorkflowInvocationSummary: Codable, Equatable, Identifiable, 
         self.nodeID = invocation.nodeID
         self.round = invocation.round
         self.status = invocation.status
+        self.awaitingStepCompletion = invocation.status == .running && invocation.stepTurn?.stopped == true && invocation.stepTurn?.completionRequested == false
         self.createdAt = invocation.createdAt
         self.completedAt = invocation.result?.completedAt
         self.issue = invocation.issue

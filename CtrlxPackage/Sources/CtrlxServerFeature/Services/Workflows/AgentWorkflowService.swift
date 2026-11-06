@@ -68,6 +68,11 @@ actor AgentWorkflowService {
         var observedIdle: Set<UUID> = []
         for run in runs {
             for invocation in run.invocations where invocation.status == .running {
+                if
+                    run.definition.nodes.first(where: { $0.id == invocation.nodeID })?.completion == .explicit,
+                    invocation.stepTurn?.completionRequested != true {
+                    continue
+                }
                 guard
                     let bound = run.instances.first(where: { $0.id == invocation.delivery.toAgentID }),
                     !run.hasAskedQuestion(for: bound),
