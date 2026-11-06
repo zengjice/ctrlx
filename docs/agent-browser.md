@@ -636,7 +636,10 @@ the Viewer does not load a second copy of the URL or receive browser credentials
   close the Host page. Only explicit Close closes it.
 - Agent pages start read-only. **Take Control** acquires one lease per page;
   another surface/Viewer cannot steal it. Manual pages attempt acquisition on
-  first display. **Return to Agent / Release Control**, Host **Take Back**,
+  first display. Before the first frame and control attempt, a returning surface
+  waits for this connection's pending release of the same page, including releases
+  from a destroyed tab view. Other pages and other Viewers remain independent.
+  **Return to Agent / Release Control**, Host **Take Back**,
   disconnect or a 20-second lease expiry release it (expiry checked every 5 s).
   Acquisition refuses in-flight Agent work and legacy short recording; the
   independent Host background recording can continue during Viewer control. Both CLI backends,
@@ -647,6 +650,11 @@ the Viewer does not load a second copy of the URL or receive browser credentials
   state and the take/release action. Extension management and remote Chrome windows
   use the same control indicator; Host **Take Back Control** shows an eye while
   that page is controlled by a Viewer.
+  A failed native acquisition reports that the page is busy or unavailable,
+  without assuming Agent ownership. Host Debug Mode records `viewer-control-rejected`
+  with the page ID and the actual reason (active human/extension control, Agent
+  operation/capture, missing page or unavailable runtime), without control tokens,
+  URLs or page content, in the existing Browser diagnostics log.
 - Viewers scale the existing viewport by default. **Fit to This Device** is an
   explicit shared Host viewport change. Inputs carry the last displayed page /
   geometry generation and an exact surface/control identity. Stale inputs fail,

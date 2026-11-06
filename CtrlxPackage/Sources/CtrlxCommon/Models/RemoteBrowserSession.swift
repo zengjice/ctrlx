@@ -38,19 +38,36 @@ final public class RemoteBrowserSession {
     @ObservationIgnored private var inputs: [(RemoteBrowserOperation, UInt64)] = []
     @ObservationIgnored private var inputTask: Task<Void, Never>?
     @ObservationIgnored private var inputEpoch = UUID()
-    @ObservationIgnored private var pendingRelease: Task<Void, Never>?
+    @ObservationIgnored private let controlReleases: RemoteBrowserControlReleases
     @ObservationIgnored public var frameMaxDimension: Int?
 
-    public init(
+    public convenience init(
         tab: RemoteBrowserTab,
         managesExtensions: Bool = false,
         supportsStalePointerCleanup: @escaping @MainActor () -> Bool = { false },
+        send: @escaping @MainActor (BrowseBrowser) async throws -> RemoteBrowserResponse
+    ) {
+        self.init(
+            tab: tab,
+            managesExtensions: managesExtensions,
+            supportsStalePointerCleanup: supportsStalePointerCleanup,
+            controlReleases: RemoteBrowserControlReleases(),
+            send: send
+        )
+    }
+
+    init(
+        tab: RemoteBrowserTab,
+        managesExtensions: Bool = false,
+        supportsStalePointerCleanup: @escaping @MainActor () -> Bool = { false },
+        controlReleases: RemoteBrowserControlReleases,
         send: @escaping @MainActor (BrowseBrowser) async throws -> RemoteBrowserResponse
     ) {
         self.tab = tab
         self.anchorTabID = tab.id
         self.managesExtensions = managesExtensions
         self.supportsStalePointerCleanup = supportsStalePointerCleanup
+        self.controlReleases = controlReleases
         self.send = send
     }
 
@@ -60,7 +77,8 @@ final public class RemoteBrowserSession {
             managesExtensions: managesExtensions,
             supportsStalePointerCleanup: { [weak client] in
                 client?.hostSupportsBrowserStalePointerCleanup == true
-            }
+            },
+            controlReleases: client.browserControlReleases
         ) { request in
             let timeout: TimeInterval
             switch request.operation {
@@ -162,6 +180,9 @@ final public class RemoteBrowserSession {
                 stop()
             }
         }
+        // A recreated tab view must not read the previous surface's lease
+        // and mistake its pending release for another active controller.
+        await controlReleases.wait(for: anchorTabID)
         while !Task.isCancelled, watching, epoch == current {
             if managesExtensions && controlID == nil {
                 do { try await Task.sleep(for: .milliseconds(180)) } catch { return }
@@ -267,9 +288,7 @@ final public class RemoteBrowserSession {
         isTakingControl = true
         defer { isTakingControl = false }
         let current = epoch
-        let pending = pendingRelease
-        pendingRelease = nil
-        await pending?.value
+        await controlReleases.wait(for: anchorTabID)
         guard watching, epoch == current, !Task.isCancelled, controlID == nil else { return }
         do {
             let result = try await send(request(.takeControl))
@@ -415,7 +434,7 @@ final public class RemoteBrowserSession {
             operation: scoped(.releaseControl)
         )
         // Best effort on disappearance. Host also releases on disconnect/expiry.
-        pendingRelease = Task { [send] in _ = try? await send(message) }
+        controlReleases.enqueue(for: anchorTabID) { [send] in _ = try? await send(message) }
     }
 
     public func dismissError() {

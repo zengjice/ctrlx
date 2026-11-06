@@ -126,6 +126,19 @@ struct RemoteBrowserSessionTests {
         var delayNextRelease = false
         var heldRelease: CheckedContinuation<Void, Never>?
         let tab: RemoteBrowserTab
+        var currentTab: RemoteBrowserTab {
+            .init(
+                id: tab.id,
+                sessionName: tab.sessionName,
+                title: tab.title,
+                url: tab.url,
+                isLoading: false,
+                isAgentOwned: tab.isAgentOwned,
+                isControlled: owned,
+                isExtensionWindow: tab.isExtensionWindow
+            )
+        }
+
         init(agent: Bool, extensionWindow: Bool = false) {
             self.tab = RemoteBrowserTab(
                 id: UUID(),
@@ -162,7 +175,7 @@ struct RemoteBrowserSessionTests {
                 defer { inFlight -= 1 }
                 try await Task.sleep(for: .milliseconds(2))
                 return .init(
-                    tab: tab,
+                    tab: currentTab,
                     frame: .init(jpeg: Data([1]), width: 1_200, height: 700, generation: frameGeneration),
                     controlID: owned && request.controlID == control ? control : nil
                 )
@@ -449,6 +462,90 @@ struct RemoteBrowserSessionTests {
         await retake.value
         try await wait { session.controlID != nil }
         #expect(host.operations.filter { $0 == .takeControl }.count == 2)
+    }
+
+    @Test(arguments: [false, true])
+    func switchingBackWaitsForReleaseBeforeItsFirstFrame(recreated: Bool) async throws {
+        let host = Host(agent: false)
+        let releases = ViewerRelayClient().browserControlReleases
+        let original = RemoteBrowserSession(tab: host.tab, controlReleases: releases, send: host.send)
+        let first = Task { await original.watch() }
+        try await wait { original.controlID != nil }
+        host.delayNextRelease = true
+        original.stop()
+        first.cancel()
+        await first.value
+        try await wait { host.heldRelease != nil }
+        let frames = host.frameDimensions.count
+        let session = recreated ? RemoteBrowserSession(tab: host.tab, controlReleases: releases, send: host.send) : original
+        let second = Task { await session.watch() }
+        defer {
+            host.heldRelease?.resume()
+            host.heldRelease = nil
+            session.stop()
+            second.cancel()
+        }
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(host.frameDimensions.count == frames)
+        host.heldRelease?.resume()
+        host.heldRelease = nil
+        try await wait { session.controlID != nil }
+        #expect(host.operations.filter { $0 == .takeControl }.count == 2)
+        #expect(session.error == nil)
+    }
+
+    @Test
+    func cancelledReturnDoesNotReacquireOrBlockOtherPages() async throws {
+        let host = Host(agent: false), other = Host(agent: false)
+        let releases = RemoteBrowserControlReleases()
+        let original = RemoteBrowserSession(tab: host.tab, controlReleases: releases, send: host.send)
+        let first = Task { await original.watch() }
+        try await wait { original.controlID != nil }
+        host.delayNextRelease = true
+        original.stop()
+        first.cancel()
+        await first.value
+        try await wait { host.heldRelease != nil }
+        let frames = host.frameDimensions.count
+        let returning = RemoteBrowserSession(tab: host.tab, controlReleases: releases, send: host.send)
+        let second = Task { await returning.watch() }
+        let otherSession = RemoteBrowserSession(tab: other.tab, controlReleases: releases, send: other.send)
+        let otherWatch = Task { await otherSession.watch() }
+        defer {
+            host.heldRelease?.resume()
+            host.heldRelease = nil
+            returning.stop()
+            second.cancel()
+            otherSession.stop()
+            otherWatch.cancel()
+        }
+        try await wait { otherSession.controlID != nil }
+        #expect(host.heldRelease != nil)
+        returning.stop()
+        second.cancel()
+        host.heldRelease?.resume()
+        host.heldRelease = nil
+        await second.value
+        #expect(host.frameDimensions.count == frames)
+        #expect(host.operations.filter { $0 == .takeControl }.count == 1)
+        #expect(returning.controlID == nil)
+    }
+
+    @Test
+    func anotherSurfaceControlIsNotAutomaticallyAcquired() async throws {
+        let host = Host(agent: false)
+        host.owned = true
+        let session = RemoteBrowserSession(tab: host.tab, send: host.send)
+        let watch = Task { await session.watch() }
+        defer {
+            session.stop()
+            watch.cancel()
+        }
+        try await wait { host.frameDimensions.count >= 2 }
+        #expect(session.tab.isControlled)
+        #expect(session.controlID == nil)
+        #expect(!host.operations.contains(.takeControl))
+        #expect(!host.operations.contains(.releaseControl))
     }
 
     @Test(arguments: [false, true])

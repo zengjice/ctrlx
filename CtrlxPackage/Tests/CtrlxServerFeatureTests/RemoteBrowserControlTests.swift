@@ -287,12 +287,18 @@
             await service.shutdown()
         }
 
-        @Test
-        func agentBusyAndExpiredControl() async throws {
-            let (service, runtime, tab) = try await fixture()
+        @Test(arguments: [false, true])
+        func agentBusyAndExpiredControl(agent: Bool) async throws {
+            let (service, runtime, tab) = try await fixture(agent: agent)
             let request = BrowseBrowser(sessionName: "test", tabID: tab.id, surfaceID: UUID(), operation: .takeControl)
             runtime.blocked = true
-            await #expect(throws: (any Error).self) { try await service.handleBrowser(request, viewerID: "a") }
+            do {
+                _ = try await service.handleBrowser(request, viewerID: "a")
+                Issue.record("A busy runtime must not grant page control.")
+            } catch {
+                #expect(error.localizedDescription == "This page is busy or unavailable. Try Take Control again shortly.")
+            }
+            #expect(service.remoteControls.isEmpty)
             runtime.blocked = false
             _ = try await service.handleBrowser(request, viewerID: "a")
             service.remoteControls[tab.id]?.expires = .now.advanced(by: .seconds(-1))

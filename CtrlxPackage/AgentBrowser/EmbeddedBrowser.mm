@@ -920,10 +920,17 @@ void RecordBrowserDiagnostic(NSDictionary* event) {
 - (BOOL)setHumanControl:(NSString *)token forTab:(NSString *)identifier {
   if (extensionSurface && extensionSurface->Active() &&
       ([extensionAnchor isEqual:identifier] || [extensionControlledPage isEqual:identifier])) {
-    if (token.length) return NO;
+    if (token.length) {
+      RecordBrowserDiagnostic(@{@"event": @"viewer-control-rejected", @"tab": identifier ?: @"", @"reason": @"extension-control-active"});
+      return NO;
+    }
     extensionSurface->Revoke();
   }
-  if (!self.started || self.closing || !SetAgentBrowserHumanControl(identifier, token)) return NO;
+  if (!self.started || self.closing) {
+    RecordBrowserDiagnostic(@{@"event": @"viewer-control-rejected", @"tab": identifier ?: @"", @"reason": @"runtime-not-ready"});
+    return NO;
+  }
+  if (!SetAgentBrowserHumanControl(identifier, token)) return NO;
   auto browser = AgentBrowserTarget(identifier);
   if (browser && browsers.contains(browser->GetIdentifier())) {
     auto client = static_cast<EmbeddedClient*>(browser->GetHost()->GetClient().get());
