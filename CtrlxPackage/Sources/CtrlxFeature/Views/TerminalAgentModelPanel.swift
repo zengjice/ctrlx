@@ -143,8 +143,6 @@
                         }
                     }
                 }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.roundedRectangle(radius: 12))
             }
         }
 
@@ -162,8 +160,19 @@
                 }
                 .font(.subheadline.weight(selected ? .semibold : .medium))
                 .frame(maxWidth: .infinity, minHeight: 44)
+                .padding(.horizontal, 8)
+                .foregroundStyle(.primary)
+                .background(
+                    selected ? Color.accentColor.opacity(0.2) : Color(uiColor: .tertiarySystemFill),
+                    in: RoundedRectangle(cornerRadius: 12)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(selected ? Color.accentColor : .clear, lineWidth: 2)
+                }
+                .opacity(!selected && (changesDisabled || selection == nil) ? 0.5 : 1)
             }
-            .tint(selected ? Color.accentColor : .primary)
+            .buttonStyle(.plain)
             .disabled(changesDisabled || selected || selection == nil)
             .accessibilityAddTraits(selected ? .isSelected : [])
         }

@@ -395,12 +395,16 @@ editor hides its Form background so it does not obscure the shared material.
 ## iOS model controls
 
 Agent tabs have an independent **Model** button in the bottom input toolbar's
-first row, next to `/` Commands. It uses the same capsule style as the other
+first row, after `$` as the last built-in control before the custom-button
+divider. It uses the same capsule style as the other
 input-toolbar controls. Its
 **Model** and **Effort** tabs use the same in-page overlay, backdrop, Close action
 and adaptive button grid as `/` Commands. It does not add an entry inside the
 Commands panel or borrow terminal focus. Selecting an option waits for Host
 confirmation before closing; failures stay in the panel with an actionable alert.
+Selected Model and Effort choices use a tinted fill, accent border and checkmark
+with primary text. The current selection remains legible even though it cannot
+be selected again; unavailable alternatives stay visually dimmed.
 
 The panel reads the Host's existing `AgentModelControls` catalog and respects its
 per-window shortcut visibility preferences; the current model and effort remain
@@ -707,8 +711,9 @@ collect real quality evidence; record actual microphone latency separately.
 
 ## iOS custom input buttons
 
-The first input row's horizontal scroll area ends with `$`, device-local custom
-buttons, then **Add Button** (`＋`). Send remains pinned outside the scroll area.
+The first input row places `$`, then **Model** on Agent tabs, before the divider
+and device-local custom buttons. **Add Button** (`＋`) ends the horizontal scroll
+area. Send remains pinned outside it.
 All built-in first-row buttons, including Voice and Send, share a 44-point width
 at the default text size and scale together with Dynamic Type. Custom buttons
 keep content-sized widths; recording and loading states do not widen the row controls.

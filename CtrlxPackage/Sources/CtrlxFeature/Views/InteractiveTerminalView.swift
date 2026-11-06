@@ -66,9 +66,12 @@ enum TerminalCursorTapNavigation {
     /// ```
     final class InteractiveTerminalView: TerminalView {
         private var appliedTheme: TerminalTheme?
+        private var inputCursorStyle = TerminalInputCursorStyle()
+        private var terminalCaretColor: UIColor?
 
         func applyTheme(_ theme: TerminalTheme) {
             guard appliedTheme != theme else { return }
+            restoreTerminalCursor()
             let palette = theme.palette
             installColors(palette.swiftTermANSIColors)
             nativeForegroundColor = palette.foreground.nativeColor
@@ -78,6 +81,52 @@ enum TerminalCursorTapNavigation {
             caretTextColor = palette.background.nativeColor
             appliedTheme = theme
             updateExplicitColorTransform()
+            updateInputCursor()
+        }
+
+        private func restoreTerminalCursor() {
+            let previousStyle = getTerminal().options.cursorStyle
+            inputCursorStyle.restore(in: getTerminal())
+            if let terminalCaretColor {
+                caretColor = terminalCaretColor
+                self.terminalCaretColor = nil
+            }
+            refreshCursorStyle(ifChangedFrom: previousStyle)
+        }
+
+        private func updateInputCursor() {
+            let previousStyle = getTerminal().options.cursorStyle
+            let isEditing = inputEnabled && keyboardRequested && inputProxy.isFirstResponder
+                && window != nil && !inputFocusUpdates.isInvalidated
+            inputCursorStyle.update(in: getTerminal(), isEditing: isEditing)
+            if isEditing {
+                if terminalCaretColor == nil {
+                    terminalCaretColor = caretColor
+                }
+                if caretColor != tintColor {
+                    caretColor = tintColor
+                }
+            } else if let terminalCaretColor {
+                caretColor = terminalCaretColor
+                self.terminalCaretColor = nil
+            }
+            refreshCursorStyle(ifChangedFrom: previousStyle)
+        }
+
+        private func refreshCursorStyle(ifChangedFrom previousStyle: CursorStyle) {
+            guard !isFeedingTerminalData, previousStyle != getTerminal().options.cursorStyle else { return }
+            // An empty feed schedules SwiftTerm's cursor geometry refresh even
+            // on a quiet terminal. Keep local selection across this redraw.
+            let reportsMouse = allowMouseReporting
+            allowMouseReporting = false
+            feed(byteArray: [])
+            allowMouseReporting = reportsMouse
+        }
+
+        override func tintColorDidChange() {
+            super.tintColorDidChange()
+            guard didFinishInit else { return }
+            updateInputCursor()
         }
 
         private func updateExplicitColorTransform() {
@@ -254,6 +303,7 @@ enum TerminalCursorTapNavigation {
                 if focused {
                     self?.scheduleQuestionCheck()
                 }
+                self?.updateInputCursor()
             }
             proxy.onCompositionStart = { [weak self] in
                 self?.onCompositionStart?()
@@ -366,6 +416,7 @@ enum TerminalCursorTapNavigation {
                 cancelQuestionCheck()
             }
             inputFocusUpdates.setAttached(window != nil)
+            updateInputCursor()
         }
 
         /// SwiftTerm's accessory toggles its custom input view through the
@@ -387,7 +438,9 @@ enum TerminalCursorTapNavigation {
                 isFeedingTerminalData = false
                 scheduleQuestionCheck()
             }
+            restoreTerminalCursor()
             feed(byteArray: bytes)
+            updateInputCursor()
             if mouseScrollAnimator.isActive, !isCodexFullscreenScroll {
                 cancelMouseScroll()
             }
@@ -396,6 +449,12 @@ enum TerminalCursorTapNavigation {
             finishCursorNavigationIfReady()
 
             setNeedsLayout()
+        }
+
+        func resetTerminal() {
+            restoreTerminalCursor()
+            getTerminal().resetToInitialState()
+            updateInputCursor()
         }
 
         override func layoutSubviews() {
@@ -458,6 +517,7 @@ enum TerminalCursorTapNavigation {
                 inputEnabled: isEnabled,
                 keyboardRequested: isEnabled && keyboardRequested
             ))
+            updateInputCursor()
         }
 
         func invalidateInput() {
@@ -470,10 +530,14 @@ enum TerminalCursorTapNavigation {
             inputEnabled = false
             inputProxy.inputEnabled = false
             inputFocusUpdates.invalidate()
+            updateInputCursor()
         }
 
         private func applyInputPresentation(_ state: TerminalInputPresentation.State) -> Bool {
-            defer { onInputPresentationChange?() }
+            defer {
+                updateInputCursor()
+                onInputPresentationChange?()
+            }
             guard let window, inputProxy.window === window else { return false }
             guard state.inputEnabled else {
                 return !inputProxy.isFirstResponder || inputProxy.resignFirstResponder()

@@ -89,15 +89,6 @@
                     presentation: $quickActionPresentation
                 )
 
-                if let agentPluginID {
-                    TerminalAgentModelButton(
-                        context: phraseContext,
-                        pluginID: agentPluginID,
-                        pane: agentPane,
-                        presentation: $quickActionPresentation
-                    )
-                }
-
                 RepeatingTerminalKeyButton(
                     title: "←",
                     key: .left,
@@ -146,6 +137,15 @@
                 .opacity(terminalInputEnabled ? 1 : 0.4)
                 .accessibilityLabel("Dollar Sign")
                 .accessibilityIdentifier("terminal-dollar-control")
+
+                if let agentPluginID {
+                    TerminalAgentModelButton(
+                        context: phraseContext,
+                        pluginID: agentPluginID,
+                        pane: agentPane,
+                        presentation: $quickActionPresentation
+                    )
+                }
 
                 Divider()
                     .frame(height: TerminalInputControlMetrics.buttonHeight - 8)

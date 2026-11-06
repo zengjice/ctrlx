@@ -520,6 +520,22 @@ the unchanged keyboard/selection/cursor controls on narrow screens.
 
 ## Native keyboard text and caret synchronization
 
+While the software keyboard is requested and its native input proxy owns focus,
+iOS presents a steady, two-point insertion bar in the app's tint color. The bar
+marks the left edge of the current terminal cell, including a full-width Chinese
+character, rather than covering the character with a block. Hiding the keyboard,
+losing input focus or disabling input restores the terminal's cursor style and
+color. The proxy keeps focus for accessory keys when the keyboard is hidden;
+that alone does not enable the insertion bar.
+
+This is local presentation: before parsing each output chunk, the saved Host
+cursor style and color are restored, then the bar is reapplied if editing is
+still active. Consequently new Host style/color requests survive keyboard
+dismissal, and cursor visibility, synchronized output, text and input bytes
+remain under the existing terminal protocol. No Host command or cursor-setting
+escape sequence is sent. `TerminalInputCursorStyleTests` covers style restoration,
+split cursor-style sequences, wide characters, cursor position and visibility.
+
 `TerminalInputProxyView` owns a native UITextView shadow document, not the
 remote editor's full draft. Keyboards can insert paired quotes/brackets and
 then move only their local selection back inside. Forwarding text differences

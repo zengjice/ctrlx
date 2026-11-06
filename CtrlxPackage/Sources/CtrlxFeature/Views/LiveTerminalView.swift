@@ -1896,7 +1896,7 @@
                 terminalView?.changeScrollback(scrollbackLineLimit)
                 handleResize(width: width, height: height)
                 feedCoalescer.replace(with: content) { [weak self] in
-                    self?.terminalView?.getTerminal().resetToInitialState()
+                    self?.terminalView?.resetTerminal()
                 }
                 terminalView?.scrollToBottom()
                 outerScrollView?.requestScrollToBottom()
