@@ -78,6 +78,10 @@ public struct SessionLaunchAgent: Identifiable, Sendable, Equatable {
         let name = providers.first { $0.id == defaultProviderID }?.name ?? defaultProviderID
         return "Default: \(name)"
     }
+
+    public var initialProviderID: String? {
+        AgentLaunchDefaults.providerID(pluginID: id, availableIDs: providers.map(\.id))
+    }
 }
 
 /// Syntax only: viewers must never expand `~` using their own home directory.

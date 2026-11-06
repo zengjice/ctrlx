@@ -3,6 +3,24 @@ import Testing
 @testable import CtrlxNetworking
 
 struct AgentLaunchDefaultsTests {
+    @Test("Codex and Claude Code creation prefer their official login regardless of Provider display order")
+    func officialProvider() {
+        #expect(AgentLaunchDefaults.providerID(pluginID: "codex", availableIDs: ["custom", "openai"]) == "openai")
+        #expect(AgentLaunchDefaults.providerID(pluginID: "codex", availableIDs: ["openai"]) == "openai")
+        #expect(AgentLaunchDefaults.providerID(pluginID: "claude-code", availableIDs: ["custom", "anthropic"]) == "anthropic")
+        #expect(AgentLaunchDefaults.providerID(pluginID: "claude-code", availableIDs: ["anthropic"]) == "anthropic")
+    }
+
+    @Test("Legacy Hosts and other agents retain their existing Provider behavior")
+    func unavailableProvider() {
+        #expect(AgentLaunchDefaults.providerID(pluginID: "codex", availableIDs: []) == nil)
+        #expect(AgentLaunchDefaults.providerID(pluginID: "codex", availableIDs: ["custom"]) == nil)
+        #expect(AgentLaunchDefaults.providerID(pluginID: "claude-code", availableIDs: []) == nil)
+        #expect(AgentLaunchDefaults.providerID(pluginID: "claude-code", availableIDs: ["custom", "openai"]) == nil)
+        #expect(AgentLaunchDefaults.providerID(pluginID: "pi", availableIDs: ["openai"]) == nil)
+        #expect(AgentLaunchDefaults.providerID(pluginID: "pi", availableIDs: ["anthropic"]) == nil)
+    }
+
     @Test("Codex is preferred regardless of the available agents' display order")
     func prefersCodex() {
         #expect(AgentLaunchDefaults.selectedID(availableIDs: ["claude-code", "codex", "pi"]) == "codex")

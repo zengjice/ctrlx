@@ -1,5 +1,6 @@
 #if os(iOS)
     import CtrlxCommon
+    import CtrlxNetworking
     import SwiftUI
 
     /// Lives above the terminal content, outside its sizing and responder paths.
@@ -15,6 +16,13 @@
         let sendPhrase: @MainActor (TerminalPhraseRequest) -> Bool
         var commandContext: AgentCommandContext? = nil
         var sendCommand: @MainActor (AgentCommandRequest) -> Bool = { _ in false }
+        var modelPane: WorkspacePaneIdentity? = nil
+        var modelPluginID: String? = nil
+        var modelShortcuts = AgentModelShortcuts()
+        var modelUnavailableReason: String? = nil
+        var requestModels: @MainActor (TerminalAgentModelPresentation, AgentModelControls) async throws -> AgentModelSnapshot = { _, _ in
+            throw CancellationError()
+        }
 
         func body(content: Content) -> some View {
             content
@@ -51,8 +59,10 @@
                         .frame(width: geometry.size.width, height: geometry.size.height, alignment: .bottom)
                         // Keep animation transactions inside the overlay. The
                         // terminal, safe-area bar and responder must not animate.
-                        .animation(.easeOut(duration: reduceMotion ? 0.15 : 0.2),
-                                   value: presentation.isPresented)
+                        .animation(
+                            .easeOut(duration: reduceMotion ? 0.15 : 0.2),
+                            value: presentation.isPresented
+                        )
                         .allowsHitTesting(presentation.isPresented)
                     }
                     // Sliding out must not cover the fixed keyboard rows.
@@ -60,12 +70,28 @@
                 }
                 .onChange(of: phraseContext) { validate() }
                 .onChange(of: commandContext) { validate() }
+                .onChange(of: modelPane) { validate() }
+                .onChange(of: modelPluginID) { validate() }
                 .onDisappear(perform: close)
         }
 
         @ViewBuilder
         private func panelContent(_ panel: TerminalQuickActionPresentation.Panel) -> some View {
             switch panel {
+            case let .models(captured):
+                TerminalAgentModelPanel(
+                    captured: captured,
+                    currentContext: phraseContext,
+                    hidden: modelShortcuts,
+                    unavailableReason: modelUnavailableReason,
+                    request: { spec in try await requestModels(captured, spec) },
+                    close: {
+                        if presentation.panel == .models(captured) {
+                            close()
+                        }
+                    }
+                )
+                .id(captured.id)
             case let .commands(captured):
                 TerminalAgentCommandPanel(
                     capturedContext: captured,
@@ -92,10 +118,12 @@
             }
         }
 
-        private func close() { presentation.dismiss() }
+        private func close() {
+            presentation.dismiss()
+        }
 
         private func validate() {
-            presentation.validate(phraseContext: phraseContext, commandContext: commandContext)
+            presentation.validate(phraseContext: phraseContext, commandContext: commandContext, modelPane: modelPane, modelPluginID: modelPluginID)
         }
     }
 

@@ -30,6 +30,7 @@ struct WindowTabBar: View {
     let onSelectWindow: (LocalTmuxWindow) -> Void
     let onCloseWindow: (LocalTmuxWindow) -> Void
     let onNewWindow: () -> Void
+    @Binding var isNewTabMenuPresented: Bool
     let agentConfiguration: NewAgentTabConfiguration
     let onForkWindow: (LocalTmuxWindow, AgentForkDestination) -> Void
     let onOpenBrowser: (LocalTmuxWindow) -> Void
@@ -345,6 +346,7 @@ struct WindowTabBar: View {
         NewTabMenuButton(
             helpText: "New agent or terminal in \(session.sessionName)",
             agentConfiguration: agentConfiguration,
+            isPresented: $isNewTabMenuPresented,
             onNewTerminal: onNewWindow,
             onOpenGit: onSelectGitBrowser,
             onNewResource: onNewResource

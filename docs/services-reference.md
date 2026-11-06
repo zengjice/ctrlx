@@ -865,6 +865,9 @@ installing its event bridge into an agent are distinct operations. See
 ### Start an agent window in an existing session (Mac and iOS)
 
 Mac session tab strips (local and Viewer) also expose **+ → New Agent…**.
+**⌘T** opens the same compact tab picker as **+**, with **New Agent…** selected.
+Use the arrow keys to change the selection, Return to open it, or Escape to dismiss.
+The picker also retains New Terminal, resource tabs and the local Open Git action.
 iOS exposes **New Agent…** and **New Terminal** (formerly "New Window") directly
 in the terminal action row and in the title's window-switcher menu. Both use
 `CtrlxCommon.NewAgentTabPanel`; Mac presents a popover, iOS an adaptive-width
@@ -877,6 +880,14 @@ Host/session (falling back to the selected window's active pane, then `~/`).
 **Choose Directory…** reuses the directory browser below. Merely opening the
 panel does no directory I/O. Cards capture their Host/session when opened;
 editing a path never expands it using the Viewer's home.
+
+Creation forms (New Agent, Start in Directory/worktree, workflow Agent creation
+and Fork) initially select **OpenAI (official login)** for Codex and
+**Anthropic (official login)** for Claude Code when offered by the Host. The
+CLI/default-configuration choice remains available after the named Providers.
+Explicit CLI/custom choices are passed through unchanged; other agents and older
+Hosts without the corresponding official option retain their existing defaults.
+This changes form drafts, not the Host's saved Provider settings.
 
 Starting a card creates a **window/tab in the existing tmux session**, not a
 new session or split pane. `TmuxWindowCreation` shares Host-side

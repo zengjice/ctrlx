@@ -32,6 +32,8 @@ public struct DirectorySessionForm: View {
         self.isCreating = isCreating
         self.onStart = onStart
         self.onCancel = onCancel
+        let agentID = AgentLaunchDefaults.selectedID(availableIDs: agents.map(\.id))
+        self._selectedProviderID = State(initialValue: agents.first { $0.id == agentID }?.initialProviderID)
     }
 
     private var agentID: String? {
@@ -96,14 +98,13 @@ public struct DirectorySessionForm: View {
                 }
                 .pickerStyle(.menu)
                 .accessibilityIdentifier("new-session-agent")
-                .onChange(of: agentID) { selectedProviderID = nil }
 
                 if let agent = selectedAgent, !agent.providers.isEmpty {
                     Picker("Provider", selection: $selectedProviderID) {
-                        Text(agent.defaultProviderLabel).tag(String?.none)
                         ForEach(agent.providers) { provider in
                             Text(provider.name).tag(Optional(provider.id))
                         }
+                        Text(agent.defaultProviderLabel).tag(String?.none)
                     }
                     .pickerStyle(.menu)
                     .accessibilityIdentifier("new-session-provider")
@@ -139,6 +140,7 @@ public struct DirectorySessionForm: View {
             }
         }
         .disabled(isCreating || isCreatingDirectory)
+        .onChange(of: agentID) { selectedProviderID = selectedAgent?.initialProviderID }
         .task(id: worktreeQuery) { await prepareWorktree() }
     }
 

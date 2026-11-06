@@ -243,6 +243,7 @@ public struct AgentForkPanel: View {
                 let prepared = try await configuration.prepare(source)
                 try Task.checkCancellation()
                 preparation = prepared
+                targetProviderID = AgentLaunchDefaults.providerID(pluginID: source.pluginID, availableIDs: prepared.providers?.map(\.id) ?? [])
             } catch is CancellationError { return }
             catch {
                 guard !Task.isCancelled else { return }
@@ -318,10 +319,10 @@ public struct AgentForkPanel: View {
             }
             if let providers = preparation?.providers, !providers.isEmpty {
                 Picker("Target Provider", selection: $targetProviderID) {
-                    Text("Current CLI configuration").tag(String?.none)
                     ForEach(providers) { provider in
                         Text(provider.name).tag(Optional(provider.id))
                     }
+                    Text("Current CLI configuration").tag(String?.none)
                 }
                 .pickerStyle(.menu)
                 .disabled(isLaunching)

@@ -250,6 +250,12 @@ child tabs; tapping the title still opens Tabs. Browser/Simulator content gestur
 terminal swipe navigation and the bottom bar's vertical gestures retain their
 existing behavior. Terminal navigation does not implicitly enter a child group.
 
+The iOS Files, Browser and Simulator bottom bar shows a short, centered grabber
+for swiping up to Tabs. Source-linked tabs also show a longer bar below the
+buttons for horizontal group navigation. The source shortcut uses its return-arrow
+icon and source name, without a second leading arrow. These markers stay inside
+the bar's existing gesture area and never intercept resource-content gestures.
+
 Order is local to each client. Saving catalog IDs for ordering does not recreate
 browser pages or simulators: only live Host descriptors make those tabs available.
 During partial catalog delivery, reordering replaces only the current group's
