@@ -6,6 +6,15 @@
 
 ## Quick Start
 
+Launch the installed CtrlX app once, then open a new terminal. CtrlX automatically
+installs `~/.local/bin/ctrlx` and configures PATH for the current user's zsh, bash
+or sh shell, without administrator permission. The CtrlX menu retains manual
+installation, reinstallation and removal; removal disables automatic reinstallation. Existing terminal
+processes keep their previous PATH until restarted. Zsh completion remains an
+optional manual installation.
+Use **Reinstall Command Line Tool…** to add zsh completion or retry setup after
+automatic installation, without uninstalling first.
+
 ```bash
 # Check that CtrlX is running
 ctrlx ping

@@ -466,7 +466,9 @@
                         quickActionPresentation: $quickActionPresentation,
                         customButtonStore: settings.customButtons,
                         sendCustomButton: sendCustomButton,
-                        agentCommandContext: activeAgentCommandContext
+                        agentCommandContext: activeAgentCommandContext,
+                        agentPluginID: activeAgentPluginID,
+                        agentPane: activeModelPane
                     )
                     .gesture(terminalBarSwipe)
                 } else if let tab = selectedLinkedTab {
@@ -1305,14 +1307,6 @@
                         windowActions(window, scope: scope)
                     }
                     if case .terminal = scope {
-                        if let pluginID = activeAgentPluginID {
-                            TerminalAgentModelButton(
-                                context: activePhraseContext,
-                                pluginID: pluginID,
-                                pane: activeModelPane,
-                                presentation: $quickActionPresentation
-                            )
-                        }
                         Button(action: resizeWindowToFit) {
                             Label("Fit Terminal to Screen", symbol: .arrowUpLeftAndArrowDownRight)
                         }

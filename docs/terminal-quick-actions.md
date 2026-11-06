@@ -380,7 +380,9 @@ editor hides its Form background so it does not obscure the shared material.
 
 ## iOS model controls
 
-Agent tabs have an independent **Model** button in the first shortcut row. Its
+Agent tabs have an independent **Model** button in the bottom input toolbar's
+first row, next to `/` Commands. It uses the same capsule style as the other
+input-toolbar controls. Its
 **Model** and **Effort** tabs use the same in-page overlay, backdrop, Close action
 and adaptive button grid as `/` Commands. It does not add an entry inside the
 Commands panel or borrow terminal focus. Selecting an option waits for Host

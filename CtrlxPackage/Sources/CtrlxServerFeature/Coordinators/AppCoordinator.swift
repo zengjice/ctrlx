@@ -54,6 +54,7 @@
 
         public let agentBrowser: AgentBrowserService
         public let agentSimulator = AgentSimulatorService()
+        public let cliInstaller = CLIInstaller()
         private let hostDashboard = HostDashboardService()
         public let dashboardStore = DashboardStore()
 

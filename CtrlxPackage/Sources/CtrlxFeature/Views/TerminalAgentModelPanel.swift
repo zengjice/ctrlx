@@ -15,8 +15,12 @@
                 guard let pane, context.target.paneID != nil else { return }
                 presentation.toggle(.models(.init(context: context, pluginID: pluginID, pane: pane)))
             } label: {
-                Text("Model").font(.subheadline.weight(.medium))
+                Text("Model")
+                    .lineLimit(1)
+                    .terminalInputControlStyle(fixedWidth: false)
+                    .contentShape(Capsule())
             }
+            .buttonStyle(.plain)
             .disabled(context.target.paneID == nil || pane == nil)
             .accessibilityHint("Choose the current Agent's model or reasoning effort")
             .accessibilityIdentifier("terminal-agent-model-control")

@@ -22,6 +22,8 @@
         let customButtonStore: TerminalCustomButtonStore
         let sendCustomButton: (TerminalCustomButtonRequest) -> Bool
         var agentCommandContext: AgentCommandContext? = nil
+        var agentPluginID: String? = nil
+        var agentPane: WorkspacePaneIdentity? = nil
 
         /// Editing disables terminal keystrokes, not the panel toggles.
         private var terminalInputEnabled: Bool {
@@ -86,6 +88,15 @@
                     terminalContext: phraseContext,
                     presentation: $quickActionPresentation
                 )
+
+                if let agentPluginID {
+                    TerminalAgentModelButton(
+                        context: phraseContext,
+                        pluginID: agentPluginID,
+                        pane: agentPane,
+                        presentation: $quickActionPresentation
+                    )
+                }
 
                 RepeatingTerminalKeyButton(
                     title: "←",
