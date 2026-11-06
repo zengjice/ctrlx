@@ -7,6 +7,29 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.147 — User CLI setup and explicit workflow step completion
+
+- Automatically install this user's `~/.local/bin/ctrlx` launcher and managed
+  shell PATH configuration when the standard Mac App launches from Applications.
+  Preserve unrelated commands and shell settings; manual uninstall disables
+  automatic setup until reinstall. Open a new terminal to use the updated PATH.
+  See [CLI setup](docs/ctrlx-cli-api.md).
+- Let workflow steps span multiple discussion turns and advance only after
+  `ctrlx workflow complete-step --invocation <ID>` when configured for explicit
+  completion. Keep reply-end behavior for existing definitions and preserve
+  invocation identity across pauses and restarts. See
+  [step completion](docs/multi-agent-design.md#多轮讨论与步骤完成).
+- Explain workflow start conflicts and preserve the rejected task/image draft
+  for correction instead of losing it.
+- Include iOS source changes moving Model to the input toolbar and using the
+  native paste menu in workflow input. This release packages macOS only.
+- Validation: the filtered run reported 326 Swift tests, with the opt-in native
+  CLI case skipped there and then passed separately using private Codex/Claude
+  instances and a deterministic loopback model. All 120 private publication,
+  installer and COS regressions, 23 skill checks, both boundary checks and lint
+  for 47 Swift files passed. Paired-device UI, live-model multi-turn discussion
+  and Apple Intelligence evaluations were not rerun.
+
 ## 3.0.146 — Browser control recovery and Mac settings fixes
 
 - Restore Viewer browser control after switching tabs by waiting for this
