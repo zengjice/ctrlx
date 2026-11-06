@@ -42,16 +42,12 @@ public struct RemoteHostsSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            ForEach(settings.pairedHosts) { host in
-                RelayAccessSettingsSection(
-                    server: settings.externalServerURL,
-                    pairID: host.id,
-                    role: "viewer",
-                    title: "Relay Traffic · \(host.displayName)",
-                    restriction: coordinator.viewerConnectionManager?.connection(for: host.id)?.relayClient.relayAccessRestriction
-                ) {
-                    await coordinator.viewerConnectionManager?.enableReconnectAndRetryAll()
-                }
+            ViewerRelayAccessSettingsSections(
+                server: settings.externalServerURL,
+                hosts: settings.pairedHosts,
+                restriction: { coordinator.viewerConnectionManager?.connection(for: $0)?.relayClient.relayAccessRestriction }
+            ) { id in
+                await coordinator.viewerConnectionManager?.connection(for: id)?.enableReconnectAndRetry()
             }
 
             // Server Configuration

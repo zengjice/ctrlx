@@ -55,20 +55,7 @@ public struct RelayAccessSettingsSection: View {
                         .accessibilityIdentifier("relay-access-save")
                     }
                     if let quota = access?.quota {
-                        LabeledContent("Shared account", value: quota.accountName)
-                        LabeledContent("Used this month", value: "\(bytes(quota.usedBytes)) / \(bytes(quota.totalBytes))")
-                        LabeledContent("Monthly allowance", value: bytes(quota.baseBytes))
-                        LabeledContent("Extra this month", value: bytes(quota.extraBytes))
-                        LabeledContent("Resets") {
-                            Text(quota.resetsAt, format: .dateTime.year().month().day().hour().minute())
-                        }
-                        if !quota.enabled {
-                            Text("This Relay account is disabled. Contact the administrator.")
-                                .foregroundStyle(.red)
-                        } else if quota.remainingBytes == 0 {
-                            Text("Relay traffic quota is exhausted. Add quota or wait for the monthly reset.")
-                                .foregroundStyle(.orange)
-                        }
+                        RelayQuotaRows(quota: quota)
                     }
                     if let message = error ?? access?.failure?.message ?? restriction?.message {
                         Text(message)
@@ -172,6 +159,28 @@ public struct RelayAccessSettingsSection: View {
         } catch {
             guard !Task.isCancelled, requestID == id else { return }
             self.error = error.localizedDescription
+        }
+    }
+}
+
+@MainActor
+struct RelayQuotaRows: View {
+    let quota: RelayQuotaStatus
+
+    var body: some View {
+        LabeledContent("Shared account", value: quota.accountName)
+        LabeledContent("Used this month", value: "\(bytes(quota.usedBytes)) / \(bytes(quota.totalBytes))")
+        LabeledContent("Monthly allowance", value: bytes(quota.baseBytes))
+        LabeledContent("Extra this month", value: bytes(quota.extraBytes))
+        LabeledContent("Resets") {
+            Text(quota.resetsAt, format: .dateTime.year().month().day().hour().minute())
+        }
+        if !quota.enabled {
+            Text("This Relay account is disabled. Contact the administrator.")
+                .foregroundStyle(.red)
+        } else if quota.remainingBytes == 0 {
+            Text("Relay traffic quota is exhausted. Add quota or wait for the monthly reset.")
+                .foregroundStyle(.orange)
         }
     }
 
