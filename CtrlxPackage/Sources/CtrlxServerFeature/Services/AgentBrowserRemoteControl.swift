@@ -152,7 +152,7 @@ extension AgentBrowserService {
                 guard lease.viewerID == viewerID else { throw RemoteBrowserError.message("Another viewer controls this page.") }
             } else {
                 guard runtime.setHumanControl(UUID().uuidString, forTab: tabID.uuidString) else {
-                    throw RemoteBrowserError.message("Agent page operation is still running. Try closing when it finishes.")
+                    throw RemoteBrowserError.message("This page is busy or unavailable. Try closing it again shortly.")
                 }
             }
             runtime.closeTab(tabID.uuidString)
@@ -172,7 +172,7 @@ extension AgentBrowserService {
             }
             let id = UUID()
             guard runtime.setHumanControl(id.uuidString, forTab: tabID.uuidString) else {
-                throw RemoteBrowserError.message("The Agent is still performing a page operation. Try Take Control when it finishes.")
+                throw RemoteBrowserError.message("This page is busy or unavailable. Try Take Control again shortly.")
             }
             remoteControls[tabID] = BrowserControlLease(
                 id: id,

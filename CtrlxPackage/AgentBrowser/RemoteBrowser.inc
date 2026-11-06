@@ -113,8 +113,14 @@
   bool SetHumanControl(NSString* identifier, NSString* token) {
     CEF_REQUIRE_UI_THREAD();
     std::string id = identifier.UTF8String ?: "";
+    auto reject = [&](NSString* reason) {
+      RecordBrowserDiagnostic(@{@"event": @"viewer-control-rejected", @"tab": identifier ?: @"", @"reason": reason,
+        @"agentOwned": @(ownership_.owners.contains(id) && !ownership_.owners.at(id).empty()),
+        @"agentGrant": @(ownership_.grants.contains(id))});
+      return false;
+    };
     auto found = tabs_.find(id);
-    if (found == tabs_.end()) return false;
+    if (found == tabs_.end()) return reject(@"unknown-page");
     if (!token.length) {
       AgentBrowserCancelHumanInput(found->second.browser);
       humanControl_.erase(id);
@@ -123,8 +129,10 @@
     }
     // Never interrupt an in-flight Agent action or recording. The caller can
     // offer Take Control again after it finishes, without replaying anything.
-    if (humanControl_.contains(id) || Busy(found->second.browser)) return false;
-    for (auto& [key, deadline] : engineCaptures_) if (key.first == found->second.browser->GetIdentifier()) return false;
+    if (humanControl_.contains(id)) return reject(@"human-control-active");
+    if (Busy(found->second.browser)) return reject(@"agent-operation-in-flight");
+    for (auto& [key, deadline] : engineCaptures_)
+      if (key.first == found->second.browser->GetIdentifier()) return reject(@"agent-capture-active");
     AgentBrowserCancelHumanInput(found->second.browser);
     HumanTakeover(found->second.browser);
     humanControl_[id] = token.UTF8String;

@@ -115,6 +115,7 @@ final public class ViewerRelayClient {
     public private(set) var hostSupportsBrowserStalePointerCleanup = false
     public private(set) var hostSupportsAgentImageInput = false
     public private(set) var browserTabs: [RemoteBrowserTab] = []
+    @ObservationIgnored let browserControlReleases = RemoteBrowserControlReleases()
     public private(set) var hostSupportsSimulatorViewing = false
     public private(set) var hostSupportsPaneSimulator = false
     public private(set) var hostSupportsPaneSimulatorCreation = false
