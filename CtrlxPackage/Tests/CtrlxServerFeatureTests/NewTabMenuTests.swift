@@ -81,6 +81,109 @@
             #expect(chosen == (mode == 0 ? .agent : mode == 1 ? .terminal : .resource(.browser)))
         }
 
+        @Test("New Agent shows two vertical cards and scrolls additional Agent types", arguments: [false, true])
+        func agentPanelInitialLayout(hasAdditionalAgent: Bool) async throws {
+            _ = NSApplication.shared
+            NSApp.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
+            let agents: [SessionLaunchAgent] = [
+                .init(id: "codex", name: "Codex", providers: [.init(id: "openai", name: "OpenAI (official login)")]),
+                .init(id: "claude-code", name: "Claude Code", providers: [.init(id: "anthropic", name: "Anthropic (official login)")]),
+            ]
+            let config = NewAgentTabConfiguration(
+                id: .init(hostID: nil, sessionName: "work"), initialDirectory: "/Host/Projects/work",
+                agents: agents + (hasAdditionalAgent ? [.init(id: "future", name: "Future Agent")] : []),
+                directorySource: .init(id: "host", list: { _ in
+                    Issue.record("Opening the panel must not browse directories")
+                    throw CancellationError()
+                }),
+                unavailableReason: nil, start: { _ in Issue.record("Opening the panel must not launch an Agent") }
+            )
+            let hosting = NSHostingView(rootView: NewAgentTabPanel(configuration: config))
+            let window = NSWindow(contentRect: .init(origin: .init(x: -10_000, y: -10_000), size: hosting.fittingSize), styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = hosting
+            window.orderBack(nil)
+            defer { window.close() }
+            try await Task.sleep(for: .milliseconds(200))
+            hosting.layoutSubtreeIfNeeded()
+            let scroll = try #require(scrollView(in: hosting))
+            let visible = window.convertToScreen(scroll.contentView.convert(scroll.contentView.bounds, to: nil))
+            var titleFrames: [CGRect] = []
+            for agent in agents {
+                for identifier in [agent.name, "\(agent.name) directory on Host", "Start \(agent.name)"] {
+                    let control = try await element(identifier, in: window)
+                    let frame = try frame(of: control)
+                    #expect(frame.width > 0 && frame.height > 0 && visible.contains(frame), "\(identifier) must be fully visible: \(frame) inside \(visible)")
+                    if identifier == agent.name {
+                        titleFrames.append(frame)
+                    }
+                }
+            }
+            #expect(titleFrames[0].minY > titleFrames[1].maxY)
+            #expect(abs(titleFrames[0].minX - titleFrames[1].minX) < 1)
+            let document = try #require(scroll.documentView)
+            if hasAdditionalAgent {
+                #expect(document.bounds.height > scroll.contentView.bounds.height)
+                let y = document.isFlipped ? document.bounds.maxY - scroll.contentView.bounds.height : document.bounds.minY
+                scroll.contentView.scroll(to: .init(x: 0, y: y))
+                scroll.reflectScrolledClipView(scroll.contentView)
+                try await Task.sleep(for: .milliseconds(100))
+                let start = try await element("Start Future Agent", in: window)
+                #expect(try visible.contains(frame(of: start)))
+            } else {
+                #expect(document.bounds.height <= scroll.contentView.bounds.height)
+            }
+        }
+
+        private func scrollView(in view: NSView) -> NSScrollView? {
+            if let scroll = view as? NSScrollView {
+                return scroll
+            }
+            return view.subviews.lazy.compactMap { scrollView(in: $0) }.first
+        }
+
+        private func frame(of node: NSObject) throws -> CGRect {
+            let selector = NSSelectorFromString("accessibilityFrame")
+            let implementation = try #require(node.method(for: selector))
+            return unsafeBitCast(implementation, to: (@convention(c) (AnyObject, Selector) -> CGRect).self)(node, selector)
+        }
+
+        private func element(_ identifier: String, in window: NSWindow) async throws -> NSObject {
+            for _ in 0..<100 {
+                if let node = find(identifier, in: window.contentView) {
+                    return node
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            throw MissingElement(identifier: identifier)
+        }
+
+        private struct MissingElement: Error { let identifier: String }
+
+        private func find(_ identifier: String, in root: Any?) -> NSObject? {
+            guard let node = root as? NSObject else { return nil }
+            for name in ["accessibilityLabel", "accessibilityValue"] {
+                let selector = NSSelectorFromString(name)
+                if node.responds(to: selector), node.perform(selector)?.takeUnretainedValue() as? String == identifier {
+                    return node
+                }
+            }
+            let childrenSelector = NSSelectorFromString("accessibilityChildren")
+            if node.responds(to: childrenSelector) {
+                for child in node.perform(childrenSelector)?.takeUnretainedValue() as? [Any] ?? [] {
+                    if let match = find(identifier, in: child) {
+                        return match
+                    }
+                }
+            }
+            for child in (node as? NSView)?.subviews ?? [] {
+                if let match = find(identifier, in: child) {
+                    return match
+                }
+            }
+            return nil
+        }
+
         private func key(code: UInt16, characters: String, window: NSWindow) throws -> NSEvent {
             try #require(NSEvent.keyEvent(
                 with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,

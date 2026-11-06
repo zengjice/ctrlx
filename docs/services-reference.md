@@ -870,9 +870,11 @@ Use the arrow keys to change the selection, Return to open it, or Escape to dism
 The picker also retains New Terminal, resource tabs and the local Open Git action.
 iOS exposes **New Agent…** and **New Terminal** (formerly "New Window") directly
 in the terminal action row and in the title's window-switcher menu. Both use
-`CtrlxCommon.NewAgentTabPanel`; Mac presents a popover, iOS an adaptive-width
-sheet without a nested navigation container. The iOS path inherits its selected
-pane's cwd, not a stale Host focus.
+`CtrlxCommon.NewAgentTabPanel`. Mac presents a single-column popover with a
+fixed list height that shows two complete Agent cards. Additional Agent types
+and expanded directory browsers scroll within that list. iOS presents an
+adaptive-width sheet without a nested navigation container. The iOS path
+inherits its selected pane's cwd, not a stale Host focus.
 Each enabled Host agent has its own card, editable directory and Start button;
 there is no agent picker or separate hard-coded list. Codex is placed first
 when available. The directory starts from the last focused terminal in this
