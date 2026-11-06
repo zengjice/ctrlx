@@ -120,7 +120,7 @@ public struct NewAgentTabPanel: View {
                 }
             }
             #if os(macOS)
-            .frame(maxHeight: 500)
+            .frame(height: 420)
             #endif
             if let errorMessage {
                 Text(errorMessage).font(.callout).foregroundStyle(.red)
@@ -129,7 +129,7 @@ public struct NewAgentTabPanel: View {
         }
         .padding()
         #if os(macOS)
-            .frame(width: 420)
+            .frame(width: 480)
         #endif
             .interactiveDismissDisabled(launchingAgentID != nil)
             .accessibilityIdentifier("new-agent-tab-panel")
