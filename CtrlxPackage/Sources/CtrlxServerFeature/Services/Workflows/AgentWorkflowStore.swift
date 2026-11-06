@@ -206,10 +206,15 @@ actor AgentWorkflowStore {
         try AgentWorkflowWire.validate(definition)
         try validateAttachments(definition.attachmentIDs, in: updated)
         let instanceIDs = definition.agentInstanceIDs
-        let occupied = updated.runs.contains { run in
-            !run.status.isTerminal && run.instances.contains { instanceIDs.contains($0.id) }
+        let conflicts = updated.runs.compactMap { run -> AgentWorkflowStartRejection.Conflict? in
+            guard !run.status.isTerminal else { return nil }
+            let agents = run.instances.filter { instanceIDs.contains($0.id) }
+            guard !agents.isEmpty else { return nil }
+            return .init(run: .init(run), agentNames: agents.map(\.displayName))
         }
-        guard !occupied else { throw AgentWorkflowError("An Agent is already reserved by another active workflow.") }
+        guard conflicts.isEmpty else {
+            throw AgentWorkflowStartRejection("These Agents already belong to an unfinished workflow.", conflicts: conflicts)
+        }
         let instances = definition.agents.compactMap { participant in
             instanceIDs.contains(participant.id) ? updated.instances.first { $0.id == participant.id } : nil
         }

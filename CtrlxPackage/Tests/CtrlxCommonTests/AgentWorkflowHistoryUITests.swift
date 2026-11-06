@@ -8,19 +8,19 @@
     @MainActor
     @Suite(.serialized)
     struct AgentWorkflowHistoryUITests {
-        private func element(_ identifier: String, in root: Any) -> NSObject? {
+        private func element(_ identifier: String, in root: Any, attributeName: String = "accessibilityIdentifier") -> NSObject? {
             guard let node = root as? NSObject else { return nil }
-            if attribute("accessibilityIdentifier", from: node) as? String == identifier {
+            if attribute(attributeName, from: node) as? String == identifier {
                 return node
             }
             for child in attribute("accessibilityChildren", from: node) as? [Any] ?? [] {
-                if let match = element(identifier, in: child) {
+                if let match = element(identifier, in: child, attributeName: attributeName) {
                     return match
                 }
             }
             if let view = node as? NSView {
                 for child in view.subviews {
-                    if let match = element(identifier, in: child) {
+                    if let match = element(identifier, in: child, attributeName: attributeName) {
                         return match
                     }
                 }
@@ -148,7 +148,7 @@
                 }
                 return response
             }
-            let hosting = NSHostingView(rootView: AgentWorkflowStartView(endpoint: endpoint, hostID: hostID, definitionID: saved.id, navigation: navigation))
+            let hosting = NSHostingView(rootView: AgentWorkflowStartView(endpoint: endpoint, hostID: hostID, definitionID: saved.id, navigation: navigation, openAgent: { _ in }))
             let window = NSWindow(contentRect: CGRect(x: -10_000, y: -10_000, width: 640, height: 700), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             window.contentView = hosting
@@ -200,6 +200,135 @@
             #expect(navigation.path.count == 2)
         }
 
+        @Test(arguments: ["rejected-edit", "rejected-close", "timeout", "missing", "old-host"])
+        func quickStartKeepsDraftsAndDistinguishesRefusalFromUnconfirmedStart(outcome: String) async throws {
+            _ = NSApplication.shared
+            NSApp.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
+            let hostID = UUID(), navigation = AgentWorkflowNavigation()
+            navigation.path = [.host("start-refusal")]
+            let node = AgentWorkflowNode(name: "Developer", agentInstanceID: UUID())
+            let saved = AgentWorkflowDefinition(name: "New task", hostID: hostID, nodes: [node], edges: [], entryNodeID: node.id, initialInput: .init(text: "Draft with image"))
+            var existing = saved
+            existing.name = "Existing review"
+            var occupied = AgentWorkflowRun(definition: existing, instances: [], createdAt: Date(), authorizationExpiresAt: Date().addingTimeInterval(3_600))
+            occupied.status = .paused
+            let rejection = AgentWorkflowStartRejection("These Agents already belong to an unfinished workflow.", conflicts: [.init(run: .init(occupied), agentNames: ["global · dev"])])
+            let rejected = outcome.hasPrefix("rejected")
+            var opened = false
+            var attempts: [ManageAgentWorkflows.Operation] = [], uploaded: [UUID] = [], discarded: [UUID] = []
+            let endpoint = AgentWorkflowEndpoint(id: "start-refusal", name: "Host", connected: { true }, supported: { true }) { request in
+                var response = AgentWorkflowResponse(hostID: hostID)
+                switch request.operation {
+                case .definition: response.definition = saved
+                case let .run(id):
+                    #expect(id == occupied.id)
+                    opened = true
+                    response.run = .init(occupied, currentInstances: [])
+                case .invocations: response.invocations = .init(items: [], nextOffset: nil)
+                case let .uploadAttachment(.image(id, name, mediaType, bytes, hash)):
+                    uploaded.append(id)
+                    response.uploadedOffset = bytes.count
+                    response.attachments = [.init(id: id, name: name, mediaType: mediaType, byteCount: Int64(bytes.count), sha256: hash)]
+                case let .discardAttachments(ids): discarded += ids
+                case .start:
+                    attempts.append(request.operation)
+                    if rejected {
+                        response.startRejection = rejection
+                    } else if outcome == "timeout" {
+                        throw URLError(.timedOut)
+                    } else if outcome == "old-host" {
+                        throw AgentWorkflowError("An Agent is already reserved by another active workflow.")
+                    }
+                default: Issue.record("Unexpected start-refusal operation")
+                }
+                return response
+            }
+            let hosting = NSHostingView(rootView: AgentWorkflowStartView(endpoint: endpoint, hostID: hostID, definitionID: saved.id, navigation: navigation, openAgent: { _ in }).environment(\.scenePhase, .active))
+            let window = NSWindow(contentRect: CGRect(x: -10_000, y: -10_000, width: 640, height: 820), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = hosting
+            window.orderBack(nil)
+            defer { window.close() }
+            func editor(_ view: NSView) -> AgentWorkflowTextInput.TextView? {
+                (view as? AgentWorkflowTextInput.TextView) ?? view.subviews.lazy.compactMap { editor($0) }.first
+            }
+            func wait(_ condition: () -> Bool) async throws {
+                for _ in 0..<100 {
+                    if condition() {
+                        return
+                    }
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+                throw UIError.missing("Start-refusal state")
+            }
+            try await wait { editor(hosting) != nil }
+            var input = try #require(editor(hosting))
+            let png = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR4nGNQaPjQAMIMMAYARzIIQdQEEEMAAAAASUVORK5CYII="))
+            input.receive?([.image(.init(data: png, format: .png))])
+            try await wait { uploaded.count == 1 }
+            try await Task.sleep(for: .milliseconds(100))
+            _ = try press(#require(element("workflow-start-confirm", in: window)))
+            try await wait { attempts.count == 1 }
+            try await Task.sleep(for: .milliseconds(100))
+            #expect(input.string == "Draft with image")
+            #expect(input.isEditable == rejected)
+            #expect(discarded.isEmpty)
+            let confirm = try #require(element("workflow-start-confirm", in: window))
+            #expect(attribute("accessibilityLabel", from: confirm) as? String == (rejected ? "Start" : "Retry"))
+            #expect((element("workflow-start-unconfirmed", in: window) == nil) == rejected)
+            #expect((element("workflow-start-rejection", in: window) != nil) == rejected)
+            #expect((element("workflow-start-conflict-\(occupied.id)", in: window) != nil) == rejected)
+            #expect(navigation.path == [.host("start-refusal")])
+            if rejected, let directory = ProcessInfo.processInfo.environment["CTRLX_WORKFLOW_UI_EVIDENCE"] {
+                hosting.layoutSubtreeIfNeeded()
+                let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+                hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+                try #require(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: directory).appendingPathComponent("start-refusal.png"))
+            }
+            if outcome == "rejected-edit" {
+                _ = try press(#require(element("workflow-start-conflict-\(occupied.id)", in: window)))
+                try await wait { opened }
+                try await Task.sleep(for: .milliseconds(100))
+                let back = try #require(element("Back", in: window, attributeName: "accessibilityLabel"))
+                _ = press(back)
+                try await wait { editor(hosting) != nil }
+                input = try #require(editor(hosting))
+                #expect(input.string == "Draft with image" && input.isEditable)
+                #expect(discarded.isEmpty && navigation.path == [.host("start-refusal")])
+            }
+            if outcome != "rejected-close" {
+                if rejected {
+                    input.string = "Edited task with the same image"
+                    input.delegate?.textDidChange?(Notification(name: NSText.didChangeNotification, object: input))
+                    try await Task.sleep(for: .milliseconds(50))
+                }
+                _ = try press(#require(element("workflow-start-confirm", in: window)))
+                try await wait { attempts.count == 2 }
+                if rejected {
+                    guard
+                        case let .start(_, _, firstID, _, firstInput) = attempts[0],
+                        case let .start(_, _, nextID, _, nextInput) = attempts[1] else {
+                        Issue.record("Expected start operations")
+                        return
+                    }
+                    #expect(firstID != nextID)
+                    #expect(firstInput?.text == "Draft with image")
+                    #expect(nextInput?.text == "Edited task with the same image")
+                    #expect(firstInput?.attachmentIDs == uploaded && nextInput?.attachmentIDs == uploaded)
+                } else {
+                    #expect(attempts[0] == attempts[1])
+                }
+            }
+            try await Task.sleep(for: .milliseconds(100))
+            _ = try press(#require(element("workflow-start-close", in: window)))
+            if rejected {
+                try await wait { discarded == uploaded }
+            } else {
+                try await Task.sleep(for: .milliseconds(100))
+                #expect(discarded.isEmpty)
+            }
+        }
+
         @Test(arguments: [false, true])
         func quickStartBatchesUnusedImagesAfterReplacingImports(startsRun: Bool) async throws {
             _ = NSApplication.shared
@@ -234,7 +363,7 @@
                 }
                 return response
             }
-            let hosting = NSHostingView(rootView: AgentWorkflowStartView(endpoint: endpoint, hostID: hostID, definitionID: saved.id, navigation: navigation))
+            let hosting = NSHostingView(rootView: AgentWorkflowStartView(endpoint: endpoint, hostID: hostID, definitionID: saved.id, navigation: navigation, openAgent: { _ in }))
             let window = NSWindow(contentRect: CGRect(x: -10_000, y: -10_000, width: 640, height: 700), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             window.contentView = hosting

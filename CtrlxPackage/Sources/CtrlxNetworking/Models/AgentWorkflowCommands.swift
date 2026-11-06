@@ -216,6 +216,33 @@ public struct AgentWorkflowTextPage: Codable, Equatable, Sendable {
     }
 }
 
+/// A Host decision made before creating a run, not a transport/response failure.
+public struct AgentWorkflowStartRejection: Codable, Equatable, Sendable, LocalizedError {
+    public struct Conflict: Codable, Equatable, Identifiable, Sendable {
+        public let run: AgentWorkflowRunSummary
+        public let agentNames: [String]
+        public var id: UUID {
+            run.id
+        }
+
+        public init(run: AgentWorkflowRunSummary, agentNames: [String]) {
+            self.run = run
+            self.agentNames = agentNames
+        }
+    }
+
+    public let message: String
+    public let conflicts: [Conflict]
+    public var errorDescription: String? {
+        message
+    }
+
+    public init(_ message: String, conflicts: [Conflict] = []) {
+        self.message = message
+        self.conflicts = conflicts
+    }
+}
+
 public struct AgentWorkflowResponse: Codable, Equatable, Sendable {
     public var version = AgentWorkflowWire.version
     public let hostID: UUID
@@ -224,6 +251,7 @@ public struct AgentWorkflowResponse: Codable, Equatable, Sendable {
     public var definition: AgentWorkflowDefinition?
     public var runs: AgentWorkflowPage<AgentWorkflowRunSummary>?
     public var run: AgentWorkflowRunState?
+    public var startRejection: AgentWorkflowStartRejection?
     public var invocations: AgentWorkflowPage<AgentWorkflowInvocationSummary>?
     public var text: AgentWorkflowTextPage?
     public var attachments: [AgentWorkflowAttachment]?

@@ -56,7 +56,7 @@ public struct AgentWorkflowsView: View {
                     let create = createAgent.map { action in { hostID in try await action(endpoint.id, hostID) } }
                     switch destination {
                     case .host:
-                        AgentWorkflowHostView(endpoint: endpoint, createAgent: create, navigation: navigation)
+                        AgentWorkflowHostView(endpoint: endpoint, createAgent: create, navigation: navigation, openAgent: open)
                     case let .configuration(_, hostID, id):
                         AgentWorkflowConfigurationView(endpoint: endpoint, hostID: hostID, definitionID: id, openAgent: open, createAgent: create, navigation: navigation)
                     case let .run(_, hostID, id):
@@ -82,6 +82,7 @@ private struct AgentWorkflowHostView: View {
     let createAgent: ((UUID) async throws -> AgentWorkflowAgentCreation)?
     @Environment(\.scenePhase) private var scenePhase
     let navigation: AgentWorkflowNavigation
+    let openAgent: (AgentWorkflowInstance) -> Void
     @State private var starting: AgentWorkflowDefinitionSummary?
     @State private var overview: AgentWorkflowOverview?
     @State private var editing: AgentWorkflowDefinition?
@@ -168,7 +169,7 @@ private struct AgentWorkflowHostView: View {
         }
         .sheet(item: $starting, onDismiss: { Task { await refresh() } }) { definition in
             if let hostID = overview?.hostID {
-                AgentWorkflowStartView(endpoint: endpoint, hostID: hostID, definitionID: definition.id, navigation: navigation)
+                AgentWorkflowStartView(endpoint: endpoint, hostID: hostID, definitionID: definition.id, navigation: navigation, openAgent: openAgent)
             }
         }
         .confirmationDialog("Delete this run and its handoff history?", isPresented: $confirmingDelete, presenting: pendingDeletion) { run in
@@ -319,7 +320,7 @@ struct AgentWorkflowConfigurationView: View {
             AgentWorkflowEditor(endpoint: endpoint, definition: $0, isNew: false, createAgent: createAgent)
         }
         .sheet(isPresented: $showingStart) {
-            AgentWorkflowStartView(endpoint: endpoint, hostID: hostID, definitionID: definitionID, navigation: navigation)
+            AgentWorkflowStartView(endpoint: endpoint, hostID: hostID, definitionID: definitionID, navigation: navigation, openAgent: openAgent)
         }
         .confirmationDialog("Delete this configuration?", isPresented: $confirmingDelete) {
             if let definition {

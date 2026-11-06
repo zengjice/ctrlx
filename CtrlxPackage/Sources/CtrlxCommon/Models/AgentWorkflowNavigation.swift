@@ -39,7 +39,12 @@ final public class AgentWorkflowNavigation {
         let originalPath = path
         let configuration = Destination.configuration(route: endpoint.id, hostID: hostID, id: configurationID)
         let response = try await endpoint.request(attempt, hostID: hostID)
-        guard let run = response.run else { throw AgentWorkflowError("The Host did not confirm the workflow. Retry to check this request.") }
+        guard let run = response.run else {
+            if let rejection = response.startRejection {
+                throw rejection
+            }
+            throw AgentWorkflowError("The Host did not confirm the workflow. Retry to check this request.")
+        }
         // The Host start can succeed after the operator leaves its configuration.
         if !Task.isCancelled, path == originalPath, originalPath.last == configuration || originalPath.last == .host(endpoint.id) {
             path.append(.run(route: endpoint.id, hostID: hostID, id: run.summary.id))

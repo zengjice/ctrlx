@@ -65,6 +65,54 @@ struct AgentWorkflowRequestTests {
     }
 
     @Test
+    func startRejectionIdentifiesAllOccupyingRunsAndRetryStillFindsAcceptedRequest() async throws {
+        let f = try await fixture(count: 3)
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let first = try await start(f)
+        let secondNode = AgentWorkflowNode(name: "Reviewer", agentInstanceID: f.instances[1].id)
+        let secondDefinition = try await f.service.save(.init(
+            name: "Other workflow", hostID: f.hostID, nodes: [secondNode], edges: [], entryNodeID: secondNode.id
+        ), expectedRevision: nil)
+        let second = try await f.service.start(definitionID: secondDefinition.id, expectedRevision: secondDefinition.revision, requestID: UUID(), authorizationExpiresAt: now.addingTimeInterval(3_600))
+        _ = try await f.service.pause(runID: second.id, expectedRevision: second.revision)
+        let nodes = f.instances.map { AgentWorkflowNode(name: $0.displayName, agentInstanceID: $0.id) }
+        let combined = try await f.service.save(.init(
+            name: "New workflow", hostID: f.hostID, nodes: nodes,
+            edges: [.init(source: nodes[0].id, target: nodes[1].id), .init(source: nodes[1].id, target: nodes[2].id)], entryNodeID: nodes[0].id
+        ), expectedRevision: nil)
+        let attempt = ManageAgentWorkflows(.start(definitionID: combined.id, expectedRevision: combined.revision, requestID: UUID(), authorizationExpiresAt: now.addingTimeInterval(3_600)), expectedHostID: f.hostID)
+        let response = try await f.service.handle(attempt)
+        #expect(response.run == nil)
+        let rejection = try #require(response.startRejection)
+        #expect(rejection.conflicts.map(\.id) == [first.summary.id, second.id])
+        #expect(rejection.conflicts.map { $0.run.name } == ["Workflow", "Other workflow"])
+        #expect(rejection.conflicts.map { $0.run.status } == [.running, .paused])
+        #expect(rejection.conflicts.map(\.agentNames) == [[f.instances[0].displayName], [f.instances[1].displayName]])
+        #expect(try await f.store.snapshot().runs.count == 2)
+        #expect(try await start(f, id: first.summary.id).summary.id == first.summary.id)
+        for run in try await f.store.snapshot().runs {
+            _ = try await f.service.end(runID: run.id, expectedRevision: run.revision)
+        }
+        let accepted = try await f.service.handle(attempt)
+        #expect(accepted.run?.summary.name == combined.name)
+        #expect(accepted.startRejection == nil)
+        #expect(try await f.store.snapshot().runs.count == 3)
+    }
+
+    @Test
+    func acceptedRequestWithChangedInputIsNotReportedAsNeverStarted() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let accepted = try await start(f)
+        let request = ManageAgentWorkflows(.start(
+            definitionID: f.definition.id, expectedRevision: f.definition.revision, requestID: accepted.summary.id,
+            authorizationExpiresAt: now.addingTimeInterval(3_600), initialInput: .init(text: "Different task")
+        ), expectedHostID: f.hostID)
+        await #expect(throws: AgentWorkflowError.self) { try await f.service.handle(request) }
+        #expect(try await f.store.snapshot().runs.count == 1)
+    }
+
+    @Test
     func terminalControlIsScopedToStablePaneAndUsesTheCurrentRun() async throws {
         let f = try await fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
