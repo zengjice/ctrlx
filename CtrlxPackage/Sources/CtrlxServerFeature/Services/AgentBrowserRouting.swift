@@ -11,7 +11,8 @@ enum AgentBrowserRoutingError: Error, LocalizedError {
     case ambiguousPane
     var errorDescription: String? {
         switch self {
-        case .processNotInPane: "This agent is not inside a local CtrlX tmux pane. No browser tab was opened."
+        case .processNotInPane:
+            "This agent is not inside a local CtrlX tmux pane. For Codex, start or resume with --no-daemon in the intended pane; an already-running daemon cannot be reattached by updating CtrlX. No browser tab was opened."
         case .ambiguousPane: "This agent belongs to multiple linked tmux sessions. Unlink the duplicate before opening a browser tab."
         }
     }

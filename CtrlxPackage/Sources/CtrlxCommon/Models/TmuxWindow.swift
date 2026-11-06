@@ -76,7 +76,8 @@ public struct TmuxWindow: Identifiable, Sendable {
 
     /// Groups pane states by window and returns sorted windows
     public static func groupPanes(_ paneStates: [PaneState]) -> [TmuxWindow] {
-        let grouped = Dictionary(grouping: paneStates) { $0.windowId }
+        // Status can arrive before tmux metadata; it does not establish a window.
+        let grouped = Dictionary(grouping: paneStates.filter { !$0.sessionName.isEmpty }) { $0.windowId }
 
         return grouped.compactMap { windowId, windowPanes -> TmuxWindow? in
             guard let first = windowPanes.first else { return nil }

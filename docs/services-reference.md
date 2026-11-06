@@ -508,6 +508,10 @@ tmux ──pipe-pane──→ FIFO ──→ PipePaneReader ──OSC side effec
 - Respects user-closed state (won't reopen until session ends)
 - Periodic session validation cleans up stale sessions
 - `updatePaneStates(from:)` syncs pane state from tmux, removing stale entries
+- Agent status received before tmux metadata remains provisional. It is retained
+  locally for reconciliation, but omitted from Viewer snapshots and session/window
+  grouping until a nonempty tmux session name is known; an unknown pane must not
+  create a blank session row.
 - Persists the Claude `session.id` as `PaneState.claudeSessionID` (the OTEL join key, issue #597) and exposes `applyTelemetry` / `applyPermissionMode` to stamp the joined pane; cleared on session end
 - `refreshGitBranches()` (run on the validation tick) detects each pane's git
   branch with a single cheap `git rev-parse --abbrev-ref HEAD`. The Git tab's

@@ -21,7 +21,7 @@
             windowManager: MirrorWindowManager,
             editorManager: EditorSessionManager
         ) -> [String: PaneState] {
-            var paneStates = windowManager.paneStates
+            var paneStates = windowManager.paneStates.filter { !$0.value.sessionName.isEmpty }
             for (paneId, var state) in paneStates {
                 state.editorSession = editorManager.editorSessionInfo(for: paneId)
                 paneStates[paneId] = state

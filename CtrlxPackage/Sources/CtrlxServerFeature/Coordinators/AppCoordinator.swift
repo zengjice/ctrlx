@@ -1854,7 +1854,7 @@
 
             // High-frequency per-session update to iOS (spec §7.2). Keyed by the
             // pane, matching how the session is keyed locally.
-            if let paneId = tmuxPane, !paneId.isEmpty {
+            if let paneId = tmuxPane, windowManager.paneStates[paneId]?.sessionName.isEmpty == false {
                 await connectedViewerManager?.sendAgentSessionStatusToAll(
                     sessionId: paneId,
                     pluginId: pluginID,

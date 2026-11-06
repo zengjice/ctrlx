@@ -101,6 +101,35 @@
             #expect(invalidations.value == 0)
         }
 
+        @Test("Unconfirmed agent status stays private until tmux supplies its session metadata")
+        func unconfirmedStatusIsNotPublished() {
+            let manager = makeWindowManager()
+            manager.updatePaneStates(from: [pane()])
+            manager.applyState(
+                pluginID: "codex", sessionID: "session-1", state: .working,
+                tmuxPane: "%99", projectPath: "/tmp"
+            )
+            // A snapshot started before the hook may still omit a newly created pane.
+            manager.updatePaneStates(from: [pane()])
+            let snapshot = HostSessionStateSnapshot.make(
+                windowManager: manager, editorManager: manager.editorSessionManager
+            )
+            #expect(Set(snapshot.keys) == ["%5"])
+            #expect(manager.paneStates["%99"]?.agentSession?.state == .working)
+
+            let confirmed = PaneInfo(
+                paneId: "%99", target: "new-work:0.0", sessionName: "new-work",
+                windowIndex: 0, paneIndex: 0, command: "codex", currentPath: "/tmp",
+                width: 80, height: 24, isActive: true
+            )
+            manager.updatePaneStates(from: [pane(), confirmed])
+            let next = HostSessionStateSnapshot.make(
+                windowManager: manager, editorManager: manager.editorSessionManager
+            )
+            #expect(next["%99"]?.sessionName == "new-work")
+            #expect(next["%99"]?.agentSession?.state == .working)
+        }
+
         @Test("Unchanged tmux refresh does not publish observable state")
         func unchangedRefreshIsNoop() async {
             let separator = String(PaneInfo.fieldSeparator)
