@@ -13,6 +13,68 @@ struct CodexProcessSessionReaderTests {
         Data("{\"type\":\"\(type)\",\"payload\":{\"id\":\"\(id)\",\"forked_from_id\":\"\(parentID)\",\"source\":\"\(source)\"}}".utf8)
     }
 
+    private func event(_ type: String, turn: String? = "01a12863-79a4-7ef0-a50a-2493f7262468", recordType: String = "event_msg") -> Data {
+        let id = turn.map { "\"\($0)\"" } ?? "null"
+        return Data("{\"type\":\"\(recordType)\",\"payload\":{\"type\":\"\(type)\",\"turn_id\":\(id)}}\n".utf8)
+    }
+
+    @Test("Only the latest complete native turn can override cached Working", arguments: ["complete", "turn-complete", "aborted", "active", "new-task", "late-old-completion", "new-context", "unknown-event", "partial", "malformed", "no-turn", "no-start", "truncated-prefix", "token-count"])
+    func nativeCompletion(_ scenario: String) {
+        var data = event("task_started") + event("task_complete")
+        switch scenario {
+        case "turn-complete": data = event("turn_started") + event("turn_complete")
+        case "aborted": data = event("task_started") + event("turn_aborted")
+        case "active": data = event("task_started")
+        case "new-task": data += event("task_started", turn: parentID)
+        case "late-old-completion": data += event("task_started", turn: parentID) + event("task_complete")
+        case "new-context": data += event("context", turn: parentID, recordType: "turn_context")
+        case "unknown-event": data += event("future-turn-event", turn: parentID)
+        case "partial": data += Data("{\"type\":\"event_msg\"".utf8)
+        case "malformed": data += Data("{invalid}\n".utf8)
+        case "no-turn": data = event("task_started") + event("task_complete", turn: nil)
+        case "no-start": data = event("task_complete")
+        case "truncated-prefix": data = Data("old truncated record\n".utf8) + data
+        case "token-count": data += event("token_count", turn: nil)
+        default: break
+        }
+        #expect(CodexProcessSessionReader.lastTurnCompleted(data, startsAtBeginning: scenario != "truncated-prefix") == ["complete", "turn-complete", "aborted", "truncated-prefix", "token-count"].contains(scenario))
+    }
+
+    @Test("Completion must come from this process's current unique writable conversation")
+    func nativeCompletionWriter() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-native-idle-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("rollout-2026-11-06-\(childID).jsonl")
+        try (header(childID) + Data("\n".utf8) + event("task_started") + event("task_complete")).write(to: file)
+        let pid = String(getpid())
+        let runtime = try #require(AgentSessionIdentityClient.processRuntimeID(pid))
+        let reader = CodexProcessSessionReader()
+        #expect(await !reader.turnCompleted(processID: pid, runtimeID: runtime))
+        let writer = try FileHandle(forWritingTo: file)
+        defer { try? writer.close() }
+        #expect(await reader.turnCompleted(processID: pid, runtimeID: runtime))
+        #expect(await !reader.turnCompleted(processID: pid, runtimeID: "reused-pid"))
+        try writer.seekToEnd()
+        try writer.write(contentsOf: event("task_started", turn: parentID))
+        #expect(await !reader.turnCompleted(processID: pid, runtimeID: runtime))
+        try writer.write(contentsOf: event("task_complete", turn: parentID))
+        #expect(await reader.turnCompleted(processID: pid, runtimeID: runtime))
+        try writer.write(contentsOf: Data("{partial".utf8))
+        #expect(await !reader.turnCompleted(processID: pid, runtimeID: runtime))
+        try writer.write(contentsOf: Data("}\n".utf8))
+        #expect(await !reader.turnCompleted(processID: pid, runtimeID: runtime))
+        let other = root.appendingPathComponent("rollout-2026-11-06-\(parentID).jsonl")
+        try (header(parentID) + Data("\n".utf8) + event("task_started") + event("task_complete")).write(to: other)
+        let otherWriter = try FileHandle(forWritingTo: other)
+        #expect(await !reader.turnCompleted(processID: pid, runtimeID: runtime))
+        try otherWriter.close()
+        try writer.truncate(atOffset: 0)
+        try writer.seek(toOffset: 0)
+        try writer.write(contentsOf: header(parentID) + Data("\n".utf8) + event("task_started") + event("task_complete"))
+        #expect(await !reader.turnCompleted(processID: pid, runtimeID: runtime))
+    }
+
     @Test(
         "Only matching CLI session metadata identifies a rollout; forked_from_id is never the active ID",
         arguments: ["child", "parent-mismatch", "subagent", "event", "incomplete", "oversized", "wrong-name"]

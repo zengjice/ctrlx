@@ -94,13 +94,17 @@
             if case .notInstalled = state.status {
                 return "Install"
             }
-            return "Reinstall"
+            return "Update"
         }
 
         @ViewBuilder private var statusLabel: some View {
             switch state.status {
             case let .installed(version):
-                Text(version.map { "Installed v\($0)" } ?? "Installed — version unknown")
+                if let hooks = AgentPluginResourceClient.hooksVersionIfSkillsMissing(version) {
+                    Text(hooks == "unknown" ? "Partially installed — skills missing; hooks version unknown" : "Partially installed — skills missing; hooks v\(hooks)")
+                } else {
+                    Text(version.map { "Installed v\($0)" } ?? "Installed — version unknown")
+                }
             case .notInstalled: Text("Not installed")
             case .agentUnavailable: Text("Agent CLI not found").foregroundStyle(.orange)
             case let .checkFailed(message): Text("Check failed: \(message)").foregroundStyle(.red)

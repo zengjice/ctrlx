@@ -169,7 +169,7 @@ extension CodexPluginCore {
             enabled: selected.hasPrefix("› [x] "),
             source: rows[sourceStart..<commandStart].joined(separator: " "),
             command: rows[commandStart..<modeStart].joined(separator: " "),
-            canRefresh: trust == "Trust Trusted" && rows[sourceStart..<commandStart].joined(separator: " ") == "Source Plugin - ctrlx@ctrlx" && rows.last == "space/enter toggle · esc back"
+            canRefresh: trust == "Trust Trusted" && ["Source Plugin - ctrlx-hooks@ctrlx", "Source Plugin - ctrlx@ctrlx"].contains(rows[sourceStart..<commandStart].joined(separator: " ")) && rows.last == "space/enter toggle · esc back"
         )
     }
 

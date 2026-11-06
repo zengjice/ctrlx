@@ -1,0 +1,19 @@
+{
+  "name": "ctrlx-hooks",
+  "version": "1.0.0",
+  "description": "Stable CtrlX lifecycle event bridge. Updated independently of CtrlX skills.",
+  "author": {
+    "name": "ZengJice",
+    "email": "jicezeng@gmail.com",
+    "url": "https://github.com/jicezeng"
+  },
+  "homepage": "https://github.com/jicezeng/CtrlX",
+  "repository": "https://github.com/jicezeng/CtrlX",
+  "license": "AGPL-3.0",
+  "keywords": [
+    "codex",
+    "tmux",
+    "monitoring",
+    "ctrlx"
+  ]
+}

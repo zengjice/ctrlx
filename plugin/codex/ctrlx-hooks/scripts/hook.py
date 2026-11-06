@@ -31,8 +31,16 @@ def emit_session_context(payload):
     if not isinstance(payload, dict) or payload.get("hook_event_name") != "SessionStart":
         return
 
-    # Bundled entrypoints remain the single source for these early instructions.
-    skills = Path(__file__).resolve().parent.parent / "skills"
+    # The Host publishes its current skills location outside this stable plugin.
+    # Skills updates must not change this plugin's content fingerprint.
+    try:
+        pointer = Path(SOCKET_PATH).parent / "session-skills-root"
+        skills = Path(pointer.read_text(encoding="utf-8").strip())
+        if not skills.is_absolute():
+            return
+        skills = skills.resolve()
+    except (OSError, UnicodeError):
+        return
     contexts = []
     for name in ("file-links", "agent-ios", "agent-browser"):
         skill = skills / name / "SKILL.md"

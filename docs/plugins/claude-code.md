@@ -77,12 +77,28 @@ with `configDir` set for non-default roots. An FSEvents watcher on
 `~/.claude/projects/` (500 ms debounce) calls `refreshProjects()` → `host.setProjects`.
 
 ## Ingress bridge (install)
-`install()` writes `claude-hook-bridge.py` into the plugin state dir and registers
-it across Claude's hook events in `~/.claude/settings.json`, baking in
-`plugin_id=claude-code` and the well-known socket `~/.ctrlx/state/ingress.sock`.
-The bridge reads stdin + `TMUX_PANE` + `CLAUDE_PROJECT_DIR`, connects, writes one
-length-prefixed `{plugin_id, context, payload}` frame, exits. Fires for any Claude
-session (CtrlX-launched or manual). `isInstalled`/`uninstall` manage that entry.
+Claude's native marketplace now provides two independently versioned plugins:
+`ctrlx@ctrlx` contains skills (1.3.20); `ctrlx-hooks@ctrlx` contains lifecycle hooks
+and the stable ingress bridge (1.0.0). Install/update verifies the marketplace
+source and uses `claude plugin install/update --scope user` only for missing or
+older components. It never uninstalls/reinstalls an unchanged hooks component
+when skills change. Both versions are read back before reporting success.
+Legacy `ctrlx` is upgraded first to remove its bundled hooks. Partial migrations
+can be retried; uninstall removes only these two user-scoped, qualified IDs and
+keeps plugin data. A hooks-only install is shown as partial, retains its hook
+version and Uninstall entry, and can restore missing skills with Update. The app
+does not edit Claude settings directly.
+
+The bridge still sends `plugin_id=claude-code` and uses the existing ingress
+socket. It reads stdin + `TMUX_PANE` + `CLAUDE_PROJECT_DIR`, connects, writes one
+length-prefixed `{plugin_id, context, payload}` frame and waits for the receipt.
+It fires for any Claude session (CtrlX-launched or manual).
+For SessionStart context it reads the Host-published `session-skills-root` beside
+the ingress socket, then the current shared skill entrypoints. The hooks package
+contains no skill copies, so skill updates do not modify its contents.
+An existing Claude runtime may need its native plugin reload during the initial
+migration. Claude retains its own enable/reload behavior; Codex's trust UI is not
+applied to Claude. See [the shared distribution behavior](codex.md#independent-skills-and-hook-plugins).
 
 ## Raw hook → `PluginEvent` (the 30→5 mapping)
 Parsing reuses `HookAction.from(jsonData:)`. `sessionID` = the hook `session_id`;

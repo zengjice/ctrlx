@@ -4,6 +4,12 @@ import Testing
 @testable import CodexPluginCore
 
 struct CodexHookRefreshTests {
+    @Test("Refresh recognizes the dedicated hook plugin and the legacy source, never another marketplace", arguments: ["ctrlx-hooks@ctrlx", "ctrlx@ctrlx", "ctrlx-hooks@other", "other@other"])
+    func refreshSources(_ source: String) {
+        let lines = ["UserPromptSubmit hooks", "Turn hooks on or off. Your changes are saved automatically.", "› [x] 1 Hook", "Event UserPromptSubmit", "Source Plugin - \(source)", "Command /fixture/hook.py", "Mode Sync", "Trust Trusted", "space/enter toggle · esc back"]
+        #expect(CodexPluginCore().hookTrustAllows(.toggle, lines: lines) == ["ctrlx-hooks@ctrlx", "ctrlx@ctrlx"].contains(source))
+    }
+
     @Test("Refresh preserves disabled and foreign hooks and confirms persistence", arguments: [140, 60, 48])
     func refresh(width: Int) async throws {
         let replay = RefreshReplay(width: width)
@@ -178,7 +184,7 @@ private actor RefreshReplay {
                 + ["PreToolUse", "PostToolUse", "UserPromptSubmit"].enumerated().map { ($0.offset == event ? "› " : "  ") + $0.element + " 3 2 Description" }
                 + ["enter details · esc close"]
         }
-        let source = handler == 0 ? "foreign@foreign" : (foreign ? "ctrlx@other" : "ctrlx@ctrlx")
+        let source = handler == 0 ? "foreign@foreign" : (foreign ? "ctrlx-hooks@other" : "ctrlx-hooks@ctrlx")
         let description = width < 80 ? ["Turn hooks on or off. Your changes are", "saved automatically."] : ["Turn hooks on or off. Your changes are saved automatically."]
         return ["UserPromptSubmit hooks"] + description
             + enabled.enumerated().map { ($0.offset == handler ? "› " : "  ") + "[\($0.element ? "x" : " ")] \($0.offset + 1) Hook" }

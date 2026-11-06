@@ -45,10 +45,10 @@ struct AgentModelTmuxCompatibilityTests {
             } else {
                 #expect(issue == nil)
             }
-            // Automatic workflows and hook approval still require a known mode.
+            // Automatic workflows still require a known mode.
             #expect(AgentWorkflowComposerInspection.readiness(screen, composer: core.modelComposer) == (paste == "1" ? .ready : .unavailable))
             if paste.isEmpty {
-                #expect(coordinator.hookTrustInputIssue(paneID: "%1", screen: screen, composer: core.modelComposer) != nil)
+                #expect(coordinator.hookTrustInputIssue(paneID: "%1", screen: screen, composer: core.modelComposer) == nil)
             }
         }
     }

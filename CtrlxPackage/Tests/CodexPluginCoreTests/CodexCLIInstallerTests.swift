@@ -1,420 +1,246 @@
 import CtrlxCommon
-import Foundation
 import CtrlxPluginProtocol
+import Dependencies
+import Foundation
 import Testing
 @testable import CodexPluginCore
 
-// MARK: - Thread-safe call recorder
-
-/// Thread-safe collector for process invocations made through a test ProcessRunner.
-private actor CallRecorder {
+private actor InstallerFixture {
     struct Call: Sendable {
         let executable: String
-        let arguments: [String]
+        let args: [String]
         let environment: [String: String]?
     }
 
-    private(set) var calls: [Call] = []
+    var versions: [String: String]
+    var calls: [Call] = []
+    var wrongMarketplace = false
+    var failure: String?
+    var noOp = false
+    var listExit: Int32?
+    var malformed = false
+    init(_ versions: [String: String] = [:]) {
+        self.versions = versions
+    }
 
-    func record(_ call: Call) {
-        calls.append(call)
+    func configure(wrongMarketplace: Bool = false, failure: String? = nil, noOp: Bool = false, listExit: Int32? = nil, malformed: Bool = false) {
+        self.wrongMarketplace = wrongMarketplace
+        self.failure = failure
+        self.noOp = noOp
+        self.listExit = listExit
+        self.malformed = malformed
+    }
+
+    func run(_ exe: String, _ args: [String], _ environment: [String: String]?) throws -> ProcessResult {
+        calls.append(.init(executable: exe, args: args, environment: environment))
+        func success(_ text: String = "") -> ProcessResult {
+            .init(exitCode: 0, stdout: Data(text.utf8), stderr: Data())
+        }
+        func failed(_ code: Int32) -> ProcessResult {
+            .init(exitCode: code, stdout: Data(), stderr: Data("fixture failure".utf8))
+        }
+        if args.contains("marketplace"), args.contains("list") {
+            let path = wrongMarketplace ? "/foreign" : "/bundle/plugin"
+            return success("{\"marketplaces\":[{\"name\":\"ctrlx\",\"root\":\"\(path)\"}]}")
+        }
+        if args.dropFirst().starts(with: ["plugin", "list"]) {
+            if let listExit {
+                return failed(listExit)
+            }
+            if malformed {
+                return success("not a plugin list")
+            }
+            return success("PLUGIN STATUS VERSION PATH\n" + versions.sorted { $0.key < $1.key }.map { "\($0.key) installed \($0.value) /cache" }.joined(separator: "\n"))
+        }
+        if args.count >= 4, ["add", "install", "update", "uninstall", "remove"].contains(args[2]), args[3].contains("@ctrlx") {
+            let ref = args[3]
+            if ref == failure {
+                return failed(2)
+            }
+            if ["uninstall", "remove"].contains(args[2]) {
+                versions[ref] = nil
+            } else if !noOp {
+                versions[ref] = ref == "ctrlx@ctrlx" ? "2.0.0" : "1.0.0"
+            }
+        }
+        return success()
     }
 }
-
-// MARK: - Test helpers
-
-private extension ProcessResult {
-    static func success(_ stdout: String = "", stderr: String = "") -> ProcessResult {
-        ProcessResult(exitCode: 0, stdout: Data(stdout.utf8), stderr: Data(stderr.utf8))
-    }
-
-    static func failure(exitCode: Int32, stderr: String = "") -> ProcessResult {
-        ProcessResult(exitCode: exitCode, stdout: Data(), stderr: Data(stderr.utf8))
-    }
-}
-
-// MARK: - CodexCLIInstallerTests
 
 @Suite("CodexCLIInstaller")
 struct CodexCLIInstallerTests {
-    private let marketplaceSource = URL(fileURLWithPath: "/bundle/codex-plugin")
-
-    // MARK: - install(configRoot:)
-
-    @Test("install runs marketplace add then plugin add, wrapped in /usr/bin/env")
-    func installCommandSequence() async throws {
-        let recorder = CallRecorder()
-        let processRunner = ProcessRunner { exe, args, env, _ in
-            await recorder.record(.init(executable: exe, arguments: args, environment: env))
-            return .success()
-        }
-        let installer = CodexCLIInstaller(
-            processRunner: processRunner,
-            command: "codex",
-            marketplaceSource: marketplaceSource
-        )
-
-        _ = try await installer.install(configRoot: nil)
-
-        let calls = await recorder.calls
-        #expect(calls.count == 2)
-
-        // First call: marketplace add
-        let marketplaceCall = calls[0]
-        #expect(marketplaceCall.executable == "/usr/bin/env")
-        #expect(marketplaceCall.arguments == ["codex", "plugin", "marketplace", "add", "/bundle/codex-plugin"])
-
-        // Second call: plugin add
-        let addCall = calls[1]
-        #expect(addCall.executable == "/usr/bin/env")
-        #expect(addCall.arguments == ["codex", "plugin", "add", "ctrlx@ctrlx"])
-    }
-
-    @Test("install sets CODEX_HOME when configRoot is non-nil")
-    func installSetsCodexHomeEnv() async throws {
-        let recorder = CallRecorder()
-        let processRunner = ProcessRunner { exe, args, env, _ in
-            await recorder.record(.init(executable: exe, arguments: args, environment: env))
-            return .success()
-        }
-        let installer = CodexCLIInstaller(
-            processRunner: processRunner,
-            command: "codex",
-            marketplaceSource: marketplaceSource
-        )
-
-        _ = try await installer.install(configRoot: "/custom/codex-home")
-
-        let calls = await recorder.calls
-        #expect(calls.count == 2)
-        for call in calls {
-            #expect(call.environment?["CODEX_HOME"] == "/custom/codex-home")
-        }
-    }
-
-    @Test("install omits CODEX_HOME when configRoot is nil")
-    func installOmitsCodexHomeWhenNil() async throws {
-        let recorder = CallRecorder()
-        let processRunner = ProcessRunner { exe, args, env, _ in
-            await recorder.record(.init(executable: exe, arguments: args, environment: env))
-            return .success()
-        }
-        let installer = CodexCLIInstaller(
-            processRunner: processRunner,
-            command: "codex",
-            marketplaceSource: marketplaceSource
-        )
-
-        _ = try await installer.install(configRoot: nil)
-
-        let calls = await recorder.calls
-        for call in calls {
-            #expect(call.environment == nil)
-        }
-    }
-
-    @Test("install returns .alreadyInstalled when plugin add stderr reports already-added")
-    func installAlreadyInstalled() async throws {
-        let processRunner = ProcessRunner { _, args, _, _ in
-            // marketplace add (tolerated); plugin add reports already-added. The
-            // stderr must carry both "already" AND "add" to satisfy the tightened
-            // heuristic (so unrelated "already running" messages don't match).
-            if args.contains("add") && args.contains("ctrlx@ctrlx") {
-                return .failure(exitCode: 1, stderr: "Error: plugin ctrlx@ctrlx already added")
+    private func run(_ fixture: InstallerFixture, operation: (CodexCLIInstaller) async throws -> Void) async throws {
+        try await withDependencies {
+            $0[AgentPluginResourceClient.self].version = { url in
+                url.path.contains("ctrlx-hooks/") ? "1.0.0" : "2.0.0"
             }
-            return .success()
-        }
-        let installer = CodexCLIInstaller(
-            processRunner: processRunner,
-            command: "codex",
-            marketplaceSource: marketplaceSource
-        )
-
-        let result = try await installer.install(configRoot: nil)
-        guard case .alreadyInstalled = result else {
-            Issue.record("Expected .alreadyInstalled, got \(result)")
-            return
+        } operation: {
+            let runner = ProcessRunner { exe, args, env, _ in try await fixture.run(exe, args, env) }
+            try await operation(.init(processRunner: runner, command: "codex", marketplaceSource: URL(fileURLWithPath: "/bundle/plugin")))
         }
     }
 
-    @Test("install throws executionFailed when plugin add fails for an unrelated reason")
-    func installThrowsOnFailure() async throws {
-        let processRunner = ProcessRunner { _, args, _, _ in
-            if args.contains("add") && args.contains("ctrlx@ctrlx") {
-                return .failure(exitCode: 2, stderr: "Error: network unreachable")
+    @Test("Initial install and legacy migration register exactly one separate bridge", arguments: [false, true])
+    func migration(_ legacy: Bool) async throws {
+        let fixture = InstallerFixture(legacy ? ["ctrlx@ctrlx": "1.0.0"] : [:])
+        try await run(fixture) { installer in
+            guard case .installed = try await installer.install(configRoot: "/private-config") else { Issue.record("Expected installation")
+                return
             }
-            return .success()
+            #expect(await installer.installStatus(configRoot: "/private-config") == .installed(version: "2.0.0 + hooks 1.0.0"))
+            let bundled = try await installer.bundledVersion()
+            #expect(bundled == "2.0.0 + hooks 1.0.0")
         }
-        let installer = CodexCLIInstaller(
-            processRunner: processRunner,
-            command: "codex",
-            marketplaceSource: marketplaceSource
-        )
+        let calls = await fixture.calls
+        #expect(calls.allSatisfy { $0.executable == "/usr/bin/env" && $0.environment?["CODEX_HOME"] == "/private-config" })
+        let changes = calls.filter { $0.args.count >= 4 && ["add", "install", "update"].contains($0.args[2]) && $0.args[3].contains("@ctrlx") }
+        #expect(changes.map { $0.args[3] } == ["ctrlx@ctrlx", "ctrlx-hooks@ctrlx"])
+        #expect(!calls.contains { $0.args.contains("uninstall") || $0.args.contains("remove") })
+    }
 
-        await #expect(throws: ProcessRunnerError.self) {
+    @Test("A skills update never replaces an unchanged or newer hook plugin", arguments: ["1.0.0", "1.1.0"])
+    func skillsOnly(_ hooks: String) async throws {
+        let fixture = InstallerFixture(["ctrlx@ctrlx": "1.0.0", "ctrlx-hooks@ctrlx": hooks])
+        try await run(fixture) { installer in
+            let updated = try await installer.reinstall(configRoot: nil)
+            #expect(updated == .installed(version: "2.0.0 + hooks \(hooks)"))
+            guard case .alreadyInstalled = try await installer.install(configRoot: nil) else { Issue.record("Expected unchanged components")
+                return
+            }
+        }
+        let calls = await fixture.calls
+        #expect(calls.allSatisfy { $0.environment == nil })
+        #expect(!calls.contains { $0.args.count >= 4 && $0.args[3] == "ctrlx-hooks@ctrlx" })
+    }
+
+    @Test("A hooks-only update preserves the skills installation")
+    func hooksOnly() async throws {
+        let fixture = InstallerFixture(["ctrlx@ctrlx": "2.0.0", "ctrlx-hooks@ctrlx": "0.9.0"])
+        try await run(fixture) { installer in
+            let updated = try await installer.reinstall(configRoot: nil)
+            #expect(updated == .installed(version: "2.0.0 + hooks 1.0.0"))
+        }
+        let calls = await fixture.calls
+        #expect(!calls.contains { $0.args.count >= 4 && $0.args[3] == "ctrlx@ctrlx" })
+    }
+
+    @Test("A partial migration is explicit and a retry repairs it")
+    func partialFailure() async throws {
+        let fixture = InstallerFixture(["ctrlx@ctrlx": "1.0.0"])
+        await fixture.configure(failure: "ctrlx-hooks@ctrlx")
+        try await run(fixture) { installer in
+            await #expect(throws: (any Error).self) { _ = try await installer.install(configRoot: nil) }
+            #expect(await installer.installStatus(configRoot: nil) == .installed(version: "2.0.0"))
+            let bundled = try await installer.bundledVersion()
+            #expect(AgentPluginResourceClient.updateAvailable(installed: "2.0.0", bundled: bundled))
+            await fixture.configure()
             _ = try await installer.install(configRoot: nil)
+            #expect(await installer.installStatus(configRoot: nil) == .installed(version: "2.0.0 + hooks 1.0.0"))
+        }
+        let calls = await fixture.calls
+        #expect(calls.filter { $0.args.count >= 4 && $0.args[3] == "ctrlx@ctrlx" }.count == 1)
+    }
+
+    @Test("A foreign marketplace or an optimistic CLI response cannot report successful installation", arguments: ["foreign", "no-op", "malformed"])
+    func failures(_ scenario: String) async throws {
+        let fixture = InstallerFixture()
+        await fixture.configure(wrongMarketplace: scenario == "foreign", noOp: scenario == "no-op", malformed: scenario == "malformed")
+        try await run(fixture) { installer in
+            await #expect(throws: (any Error).self) { _ = try await installer.install(configRoot: nil) }
+        }
+        if scenario != "no-op" {
+            let calls = await fixture.calls
+            #expect(!calls.contains { $0.args.count >= 4 && $0.args[3].contains("@ctrlx") })
         }
     }
 
-    @Test("install does NOT treat an unrelated 'already' message as alreadyInstalled")
-    func installAlreadyMessageWithoutAddThrows() async throws {
-        // "already running" carries "already" but not "add"; the tightened
-        // heuristic must reject it and surface the failure instead.
-        let processRunner = ProcessRunner { _, args, _, _ in
-            if args.contains("add") && args.contains("ctrlx@ctrlx") {
-                return .failure(exitCode: 1, stderr: "Error: codex is already running")
+    @Test("CLI unavailable and list failures remain distinct", arguments: [Int32(127), 2])
+    func listFailure(_ code: Int32) async throws {
+        let fixture = InstallerFixture()
+        await fixture.configure(listExit: code)
+        try await run(fixture) { installer in
+            let status = await installer.installStatus(configRoot: "/nonexistent-config")
+            if code == 127 {
+                #expect(status == .agentUnavailable)
+            } else {
+                guard case .checkFailed = status else { Issue.record("Expected check failure")
+                    return
+                }
             }
-            return .success()
-        }
-        let installer = CodexCLIInstaller(
-            processRunner: processRunner,
-            command: "codex",
-            marketplaceSource: marketplaceSource
-        )
-
-        await #expect(throws: ProcessRunnerError.self) {
-            _ = try await installer.install(configRoot: nil)
         }
     }
 
-    // MARK: - uninstall(configRoot:)
-
-    @Test("uninstall runs plugin remove ctrlx@ctrlx, wrapped in /usr/bin/env")
-    func uninstallCommand() async throws {
-        let recorder = CallRecorder()
-        let processRunner = ProcessRunner { exe, args, env, _ in
-            await recorder.record(.init(executable: exe, arguments: args, environment: env))
-            return .success()
+    @Test("Uninstall removes only the two user-owned components, tolerating an absent component", arguments: [false, true])
+    func uninstall(_ both: Bool) async throws {
+        let fixture = InstallerFixture(both ? ["ctrlx@ctrlx": "2.0.0", "ctrlx-hooks@ctrlx": "1.0.0"] : ["ctrlx@ctrlx": "1.0.0"])
+        try await run(fixture) { installer in
+            try await installer.uninstall(configRoot: "/private-config")
+            #expect(await installer.installStatus(configRoot: "/private-config") == .notInstalled)
         }
-        let installer = CodexCLIInstaller(
-            processRunner: processRunner,
-            command: "codex",
-            marketplaceSource: marketplaceSource
-        )
-
-        try await installer.uninstall(configRoot: nil)
-
-        let calls = await recorder.calls
-        #expect(calls.count == 1)
-        #expect(calls[0].executable == "/usr/bin/env")
-        #expect(calls[0].arguments == ["codex", "plugin", "remove", "ctrlx@ctrlx"])
-        #expect(calls[0].environment == nil)
+        let calls = await fixture.calls
+        let removed = calls.filter { $0.args.count >= 4 && ["remove", "uninstall"].contains($0.args[2]) }
+        #expect(removed.map { $0.args[3] } == ["ctrlx-hooks@ctrlx", "ctrlx@ctrlx"])
+        #expect(removed.allSatisfy { $0.environment?["CODEX_HOME"] == "/private-config" })
     }
 
-    @Test("uninstall threads CODEX_HOME when configRoot is non-nil")
-    func uninstallThreadsCodexHome() async throws {
-        let recorder = CallRecorder()
-        let processRunner = ProcessRunner { exe, args, env, _ in
-            await recorder.record(.init(executable: exe, arguments: args, environment: env))
-            return .success()
+    @Test("Hooks-only installations retain their component version, update notice and uninstall state")
+    func hooksRemain() async throws {
+        let fixture = InstallerFixture(["ctrlx-hooks@ctrlx": "1.0.0"])
+        try await run(fixture) { installer in
+            let status = await installer.installStatus(configRoot: "/private-config")
+            guard case let .installed(version) = status else { Issue.record("The remaining hook plugin must be uninstallable")
+                return
+            }
+            #expect(version == "missing + hooks 1.0.0")
+            #expect(AgentPluginResourceClient.hooksVersionIfSkillsMissing(version) == "1.0.0")
+            #expect(AgentPluginResourceClient.updateAvailable(installed: version, bundled: "2.0.0 + hooks 1.0.0"))
+            try await installer.uninstall(configRoot: "/private-config")
+            #expect(await installer.installStatus(configRoot: "/private-config") == .notInstalled)
         }
-        let installer = CodexCLIInstaller(
-            processRunner: processRunner,
-            command: "codex",
-            marketplaceSource: marketplaceSource
-        )
-
-        try await installer.uninstall(configRoot: "/custom/codex-home")
-
-        let calls = await recorder.calls
-        #expect(calls.count == 1)
-        #expect(calls[0].environment?["CODEX_HOME"] == "/custom/codex-home")
     }
 
-    // MARK: - installStatus(configRoot:)
-
-    @Test("installStatus returns .installed(version:) when ctrlx line with x.y.z is present")
-    func installStatusParsesInstalledVersion() async throws {
-        let listing = """
-        Marketplace `ctrlx`
-        /Applications/CtrlX.app/Contents/Resources/plugin/codex/.agents/plugins/marketplace.json
-
-        PLUGIN             STATUS     VERSION  PATH
-        ctrlx@ctrlx  installed  1.3.0    /Applications/CtrlX.app/Contents/Resources/plugin/codex/ctrlx
-        """
-        let processRunner = ProcessRunner { _, _, _, _ in
-            .success(listing)
+    @Test("Uninstall does not list a missing marketplace and still tries both IDs after an error", arguments: [false, true])
+    func uninstallWithoutSource(_ failure: Bool) async throws {
+        let fixture = InstallerFixture(["ctrlx@ctrlx": "2.0.0", "ctrlx-hooks@ctrlx": "1.0.0"])
+        await fixture.configure(failure: failure ? "ctrlx-hooks@ctrlx" : nil, listExit: 2)
+        try await run(fixture) { installer in
+            if failure {
+                await #expect(throws: AgentPluginInstallError.self) { try await installer.uninstall(configRoot: "/private-config") }
+            } else {
+                try await installer.uninstall(configRoot: "/private-config")
+            }
         }
-        let installer = CodexCLIInstaller(
-            processRunner: processRunner,
-            command: "codex",
-            marketplaceSource: marketplaceSource
-        )
-
-        let status = await installer.installStatus(configRoot: nil)
-        guard case let .installed(version) = status else {
-            Issue.record("Expected .installed, got \(status)")
-            return
-        }
-        #expect(version == "1.3.0")
+        let calls = await fixture.calls
+        #expect(calls.map { $0.args } == [["codex", "plugin", "remove", "ctrlx-hooks@ctrlx"], ["codex", "plugin", "remove", "ctrlx@ctrlx"]])
+        #expect(calls.allSatisfy { $0.environment?["CODEX_HOME"] == "/private-config" })
+        let remaining = await fixture.versions
+        #expect(remaining["ctrlx@ctrlx"] == nil)
+        #expect((remaining["ctrlx-hooks@ctrlx"] != nil) == failure)
     }
 
-    @Test("installStatus returns .installed(version: nil) when ctrlx line has no x.y.z token")
-    func installStatusInstalledWithoutVersion() async throws {
-        // An installed ctrlx row with no dot-bearing numeric token → version is
-        // nil but the plugin is still reported installed.
-        let listing = """
-        PLUGIN             STATUS     VERSION  PATH
-        ctrlx@ctrlx  installed           /Applications/CtrlX.app/Contents/Resources/plugin/codex/ctrlx
-        """
-        let processRunner = ProcessRunner { _, _, _, _ in
-            .success(listing)
+    @Test("When native listing fails, a hooks-only configuration retains the uninstall entry")
+    func configuredHooksOnly() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = root.appendingPathComponent("config.toml")
+        let fixture = InstallerFixture()
+        await fixture.configure(listExit: 2)
+        try await run(fixture) { installer in
+            try "[plugins.\"ctrlx-hooks@ctrlx\"]\nenabled = true\n".write(to: config, atomically: true, encoding: .utf8)
+            #expect(await installer.installStatus(configRoot: root.path) == .installed(version: "missing + hooks unknown"))
+            try "unrelated invalid configuration".write(to: config, atomically: true, encoding: .utf8)
+            guard case .checkFailed = await installer.installStatus(configRoot: root.path) else { Issue.record("Unknown configuration must preserve the list error")
+                return
+            }
         }
-        let installer = CodexCLIInstaller(
-            processRunner: processRunner,
-            command: "codex",
-            marketplaceSource: marketplaceSource
-        )
-
-        let status = await installer.installStatus(configRoot: nil)
-        guard case let .installed(version) = status else {
-            Issue.record("Expected .installed, got \(status)")
-            return
-        }
-        #expect(version == nil)
+        #expect(CodexCLIInstaller.parseConfiguredStatus(from: "[plugins.\"ctrlx-hooks@other\"]\nenabled = true\n") == .notInstalled)
     }
 
-    @Test("installStatus is .notInstalled when the row STATUS says 'not installed' (marketplace header present)")
-    func installStatusNotInstalledFromStatusColumn() async throws {
-        // Real `codex plugin list -m ctrlx` output: the marketplace IS registered
-        // (header + path lines mention `ctrlx`) but the plugin row's STATUS is
-        // "not installed". The marketplace header must NOT be read as installed.
-        let listing = """
-        Marketplace `ctrlx`
-        /Applications/CtrlX.app/Contents/Resources/plugin/codex/.agents/plugins/marketplace.json
-
-        PLUGIN             STATUS         VERSION  PATH
-        ctrlx@ctrlx  not installed           /Applications/CtrlX.app/Contents/Resources/plugin/codex/ctrlx
-        """
-        let processRunner = ProcessRunner { _, _, _, _ in
-            .success(listing)
-        }
-        let installer = CodexCLIInstaller(
-            processRunner: processRunner,
-            command: "codex",
-            marketplaceSource: marketplaceSource
-        )
-
-        let status = await installer.installStatus(configRoot: nil)
-        #expect(status == .notInstalled)
-    }
-
-    @Test("installStatus returns .notInstalled when ctrlx is absent from listing")
-    func installStatusNotInstalled() async throws {
-        let listing = """
-        PLUGIN        STATUS     VERSION  PATH
-        other@other   installed  0.5.0    /some/path
-        """
-        let processRunner = ProcessRunner { _, _, _, _ in
-            .success(listing)
-        }
-        let installer = CodexCLIInstaller(
-            processRunner: processRunner,
-            command: "codex",
-            marketplaceSource: marketplaceSource
-        )
-
-        let status = await installer.installStatus(configRoot: nil)
-        #expect(status == .notInstalled)
-    }
-
-    @Test("installStatus returns .agentUnavailable when process exits 127")
-    func installStatusAgentUnavailableOn127() async throws {
-        let processRunner = ProcessRunner { _, _, _, _ in
-            .failure(exitCode: 127)
-        }
-        let installer = CodexCLIInstaller(
-            processRunner: processRunner,
-            command: "codex",
-            marketplaceSource: marketplaceSource
-        )
-
-        let status = await installer.installStatus(configRoot: nil)
-        #expect(status == .agentUnavailable)
-    }
-
-    @Test("installStatus returns .agentUnavailable when processRunner throws")
-    func installStatusAgentUnavailableOnThrow() async throws {
-        let processRunner = ProcessRunner { _, _, _, _ in
-            throw ProcessRunnerError.executionFailed(exitCode: 127, stderr: "not found")
-        }
-        let installer = CodexCLIInstaller(
-            processRunner: processRunner,
-            command: "codex",
-            marketplaceSource: marketplaceSource
-        )
-
-        let status = await installer.installStatus(configRoot: nil)
-        #expect(status == .agentUnavailable)
-    }
-
-    @Test("installStatus passes CODEX_HOME when configRoot is non-nil")
-    func installStatusPassesCodexHome() async throws {
-        let recorder = CallRecorder()
-        let processRunner = ProcessRunner { exe, args, env, _ in
-            await recorder.record(.init(executable: exe, arguments: args, environment: env))
-            return .success()
-        }
-        let installer = CodexCLIInstaller(
-            processRunner: processRunner,
-            command: "codex",
-            marketplaceSource: marketplaceSource
-        )
-
-        _ = await installer.installStatus(configRoot: "/some/dir")
-
-        let calls = await recorder.calls
-        #expect(calls.count == 1)
-        #expect(calls[0].arguments == ["codex", "plugin", "list", "-m", "ctrlx"])
-        #expect(calls[0].environment?["CODEX_HOME"] == "/some/dir")
-    }
-
-    @Test("installStatus reports listing failure instead of guessing not installed")
-    func installStatusNotInstalledOnNon127Failure() async throws {
-        let configRoot = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("ctrlx-codex-status-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: configRoot, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: configRoot) }
-
-        let processRunner = ProcessRunner { _, _, _, _ in
-            .failure(exitCode: 1, stderr: "internal error")
-        }
-        let installer = CodexCLIInstaller(
-            processRunner: processRunner,
-            command: "codex",
-            marketplaceSource: marketplaceSource
-        )
-
-        let status = await installer.installStatus(configRoot: configRoot.path)
-        #expect(status == .checkFailed(message: "internal error"))
-    }
-
-    @Test("installStatus falls back to config.toml when another marketplace breaks listing")
-    func installStatusFallsBackToConfiguredPlugin() async throws {
-        let configRoot = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("ctrlx-codex-status-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: configRoot, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: configRoot) }
-        try Data(
-            """
-            [marketplaces.gallager]
-            source = "/Applications/CtrlX.app/Contents/Resources/plugin/codex"
-
-            [plugins."ctrlx@ctrlx"]
-            enabled = true
-            """.utf8
-        ).write(to: configRoot.appendingPathComponent("config.toml"))
-
-        let processRunner = ProcessRunner { _, _, _, _ in
-            .failure(exitCode: 1, stderr: "failed to load configured marketplace snapshot gallager")
-        }
-        let installer = CodexCLIInstaller(
-            processRunner: processRunner,
-            command: "codex",
-            marketplaceSource: marketplaceSource
-        )
-
-        let status = await installer.installStatus(configRoot: configRoot.path)
-        #expect(status == .installed(version: nil))
+    @Test("Status parsing requires the exact marketplace and user scope")
+    func parser() {
+        #expect(CodexCLIInstaller.parseStatus(from: "PLUGIN STATUS VERSION PATH\nctrlx@other installed 9.0.0 /cache") == .notInstalled)
+        #expect(CodexCLIInstaller.parseStatus(from: "PLUGIN STATUS VERSION PATH\nctrlx@ctrlx not installed /cache") == .notInstalled)
+        #expect(CodexCLIInstaller.parseStatus(from: "PLUGIN STATUS VERSION PATH\nctrlx-hooks@ctrlx installed 1.0.0 /cache", pluginRef: CodexCLIInstaller.hooksRef) == .installed(version: "1.0.0"))
     }
 }

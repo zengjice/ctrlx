@@ -140,6 +140,11 @@
                     _ = try await core.reinstall(configRoot: location.configRoot)
                 }
                 installations[location]?.lastChange = uninstall ? .uninstalled : .installed
+                if uninstall {
+                    // Successful removal must not depend on listing an old source.
+                    installations[location]?.status = .notInstalled
+                    return
+                }
             } catch {
                 installations[location]?.error = error.localizedDescription
             }

@@ -1000,6 +1000,14 @@
             // pane/catalog refresh. The ingress consumer may run immediately.
             await setupAgentWorkflows()
 
+            do {
+                @Dependency(AgentPluginResourceClient.self) var resources
+                guard let root = Bundle.main.resourceURL else { throw CocoaError(.fileNoSuchFile) }
+                try await resources.publishSessionSkills(root.appendingPathComponent("plugin/ctrlx/skills"), paths.ingressSocketPath.deletingLastPathComponent())
+            } catch {
+                logger.error("Could not publish SessionStart skills: \(error)")
+            }
+
             // Ingress socket: route frames by pluginID to the enabled core.
             let server = IngressSocketServer(
                 socketPath: paths.ingressSocketPath.path,

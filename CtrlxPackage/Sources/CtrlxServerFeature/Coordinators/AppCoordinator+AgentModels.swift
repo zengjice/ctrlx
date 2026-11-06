@@ -214,7 +214,7 @@ extension AppCoordinator {
             return "Finish or clear the input draft before switching models."
         }
         // Single-line model commands can use tmux's native paste on older servers.
-        // Workflows and hook approval retain their explicit input-mode requirement.
+        // Automatic workflows retain their explicit input-mode requirement.
         guard AgentWorkflowComposerInspection.readiness(screen, composer: provider.modelComposer, allowUnknownBracketedPaste: true) == .ready else {
             return "Switch models when the Agent is idle and its input is empty."
         }

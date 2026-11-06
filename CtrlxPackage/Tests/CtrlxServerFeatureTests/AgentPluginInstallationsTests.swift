@@ -15,6 +15,8 @@
             var checkedRoots: [String?] = []
             var reinstalledRoots: [String?] = []
             var failReinstall = false
+            var failUninstall = false
+            var uninstallQueryStatus: PluginInstallStatus = .notInstalled
             var blocked = false
             var resume: CheckedContinuation<Void, Never>?
             let checkStarted = AsyncStream<Void>.makeStream()
@@ -33,8 +35,16 @@
                 .alreadyInstalled
             }
 
-            func uninstall(configRoot _: String?) {
-                status = .notInstalled
+            func uninstall(configRoot _: String?) throws {
+                if failUninstall {
+                    throw AgentPluginInstallError("Native removal failed")
+                }
+                status = uninstallQueryStatus
+            }
+
+            func configureUninstall(fail: Bool) {
+                failUninstall = fail
+                uninstallQueryStatus = .checkFailed(message: "The original marketplace source no longer exists")
             }
 
             func applySettings(_: Data) -> SettingsResult {
@@ -123,6 +133,22 @@
             #expect(service.installations[location]?.error == nil)
             #expect(service.installations[location]?.lastChange == .installed)
             #expect(service.installations[location]?.status == .installed(version: "1.1.0"))
+        }
+
+        @Test("Successful uninstall does not require a source listing; failure still shows remaining components", arguments: [false, true])
+        func uninstallWithMissingSource(_ fails: Bool) async {
+            let core = Core()
+            let remaining = PluginInstallStatus.installed(version: "missing + hooks 1.0.0")
+            await core.configure(remaining)
+            await core.configureUninstall(fail: fails)
+            let location = AgentPluginLocation(pluginID: "codex", configRoot: nil)
+            let service = AgentPluginInstallations(reminders: .inMemory(channel: .plugin)) { _ in core }
+            await service.uninstall(location)
+            #expect(service.installations[location]?.status == (fails ? remaining : .notInstalled))
+            #expect(service.installations[location]?.lastChange == (fails ? nil : .uninstalled))
+            #expect((service.installations[location]?.error != nil) == fails)
+            #expect(service.installations[location]?.isBusy == false)
+            #expect(await core.checks == (fails ? 1 : 0))
         }
 
         @Test("Post-change notices distinguish reinstall from uninstall and clear on a failed operation", arguments: ["codex", "claude-code"])

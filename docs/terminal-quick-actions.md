@@ -16,6 +16,20 @@ to check. Recognized panels close before queued human input is released, so
 Return cannot accidentally toggle a hook. Feedback distinguishes new approval,
 confirmed refresh, and older Hosts' unconfirmed results. The optional refresh
 request/result fields preserve approval-only behavior for older Viewers.
+Host tmux 3.6a is supported: opening `/hooks` uses a private `paste-buffer -p`
+and Return in one guarded queue when paste-mode metadata is unavailable. Panel
+keys and composer readback accept this missing metadata while retaining process,
+foreground command, pane identity, cursor, size, copy-mode and human-input checks.
+An explicitly disabled paste mode remains blocked. The compatibility runs on the
+Host for local, Mac Viewer and iOS actions; only the Host needs this update.
+Cached Working status does not disable this repair action. When it is still
+Working, each `/hooks` entry first checks the running Codex process's unique
+writable rollout, verifies its conversation header and latest native turn end,
+then captures the live empty composer again. Missing/ambiguous ownership,
+incomplete records, a newer turn, busy footer, pending forms or drafts block input.
+The check runs only on request and does not overwrite lifecycle state or add polling.
+This menu change requires updating the operating Mac/iOS client as well as the
+Host; an older Viewer still disables the action locally from cached Working state.
 See [Codex hook approval](plugins/codex.md#approving-changed-hooks-without-leaving-the-conversation)
 for input checks and compatibility limits.
 
@@ -235,9 +249,9 @@ private buffer is consumed and deleted; paste and Return share a guarded command
 queue. Foreground command, cursor, size, copy mode, pane/process identity and
 human-input checks still apply. Servers that expose an explicitly disabled paste
 mode remain blocked; tmux 3.7+ retains the single-write submission. This fallback
-is limited to user-requested model/effort changes, including Mac/iOS Viewer
-requests executed on the Host. Automatic workflows and hook approval retain
-their explicit input-mode requirement. Only the Host needs the compatibility fix;
+also applies to user-requested hook approval, including Mac/iOS Viewer
+requests executed on the Host. Automatic workflows retain their explicit
+input-mode requirement. Only the Host needs the compatibility fix;
 updating a Viewer alone does not change the Host's behavior.
 
 Only an idle Agent with an empty native composer can accept a switch. Questions,

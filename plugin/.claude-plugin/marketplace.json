@@ -1,13 +1,18 @@
 {
-    "name": "ctrlx",
-    "owner": {
-        "name": "ZengJice"
+  "name": "ctrlx",
+  "owner": {
+    "name": "ZengJice"
+  },
+  "plugins": [
+    {
+      "name": "ctrlx",
+      "source": "./ctrlx",
+      "description": "CtrlX plugin"
     },
-    "plugins": [
-        {
-            "name": "ctrlx",
-            "source": "./ctrlx",
-            "description": "CtrlX plugin"
-        }
-    ]
+    {
+      "name": "ctrlx-hooks",
+      "source": "./ctrlx-hooks",
+      "description": "CtrlX lifecycle hooks"
+    }
+  ]
 }

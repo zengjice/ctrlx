@@ -235,7 +235,7 @@ def run():
             private_home.mkdir()
             env = {"HOME": str(private_home), "PATH": f"{root}/bin:/opt/homebrew/bin:/usr/bin:/bin", "TERM": "xterm-256color", "CTRLX_SOCKET": str(root / "api.sock")}
             bridge = root / (agent + "-hook.py")
-            source = (REPO / ("plugin/codex/ctrlx/scripts/hook.py" if agent == "codex" else "plugin/ctrlx/scripts/hook.py")).read_text()
+            source = (REPO / ("plugin/codex/ctrlx-hooks/scripts/hook.py" if agent == "codex" else "plugin/ctrlx-hooks/scripts/hook.py")).read_text()
             source = source.replace('SOCKET_PATH = os.path.expanduser("~/.ctrlx/state/ingress.sock")', "SOCKET_PATH = " + repr(str(root / "ingress.sock")))
             anchor = '    body = json.dumps(\n'
             assert source.count(anchor) == 1
@@ -247,8 +247,8 @@ def run():
                 (config / "config.toml").write_text(f'model = "gpt-5.4"\nmodel_provider = "fixture"\ncheck_for_update_on_startup = false\n[model_providers.fixture]\nname = "Fixture"\nbase_url = "{endpoint}/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n[projects."{project}"]\ntrust_level = "trusted"\n')
                 marketplace = root / "marketplace"
                 shutil.copytree(REPO / "plugin/codex", marketplace)
-                shutil.copyfile(bridge, marketplace / "ctrlx/scripts/hook.py")
-                for args in (["plugin", "marketplace", "add", str(marketplace)], ["plugin", "add", "ctrlx@ctrlx"]):
+                shutil.copyfile(bridge, marketplace / "ctrlx-hooks/scripts/hook.py")
+                for args in (["plugin", "marketplace", "add", str(marketplace)], ["plugin", "add", "ctrlx@ctrlx"], ["plugin", "add", "ctrlx-hooks@ctrlx"]):
                     subprocess.run(["/opt/homebrew/bin/codex", *args], env=env, check=True, capture_output=True, timeout=30)
                 args = ["/opt/homebrew/bin/codex", "--no-daemon", "--no-alt-screen", "--dangerously-bypass-hook-trust", "-C", str(project), "-a", "never", "-s", "danger-full-access", "Say fixture ready."]
                 if fresh:

@@ -91,7 +91,7 @@ flowchart TD
 
 Host 账本格式 4 在加载旧账本时移除已废弃的 Agent 输出附件引用，保留配置、回答、原生轮次关联、输入图片及内容节点输出；未结束的运行仍按重启规则暂停。迁移通过完整校验后才原子保存，不恢复文件分享命令。工作流协议能力与服务启动状态分开：本机与远端入口展示实际加载错误，只有远端协议版本不匹配才提示升级 Host。
 
-CtrlX 为 Claude Code 和 Codex 分别安装原生 plugin，两者共用 skill 源码，构建时同步到 Codex plugin。工作流指引变化后，两份 plugin manifest 独立递增版本（当前为 Claude Code 1.3.19、Codex 1.1.18），使已安装的同版本旧缓存能被识别为待更新。
+CtrlX 为 Claude Code 和 Codex 分别安装原生 plugin，两者共用 skill 源码，构建时同步到 Codex plugin。工作流指引变化只递增 skills 插件版本（当前为 Claude Code 1.3.20、Codex 1.1.19）；两边的 `ctrlx-hooks` 插件均为 1.0.0，仅在 hook 自身变化时独立更新，避免技能更新牵动运行中的 hooks。
 
 每条连接都等待上游成功，但材料传递可以独立选择。「Completion only」不加入上游回答和附件；它只表达执行先后。内容步骤使用相同规则，可以只生成自己的预设，不携带触发它的上游结果。
 

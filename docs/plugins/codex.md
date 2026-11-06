@@ -19,6 +19,56 @@ Code core; only the agent-specific differences are called out here. See
 | `default_provider_id` | String? | `null` |
 | `model_shortcut_defaults` | object | `{}` (hidden shortcut IDs by Provider; empty key means current CLI configuration) |
 
+## Independent skills and hook plugins
+
+The Codex marketplace ships two native plugins: `ctrlx@ctrlx` contains skills
+(1.1.19), while `ctrlx-hooks@ctrlx` contains only lifecycle declarations and the
+stable ingress bridge (1.0.0). Their versions advance independently. Skills-only
+updates must not change the hook plugin tree or version.
+
+Install/update checks both components through the native CLI, verifies the
+marketplace source, and changes only missing or older components. It upgrades
+the former monolithic `ctrlx` first so new sessions never register both sets of
+hooks. An interrupted migration can be retried; it never reports success without
+reading back both installed versions. Status shows both versions, and either
+older component produces an update notice. A legacy single version also requires
+the separate bridge. If only hooks remain, Settings shows a partial installation
+with the hook version, keeps Uninstall available, and offers to restore skills.
+Codex's configuration fallback recognizes either registered component when the
+marketplace cannot be listed, but does not infer absence from a failed query.
+Uninstall directly removes the two marketplace-qualified IDs without listing
+the marketplace source, so moving/deleting the original app cannot block it.
+Both removals are attempted and real failures are reported.
+Settings shows the successful uninstall directly; a failed removal still queries
+and displays remaining components. A stale-source listing cannot overwrite a
+confirmed removal with a check error.
+The app does not write Codex's configuration or trust hashes directly.
+
+At startup the Host atomically publishes `session-skills-root` beside its ingress
+socket, pointing to the current app's shared skills directory. SessionStart reads
+the three existing entrypoints there after forwarding its event. Neither hook
+plugin contains skills or a copy of their text. A skills update can therefore
+change SessionStart context without changing the bridge's plugin fingerprint.
+Missing optional context does not stop event forwarding.
+
+This separates future updates; an already-running conversation can retain the
+old plugin configuration during the initial migration. Review/refresh it in
+Codex, or use Codex's native plugin reload/resume if it has not discovered the
+new source. Migration does not promise hot replacement of every old runtime.
+Real hook changes still require the native trust flow.
+
+Local acceptance used Codex CLI 0.167.0 and Claude Code 2.1.317 with private
+HOME/configuration directories, native plugin caches and tmux sockets. Both
+native installers upgraded skills while leaving the hook cache's bytes, inode
+and modification time unchanged. Separate live sessions kept the same Agent
+PID and delivered exactly one UserPromptSubmit receipt after a skills-only
+update. Model endpoints were loopback fixtures; no user conversation was used.
+The repeatable native installer check is opt-in:
+`CTRLX_SPLIT_NATIVE_PLUGINS=1 ./scripts/unit-tests.sh -- --no-parallel --filter NativeAgentPluginSplitTests`.
+The packaging/context regression is `python3 -m unittest scripts.tests.test_agent_skills`.
+This evidence covers current local CLI versions, not every older running
+conversation's initial migration or cross-machine distribution.
+
 ## Hook trust on launch
 
 CtrlX-managed New Agent / project, Fork and recovery launches add
@@ -31,7 +81,10 @@ same policy to manual interactive `codex`, `codex resume` and `codex fork`
 launches through the shell integration described below.
 
 An already-running Codex process does not acquire this invocation flag. After a
-plugin update, if it reports `plugin contents changed; hook approval required`,
+plugin update, CtrlX also does not treat the flag's presence in argv as proof
+that the running hook configuration accepts the new plugin contents. The flag
+does not persist approval, and runtime plugin validation can still require a
+refresh. If it reports `plugin contents changed; hook approval required`,
 use `/hooks` to review and trust the updated hooks in that session. This reloads
 hook configuration when new approval is saved, without requiring the user to exit
 the conversation. Already-saved approval alone does not refresh every running
@@ -49,7 +102,11 @@ sources; it does not restrict approval to CtrlX.
 
 The Host requires an unambiguous supported Agent process, matching workspace
 pane identity, an idle empty composer, no pending question or editor/draft, and a
-running tmux server that reports bracketed-paste mode (tmux 3.7+). It serializes
+running tmux server with enabled bracketed-paste mode, or an older server such
+as tmux 3.6a that cannot report it. For missing mode metadata, `/hooks` uses
+tmux's native `paste-buffer -p` and Return in one guarded queue; known enabled
+mode retains the single-write submission. Explicitly disabled mode is rejected.
+Panel keys and return-to-composer checks support both paths. The Host serializes
 input through the shared terminal gate and rechecks the process and screen before
 each mutation. It opens `/hooks`, sends `t` only after recognizing the root
 `trust all` controls, then reopens the panel to read back persisted approval.
@@ -64,6 +121,16 @@ Only a recognized hooks panel in the same process is closed during cleanup.
 Queued human input invalidates further toggles, but cleanup closes the native
 panel before releasing that input, preventing an accidental hook toggle by Return.
 Existing hook enablement is preserved by Codex's trust action.
+Cached Working metadata leaves the menu available for a live check. A Working
+session requires native completion evidence from the current process's single
+writable rollout before each `/hooks` entry. The Host validates process lifetime,
+file identity and conversation header, reads at most 1 MiB from a fixed EOF, and
+rejects a partial/malformed trailing record or a newer native turn. It then
+recaptures the composer and retains the busy-footer, form, draft and input-gate
+checks. No cached conversation ID or history search can supply this evidence;
+unverifiable ownership remains blocked. This does not force the session Idle.
+Update both the Host and the operating Mac/iOS client for this repair entry;
+older clients still disable it locally from Working metadata.
 New Viewers hide this action on Hosts that
 do not advertise `supportsAgentHookTrust`.
 
@@ -86,6 +153,10 @@ change to confirm both saved states before returning to the composer.
 Native config writes refresh that conversation without restarting it. This does
 not toggle foreign, managed, untrusted or initially disabled hooks. If no eligible
 hook exists, the action reports why it cannot refresh.
+The dedicated `ctrlx-hooks@ctrlx` source is recognized alongside the old
+`ctrlx@ctrlx` source during migration. Approval and refresh feedback explicitly
+leave subsequent hook execution unconfirmed. A fresh native hook receipt is
+execution evidence; the panel's Trusted label and OTEL updates alone are not.
 
 After a failed or ambiguous toggle, restoration first reads the persisted state
 and only re-enables the same hook if it is disabled. Human takeover, changed

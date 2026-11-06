@@ -18,7 +18,7 @@ the JSON-RPC vocabulary, wire keys, or plugin storage paths.
 - `CtrlxPackage/Sources/CtrlxPluginProtocol/SidecarWire.swift` — RPC vocabulary + framing
 - `CtrlxPackage/Sources/CtrlxServerFeature/Plugins/Sidecar/SidecarSupervisor.swift` — spawn, crash policy
 - `CtrlxPackage/Sources/CtrlxPluginProtocol/IngressFrame.swift` — hook ingress frame
-- `plugin/ctrlx/scripts/hook.py` — reference hook bridge implementation
+- `plugin/ctrlx-hooks/scripts/hook.py` — reference hook bridge implementation
 
 ---
 

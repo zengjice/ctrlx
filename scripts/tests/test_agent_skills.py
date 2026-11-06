@@ -107,6 +107,13 @@ class SkillResources(unittest.TestCase):
             source = plugin / "ctrlx/skills"
             destination = plugin / "codex/ctrlx/skills"
             shutil.copytree(SKILLS, source)
+            for marketplace in [plugin, plugin / "codex"]:
+                source_marketplace = ROOT / ("plugin/codex" if marketplace.name == "codex" else "plugin")
+                shutil.copytree(source_marketplace / "ctrlx-hooks", marketplace / "ctrlx-hooks")
+                for legacy in ["hooks", "scripts"]:
+                    stale = marketplace / "ctrlx" / legacy
+                    stale.mkdir(parents=True)
+                    (stale / "old.txt").write_text("stale monolithic component")
             destination.mkdir(parents=True)
             (destination / "obsolete.md").write_text("stale built resource")
             before = {p.relative_to(source): p.read_bytes()
@@ -118,6 +125,9 @@ class SkillResources(unittest.TestCase):
                 after = {p.relative_to(destination): p.read_bytes()
                          for p in destination.rglob("*") if p.is_file()}
                 self.assertEqual(before, after)
+                for marketplace in [plugin, plugin / "codex"]:
+                    self.assertFalse((marketplace / "ctrlx/hooks").exists())
+                    self.assertFalse((marketplace / "ctrlx/scripts").exists())
             self.assertEqual(before, {p.relative_to(source): p.read_bytes()
                                       for p in source.rglob("*") if p.is_file()})
 
@@ -132,10 +142,12 @@ class PluginSessionContext(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.directory = Path(temporary.name)
         bundle = self.directory / "CtrlX.app/Contents/Resources/plugin"
-        self.plugins = {"claude-code": bundle / "ctrlx", "codex": bundle / "codex/ctrlx"}
+        self.skills = {"claude-code": bundle / "ctrlx", "codex": bundle / "codex/ctrlx"}
+        self.plugins = {"claude-code": bundle / "ctrlx-hooks", "codex": bundle / "codex/ctrlx-hooks"}
         for name, path in self.plugins.items():
-            source = "plugin/ctrlx" if name == "claude-code" else "plugin/codex/ctrlx"
-            shutil.copytree(ROOT / source, path)
+            source = "plugin" if name == "claude-code" else "plugin/codex"
+            shutil.copytree(ROOT / source / "ctrlx-hooks", path)
+            shutil.copytree(ROOT / source / "ctrlx", self.skills[name])
         subprocess.run(["bash", str(ROOT / "scripts/sync-codex-skills.sh")],
                        env=dict(os.environ, BUILT_PRODUCTS_DIR=str(self.directory),
                                 PRODUCT_NAME="CtrlX"),
@@ -153,6 +165,7 @@ class PluginSessionContext(unittest.TestCase):
         ))
         with tempfile.TemporaryDirectory(dir=self.directory) as ipc:
             path = str(Path(ipc) / "ingress.sock")
+            (Path(ipc) / "session-skills-root").write_text(str(self.skills[plugin] / "skills"), encoding="utf-8")
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
                 if available:
                     listener.bind(path)
@@ -191,6 +204,20 @@ class PluginSessionContext(unittest.TestCase):
                         listener.accept()
                 return result.stdout
 
+    def test_skills_updates_do_not_change_hook_plugin_contents(self):
+        for plugin, path in self.plugins.items():
+            before = {p.relative_to(path): p.read_bytes()
+                      for p in path.rglob("*") if p.is_file()}
+            skill = self.skills[plugin] / "skills/file-links/SKILL.md"
+            skill.write_text("---\nname: file-links\n---\nUpdated skill content.\n", encoding="utf-8")
+            stdout = self.run_hook(plugin, {"hook_event_name": "SessionStart"})
+            self.assertIn("Updated skill content.", json.loads(stdout)["hookSpecificOutput"]["additionalContext"])
+            self.assertEqual(before, {p.relative_to(path): p.read_bytes()
+                                     for p in path.rglob("*") if p.is_file()})
+            self.assertFalse((self.skills[plugin] / "hooks").exists())
+            self.assertFalse((self.skills[plugin] / "scripts").exists())
+            self.assertFalse((path / "skills").exists())
+
     def test_legacy_host_eof_keeps_hooks_compatible(self):
         for plugin in self.plugins:
             with self.subTest(plugin=plugin):
@@ -199,7 +226,7 @@ class PluginSessionContext(unittest.TestCase):
                 self.assertTrue(stdout)
 
     def skill_context(self, plugin, name):
-        skill = (self.plugins[plugin] / "skills" / name / "SKILL.md").resolve()
+        skill = (self.skills[plugin] / "skills" / name / "SKILL.md").resolve()
         body = skill.read_text().split("---", 2)[2].strip()
         if name != "file-links":
             return f"Skill source: `{skill}`. Resolve relative references from this file.\n\n{body}"
@@ -245,7 +272,7 @@ class PluginSessionContext(unittest.TestCase):
         for plugin, path in self.plugins.items():
             with self.subTest(plugin=plugin):
                 for name, body in bodies.items():
-                    (path / "skills" / name / "SKILL.md").write_text(
+                    (self.skills[plugin] / "skills" / name / "SKILL.md").write_text(
                         f"---\nname: {name}\ndescription: fixture\n---\n\n{body}\n",
                         encoding="utf-8")
                 contexts = [self.skill_context(plugin, name) for name in bodies]
@@ -276,7 +303,7 @@ class PluginSessionContext(unittest.TestCase):
         for plugin, path in self.plugins.items():
             names = self.entrypoints
             for name in names:
-                skill = path / "skills" / name / "SKILL.md"
+                skill = self.skills[plugin] / "skills" / name / "SKILL.md"
                 original = skill.read_bytes()
                 remaining = "\n\n".join(self.skill_context(plugin, other)
                                         for other in names if other != name)
@@ -298,7 +325,7 @@ class PluginSessionContext(unittest.TestCase):
         for plugin, path in self.plugins.items():
             with self.subTest(plugin=plugin):
                 for name in self.entrypoints:
-                    (path / "skills" / name / "SKILL.md").unlink()
+                    (self.skills[plugin] / "skills" / name / "SKILL.md").unlink()
                 self.assertEqual(self.run_hook(plugin, {"hook_event_name": "SessionStart"}), b"")
 
     def test_invalid_input_does_not_emit_context(self):

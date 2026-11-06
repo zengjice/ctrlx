@@ -12,11 +12,19 @@ struct AgentHookTrustMenuTests {
     @Test
     func onlyReadyCodexPanes() {
         #expect(AgentHookTrustMenu.isReady(pane("%1")))
-        #expect(!AgentHookTrustMenu.isReady(pane("%1", working: true)))
+        #expect(AgentHookTrustMenu.isReady(pane("%1", working: true)))
         #expect(!AgentHookTrustMenu.isReady(pane("%1", plugin: "claude-code")))
         let missing = PaneState(paneId: "%1", agentSession: .init(paneId: "%1", pluginID: "codex"))
         #expect(missing.workspaceIdentity == nil)
         #expect(!AgentHookTrustMenu.isReady(missing))
+    }
+
+    @Test("Approval and refresh never claim that subsequent hook execution was confirmed")
+    func executionFeedback() {
+        for message in [AgentHookTrustMenu.feedbackMessage(for: .approved), AgentHookTrustMenu.feedbackMessage(for: .alreadyTrusted, refreshed: true)] {
+            #expect(message.contains("Hook execution has not been confirmed"))
+        }
+        #expect(AgentHookTrustMenu.feedbackMessage(for: .alreadyTrusted).contains("did not confirm refreshing"))
     }
 
     #if os(macOS)

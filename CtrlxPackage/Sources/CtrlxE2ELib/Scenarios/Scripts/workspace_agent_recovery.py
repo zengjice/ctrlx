@@ -106,7 +106,7 @@ def setup():
     endpoints = wait(lambda: json.loads((EVIDENCE / "model-endpoints.json").read_text()))
     # Forward real native lifecycle payloads to this App's private socket. A gate
     # can delay one SessionStart to exercise exit before identity reconciliation.
-    original = APP / "Contents/Resources/plugin/ctrlx/scripts/hook.py"
+    original = APP / "Contents/Resources/plugin/ctrlx-hooks/scripts/hook.py"
     bridge = ROOT / "claude-hook.py"
     source = original.read_text()
     old = 'SOCKET_PATH = os.path.expanduser("~/.ctrlx/state/ingress.sock")'

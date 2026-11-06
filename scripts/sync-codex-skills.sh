@@ -15,9 +15,19 @@ APP_PLUGIN_DIR="${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Resources/plu
 SOURCE_DIR="${APP_PLUGIN_DIR}/ctrlx/skills"
 DEST_DIR="${APP_PLUGIN_DIR}/codex/ctrlx/skills"
 
+for marketplace in "$APP_PLUGIN_DIR" "$APP_PLUGIN_DIR/codex"; do
+    if [ ! -f "$marketplace/ctrlx-hooks/hooks/hooks.json" ]; then
+        echo "error: missing independent CtrlX hooks at $marketplace/ctrlx-hooks" >&2
+        exit 1
+    fi
+    # Incremental folder copies can retain files removed from the source tree.
+    # Remove the former hook component from built skills packages only.
+    rm -rf "$marketplace/ctrlx/hooks" "$marketplace/ctrlx/scripts"
+done
+
 if [ ! -d "$SOURCE_DIR" ]; then
-    echo "warning: no skills directory at $SOURCE_DIR — Codex plugin will ship without skills"
-    exit 0
+    echo "error: no skills directory at $SOURCE_DIR" >&2
+    exit 1
 fi
 
 mkdir -p "$DEST_DIR"
