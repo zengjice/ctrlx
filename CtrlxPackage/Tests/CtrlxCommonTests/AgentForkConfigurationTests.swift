@@ -74,6 +74,16 @@ struct AgentForkConfigurationTests {
         #expect(try config.worktreeRequest(source: source, preparation: nil, name: "", allowUncommittedChanges: false) == nil)
     }
 
+    @Test("Fork preserves the form's official, custom and explicit CLI Provider selections", arguments: ["openai", "custom", nil] as [String?])
+    func providerSelection(providerID: String?) throws {
+        let source = try #require(AgentForkSource(pane: pane("%1", index: 1)))
+        let config = configuration(sources: [source], destination: .currentDirectory)
+        let request = try config.forkRequest(
+            source: source, preparation: nil, name: "fork", allowUncommittedChanges: false, targetProviderID: providerID
+        )
+        #expect(request.targetProviderID == providerID)
+    }
+
     @Test("Mac/iOS current-directory Fork uses the entered window name without needing Git", arguments: ["codex", "claude-code"])
     func currentDirectoryName(agent: String) throws {
         let source = try #require(AgentForkSource(pane: pane("%1", index: 1, agent: agent)))

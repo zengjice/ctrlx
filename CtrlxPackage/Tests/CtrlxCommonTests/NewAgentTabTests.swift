@@ -5,6 +5,20 @@ import Testing
 
 @MainActor
 struct NewAgentTabTests {
+    @Test("Codex cards start with OpenAI while an explicit CLI or custom choice is preserved")
+    func initialProvider() throws {
+        let agent = SessionLaunchAgent(
+            id: "codex", name: "Codex",
+            providers: [.init(id: "custom", name: "Custom"), .init(id: "openai", name: "OpenAI")],
+            defaultProviderID: "custom"
+        )
+        let config = configuration(agents: [agent])
+        #expect(agent.initialProviderID == "openai")
+        #expect(try config.request(agentID: agent.id, directory: "/repo", providerID: agent.initialProviderID).providerID == "openai")
+        #expect(try config.request(agentID: agent.id, directory: "/repo", providerID: nil).providerID == nil)
+        #expect(try config.request(agentID: agent.id, directory: "/repo", providerID: "custom").providerID == "custom")
+    }
+
     private func configuration(host: String? = nil, agents: [SessionLaunchAgent], reason: String? = nil) -> NewAgentTabConfiguration {
         NewAgentTabConfiguration(
             id: .init(hostID: host, sessionName: "work"), initialDirectory: "/Host/repo",

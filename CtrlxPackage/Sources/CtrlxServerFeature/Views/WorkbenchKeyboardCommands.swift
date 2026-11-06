@@ -14,9 +14,9 @@ public struct WorkbenchKeyboardCommands: Commands {
             Button("New Session") { actions?.newLocalSession?() }
                 .keyboardShortcut("n", modifiers: .command)
                 .disabled(actions?.newLocalSession == nil)
-            Button("New Terminal") { actions?.newTerminal?() }
+            Button("New Tab…") { actions?.newTab?() }
                 .keyboardShortcut("t", modifiers: .command)
-                .disabled(actions?.newTerminal == nil)
+                .disabled(actions?.newTab == nil)
         }
         CommandGroup(before: .windowList) {
             Button("Switch Session…") { actions?.switchSession?() }

@@ -3,6 +3,20 @@ import Testing
 @testable import CtrlxNetworking
 
 struct AgentLaunchDefaultsTests {
+    @Test("Codex creation prefers OpenAI regardless of Provider display order")
+    func officialProvider() {
+        #expect(AgentLaunchDefaults.providerID(pluginID: "codex", availableIDs: ["custom", "openai"]) == "openai")
+        #expect(AgentLaunchDefaults.providerID(pluginID: "codex", availableIDs: ["openai"]) == "openai")
+    }
+
+    @Test("Legacy Hosts and other agents retain their existing Provider behavior")
+    func unavailableProvider() {
+        #expect(AgentLaunchDefaults.providerID(pluginID: "codex", availableIDs: []) == nil)
+        #expect(AgentLaunchDefaults.providerID(pluginID: "codex", availableIDs: ["custom"]) == nil)
+        #expect(AgentLaunchDefaults.providerID(pluginID: "claude-code", availableIDs: ["anthropic"]) == nil)
+        #expect(AgentLaunchDefaults.providerID(pluginID: "pi", availableIDs: ["openai"]) == nil)
+    }
+
     @Test("Codex is preferred regardless of the available agents' display order")
     func prefersCodex() {
         #expect(AgentLaunchDefaults.selectedID(availableIDs: ["claude-code", "codex", "pi"]) == "codex")

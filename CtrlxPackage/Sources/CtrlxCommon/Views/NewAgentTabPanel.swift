@@ -181,7 +181,7 @@ private struct AgentTabLaunchCard: View {
         self.onStart = onStart
         // Seed a user-owned draft once, not a binding to a moving terminal cwd.
         _directory = State(initialValue: initialDirectory)
-        _providerID = State(initialValue: nil)
+        _providerID = State(initialValue: agent.initialProviderID)
     }
 
     var body: some View {
@@ -197,10 +197,10 @@ private struct AgentTabLaunchCard: View {
                 .accessibilityIdentifier("new-agent-directory-\(agent.id)")
             if !agent.providers.isEmpty {
                 Picker("Provider", selection: $providerID) {
-                    Text(agent.defaultProviderLabel).tag(String?.none)
                     ForEach(agent.providers) { provider in
                         Text(provider.name).tag(Optional(provider.id))
                     }
+                    Text(agent.defaultProviderLabel).tag(String?.none)
                 }
                 .pickerStyle(.menu)
                 .accessibilityIdentifier("new-agent-provider-\(agent.id)")

@@ -118,13 +118,11 @@ struct TabDragPreview: View {
     }
 }
 
-/// Leading "+" menu used by both the local and remote tab bars. Exposes the
-/// "New Agent…" / "New Terminal" entries with a help string and
-/// optional disable on the terminal entry (the remote bar disables it while
-/// the host is disconnected).
+/// The leading "+" button and ⌘T share one picker in the active workbench.
 struct NewTabMenuButton: View {
     let helpText: String
     let agentConfiguration: NewAgentTabConfiguration
+    @Binding var isPresented: Bool
     var isTerminalDisabled = false
     let onNewTerminal: () -> Void
     var onOpenGit: (() -> Void)?
@@ -132,31 +130,8 @@ struct NewTabMenuButton: View {
     @State private var presentedAgents: NewAgentTabConfiguration?
 
     var body: some View {
-        Menu {
-            Button {
-                presentedAgents = agentConfiguration
-            } label: {
-                Label("New Agent…", symbol: .sparkles)
-            }
-            .accessibilityIdentifier("new-agent-tab")
-            Button {
-                onNewTerminal()
-            } label: {
-                Label("New Terminal", symbol: .terminal)
-            }
-            .disabled(isTerminalDisabled)
-            if let onNewResource {
-                Button { onNewResource(.files) } label: { Label("New Files", symbol: .folder) }
-                Button { onNewResource(.browser) } label: { Label("New Browser", symbol: .globe) }
-                Button { onNewResource(.simulator) } label: { Label("New iOS Simulator", symbol: .iphone) }
-            }
-            if let onOpenGit {
-                Divider()
-                Button(action: onOpenGit) {
-                    Label { Text("Open Git") } icon: { CustomSymbol.gitLogo.image }
-                }
-                .accessibilityIdentifier("open-git-tab")
-            }
+        Button {
+            isPresented.toggle()
         } label: {
             Symbols.plus.image
                 .font(.caption)
@@ -164,16 +139,54 @@ struct NewTabMenuButton: View {
                 .padding(.vertical, 6)
                 .contentShape(Rectangle())
         }
-        .menuStyle(.button)
-        .menuIndicator(.hidden)
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .fixedSize()
-        .help("\(helpText) · New Terminal: ⌘T")
+        .help("\(helpText) · ⌘T")
         .accessibilityLabel("New Tab")
-        .popover(item: $presentedAgents) { configuration in
-            NewAgentTabPanel(configuration: configuration)
+        .popover(isPresented: $isPresented) {
+            if let presentedAgents {
+                NewAgentTabPanel(configuration: presentedAgents)
+            } else {
+                NewTabPicker(items: items)
+            }
         }
+        .onChange(of: isPresented) { _, presented in
+            if !presented {
+                presentedAgents = nil
+            }
+        }
+        .onChange(of: agentConfiguration.id) {
+            isPresented = false
+            presentedAgents = nil
+        }
+    }
+
+    var items: [NewTabMenuItem] {
+        var items: [NewTabMenuItem] = [
+            .init(id: .agent, title: "New Agent…", image: Symbols.sparkles.image) {
+                presentedAgents = agentConfiguration
+            },
+            .init(id: .terminal, title: "New Terminal", image: Symbols.terminal.image, isEnabled: !isTerminalDisabled) {
+                isPresented = false
+                onNewTerminal()
+            },
+        ]
+        if let onNewResource {
+            for (kind, title, symbol) in [(ResourceTabKind.files, "New Files", Symbols.folder), (.browser, "New Browser", .globe), (.simulator, "New iOS Simulator", .iphone)] {
+                items.append(.init(id: .resource(kind), title: title, image: symbol.image) {
+                    isPresented = false
+                    onNewResource(kind)
+                })
+            }
+        }
+        if let onOpenGit {
+            items.append(.init(id: .git, title: "Open Git", image: CustomSymbol.gitLogo.image) {
+                isPresented = false
+                onOpenGit()
+            })
+        }
+        return items
     }
 }
 

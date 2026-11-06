@@ -275,6 +275,7 @@ public struct MainView: View {
     @State private var creatingSelection: NewSessionCreatingState?
     @State private var isCreatingAgentTab = false
     @State private var isCreatingTerminal = false
+    @State private var showingNewTabMenu = false
     @State private var showingSessionSwitcher = false
     @State private var pendingAgentFork: AgentForkConfiguration?
     @State private var showingNewLocalSession = false
@@ -868,6 +869,7 @@ public struct MainView: View {
                 let changedSelection = previous?.stableId != current?.stableId
                     || previous?.sessionName != current?.sessionName
                 if previous?.sessionName != current?.sessionName {
+                    showingNewTabMenu = false
                     applySelectedLocalSharedTerminalLayout()
                 }
                 // Pane dimensions, titles and process state refresh inside the same
@@ -879,6 +881,7 @@ public struct MainView: View {
                 }
             }
             .onChange(of: selectedRemoteSession) {
+                showingNewTabMenu = false
                 if selectedRemoteSession == nil {
                     applySelectedLocalSharedTerminalLayout()
                 } else {
@@ -975,6 +978,10 @@ public struct MainView: View {
             }
     }
 
+    private func openNewTabMenu() {
+        showingNewTabMenu = true
+    }
+
     private func openSessionSwitcher() {
         showingSessionSwitcher = true
     }
@@ -984,7 +991,7 @@ public struct MainView: View {
     }
 
     private var menuCommands: MenuCommandsModifier {
-        let newTerminal: (@MainActor () -> Void)? = canCreateTerminal && !isPresentingSessionPicker ? createTerminalTab : nil
+        let newTab: (@MainActor () -> Void)? = sidebarSessionSelection.wrappedValue != nil && !isPresentingSessionPicker ? openNewTabMenu : nil
         let switchSession: (@MainActor () -> Void)? = detachedWorkspace == nil && !isPresentingSessionPicker ? openSessionSwitcher : nil
         let voice: (@MainActor () -> Void)? = settings.showStatusBar && terminalQuickActions.active?.isAvailable == true && !isPresentingSessionPicker
             ? terminalQuickActions.toggleVoiceInput : nil
@@ -1000,7 +1007,7 @@ public struct MainView: View {
             onNewLocalSession: {
                 showingNewLocalSession = true
             },
-            onNewTerminal: newTerminal,
+            onNewTab: newTab,
             onSwitchSession: switchSession,
             onToggleVoiceInput: voice,
             allowsSessionNavigation: detachedWorkspace == nil && !isPresentingSessionPicker
@@ -1582,6 +1589,7 @@ public struct MainView: View {
                         requestCloseRemoteWindow(windowToClose, hostId: remote.hostId)
                     },
                     onNewWindow: { createTerminalTab() },
+                    isNewTabMenuPresented: $showingNewTabMenu,
                     agentConfiguration: agentTabConfiguration(
                         sessionName: remote.sessionName,
                         hostID: remote.hostId,
@@ -1751,6 +1759,7 @@ public struct MainView: View {
                             requestCloseWindow(windowToClose)
                         },
                         onNewWindow: { createTerminalTab() },
+                        isNewTabMenuPresented: $showingNewTabMenu,
                         agentConfiguration: agentTabConfiguration(
                             sessionName: session.sessionName,
                             hostID: nil,

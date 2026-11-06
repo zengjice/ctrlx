@@ -37,6 +37,7 @@ struct RemoteWindowTabBar: View {
     let onSelectWindow: (TmuxWindow) -> Void
     let onCloseWindow: (TmuxWindow) -> Void
     let onNewWindow: () -> Void
+    @Binding var isNewTabMenuPresented: Bool
     let agentConfiguration: NewAgentTabConfiguration
     let forkUnavailableReason: String?
     let supportsOtherDirectoryFork: Bool
@@ -283,6 +284,7 @@ struct RemoteWindowTabBar: View {
         NewTabMenuButton(
             helpText: "New agent or terminal tab",
             agentConfiguration: agentConfiguration,
+            isPresented: $isNewTabMenuPresented,
             isTerminalDisabled: !isHostConnected,
             onNewTerminal: onNewWindow,
             onNewResource: onNewResource
