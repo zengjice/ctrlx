@@ -7,6 +7,24 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.145 — Unified new-tab picker and official Provider defaults
+
+- Open the same compact Mac tab picker from **+** and **⌘T**, with New Agent
+  selected initially. Support arrow keys, Return and Escape while preserving
+  Terminal, resource and local Git actions.
+- Default Codex creation forms to OpenAI official login and Claude Code forms
+  to Anthropic official login when the Host offers them. Preserve explicit
+  CLI/custom choices and saved Host settings. See
+  [Agent creation](docs/services-reference.md#start-an-agent-window-in-an-existing-session-mac-and-ios).
+- Include iOS source changes for Model/Effort controls and resource navigation
+  cues; they require a later iOS build and installation. This release packages
+  macOS only. See [model controls](docs/terminal-quick-actions.md#ios-model-controls).
+- Validation: all 81 focused Swift tests passed, including AppKit picker keyboard
+  interaction and creation-form Provider checks. All 120 private publication,
+  installer and COS regressions, both boundary checks and SwiftFormat lint for
+  the 27 changed Swift files passed. Paired-device UI, iOS target validation and
+  Apple Intelligence evaluations were not rerun for this Mac release.
+
 ## 3.0.144 — Workflow interaction, browser audio and recovered terminals
 
 - Allow manual typing, pasting and answers while Agent workflows run. Pause and
