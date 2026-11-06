@@ -5,16 +5,17 @@ import Testing
 
 @MainActor
 struct NewAgentTabTests {
-    @Test("Codex cards start with OpenAI while an explicit CLI or custom choice is preserved")
-    func initialProvider() throws {
+    @Test("Agent cards start with their official login while an explicit CLI or custom choice is preserved", arguments: ["codex", "claude-code"])
+    func initialProvider(pluginID: String) throws {
+        let providerID = pluginID == "codex" ? "openai" : "anthropic"
         let agent = SessionLaunchAgent(
-            id: "codex", name: "Codex",
-            providers: [.init(id: "custom", name: "Custom"), .init(id: "openai", name: "OpenAI")],
+            id: pluginID, name: pluginID,
+            providers: [.init(id: "custom", name: "Custom"), .init(id: providerID, name: "Official login")],
             defaultProviderID: "custom"
         )
         let config = configuration(agents: [agent])
-        #expect(agent.initialProviderID == "openai")
-        #expect(try config.request(agentID: agent.id, directory: "/repo", providerID: agent.initialProviderID).providerID == "openai")
+        #expect(agent.initialProviderID == providerID)
+        #expect(try config.request(agentID: agent.id, directory: "/repo", providerID: agent.initialProviderID).providerID == providerID)
         #expect(try config.request(agentID: agent.id, directory: "/repo", providerID: nil).providerID == nil)
         #expect(try config.request(agentID: agent.id, directory: "/repo", providerID: "custom").providerID == "custom")
     }
