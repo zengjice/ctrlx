@@ -7,6 +7,26 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.146 — Browser control recovery and Mac settings fixes
+
+- Restore Viewer browser control after switching tabs by waiting for this
+  connection's pending release before requesting the same page again. Report
+  busy/unavailable pages accurately and record scoped rejection reasons in Debug
+  Mode. See [Viewer control](docs/agent-browser.md#viewer-browser-surface).
+- Show two complete vertical Agent cards in the Mac New Agent popover; scroll
+  additional cards and expanded directory browsers within the list.
+- Group Viewer Relay allowances by server and account, using the latest quota
+  snapshot while retaining per-pair credentials and reconnect checks.
+- Reject expired or abandoned installer Quit requests before shutdown begins.
+  Publish the matching private installer template with this Host update; ordinary
+  Quit remains supported. See [installation](RELEASE.md#publish-only-the-macos-package).
+- Validation: the filtered Swift run reported 75 tests with one opt-in native
+  audio-device check skipped. All 120 private publisher/installer/COS regressions,
+  43 local-installer checks, both boundary checks and SwiftFormat lint for 18
+  changed Swift files passed. Signed native-runtime acceptance is recorded
+  separately; paired-device UI and Apple Intelligence evaluations were not rerun.
+
+
 ## 3.0.145 — Unified new-tab picker and official Provider defaults
 
 - Open the same compact Mac tab picker from **+** and **⌘T**, with New Agent
