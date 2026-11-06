@@ -441,7 +441,12 @@
                 phraseContext: activePhraseContext,
                 sendPhrase: sendPhrase,
                 commandContext: activeAgentCommandContext,
-                sendCommand: sendAgentCommand
+                sendCommand: sendAgentCommand,
+                modelPane: terminalIsVisible ? activeModelPane : nil,
+                modelPluginID: activeAgentPluginID,
+                modelShortcuts: activeModelPane.flatMap { sessionStore.agentModelShortcutsByHost[hostId]?[$0.windowID]?.hidden } ?? .init(),
+                modelUnavailableReason: modelUnavailableReason,
+                requestModels: requestAgentModels
             ))
             .modifier(TerminalVoiceInputOverlay(
                 session: voiceSession, context: activePhraseContext,
@@ -1300,6 +1305,14 @@
                         windowActions(window, scope: scope)
                     }
                     if case .terminal = scope {
+                        if let pluginID = activeAgentPluginID {
+                            TerminalAgentModelButton(
+                                context: activePhraseContext,
+                                pluginID: pluginID,
+                                pane: activeModelPane,
+                                presentation: $quickActionPresentation
+                            )
+                        }
                         Button(action: resizeWindowToFit) {
                             Label("Fit Terminal to Screen", symbol: .arrowUpLeftAndArrowDownRight)
                         }
@@ -2319,6 +2332,48 @@
                 hasExternalEditor: pane?.editorSession != nil,
                 inputRevision: terminalInputRevision
             )
+        }
+
+        private var activeModelPane: WorkspacePaneIdentity? {
+            window?.panes.first { $0.paneId == activePaneId }?.workspaceIdentity
+        }
+
+        private var activeAgentPluginID: String? {
+            window?.panes.first { $0.paneId == activePaneId }?.agentSession?.pluginID
+        }
+
+        private var modelUnavailableReason: String? {
+            if !relayClient.isHostConnected {
+                return "Reconnect to the Host to use model shortcuts."
+            }
+            if !relayClient.hostSupportsAgentModelControls {
+                return "Update the Host Mac to use model shortcuts."
+            }
+            return nil
+        }
+
+        private func requestAgentModels(_ captured: TerminalAgentModelPresentation, _ spec: AgentModelControls) async throws -> AgentModelSnapshot {
+            guard
+                terminalIsVisible, quickActionPresentation.panel == .models(captured),
+                captured.matches(context: activePhraseContext, pane: activeModelPane, pluginID: activeAgentPluginID),
+                spec.workspacePane == captured.pane,
+                let paneID = captured.context.target.paneID else { throw CancellationError() }
+            if let modelUnavailableReason {
+                throw ViewerRelayClientError.commandFailed(modelUnavailableReason)
+            }
+            if spec.selection != nil, !activePhraseContext.canSend {
+                throw ViewerRelayClientError.commandFailed("The terminal is not ready for a model change.")
+            }
+            let result = await relayClient.sendCommand(spec, paneId: paneID, timeout: 25)
+            try Task.checkCancellation()
+            guard
+                terminalIsVisible, quickActionPresentation.panel == .models(captured),
+                captured.matches(context: activePhraseContext, pane: activeModelPane, pluginID: activeAgentPluginID) else { throw CancellationError() }
+            let response = try result.get()
+            guard response.success, let snapshot = response.agentModels else {
+                throw ViewerRelayClientError.commandFailed(response.error ?? "Model controls are unavailable on this Host.")
+            }
+            return snapshot
         }
 
         private func sendAgentCommand(_ request: AgentCommandRequest) -> Bool {

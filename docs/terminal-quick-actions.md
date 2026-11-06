@@ -378,6 +378,23 @@ height across the live terminal. The animation never wraps the terminal or keybo
 fade only, and Reduce Transparency uses an opaque, legible surface. The phrase
 editor hides its Form background so it does not obscure the shared material.
 
+## iOS model controls
+
+Agent tabs have an independent **Model** button in the first shortcut row. Its
+**Model** and **Effort** tabs use the same in-page overlay, backdrop, Close action
+and adaptive button grid as `/` Commands. It does not add an entry inside the
+Commands panel or borrow terminal focus. Selecting an option waits for Host
+confirmation before closing; failures stay in the panel with an actionable alert.
+
+The panel reads the Host's existing `AgentModelControls` catalog and respects its
+per-window shortcut visibility preferences; the current model and effort remain
+visible. Model changes preserve a supported effort or use the new model's default.
+**Refresh Models** reloads the catalog. Unsupported Hosts show an update reason.
+Reads and writes capture the Host, Agent, input revision and stable pane identity;
+each opening has its own lifetime so late results cannot update or dismiss a
+different panel. Changes carry the observed runtime and selection for Host-side
+validation and are never retried automatically.
+
 ## iOS resource shortcuts
 
 The Files, Browser and Simulator shortcuts on Agent, Terminal and resource pages

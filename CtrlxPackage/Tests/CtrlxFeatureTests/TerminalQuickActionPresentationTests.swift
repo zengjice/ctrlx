@@ -6,16 +6,81 @@ import Testing
 @Suite("Terminal quick action overlay presentation")
 struct TerminalQuickActionPresentationTests {
     private func phrase(host: String = "host", pane: String? = "%1", revision: UInt64 = 0, connected: Bool = true) -> TerminalPhraseContext {
-        TerminalPhraseContext(hostID: host, paneID: pane, inputRevision: revision,
-                              isConnected: connected, isInputAvailable: true)
+        TerminalPhraseContext(
+            hostID: host,
+            paneID: pane,
+            inputRevision: revision,
+            isConnected: connected,
+            isInputAvailable: true
+        )
     }
 
-    private func command(host: String = "host", pane: String = "%1", revision: UInt64 = 0, plugin: String = "codex",
-                         connected: Bool = true) throws -> AgentCommandContext {
+    private func command(
+        host: String = "host",
+        pane: String = "%1",
+        revision: UInt64 = 0,
+        plugin: String = "codex",
+        connected: Bool = true
+    ) throws -> AgentCommandContext {
         try #require(AgentCommandContext(
             hostID: host, paneID: pane, session: AgentSession(paneId: pane, pluginID: plugin),
             isConnected: connected, isInputAvailable: true, hasExternalEditor: false, inputRevision: revision
         ))
+    }
+
+    @Test("Model controls open independently from slash commands and keep terminal input available")
+    func independentModelPanel() {
+        let pane = WorkspacePaneIdentity(serverID: "server", sessionID: .init(), windowID: .init(), paneID: .init())
+        let captured = TerminalAgentModelPresentation(context: phrase(), pluginID: "other-agent", pane: pane)
+        var presentation = TerminalQuickActionPresentation()
+        presentation.toggle(.models(captured))
+        presentation.validate(phraseContext: phrase(), commandContext: nil, modelPane: pane, modelPluginID: "other-agent")
+        #expect(presentation.panel == .models(captured))
+        #expect(!presentation.suspendsTerminalInput)
+        presentation.toggleCommands(context: nil, terminal: phrase())
+        #expect(presentation.panel == .commandsUnavailable(phrase()))
+        presentation.toggle(.models(captured))
+        #expect(presentation.panel == .models(captured))
+        presentation.toggle(.models(.init(context: phrase(connected: false), pluginID: "other-agent", pane: pane)))
+        #expect(!presentation.isPresented)
+    }
+
+    @Test("A model panel survives availability changes, but not a replaced Host, pane, agent or local input")
+    func modelTargetValidation() {
+        let pane = WorkspacePaneIdentity(serverID: "server", sessionID: .init(), windowID: .init(), paneID: .init())
+        let captured = TerminalAgentModelPresentation(context: phrase(), pluginID: "codex", pane: pane)
+        var presentation = TerminalQuickActionPresentation()
+        presentation.show(.models(captured))
+        presentation.validate(phraseContext: phrase(connected: false), commandContext: nil, modelPane: pane, modelPluginID: "codex")
+        #expect(presentation.panel == .models(captured))
+        for (context, identity, plugin) in [
+            (phrase(host: "other"), Optional(pane), Optional("codex")),
+            (phrase(pane: "%2"), pane, "codex"),
+            (phrase(revision: 1), pane, "codex"),
+            (phrase(), .init(serverID: "replacement", sessionID: pane.sessionID, windowID: pane.windowID, paneID: pane.paneID), "codex"),
+            (phrase(), .init(serverID: pane.serverID, sessionID: pane.sessionID, windowID: pane.windowID, paneID: .init()), "codex"),
+            (phrase(), pane, "claude-code"),
+            (phrase(), nil, "codex"),
+            (phrase(), pane, nil),
+        ] {
+            presentation.show(.models(captured))
+            presentation.validate(phraseContext: context, commandContext: nil, modelPane: identity, modelPluginID: plugin)
+            #expect(!presentation.isPresented)
+        }
+    }
+
+    @Test("Reopening model controls creates a new owner for asynchronous completions")
+    func modelPanelOwnership() {
+        let pane = WorkspacePaneIdentity(serverID: "server", sessionID: .init(), windowID: .init(), paneID: .init())
+        let previous = TerminalAgentModelPresentation(context: phrase(), pluginID: "codex", pane: pane)
+        let reopened = TerminalAgentModelPresentation(context: phrase(), pluginID: "codex", pane: pane)
+        var presentation = TerminalQuickActionPresentation()
+        presentation.show(.models(previous))
+        presentation.dismiss()
+        presentation.show(.models(reopened))
+        #expect(previous.id != reopened.id)
+        #expect(presentation.panel != .models(previous))
+        #expect(presentation.panel == .models(reopened))
     }
 
     @Test("Commands remain openable without an agent, connection, or selected pane")
@@ -36,9 +101,9 @@ struct TerminalQuickActionPresentationTests {
     func toggleCommandsAcrossIdentityChange() throws {
         var presentation = TerminalQuickActionPresentation()
         presentation.toggleCommands(context: nil, terminal: phrase())
-        presentation.toggleCommands(context: try command(), terminal: phrase())
+        try presentation.toggleCommands(context: command(), terminal: phrase())
         #expect(!presentation.isPresented)
-        presentation.toggleCommands(context: try command(), terminal: phrase())
+        try presentation.toggleCommands(context: command(), terminal: phrase())
         presentation.toggleCommands(context: nil, terminal: phrase())
         #expect(!presentation.isPresented)
 
@@ -66,7 +131,7 @@ struct TerminalQuickActionPresentationTests {
 
     @Test("Missing-identity panels never borrow metadata from another terminal or input revision")
     func unrelatedIdentityIsIgnored() throws {
-        for unrelated in [try command(host: "other"), try command(pane: "%2"), try command(revision: 1)] {
+        for unrelated in try [command(host: "other"), command(pane: "%2"), command(revision: 1)] {
             var presentation = TerminalQuickActionPresentation()
             presentation.toggleCommands(context: nil, terminal: phrase())
             presentation.validate(phraseContext: phrase(), commandContext: unrelated)
@@ -86,9 +151,9 @@ struct TerminalQuickActionPresentationTests {
 
     @Test("The same toolbar button opens, closes and reopens either panel")
     func toggleSamePanel() throws {
-        for panel in [TerminalQuickActionPresentation.Panel.commands(try command()), .commandsUnavailable(phrase()), .phrases(phrase())] {
+        for panel in try [TerminalQuickActionPresentation.Panel.commands(command()), .commandsUnavailable(phrase()), .phrases(phrase())] {
             var presentation = TerminalQuickActionPresentation()
-            for _ in 0 ..< 5 {
+            for _ in 0..<5 {
                 presentation.toggle(panel)
                 #expect(presentation.panel == panel)
                 #expect(!presentation.suspendsTerminalInput)
@@ -102,7 +167,7 @@ struct TerminalQuickActionPresentationTests {
     @Test("Tapping the other toolbar button switches directly and preserves its target")
     func toggleOtherPanel() throws {
         var presentation = TerminalQuickActionPresentation()
-        let commands = TerminalQuickActionPresentation.Panel.commands(try command())
+        let commands = try TerminalQuickActionPresentation.Panel.commands(command())
         let phrases = TerminalQuickActionPresentation.Panel.phrases(phrase())
         for panel in [commands, phrases, commands, phrases] {
             presentation.toggle(panel)
@@ -114,8 +179,8 @@ struct TerminalQuickActionPresentationTests {
     @Test("Connection changes do not turn the close button into a reopen action")
     func toggleAfterAvailabilityChange() throws {
         var presentation = TerminalQuickActionPresentation()
-        presentation.toggle(.commands(try command()))
-        presentation.toggle(.commands(try command(connected: false)))
+        try presentation.toggle(.commands(command()))
+        try presentation.toggle(.commands(command(connected: false)))
         #expect(!presentation.isPresented)
         presentation.toggle(.phrases(phrase()))
         presentation.toggle(.phrases(phrase(connected: false)))
@@ -124,7 +189,7 @@ struct TerminalQuickActionPresentationTests {
 
     @Test("Toolbar toggles can close or switch out of the phrase editor")
     func toggleOutOfEditor() throws {
-        for panel in [TerminalQuickActionPresentation.Panel.phrases(phrase()), .commands(try command())] {
+        for panel in try [TerminalQuickActionPresentation.Panel.phrases(phrase()), .commands(command())] {
             var presentation = TerminalQuickActionPresentation()
             presentation.toggle(.phrases(phrase()))
             presentation.isEditingPhrase = true
@@ -145,7 +210,9 @@ struct TerminalQuickActionPresentationTests {
     func browsingPreservesInput(keyboardRequested: Bool) async throws {
         var presentation = TerminalQuickActionPresentation()
         var applied: [TerminalInputPresentation.State] = []
-        let updates = TerminalInputFocusUpdates { applied.append($0); return true }
+        let updates = TerminalInputFocusUpdates { applied.append($0)
+            return true
+        }
         let initial = TerminalInputPresentation.resolve(
             keyboardRequested: keyboardRequested, isActive: true, isCopyPresented: false
         )
@@ -153,7 +220,11 @@ struct TerminalQuickActionPresentationTests {
         updates.request(initial)
         await updates.pendingTask?.value
 
-        for panel in [TerminalQuickActionPresentation.Panel.commands(try command()), .commandsUnavailable(phrase()), .phrases(phrase())] {
+        let models = TerminalQuickActionPresentation.Panel.models(.init(
+            context: phrase(), pluginID: "codex",
+            pane: .init(serverID: "server", sessionID: .init(), windowID: .init(), paneID: .init())
+        ))
+        for panel in try [models, .commands(command()), .commandsUnavailable(phrase()), .phrases(phrase())] {
             presentation.show(panel)
             #expect(presentation.isPresented)
             #expect(!presentation.suspendsTerminalInput)
@@ -199,7 +270,7 @@ struct TerminalQuickActionPresentationTests {
         var presentation = TerminalQuickActionPresentation()
         presentation.show(.phrases(phrase()))
         presentation.isEditingPhrase = true
-        presentation.show(.commands(try command()))
+        try presentation.show(.commands(command()))
         #expect(!presentation.isEditingPhrase)
         #expect(!presentation.suspendsTerminalInput)
         presentation.show(.phrases(phrase()))
@@ -252,11 +323,11 @@ struct TerminalQuickActionPresentationTests {
 
     @Test("Availability changes keep panels open, preserving their captured targets")
     func availability() throws {
-        for panel in [TerminalQuickActionPresentation.Panel.commands(try command()), .phrases(phrase())] {
+        for panel in try [TerminalQuickActionPresentation.Panel.commands(command()), .phrases(phrase())] {
             var presentation = TerminalQuickActionPresentation()
             presentation.show(panel)
             for connected in [false, true] {
-                presentation.validate(phraseContext: phrase(connected: connected), commandContext: try command(connected: connected))
+                try presentation.validate(phraseContext: phrase(connected: connected), commandContext: command(connected: connected))
                 #expect(presentation.panel == panel)
                 #expect(!presentation.suspendsTerminalInput)
             }
@@ -265,13 +336,15 @@ struct TerminalQuickActionPresentationTests {
 
     @Test("Changing pane or local input closes either panel and clears editor state")
     func staleInput() throws {
-        for panel in [TerminalQuickActionPresentation.Panel.commands(try command()), .phrases(phrase())] {
+        for panel in try [TerminalQuickActionPresentation.Panel.commands(command()), .phrases(phrase())] {
             for (pane, revision) in [("%2", UInt64(0)), ("%1", UInt64(1))] {
                 var presentation = TerminalQuickActionPresentation()
                 presentation.show(panel)
                 presentation.isEditingPhrase = true
-                presentation.validate(phraseContext: phrase(pane: pane, revision: revision),
-                                      commandContext: try command(pane: pane, revision: revision))
+                try presentation.validate(
+                    phraseContext: phrase(pane: pane, revision: revision),
+                    commandContext: command(pane: pane, revision: revision)
+                )
                 #expect(!presentation.isPresented)
                 #expect(!presentation.isEditingPhrase)
             }
@@ -280,9 +353,9 @@ struct TerminalQuickActionPresentationTests {
 
     @Test("Agent loss or replacement closes commands but does not prevent shell phrases")
     func agentChange() throws {
-        for changed in [nil, try command(plugin: "claude-code")] {
+        for changed in try [nil, command(plugin: "claude-code")] {
             var presentation = TerminalQuickActionPresentation()
-            presentation.show(.commands(try command()))
+            try presentation.show(.commands(command()))
             presentation.validate(phraseContext: phrase(), commandContext: changed)
             #expect(!presentation.isPresented)
             presentation.show(.phrases(phrase()))
@@ -293,7 +366,7 @@ struct TerminalQuickActionPresentationTests {
 
     @Test("Browsing cannot override an inactive pane or a copy sheet")
     func preservesOtherInputGuards() throws {
-        for panel in [TerminalQuickActionPresentation.Panel.commands(try command()), .phrases(phrase())] {
+        for panel in try [TerminalQuickActionPresentation.Panel.commands(command()), .phrases(phrase())] {
             var presentation = TerminalQuickActionPresentation()
             presentation.show(panel)
             for (active, copy) in [(false, false), (true, true)] {

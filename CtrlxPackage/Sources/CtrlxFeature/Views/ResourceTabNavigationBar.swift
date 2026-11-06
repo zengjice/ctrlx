@@ -10,12 +10,37 @@
         let onAction: (ResourceTabNavigationPolicy.Action) -> Void
 
         var body: some View {
+            VStack(spacing: 0) {
+                Capsule()
+                    .fill(.secondary.opacity(0.5))
+                    .frame(width: 36, height: 5)
+                    .padding(.top, 6)
+                    .padding(.bottom, 2)
+                    .accessibilityHidden(true)
+                navigationButtons
+                if sourceName != nil {
+                    Capsule()
+                        .fill(.secondary.opacity(0.4))
+                        .frame(width: 96, height: 4)
+                        .padding(.top, 2)
+                        .padding(.bottom, 8)
+                        .accessibilityHidden(true)
+                } else {
+                    Color.clear.frame(height: 6).accessibilityHidden(true)
+                }
+            }
+            .background(.bar)
+            .overlay(alignment: .top) { Divider() }
+            .contentShape(Rectangle())
+            .gesture(ResourceTabNavigationGesture(isEnabled: isEnabled, canSwitch: sourceName != nil, onAction: onAction))
+        }
+
+        private var navigationButtons: some View {
             HStack(spacing: 16) {
                 Button { onAction(sourceName == nil ? .tabs : .source) } label: {
                     HStack(spacing: 8) {
                         if let sourceName {
-                            Symbols.arrowLeft.image
-                            (isAgentSource ? Symbols.sparkles : .terminal).image
+                            LinkedTabSourceIcon(isAgentSource: isAgentSource)
                             Text(sourceName).lineLimit(1).truncationMode(.middle)
                         } else {
                             Label("Tabs", symbol: .chevronUp)
@@ -47,10 +72,6 @@
             .buttonStyle(.plain)
             .foregroundStyle(.tint)
             .padding(.horizontal, 16)
-            .background(.bar)
-            .overlay(alignment: .top) { Divider() }
-            .contentShape(Rectangle())
-            .gesture(ResourceTabNavigationGesture(isEnabled: isEnabled, canSwitch: sourceName != nil, onAction: onAction))
         }
     }
 
