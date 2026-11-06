@@ -514,6 +514,15 @@ Routing reads pane metadata and shell PIDs in one live tmux query; it does not
 reuse the UI refresh cache, which may still be loading or have deduplicated
 linked sessions. The process tree is then matched against that live snapshot.
 
+Codex tool execution must remain under the source pane's process tree. CtrlX's
+managed Codex launches add `--no-daemon`; a detached app-server daemon cannot be
+routed through its terminal UI's pane. Updating CtrlX cannot change an existing
+process tree. If an affected session is still running, let its work finish, then
+resume it in the intended pane with `codex --no-daemon resume <session-id>`.
+`ctrlx browser identity` run by that Agent reports the tool caller's PID without
+opening a page; compare it with the pane's process ancestry when diagnosing this
+error. Do not substitute an inherited `TMUX_PANE` or the currently focused pane.
+
 Resource ownership records the Host, stable pane, plugin ID and verified native
 conversation ID; execution still authenticates the current PID and start time.
 Plugin/CLI versions, tab names and directories are not identity. The Host resolves

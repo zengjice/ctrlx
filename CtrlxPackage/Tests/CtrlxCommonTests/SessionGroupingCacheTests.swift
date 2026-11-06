@@ -7,6 +7,37 @@ import Testing
 
 @MainActor
 struct SessionGroupingCacheTests {
+    @Test("Agent status without tmux metadata never creates a blank session", arguments: [false, true])
+    func statusBeforeMetadata(fullSnapshot: Bool) {
+        let store = SessionStore()
+        let real = PaneState(
+            paneId: "%1", sessionName: "experience-model",
+            agentSession: .init(paneId: "%1", pluginID: "codex", state: .idle)
+        )
+        var pending = PaneState(
+            paneId: "%99", agentSession: .init(paneId: "%99", pluginID: "codex", state: .working)
+        )
+        store.handleStateUpdate(.init(
+            pairId: "host", paneStates: fullSnapshot ? ["%1": real, "%99": pending] : ["%1": real]
+        ))
+        if !fullSnapshot {
+            store.handleAgentStatus(.init(
+                pairId: "host", sessionId: "%99", pluginId: "codex", state: .working, timestamp: Date()
+            ))
+        }
+
+        #expect(store.windows(for: "host").map(\.sessionName) == ["experience-model"])
+        #expect(store.sessions(for: "host").map(\.sessionName) == ["experience-model"])
+        #expect(store.session(named: "", hostId: "host") == nil)
+        #expect(store.session(named: "experience-model", hostId: "host")?.agentSession?.state == .idle)
+        #expect(store.paneState(for: "%99", hostId: "host")?.agentSession?.state == .working)
+
+        pending.sessionName = "new-work"
+        store.handleStateUpdate(.init(pairId: "host", paneStates: ["%1": real, "%99": pending]))
+        #expect(store.sessions(for: "host").map(\.sessionName) == ["experience-model", "new-work"])
+        #expect(store.session(named: "new-work", hostId: "host")?.agentSession?.state == .working)
+    }
+
     @Test("Warm grouping stays observed and invalidates for status, handled state, replacement and disconnection")
     func hostLifetime() {
         let store = SessionStore()
