@@ -1318,6 +1318,15 @@ exposed to the Mac app, Viewer, and iOS clients.
   the app's unified-log `shutdown` category records request receipt, stage
   start/completion and elapsed time, plus cleanup completion or deadline-based
   termination. These lifecycle records do not require `LOG_LEVEL=info`.
+- Both installers send the standard Quit AppleEvent with an optional `cxdl`
+  parameter containing an epoch-seconds deadline ten seconds after sending.
+  Before starting cleanup, both AppKit and native-loop termination paths reject
+  expired or malformed tagged requests and requests whose sending process has
+  exited. Acceptance is checked once; already-started cleanup still completes
+  under its existing deadline. Interactive Quit and untagged legacy requests
+  retain their normal behavior. This prevents a failed installer from quitting
+  the Host later when a queued event is finally processed. The signed installer
+  template and Host must both be updated for this protection.
 - If the installer exits while CtrlX is still running, the error includes its
   explicit failure reason and the log path. AppleScript cancellation (`-128`)
   points users to open Host dialogs. The reader examines at most the last

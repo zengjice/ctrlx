@@ -172,6 +172,15 @@ The app records Quit receipt, cleanup stages and durations, and termination
 authorization in the macOS unified log (`com.jicezeng.ctrlx`, category `shutdown`),
 independently of `LOG_LEVEL`.
 
+Both installers bound the AppleScript reply wait to 45 seconds and attach the
+optional `cxdl` epoch deadline to the standard Quit event. New Hosts allow only
+ten seconds to begin cleanup and require the sending process to remain alive;
+expired/cancelled requests cannot start a delayed shutdown after installation
+has failed. Already-started cleanup retains its 30-second deadline. Ordinary
+Quit and old installers remain supported. Publish the changed private template
+with its detached signature alongside the Host update; editing the local
+template alone does not protect the installed Host or change the COS script.
+
 Installer promotion uses a COS lock object created with overwrite forbidden.
 While holding it, the publisher rechecks the previous installer, saves an immutable
 backup, replaces `mac.sh` and `mac.sh.sig`, and verifies the anonymous public

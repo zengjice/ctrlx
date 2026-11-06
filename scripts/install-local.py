@@ -62,8 +62,14 @@ def quit_mac(app):
     # A timeout never authorizes a forced kill or replacing a running executable.
     # AppShutdownDelegate allows 30 seconds for cleanup; leave time for AppKit exit.
     deadline = time.monotonic() + 45
+    # A queued AppleEvent can outlive osascript. New Hosts reject it after ten
+    # seconds, preserving time for cleanup within the overall installation wait.
+    quit_deadline = int(time.time()) + 10
+    script = (f'with timeout of 45 seconds\n'
+              f'    tell application "{app}" to «event aevtquit» given «class cxdl»:"{quit_deadline}"\n'
+              f'end timeout')
     try:
-        result = subprocess.run(["/usr/bin/osascript", "-e", f'tell application "{app}" to quit'],
+        result = subprocess.run(["/usr/bin/osascript", "-e", script],
                                 capture_output=True, text=True, timeout=45)
     except subprocess.TimeoutExpired as error:
         raise RuntimeError("CtrlX Quit request timed out after 45 seconds; existing App was not replaced.") from error

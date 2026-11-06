@@ -441,9 +441,13 @@ class MacLifecycleTests(unittest.TestCase):
         app = Path("/Applications/CtrlX.app")
         with mock.patch.object(installer, "app_processes", side_effect=[[12], [12], []]), \
                 mock.patch.object(installer.subprocess, "run") as run, \
+                mock.patch.object(installer.time, "time", return_value=1_000), \
                 mock.patch.object(installer.time, "sleep") as sleep:
             installer.quit_mac(app)
-        self.assertEqual(run.call_args.args[0], ["/usr/bin/osascript", "-e", f'tell application "{app}" to quit'])
+        self.assertEqual(run.call_args.args[0], ["/usr/bin/osascript", "-e",
+                         'with timeout of 45 seconds\n'
+                         f'    tell application "{app}" to «event aevtquit» given «class cxdl»:"1010"\n'
+                         'end timeout'])
         self.assertEqual(run.call_args.kwargs["timeout"], 45)
         sleep.assert_called_once_with(0.25)
 

@@ -40,6 +40,7 @@
         private let logger = os.Logger(subsystem: "com.jicezeng.ctrlx", category: "shutdown")
 
         @Dependency(\.continuousClock) private var clock
+        @Dependency(InstallerQuitRequestClient.self) private var installerQuitRequest
 
         /// Hook invoked when the delegate decides termination should proceed.
         /// Defaults to `NSApp.reply(toApplicationShouldTerminate: true)`.
@@ -71,6 +72,9 @@
 
         public func tryToTerminateWithoutModalLoop() -> Bool {
             logger.notice("Quit requested via native event loop; cleanupStarted=\(self.isCleaningUp), replied=\(self.didReply)")
+            if rejectInstallerQuit() {
+                return true
+            }
             guard !didReply, let cleanup = onShouldTerminate else { return false }
             if !isCleaningUp {
                 usesModalReply = false
@@ -83,6 +87,9 @@
             _: NSApplication
         ) -> NSApplication.TerminateReply {
             logger.notice("Quit requested via AppKit; cleanupStarted=\(self.isCleaningUp), replied=\(self.didReply)")
+            if rejectInstallerQuit() {
+                return .terminateCancel
+            }
             guard !didReply else { return .terminateNow }
             guard let cleanup = onShouldTerminate else { return .terminateNow }
             if !isCleaningUp {
@@ -90,6 +97,13 @@
                 beginCleanup(cleanup)
             }
             return .terminateLater
+        }
+
+        private func rejectInstallerQuit() -> Bool {
+            // An accepted request owns cleanup even if its sender later times out.
+            guard !isCleaningUp, !didReply, let reason = installerQuitRequest.rejectionReason() else { return false }
+            logger.notice("Rejected Quit request: \(reason, privacy: .public)")
+            return true
         }
 
         private func beginCleanup(_ cleanup: @escaping @MainActor () async -> Void) {
