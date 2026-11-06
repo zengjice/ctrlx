@@ -42,8 +42,10 @@ missing or asking to install it, check the bundled executable:
 Use that quoted absolute path in place of `ctrlx` in every command when needed.
 `browser` and `ios` are subcommands of the same executable; they do not require
 separate `ctrlx-browser`, `agent-browser` or simulator CLI installations. If the
-app is installed elsewhere, use its `Contents/MacOS/CtrlXCLI`. **CtrlX → Install
-Command Line Tool…** installs the optional PATH wrapper. A socket connection
+app is installed elsewhere, use its `Contents/MacOS/CtrlXCLI`. The installed App
+automatically configures the current user's `~/.local/bin/ctrlx`; open a new
+terminal after its first launch. **CtrlX → Install Command Line Tool…** or
+**Reinstall Command Line Tool…** retries setup if needed. A socket connection
 failure means check the app/socket; `wait-ready --timeout 30` waits for an expected
 startup. On `not_found`, re-list once and resolve a fresh target; do not retry
 stale IDs.

@@ -486,7 +486,7 @@ struct TmuxPaneMirrorApp: App {
             // App menu - Check for Updates + Install CLI
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesView(coordinator: coordinator)
-                InstallCLIMenuItem()
+                InstallCLIMenuItem(installer: coordinator.cliInstaller)
             }
 
             CommandGroup(replacing: .saveItem) {}
@@ -580,6 +580,7 @@ struct TmuxPaneMirrorApp: App {
                 dashboard: coordinator.dashboardStore
             )
             .handleIPAFileRequests(ipaFiles)
+            .task { await coordinator.cliInstaller.setupAutomatically() }
             .task {
                 coordinator.settings.applyAppearance()
                 // Capture the Settings-opening action once at launch so a
@@ -731,30 +732,47 @@ private struct APIReferenceMenuItem: View {
     }
 }
 
-/// Menu item to install/uninstall the `ctrlx` CLI symlink.
+/// Menu item to manage the current user's `ctrlx` launcher.
 ///
 /// When installing on a zsh user's machine, offers to also install the zsh
 /// completion script alongside the CLI so tab-completion works out of the box.
 private struct InstallCLIMenuItem: View {
-    @State private var installed = CLIInstaller.isInstalled
+    let installer: CLIInstaller
 
     var body: some View {
-        Button(installed ? "Uninstall Command Line Tool..." : "Install Command Line Tool...") {
-            if installed {
-                if CLIInstaller.uninstall() {
-                    installed = false
+        Group {
+            Button(installer.isInstalled ? "Reinstall Command Line Tool..." : "Install Command Line Tool...") {
+                let completion = installer.userShellIsZsh && askAboutZshCompletion()
+                Task {
+                    if let result = await installer.install(installZshCompletion: completion) {
+                        if result.completionRequested, !result.completionInstalled {
+                            showCompletionFailureAlert(reason: result.completionFailureReason)
+                        }
+                    } else {
+                        showInstallationFailureAlert()
+                    }
                 }
-            } else {
-                let installCompletion = CLIInstaller.userShellIsZsh && askAboutZshCompletion()
-                let result = CLIInstaller.install(installZshCompletion: installCompletion)
-                if result.cliInstalled {
-                    installed = true
-                }
-                if result.completionRequested, !result.completionInstalled {
-                    showCompletionFailureAlert(reason: result.completionFailureReason)
+            }
+            if installer.isInstalled {
+                Button("Uninstall Command Line Tool...") {
+                    Task {
+                        if !(await installer.uninstall()) {
+                            showInstallationFailureAlert()
+                        }
+                    }
                 }
             }
         }
+        .disabled(installer.isWorking)
+        .help(installer.errorMessage ?? "Manage the command-line tool for your user account")
+    }
+
+    private func showInstallationFailureAlert() {
+        let alert = NSAlert()
+        alert.messageText = "Command Line Tool Setup Failed"
+        alert.informativeText = installer.errorMessage ?? "Try again from the CtrlX menu."
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     /// Shows a confirmation alert asking whether to install the zsh completion script.
@@ -763,8 +781,8 @@ private struct InstallCLIMenuItem: View {
         alert.messageText = "Install zsh tab completion?"
         alert.informativeText = """
         Your login shell is zsh. Also install tab completion for \
-        the ctrlx command? It will be written to \
-        /usr/local/share/zsh/site-functions/_ctrlx in the same admin prompt.
+        the ctrlx command? It will be installed for your user account \
+        without administrator permission.
         """
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Install Completion")
