@@ -40,7 +40,13 @@ extension AgentWorkflowService {
         case let .deleteDefinition(id, expectedRevision):
             try await deleteDefinition(id: id, expectedRevision: expectedRevision)
         case let .start(definitionID, expectedRevision, requestID, authorizationExpiresAt, initialInput):
-            let run = try await start(definitionID: definitionID, expectedRevision: expectedRevision, requestID: requestID, authorizationExpiresAt: authorizationExpiresAt, initialInput: initialInput)
+            let run: AgentWorkflowRun
+            do {
+                run = try await start(definitionID: definitionID, expectedRevision: expectedRevision, requestID: requestID, authorizationExpiresAt: authorizationExpiresAt, initialInput: initialInput)
+            } catch let rejection as AgentWorkflowStartRejection {
+                response.startRejection = rejection
+                break
+            }
             response.run = try AgentWorkflowRunState(run, currentInstances: await snapshot().instances)
         case let .runs(offset):
             response.runs = try Self.page(archive.runs.reversed().map(AgentWorkflowRunSummary.init), offset: offset)

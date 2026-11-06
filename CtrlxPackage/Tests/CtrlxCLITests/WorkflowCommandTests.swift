@@ -5,6 +5,17 @@ import Testing
 
 struct WorkflowCommandTests {
     @Test
+    func explicitCompletionUsesOnlyInvocationAndRejectsOverrides() throws {
+        let id = UUID().uuidString
+        let command = try #require(CtrlxCLI.parseAsRoot(["workflow", "complete-step", "--invocation", id]) as? WorkflowCompleteStepCommand)
+        #expect(try command.parameters() == ["invocationId": .string(id)])
+        for flag in ["--pane", "--session", "--window"] {
+            let invalid = try WorkflowCompleteStepCommand.parse(["--invocation", id, flag, "other"])
+            #expect(throws: (any Error).self) { try invalid.parameters() }
+        }
+    }
+
+    @Test
     func shareIsNotAWorkflowCommand() {
         #expect(throws: (any Error).self) {
             try CtrlxCLI.parseAsRoot(["workflow", "share", "--invocation", UUID().uuidString, "--file", "report.md"])

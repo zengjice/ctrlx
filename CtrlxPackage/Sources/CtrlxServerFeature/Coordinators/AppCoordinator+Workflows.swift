@@ -40,6 +40,9 @@ extension AppCoordinator {
             agentWorkflowAgentService = AgentWorkflowAgentService(store: store, inspect: { [weak self] instance in
                 guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
                 return try await inspectWorkflowInstance(instance, verifyNativeWriter: true)
+            }, synchronizeEvents: { [weak self] invocationID in
+                guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
+                try await synchronizeWorkflowEvents(invocationID)
             })
             let gate = AgentWorkflowInputGate()
             let delivery = AgentWorkflowTerminalTransport(

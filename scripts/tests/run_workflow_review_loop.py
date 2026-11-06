@@ -128,6 +128,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     state["imageRead"] = True
                     command = "printf '%s\\n' 'def safe_divide(numerator, denominator):' '    return numerator / denominator' > sample.py"
                     call = ("exec_command", {"cmd": command, "login": False})
+                elif phase == 1:
+                    call = ("exec_command", {"cmd": f"ctrlx workflow complete-step --invocation {invocation} --json", "login": False})
                 else:
                     assert (server.root / "project/sample.py").is_file()
                     reply = "DEVELOPMENT_DONE: implemented safe_divide in sample.py."
@@ -144,6 +146,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 elif phase == 1:
                     check = "from sample import safe_divide; assert safe_divide(6, 2) == 3\ntry:\n safe_divide(1, 0)\nexcept ValueError:\n pass\nelse:\n raise AssertionError('missing guard')"
                     call = ("exec_command", {"cmd": "python3 -c " + shlex.quote(check), "login": False})
+                elif phase == 2:
+                    call = ("exec_command", {"cmd": f"ctrlx workflow complete-step --invocation {invocation} --json", "login": False})
                 else:
                     reply = "REPAIR_DONE: added the Accepted guard and verified normal and zero inputs."
             elif invocation and "Review the current implementation" in prompt:

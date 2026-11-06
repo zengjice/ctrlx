@@ -6,6 +6,24 @@ import Testing
 
 struct AgentWorkflowWireTests {
     @Test
+    func startRejectionRoundTripsAndAbsentFieldRemainsUnconfirmed() throws {
+        let hostID = UUID()
+        let node = AgentWorkflowNode(name: "Developer", agentInstanceID: UUID())
+        let definition = AgentWorkflowDefinition(name: "Existing workflow", hostID: hostID, nodes: [node], edges: [], entryNodeID: node.id)
+        var run = AgentWorkflowRun(definition: definition, instances: [], createdAt: Date(), authorizationExpiresAt: Date().addingTimeInterval(3_600))
+        run.status = .paused
+        var response = AgentWorkflowResponse(hostID: hostID)
+        response.startRejection = .init("Occupied", conflicts: [.init(run: .init(run), agentNames: ["global · dev"])])
+        let message = CommandResponseMessage(commandId: UUID(), success: true, agentWorkflow: response)
+        let decoded = try JSONDecoder().decode(CommandResponseMessage.self, from: JSONEncoder().encode(message))
+        #expect(decoded.success && decoded.agentWorkflow == response)
+        var legacy = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(response)) as? [String: Any])
+        legacy.removeValue(forKey: "startRejection")
+        let old = try JSONDecoder().decode(AgentWorkflowResponse.self, from: JSONSerialization.data(withJSONObject: legacy))
+        #expect(old.startRejection == nil && old.run == nil && old.version == response.version)
+    }
+
+    @Test
     func runtimeIssueRoundTripsAndOlderInstancesStillDecode() throws {
         let instance = AgentWorkflowInstance(
             hostID: UUID(), pluginID: "codex", processID: 42, processRuntimeID: "runtime",

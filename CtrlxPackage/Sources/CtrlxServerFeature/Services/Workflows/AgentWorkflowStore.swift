@@ -56,7 +56,7 @@ extension AgentWorkflowObservation {
 }
 
 struct AgentWorkflowArchive: Codable, Equatable, Sendable {
-    var schemaVersion = 4
+    var schemaVersion = 5
     let hostID: UUID
     var definitions: [AgentWorkflowDefinition] = []
     var instances: [AgentWorkflowInstance] = []
@@ -206,10 +206,15 @@ actor AgentWorkflowStore {
         try AgentWorkflowWire.validate(definition)
         try validateAttachments(definition.attachmentIDs, in: updated)
         let instanceIDs = definition.agentInstanceIDs
-        let occupied = updated.runs.contains { run in
-            !run.status.isTerminal && run.instances.contains { instanceIDs.contains($0.id) }
+        let conflicts = updated.runs.compactMap { run -> AgentWorkflowStartRejection.Conflict? in
+            guard !run.status.isTerminal else { return nil }
+            let agents = run.instances.filter { instanceIDs.contains($0.id) }
+            guard !agents.isEmpty else { return nil }
+            return .init(run: .init(run), agentNames: agents.map(\.displayName))
         }
-        guard !occupied else { throw AgentWorkflowError("An Agent is already reserved by another active workflow.") }
+        guard conflicts.isEmpty else {
+            throw AgentWorkflowStartRejection("These Agents already belong to an unfinished workflow.", conflicts: conflicts)
+        }
         let instances = definition.agents.compactMap { participant in
             instanceIDs.contains(participant.id) ? updated.instances.first { $0.id == participant.id } : nil
         }
@@ -317,7 +322,7 @@ actor AgentWorkflowStore {
         }
         var loaded = try JSONDecoder().decode(AgentWorkflowArchive.self, from: Data(contentsOf: fileURL))
         guard
-            [1, 2, 3, 4].contains(loaded.schemaVersion), loaded.hostID == hostID,
+            [1, 2, 3, 4, 5].contains(loaded.schemaVersion), loaded.hostID == hostID,
             Set(loaded.definitions.map(\.id)).count == loaded.definitions.count,
             Set(loaded.runs.map(\.id)).count == loaded.runs.count,
             Set(loaded.instances.map(\.id)).count == loaded.instances.count else {
@@ -354,14 +359,14 @@ actor AgentWorkflowStore {
             }
             loaded.runs[index] = try AgentWorkflowExecution(restoring: loaded.runs[index]).run
         }
-        loaded.schemaVersion = 4
+        loaded.schemaVersion = 5
         try commit(loaded)
         return loaded
     }
 
     func commit(_ updated: AgentWorkflowArchive) throws {
         var updated = updated
-        updated.schemaVersion = 4
+        updated.schemaVersion = 5
         guard updated != archive else { return }
         let data = try JSONEncoder().encode(updated)
         try FileManager.default.createDirectory(

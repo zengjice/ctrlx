@@ -130,6 +130,13 @@ struct AgentWorkflowEditor: View {
                             AgentWorkflowInputPreview(definition: draft, node: node, attachments: attachments)
                         }
                         if node.kind == .agent {
+                            Picker("Complete step", selection: $node.completion) {
+                                ForEach(AgentWorkflowNode.Completion.allCases, id: \.self) { Text($0.title).tag($0) }
+                            }
+                            if node.completion == .explicit {
+                                Text("Discussion can continue across replies. Downstream steps wait until the Agent explicitly completes this task.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
                             Toggle("Allow this step to end the workflow", isOn: $node.allowsFinish)
                             if node.allowsFinish {
                                 Text("Define when to finish in this step's instructions. This switch grants permission; it does not define the completion condition.")

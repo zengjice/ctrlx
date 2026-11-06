@@ -79,7 +79,7 @@ struct AgentWorkflowAttachmentAccessTests {
         let f = try await fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
         let task = try await f.start()
-        let service = AgentWorkflowAgentService(store: f.store, inspect: { $0 })
+        let service = AgentWorkflowAgentService(store: f.store, inspect: { $0 }, synchronizeEvents: { _ in })
         let response = await service.handle(f.request(task), peer: f.peer)
         #expect(response.ok)
         guard
@@ -102,7 +102,7 @@ struct AgentWorkflowAttachmentAccessTests {
         defer { try? FileManager.default.removeItem(at: f.root) }
         let task = try await f.start(accepted: accepted)
         _ = try await f.store.update(runID: task.delivery.runID) { $0.pause(reason: "Permission requires a human response") }
-        let service = AgentWorkflowAgentService(store: f.store, inspect: { $0 })
+        let service = AgentWorkflowAgentService(store: f.store, inspect: { $0 }, synchronizeEvents: { _ in })
         let response = await service.handle(f.request(task), peer: f.peer)
         if accepted {
             try #require(response.ok)
@@ -137,7 +137,7 @@ struct AgentWorkflowAttachmentAccessTests {
                 live.conversationID = "replacement"
             }
             return live
-        }, now: { condition == "expired" ? Date.distantFuture : .now })
+        }, synchronizeEvents: { _ in }, now: { condition == "expired" ? Date.distantFuture : .now })
         if condition == "ended" || condition == "oldRound" {
             _ = try await f.store.update(runID: task.delivery.runID) {
                 if condition == "ended" {
@@ -181,7 +181,7 @@ struct AgentWorkflowAttachmentAccessTests {
             }
         }
         let inspector = Inspector()
-        let service = AgentWorkflowAgentService(store: f.store, inspect: { try await inspector.inspect($0, fixture: f, task: task) })
+        let service = AgentWorkflowAgentService(store: f.store, inspect: { try await inspector.inspect($0, fixture: f, task: task) }, synchronizeEvents: { _ in })
         #expect(await service.handle(f.request(task), peer: f.peer).error?.code == "workflow_denied")
     }
 
@@ -216,12 +216,12 @@ struct AgentWorkflowAttachmentAccessTests {
         let f = try await fixture(mediaType: "image/png", contents: bytes)
         defer { try? FileManager.default.removeItem(at: f.root) }
         let task = try await f.start()
-        let service = AgentWorkflowAgentService(store: f.store, inspect: { $0 })
+        let service = AgentWorkflowAgentService(store: f.store, inspect: { $0 }, synchronizeEvents: { _ in })
         #expect(await service.handle(f.request(task), peer: f.peer).ok)
         let wrongFormat = try await fixture(mediaType: "image/png", contents: Data("not an image".utf8))
         defer { try? FileManager.default.removeItem(at: wrongFormat.root) }
         let wrongTask = try await wrongFormat.start()
-        let denied = await AgentWorkflowAgentService(store: wrongFormat.store, inspect: { $0 }).handle(wrongFormat.request(wrongTask), peer: wrongFormat.peer)
+        let denied = await AgentWorkflowAgentService(store: wrongFormat.store, inspect: { $0 }, synchronizeEvents: { _ in }).handle(wrongFormat.request(wrongTask), peer: wrongFormat.peer)
         #expect(denied.error?.code == "workflow_denied")
     }
 

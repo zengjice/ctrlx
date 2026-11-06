@@ -28,9 +28,9 @@
         private let dispatcher: PluginEventDispatcher
         @Dependency(PluginIngressPeerClient.self) private var peerClient
 
-        private struct ReceivedFrame: Sendable {
-            let frame: IngressFrame
-            let peer: PluginIngressPeer?
+        private enum ReceivedFrame: Sendable {
+            case frame(IngressFrame, PluginIngressPeer?)
+            case barrier(UUID)
         }
 
         private var serverFd: Int32 = -1
@@ -48,6 +48,29 @@
         /// run strictly one frame at a time, in the order frames were read.
         private var consumerTask: Task<Void, Never>?
         private var frameContinuation: AsyncStream<ReceivedFrame>.Continuation?
+        private var barriers: [UUID: CheckedContinuation<Void, any Error>] = [:]
+
+        /// A hook's ACK only confirms enqueueing. Separate API commands must
+        /// wait for those already acknowledged events before reading their state.
+        func waitForPendingFrames() async throws {
+            let id = UUID()
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                    guard !Task.isCancelled, let frames = frameContinuation else {
+                        continuation.resume(throwing: CancellationError())
+                        return
+                    }
+                    barriers[id] = continuation
+                    frames.yield(.barrier(id))
+                }
+            } onCancel: {
+                Task { await self.cancelBarrier(id) }
+            }
+        }
+
+        private func cancelBarrier(_ id: UUID) {
+            barriers.removeValue(forKey: id)?.resume(throwing: CancellationError())
+        }
 
         /// - Parameters:
         ///   - socketPath: where to bind the ingress socket (typically
@@ -149,13 +172,18 @@
             let logger = logger
             consumerTask = Task {
                 for await received in stream {
-                    let frame = received.frame
+                    guard case let .frame(frame, peer) = received else {
+                        if case let .barrier(id) = received {
+                            barriers.removeValue(forKey: id)?.resume()
+                        }
+                        continue
+                    }
                     guard let core = await lookup(frame.pluginID) else {
                         logger.debug("Dropping ingress frame for unknown/disabled plugin '\(frame.pluginID)'")
                         continue
                     }
                     if let event = await core.handleIngress(frame) {
-                        await dispatcher.dispatch(event, ingressPeer: received.peer)
+                        await dispatcher.dispatch(event, ingressPeer: peer)
                     } else {
                         logger.debug("Core '\(frame.pluginID)' dropped ingress frame (returned nil)")
                     }
@@ -180,6 +208,11 @@
             frameContinuation = nil
             consumerTask?.cancel()
             consumerTask = nil
+            let waiting = barriers.values
+            barriers.removeAll()
+            for continuation in waiting {
+                continuation.resume(throwing: CancellationError())
+            }
 
             if serverFd >= 0 {
                 shutdown(serverFd, SHUT_RDWR)
@@ -313,7 +346,7 @@
                 }
 
                 let peer = peerClient.capture(fd)
-                continuation.yield(ReceivedFrame(frame: frame, peer: peer))
+                continuation.yield(.frame(frame, peer))
                 if frame.context["CTRLX_INGRESS_ACK"] == "1" {
                     // Receipt only: no application/Agent success is implied.
                     // The bridge waits here so kernel ancestry remains available

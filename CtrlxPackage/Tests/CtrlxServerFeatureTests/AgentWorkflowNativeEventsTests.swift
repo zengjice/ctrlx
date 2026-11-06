@@ -1,7 +1,10 @@
+import ClaudeCodePluginCore
+import CodexPluginCore
 import ConcurrencyExtras
 import CryptoKit
 import CtrlxNetworking
 import CtrlxPluginProtocol
+import Darwin
 import Foundation
 import Testing
 @testable import CtrlxServerFeature
@@ -64,7 +67,7 @@ struct AgentWorkflowNativeEventsTests {
         }
     }
 
-    private func fixture(conversation: String = "conversation", imageCount: Int = 0, plugin: String = "codex") async throws -> Fixture {
+    private func fixture(conversation: String = "conversation", imageCount: Int = 0, plugin: String = "codex", completion: AgentWorkflowNode.Completion = .replyEnded, allowsFinish: Bool = false) async throws -> Fixture {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-workflow-events-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let transcript = directory.appendingPathComponent("native.jsonl")
@@ -84,7 +87,7 @@ struct AgentWorkflowNativeEventsTests {
             _ = try await store.uploadAttachment(.image(id: id, name: "task.png", mediaType: "image/png", data: bytes, sha256: hash))
             imageIDs.append(id)
         }
-        let node = AgentWorkflowNode(name: "Developer", agentInstanceID: instance.id)
+        let node = AgentWorkflowNode(name: "Developer", agentInstanceID: instance.id, allowsFinish: allowsFinish, completion: completion)
         let definition = try await store.saveDefinition(.init(name: "Test", hostID: hostID, nodes: [node], edges: [], entryNodeID: node.id, initialInput: .init(attachmentIDs: imageIDs)), expectedRevision: nil)
         let run = try await store.start(definitionID: definition.id, expectedRevision: definition.revision, requestID: UUID(), now: Date(), authorizationExpiresAt: Date().addingTimeInterval(3_600))
         let written = try await store.update(runID: run.id) {
@@ -113,6 +116,283 @@ struct AgentWorkflowNativeEventsTests {
             invocation: invocation,
             peer: peer
         )
+    }
+
+    @Test(arguments: ["codex", "claude-code"], ["workflow.completeStep", "workflow.finish"])
+    func completionWaitsForAcknowledgedHooks(plugin: String, method: String) async throws {
+        let f = try await fixture(plugin: plugin, completion: .explicit, allowsFinish: true)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, plugin: plugin), peer: f.peer)
+        let gate = AsyncStream<Void>.makeStream()
+        defer { gate.continuation.finish() }
+        let entered = LockIsolated(false), synchronizing = LockIsolated(false), completed = LockIsolated(false)
+        let dispatcher = PluginEventDispatcher(onState: { _, session, _, _, _, _ in
+            if session == "blocked" {
+                entered.setValue(true)
+                for await _ in gate.stream {
+                    break
+                }
+            } else {
+                do {
+                    _ = try await f.router.receive(f.event(.submitted, text: "Implement the design", turn: "B", plugin: plugin), peer: f.peer)
+                } catch { Issue.record(Comment(rawValue: error.localizedDescription)) }
+            }
+        })
+        let core = EchoPluginCore()
+        let path = "\(NSTemporaryDirectory())wf-\(UUID().uuidString.prefix(8)).sock"
+        let ingress = IngressSocketServer(socketPath: path, coreLookup: { _ in core }, dispatcher: dispatcher)
+        try await ingress.start()
+        defer { Task { await ingress.stop() } }
+        try await enqueueAcknowledgedHook(session: "blocked", path: path)
+        try await enqueueAcknowledgedHook(session: "B", path: path)
+        let service = AgentWorkflowAgentService(store: f.store, inspect: { $0 }, synchronizeEvents: {
+            synchronizing.setValue(true)
+            try await ingress.waitForPendingFrames()
+            try await f.router.requireVerifiedSubmission($0)
+        })
+        var params: [String: JSONValue] = ["invocationId": .string(f.invocation.id.uuidString)]
+        if method == "workflow.finish" {
+            params["reason"] = .string("Implemented")
+        }
+        let request = JSONRPCRequest(id: "complete", method: method, params: params)
+        let response = Task {
+            let result = await service.handle(request, peer: f.peer)
+            completed.setValue(true)
+            return result
+        }
+        for _ in 0..<100 {
+            if entered.value && synchronizing.value {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(entered.value && synchronizing.value)
+        #expect(!completed.value)
+        let before = try await f.store.snapshot().runs[0].invocations[0]
+        #expect(before.stepTurn?.id == "turn" && before.stepTurn?.completionRequested == false)
+        gate.continuation.finish()
+        try #require(await response.value.ok)
+        let saved = try await f.store.snapshot().runs[0]
+        #expect(saved.invocations[0].nativeTurnID == "turn")
+        #expect(saved.invocations[0].stepTurn?.id == "B" && saved.invocations[0].stepTurn?.completionRequested == true)
+        #expect((saved.finishRequest != nil) == (method == "workflow.finish"))
+        #expect(try await f.router.receive(f.event(.stopCandidate, text: "Old design proposal", plugin: plugin), peer: f.peer) == nil)
+        #expect(try await f.store.snapshot().runs[0].invocations[0].result == nil)
+        let stop = try #require(await f.router.receive(f.event(.stopCandidate, text: "Implemented", turn: "B", plugin: plugin), peer: f.peer))
+        #expect(stop.candidate.nativeTurnID == "B")
+        await ingress.stop()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    private func enqueueAcknowledgedHook(session: String, path: String) async throws {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        try #require(fd >= 0)
+        defer { close(fd) }
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        try #require(path.utf8.count < MemoryLayout.size(ofValue: address.sun_path))
+        path.withCString { source in
+            withUnsafeMutablePointer(to: &address.sun_path) {
+                UnsafeMutableRawPointer($0).copyMemory(from: source, byteCount: path.utf8.count + 1)
+            }
+        }
+        let connected = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+        }
+        try #require(connected == 0)
+        var timeout = timeval(tv_sec: 5, tv_usec: 0)
+        try #require(setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout))) == 0)
+        let payload = try JSONEncoder().encode(EchoDirective(sessionID: session, state: .working))
+        let bytes = try IngressFrame(pluginID: EchoPluginCore.pluginID, context: ["CTRLX_INGRESS_ACK": "1"], payload: payload).encodeFrame()
+        let written = bytes.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
+        try #require(written == bytes.count)
+        try await awaitIngressAcknowledgement(fd)
+    }
+
+    @Test(arguments: ["codex", "claude-code"], ["active", "stopped", "timeout"])
+    func laterReceiptSurvivesInspectionFailure(plugin: String, state: String) async throws {
+        let f = try await fixture(plugin: plugin, completion: .explicit, allowsFinish: true)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let available = LockIsolated(true), timedOut = LockIsolated(false)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            guard available.value else { throw AgentWorkflowInspectionUnavailable() }
+            return $0
+        }, verificationTimeout: state == "timeout" ? .milliseconds(250) : .seconds(5), onFailure: { _ in timedOut.setValue(true) })
+        _ = try await router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, plugin: plugin), peer: f.peer)
+        available.setValue(false)
+        _ = try await router.receive(f.event(.submitted, text: "Implement", turn: "B", plugin: plugin), peer: f.peer)
+        if state == "stopped" {
+            _ = try await router.receive(f.event(.stopCandidate, text: "More discussion", turn: "B", plugin: plugin), peer: f.peer)
+        }
+        if state == "timeout" {
+            for _ in 0..<100 {
+                if timedOut.value {
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            try #require(timedOut.value)
+        }
+        let service = AgentWorkflowAgentService(store: f.store, inspect: { $0 }, synchronizeEvents: { try await router.requireVerifiedSubmission($0) })
+        let complete = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        let finish = JSONRPCRequest(id: "finish", method: "workflow.finish", params: ["invocationId": .string(f.invocation.id.uuidString), "reason": .string("Done")])
+        for request in [complete, finish] {
+            #expect(await service.handle(request, peer: f.peer).error?.code == "workflow_denied")
+        }
+        #expect(try await f.store.snapshot().runs[0].invocations[0].stepTurn?.completionRequested == false)
+        #expect(try await router.receive(f.event(.stopCandidate, text: "Old proposal", plugin: plugin), peer: f.peer) == nil)
+        available.setValue(true)
+        for _ in 0..<100 {
+            try await Task.sleep(for: .milliseconds(20))
+            do {
+                try await router.requireVerifiedSubmission(f.invocation.id)
+                if try await f.store.snapshot().runs[0].invocations[0].stepTurn?.id == "B" {
+                    break
+                }
+            } catch { continue }
+        }
+        let recovered = try await f.store.snapshot().runs[0]
+        #expect(recovered.invocations[0].nativeTurnID == "turn")
+        #expect(recovered.invocations[0].stepTurn?.id == "B")
+        #expect(recovered.invocations[0].stepTurn?.stopped == (state == "stopped"))
+        try await f.store.update(runID: f.run.id) { try $0.resume(instances: [f.instance], now: Date()) }
+        if state == "stopped" {
+            #expect(await service.handle(complete, peer: f.peer).error != nil)
+            _ = try await router.receive(f.event(.submitted, text: "Now implement", turn: "C", plugin: plugin), peer: f.peer)
+        }
+        try #require(await service.handle(complete, peer: f.peer).ok)
+        let finalTurn = state == "stopped" ? "C" : "B"
+        let final = try #require(await router.receive(f.event(.stopCandidate, text: "Implemented", turn: finalTurn, plugin: plugin), peer: f.peer))
+        #expect(final.candidate.nativeTurnID == finalTurn)
+        #expect(try await f.store.snapshot().runs[0].invocations[0].result == nil)
+        await router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test
+    func laterDiscussionReceiptSurvivesInitialReceiptVerification() async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let available = LockIsolated(false)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            guard available.value else { throw AgentWorkflowInspectionUnavailable() }
+            return $0
+        })
+        _ = try await router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        _ = try await router.receive(f.event(.stopCandidate, text: "Proposal"), peer: f.peer)
+        _ = try await router.receive(f.event(.submitted, text: "Clarify", turn: "next"), peer: f.peer)
+        _ = try await router.receive(f.event(.stopCandidate, text: "Clarification", turn: "next"), peer: f.peer)
+        available.setValue(true)
+        for _ in 0..<100 {
+            if try await f.store.snapshot().runs[0].invocations[0].stepTurn?.stopped == true {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let saved = try await f.store.snapshot().runs[0].invocations[0]
+        #expect(saved.nativeTurnID == "turn")
+        #expect(saved.stepTurn?.id == "next" && saved.stepTurn?.stopped == true)
+        #expect(saved.result == nil)
+        await router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: ["codex", "claude-code"])
+    func proposalAndHumanDiscussionWaitUntilAnExplicitlyCompletedTurn(plugin: String) async throws {
+        let f = try await fixture(plugin: plugin, completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let service = AgentWorkflowAgentService(store: f.store, inspect: { $0 }, synchronizeEvents: { _ in })
+        let request = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        #expect(await service.handle(request, peer: f.peer).error != nil)
+        #expect(try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, plugin: plugin), peer: f.peer) == nil)
+        #expect(try await f.router.receive(f.event(.stopCandidate, text: "Please confirm the design", plugin: plugin), peer: f.peer) == nil)
+        var saved = try await f.store.snapshot().runs[0]
+        #expect(saved.status == .running && saved.invocations[0].result == nil)
+        #expect(AgentWorkflowInvocationSummary(saved.invocations[0]).awaitingStepCompletion)
+        #expect(try AgentWorkflowExecution(validating: saved).readyNodeIDs.isEmpty)
+        let restored = try AgentWorkflowExecution(restoring: saved)
+        #expect(restored.run.invocations[0].status == .running)
+        #expect(await service.handle(request, peer: f.peer).error != nil) // A stopped proposal is not a current tool turn.
+
+        _ = try await f.router.receive(f.event(.submitted, text: "Answer to the question", plugin: plugin), peer: f.peer)
+        let continued = try await f.store.snapshot().runs[0].invocations[0]
+        #expect(continued.stepTurn?.stopped == false && continued.stepTurn?.prompt == f.invocation.delivery.input.text)
+        _ = try await f.router.receive(f.event(.submitted, text: "Discuss an alternative", turn: "discussion", plugin: plugin), peer: f.peer)
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "Alternative proposal", turn: "discussion", plugin: plugin), peer: f.peer)
+        _ = try await f.router.receive(f.event(.submitted, text: "Implement the agreed design", turn: "implementation", plugin: plugin), peer: f.peer)
+        #expect(await service.handle(request, peer: nil).error != nil)
+        try #require(await service.handle(request, peer: f.peer).ok)
+        try #require(await service.handle(request, peer: f.peer).ok)
+        saved = try await f.store.snapshot().runs[0]
+        #expect(saved.invocations[0].nativeTurnID == "turn") // Original delivery receipt stays unchanged.
+        #expect(saved.invocations[0].stepTurn?.id == "implementation")
+        #expect(saved.invocations[0].result == nil)
+        #expect(try await f.router.receive(f.event(.stopCandidate, text: "Old proposal", plugin: plugin), peer: f.peer) == nil)
+        // A later manual task cannot replace the explicitly selected result.
+        _ = try await f.router.receive(f.event(.submitted, text: "Unrelated question", turn: "other", plugin: plugin), peer: f.peer)
+        #expect(try await f.router.receive(f.event(.stopCandidate, text: "Unrelated answer", turn: "other", plugin: plugin), peer: f.peer) == nil)
+        let records: [[String: Any]]
+        let provider: any AgentWorkflowProviding
+        if plugin == "codex" {
+            provider = CodexPluginCore()
+            records = [
+                ["type": "session_meta", "payload": ["id": "conversation"]],
+                ["type": "event_msg", "payload": ["type": "task_started", "turn_id": "turn"]],
+                ["type": "event_msg", "payload": ["type": "task_complete", "turn_id": "turn", "last_agent_message": "Please confirm the design"]],
+                ["type": "event_msg", "payload": ["type": "task_started", "turn_id": "implementation"]],
+                ["type": "event_msg", "payload": ["type": "task_complete", "turn_id": "implementation", "last_agent_message": "Implementation and checks done"]],
+            ]
+        } else {
+            provider = ClaudeCodePluginCore()
+            records = [
+                ["type": "user", "uuid": "user", "promptId": "implementation", "sessionId": "conversation", "isSidechain": false],
+                [
+                    "type": "assistant",
+                    "uuid": "answer",
+                    "parentUuid": "user",
+                    "sessionId": "conversation",
+                    "isSidechain": false,
+                    "message": ["id": "message", "stop_reason": "end_turn", "content": [["type": "text", "text": "Implementation and checks done"]]],
+                ],
+                [
+                    "type": "system",
+                    "subtype": "stop_hook_summary",
+                    "uuid": "stop",
+                    "parentUuid": "answer",
+                    "sessionId": "conversation",
+                    "isSidechain": false,
+                    "hookErrors": [],
+                    "hookAdditionalContext": [],
+                    "preventedContinuation": false,
+                    "stopReason": "",
+                ],
+            ]
+        }
+        var bytes = Data()
+        for record in records {
+            try bytes.append(JSONSerialization.data(withJSONObject: record))
+            bytes.append(0x0A)
+        }
+        try bytes.write(to: f.transcript)
+        let context = try #require(await f.router.receive(f.event(.stopCandidate, text: "Implementation and checks done", turn: "implementation", plugin: plugin), peer: f.peer))
+        let monitor = AgentWorkflowCompletionMonitor(store: f.store, runner: f.runner, inspect: { $0 }, verificationTimeout: .seconds(2), onFailure: { Issue.record(Comment(rawValue: $0)) })
+        await monitor.verify(context, provider: provider)
+        for _ in 0..<100 {
+            saved = try await f.store.snapshot().runs[0]
+            if saved.status.isTerminal || saved.status == .paused {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(saved.status == .completed)
+        #expect(saved.invocations[0].result?.text == "Implementation and checks done")
+        #expect(saved.invocations[0].result?.nativeTurnID == "implementation")
+        _ = try AgentWorkflowExecution(validating: saved)
+        #expect(await service.handle(request, peer: f.peer).error != nil)
+        await monitor.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
     }
 
     @Test
@@ -712,13 +992,97 @@ struct AgentWorkflowNativeEventsTests {
         await f.runner.shutdown()
     }
 
-    @Test
-    func endedRunStillVerifiesLateAnswerWithoutRestarting() async throws {
-        let f = try await fixture()
+    private func startAnotherRun(_ f: Fixture) async throws -> AgentWorkflowRun {
+        let run = try await f.store.start(
+            definitionID: f.run.definition.id, expectedRevision: f.run.definition.revision, requestID: UUID(),
+            now: Date(), authorizationExpiresAt: Date().addingTimeInterval(3_600)
+        )
+        return try await f.store.update(runID: run.id) {
+            let invocation = try $0.prepareInvocation(nodeID: run.definition.entryNodeID, now: Date())
+            try $0.beginWriting(invocationID: invocation.id, instance: f.instance, now: Date())
+            try $0.didWrite(invocationID: invocation.id)
+        }
+    }
+
+    @Test(arguments: ["codex", "claude-code"], [false, true])
+    func endedExplicitRunCannotConsumeNewRunsReceipt(plugin: String, receiptPending: Bool) async throws {
+        let f = try await fixture(plugin: plugin, completion: .explicit)
         defer { try? FileManager.default.removeItem(at: f.directory) }
-        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        let available = LockIsolated(!receiptPending)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            guard available.value else { throw AgentWorkflowInspectionUnavailable() }
+            return $0
+        })
+        _ = try await router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, plugin: plugin), peer: f.peer)
         try await f.store.update(runID: f.run.id) { $0.end() }
-        let candidate = try #require(await f.router.receive(f.event(.stopCandidate, text: "Late answer"), peer: f.peer))
+        let next = try await startAnotherRun(f)
+        let task = try #require(next.invocations.first)
+        #expect(task.status == .awaitingAcceptance)
+        _ = try await router.receive(f.event(.submitted, text: task.delivery.input.text, turn: "new-run", plugin: plugin), peer: f.peer)
+        available.setValue(true)
+        if receiptPending {
+            for _ in 0..<100 {
+                if try await f.store.snapshot().runs.allSatisfy({ $0.invocations[0].nativeTurnID != nil }) {
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+        let saved = try await f.store.snapshot().runs
+        let old = try #require(saved.first(where: { $0.id == f.run.id }))
+        let current = try #require(saved.first(where: { $0.id == next.id }))
+        #expect(old.status == .ended && old.invocations[0].nativeTurnID == "turn")
+        #expect(old.invocations[0].stepTurn?.id == "turn")
+        #expect(current.invocations[0].status == .running)
+        #expect(current.invocations[0].nativeTurnID == "new-run")
+        #expect(current.invocations[0].stepTurn?.id == "new-run")
+        #expect(saved.allSatisfy { $0.invocations.count == 1 && $0.invocations[0].result == nil })
+        await router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: ["codex", "claude-code"])
+    func currentPendingReceiptDoesNotSwallowEndedRunsLateStop(plugin: String) async throws {
+        let f = try await fixture(plugin: plugin, completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, plugin: plugin), peer: f.peer)
+        try await f.store.update(runID: f.run.id) {
+            try $0.requestStepCompletion(invocationID: f.invocation.id, instance: f.instance, turnID: "turn", now: Date())
+            $0.end()
+        }
+        let next = try await startAnotherRun(f)
+        let task = try #require(next.invocations.first)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: { _ in
+            throw AgentWorkflowInspectionUnavailable()
+        })
+        _ = try await router.receive(f.event(.submitted, text: task.delivery.input.text, turn: "new-run", plugin: plugin), peer: f.peer)
+        let late = try await router.receive(f.event(.stopCandidate, text: "Late result", plugin: plugin), peer: f.peer)
+        #expect(late?.runID == f.run.id && late?.invocation.id == f.invocation.id)
+        #expect(late?.candidate.nativeTurnID == "turn")
+        let current = try #require(await f.store.snapshot().runs.first(where: { $0.id == next.id }))
+        #expect(current.invocations[0].nativeTurnID == nil && current.invocations[0].result == nil)
+        await router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: ["codex", "claude-code"], [AgentWorkflowNode.Completion.replyEnded, .explicit])
+    func endedRunStillVerifiesLateAnswerWithoutRestarting(plugin: String, completion: AgentWorkflowNode.Completion) async throws {
+        let f = try await fixture(plugin: plugin, completion: completion)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, plugin: plugin), peer: f.peer)
+        try await f.store.update(runID: f.run.id) {
+            if completion == .explicit {
+                try $0.requestStepCompletion(invocationID: f.invocation.id, instance: f.instance, turnID: "turn", now: Date())
+            }
+            $0.end()
+        }
+        let next = try await startAnotherRun(f)
+        let task = try #require(next.invocations.first)
+        _ = try await f.router.receive(f.event(.submitted, text: task.delivery.input.text, turn: "new-run", plugin: plugin), peer: f.peer)
+        // Exact old receipts and results can still be archived after End.
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, plugin: plugin), peer: f.peer)
+        let candidate = try #require(await f.router.receive(f.event(.stopCandidate, text: "Late answer", plugin: plugin), peer: f.peer))
+        #expect(candidate.runID == f.run.id)
         try Data("{\"final\":\"Late answer\"}\n".utf8).write(to: f.transcript)
         let monitor = AgentWorkflowCompletionMonitor(store: f.store, runner: f.runner, inspect: { $0 }, onFailure: { Issue.record(Comment(rawValue: $0)) })
         await monitor.verify(candidate, provider: NativeWorkflowTestProvider())
@@ -728,11 +1092,15 @@ struct AgentWorkflowNativeEventsTests {
             }
             try await Task.sleep(for: .milliseconds(10))
         }
-        let run = try await f.store.snapshot().runs[0]
+        let saved = try await f.store.snapshot().runs
+        let run = try #require(saved.first(where: { $0.id == f.run.id }))
+        let current = try #require(saved.first(where: { $0.id == next.id }))
         #expect(run.status == .ended)
         #expect(run.invocations.count == 1 && run.invocations[0].status == .succeeded)
         #expect(run.invocations[0].result?.text == "Late answer")
-        #expect(try await f.router.receive(f.event(.stopCandidate, text: "Late answer"), peer: f.peer) == nil)
+        #expect(current.status == .running && current.invocations[0].status == .running)
+        #expect(current.invocations[0].nativeTurnID == "new-run" && current.invocations[0].result == nil)
+        #expect(try await f.router.receive(f.event(.stopCandidate, text: "Late answer", plugin: plugin), peer: f.peer) == nil)
         await monitor.shutdown()
         await f.runner.shutdown()
     }

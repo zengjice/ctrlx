@@ -17,7 +17,12 @@ actor AgentWorkflowEventRouter {
     private struct PendingSubmission {
         let context: AgentWorkflowTurnContext
         let bindFirstConversation: Bool
+        var isStepContinuation = false
+        var verifying = false
+        var revision = 0
         var following: PluginWorkflowEvent?
+        var continuation: PluginWorkflowEvent?
+        var continuationFollowing: PluginWorkflowEvent?
         var retry: Task<Void, Never>?
     }
 
@@ -55,6 +60,19 @@ actor AgentWorkflowEventRouter {
         }
     }
 
+    func requireVerifiedSubmission(_ invocationID: UUID) async throws {
+        // A timed-out receipt still supersedes the old turn. An explicit retry
+        // may verify it, but must never fall back to completing that old turn.
+        if !stopped, pending[invocationID] != nil, pending[invocationID]?.retry == nil {
+            if let context = try await verifySubmission(invocationID) {
+                await onVerified(context)
+            }
+        }
+        guard !stopped, pending[invocationID] == nil else {
+            throw AgentWorkflowError("The Agent's current turn is awaiting receipt verification. Retry the completion command after verification.")
+        }
+    }
+
     func receive(_ event: PluginEvent, peer: PluginIngressPeer) async throws -> AgentWorkflowTurnContext? {
         guard !stopped else { return nil }
         if case .awaitingReplies = event.state {
@@ -81,9 +99,34 @@ actor AgentWorkflowEventRouter {
             })?.key {
             if pending[id]?.following?.kind != .failed {
                 pending[id]?.following = native
+                pending[id]?.revision += 1
             }
             return nil
         }
+        if
+            let id = pending.first(where: { entry in
+                guard
+                    entry.value.context.instance.matchesBinding(observed),
+                    entry.value.context.candidate.nativeTurnID != native.nativeTurnID,
+                    let run = archive.runs.first(where: { $0.id == entry.value.context.runID }),
+                    !run.status.isTerminal,
+                    run.definition.nodes.first(where: { $0.id == entry.value.context.invocation.nodeID })?.completion == .explicit else { return false }
+                return native.kind == .submitted || (
+                    entry.value.continuation?.nativeTurnID == native.nativeTurnID
+                        && entry.value.continuation?.transcriptPath == native.transcriptPath
+                )
+            })?.key {
+            if native.kind == .submitted {
+                pending[id]?.continuation = native
+                pending[id]?.continuationFollowing = nil
+                pending[id]?.revision += 1
+            } else if pending[id]?.continuationFollowing?.kind != .failed {
+                pending[id]?.continuationFollowing = native
+                pending[id]?.revision += 1
+            }
+            return nil
+        }
+
         guard native.kind == .submitted || process.matchesBinding(observed) else { return nil }
         // Submission identity is checked by verifySubmission, which retains
         // authenticated evidence through temporary process-scan outages.
@@ -113,7 +156,23 @@ actor AgentWorkflowEventRouter {
                     pending[invocation.id] = .init(context: context, bindFirstConversation: bindsConversation)
                     do { return try await verifySubmission(invocation.id) }
                     catch {
-                        pending.removeValue(forKey: invocation.id)?.retry?.cancel()
+                        pending[invocation.id]?.retry?.cancel()
+                        pending[invocation.id]?.retry = nil
+                        throw error
+                    }
+                }
+                if
+                    !run.status.isTerminal,
+                    let invocation = invocations.first(where: {
+                        $0.status == .running && $0.stepTurn?.completionRequested == false
+                    }) {
+                    guard pending[invocation.id] == nil else { return nil }
+                    let context = AgentWorkflowTurnContext(runID: run.id, invocation: invocation, instance: instance, candidate: native)
+                    pending[invocation.id] = .init(context: context, bindFirstConversation: false, isStepContinuation: true)
+                    do { return try await verifySubmission(invocation.id) }
+                    catch {
+                        pending[invocation.id]?.retry?.cancel()
+                        pending[invocation.id]?.retry = nil
                         throw error
                     }
                 }
@@ -124,7 +183,7 @@ actor AgentWorkflowEventRouter {
                  .stopCandidate:
                 guard
                     let invocation = invocations.first(where: {
-                        $0.nativeTurnID == native.nativeTurnID && $0.nativeTranscriptPath == native.transcriptPath
+                        $0.resultTurnID == native.nativeTurnID && $0.resultTranscriptPath == native.transcriptPath
                             && [.running, .uncertain].contains($0.status)
                     }) else { continue }
                 let live = native.kind == .failed ? try await inspect(instance) : instance
@@ -136,7 +195,9 @@ actor AgentWorkflowEventRouter {
     }
 
     private func verifySubmission(_ id: UUID) async throws -> AgentWorkflowTurnContext? {
-        guard let submission = pending[id] else { return nil }
+        guard let submission = pending[id], !submission.verifying else { return nil }
+        pending[id]?.verifying = true
+        defer { pending[id]?.verifying = false }
         let candidate = submission.context
         let live: AgentWorkflowInstance
         do { live = try await inspect(candidate.instance) }
@@ -159,19 +220,44 @@ actor AgentWorkflowEventRouter {
         if let issue = live.capabilityIssue {
             throw AgentWorkflowError(issue)
         }
-        try await runner.accepted(
-            runID: candidate.runID, invocationID: id, instance: live,
-            nativeTurnID: candidate.candidate.nativeTurnID, transcriptPath: candidate.candidate.transcriptPath,
-            bindFirstConversation: submission.bindFirstConversation
-        )
-        guard let resolved = pending.removeValue(forKey: id) else { return nil }
-        if let following = resolved.following {
-            // The Stop may have arrived while inspection or receipt persistence
-            // was suspended. Route it only after the native turn is linked.
-            return try await routeFollowing(.init(runID: candidate.runID, invocation: candidate.invocation, instance: live, candidate: following))
+        if submission.isStepContinuation {
+            try await store.update(runID: candidate.runID) {
+                try $0.observeStepTurn(invocationID: id, instance: live, turn: .init(
+                    id: candidate.candidate.nativeTurnID, transcriptPath: candidate.candidate.transcriptPath, prompt: candidate.candidate.text
+                ))
+            }
+        } else {
+            try await runner.accepted(
+                runID: candidate.runID, invocationID: id, instance: live,
+                nativeTurnID: candidate.candidate.nativeTurnID, transcriptPath: candidate.candidate.transcriptPath,
+                bindFirstConversation: submission.bindFirstConversation
+            )
         }
-        guard candidate.invocation.nativeTurnID == nil else { return nil }
-        return .init(runID: candidate.runID, invocation: candidate.invocation, instance: live, candidate: candidate.candidate)
+        while let resolved = pending[id] {
+            if let continuation = resolved.continuation {
+                try await store.update(runID: candidate.runID) {
+                    try $0.observeStepTurn(invocationID: id, instance: live, turn: .init(
+                        id: continuation.nativeTurnID, transcriptPath: continuation.transcriptPath, prompt: continuation.text
+                    ))
+                }
+            }
+            let following = resolved.continuation == nil ? resolved.following : resolved.continuationFollowing
+            var context: AgentWorkflowTurnContext?
+            if let following {
+                context = try await routeFollowing(.init(runID: candidate.runID, invocation: candidate.invocation, instance: live, candidate: following))
+            } else if !submission.isStepContinuation, resolved.continuation == nil, candidate.invocation.nativeTurnID == nil {
+                let current = try await store.snapshot().runs.first(where: { $0.id == candidate.runID })?.invocations.first(where: { $0.id == id })
+                if current?.stepTurn == nil {
+                    context = .init(runID: candidate.runID, invocation: candidate.invocation, instance: live, candidate: candidate.candidate)
+                }
+            }
+            // Keep completion blocked until every event received during the
+            // asynchronous writes above has also been applied.
+            guard pending[id]?.revision == resolved.revision else { continue }
+            pending.removeValue(forKey: id)
+            return context
+        }
+        return nil
     }
 
     private func retrySubmission(_ id: UUID) async {
@@ -187,7 +273,8 @@ actor AgentWorkflowEventRouter {
                 }
             }
         } catch {
-            guard let unresolved = pending.removeValue(forKey: id), !Task.isCancelled else { return }
+            guard let unresolved = pending[id], !Task.isCancelled else { return }
+            pending[id]?.retry = nil
             onFailure("Could not verify a workflow submission receipt: \(error.localizedDescription)")
             do { try await store.update(runID: unresolved.context.runID) { $0.pause(reason: error.localizedDescription) } }
             catch { onFailure("Could not pause the workflow: \(error.localizedDescription)") }
@@ -195,6 +282,18 @@ actor AgentWorkflowEventRouter {
     }
 
     private func routeFollowing(_ context: AgentWorkflowTurnContext) async throws -> AgentWorkflowTurnContext? {
+        let run = try await store.snapshot().runs.first(where: { $0.id == context.runID })
+        guard var invocation = run?.invocations.first(where: { $0.id == context.invocation.id }) else { return nil }
+        if let turn = invocation.stepTurn {
+            guard turn.id == context.candidate.nativeTurnID, turn.transcriptPath == context.candidate.transcriptPath else { return nil }
+            if !context.candidate.hasPendingWork {
+                let id = invocation.id
+                let updated = try await store.update(runID: context.runID) { try $0.stopStepTurn(invocationID: id, turnID: turn.id) }
+                guard let current = updated.invocations.first(where: { $0.id == id }), current.stepTurn?.id == turn.id else { return nil }
+                invocation = current
+            }
+            guard invocation.stepTurn?.completionRequested == true else { return nil }
+        }
         if context.candidate.kind == .failed {
             try await runner.failed(
                 runID: context.runID, invocationID: context.invocation.id, instance: context.instance,
@@ -202,6 +301,6 @@ actor AgentWorkflowEventRouter {
             )
             return nil
         }
-        return context
+        return .init(runID: context.runID, invocation: invocation, instance: context.instance, candidate: context.candidate)
     }
 }

@@ -202,9 +202,9 @@ struct AgentWorkflowStoreTests {
         let fixture = try await fixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
         let run = try await start(fixture)
-        await #expect(throws: AgentWorkflowError.self) { try await start(fixture) }
+        await #expect(throws: AgentWorkflowStartRejection.self) { try await start(fixture) }
         try await fixture.store.update(runID: run.id) { $0.pause(reason: "Manual pause") }
-        await #expect(throws: AgentWorkflowError.self) { try await start(fixture) }
+        await #expect(throws: AgentWorkflowStartRejection.self) { try await start(fixture) }
         try await fixture.store.update(runID: run.id) { $0.end() }
         let next = try await start(fixture)
         #expect(next.id != run.id)

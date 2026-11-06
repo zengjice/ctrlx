@@ -46,6 +46,9 @@ public enum AgentWorkflowPrompt {
             attachments += answer.attachmentIDs
         }
         var context = ["[CtrlX workflow invocation: \(invocationReference)]"]
+        if node.completion == .explicit {
+            context.append("This step may span multiple replies. When its task is complete, run: ctrlx workflow complete-step --invocation \(invocationReference). Then provide the final result. Discussion or a proposal alone does not hand off the step.")
+        }
         if node.allowsFinish {
             context.append("May end workflow: ctrlx workflow finish --invocation \(invocationReference) --reason \"<reason>\"")
         }

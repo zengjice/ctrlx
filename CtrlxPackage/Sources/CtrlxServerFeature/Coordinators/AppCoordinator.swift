@@ -1031,6 +1031,14 @@
             #endif
         }
 
+        func synchronizeWorkflowEvents(_ invocationID: UUID) async throws {
+            guard let ingressSocketServer, let agentWorkflowEvents else {
+                throw AgentWorkflowError("Workflow event processing is unavailable on this Host.")
+            }
+            try await ingressSocketServer.waitForPendingFrames()
+            try await agentWorkflowEvents.requireVerifiedSubmission(invocationID)
+        }
+
         #if DEBUG
             /// Seed the fixed E2E project set through the plugin path, tagged by
             /// pluginID exactly as the live scanners would (one Codex-tagged
@@ -3166,7 +3174,7 @@
                 if request.method == "simulator.action" {
                     return await agentSimulator.handle(request)
                 }
-                if ["workflow.finish", "workflow.attachments"].contains(request.method) {
+                if ["workflow.finish", "workflow.completeStep", "workflow.attachments"].contains(request.method) {
                     guard let self else { return .internalError(id: request.id, "Host is shutting down.") }
                     return await self.handleWorkflowAgentCommand(request, peer: peer)
                 }

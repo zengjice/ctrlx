@@ -2,7 +2,7 @@ import Foundation
 
 public enum AgentWorkflowReviewTemplate {
     public static func apply(to definition: inout AgentWorkflowDefinition, developerID: UUID, reviewerID: UUID) {
-        let develop = AgentWorkflowNode(name: "Initial development", agentInstanceID: developerID, initialTask: .textAndAttachments)
+        let develop = AgentWorkflowNode(name: "Initial development", agentInstanceID: developerID, initialTask: .textAndAttachments, completion: .explicit)
         let review = AgentWorkflowNode(
             name: "Review", agentInstanceID: reviewerID,
             input: .init(text: """
@@ -20,7 +20,7 @@ public enum AgentWorkflowReviewTemplate {
             """), initialTask: .omit
         )
         let instructions = AgentWorkflowNode(name: "Repair instructions", content: .init(text: "Fix the Accepted findings from your preceding judgment. Run the relevant checks and report the results."), initialTask: .omit)
-        let repair = AgentWorkflowNode(name: "Repair", agentInstanceID: developerID, initialTask: .omit)
+        let repair = AgentWorkflowNode(name: "Repair", agentInstanceID: developerID, initialTask: .omit, completion: .explicit)
         definition.participants = [
             .init(agentInstanceID: developerID, name: "Developer"),
             .init(agentInstanceID: reviewerID, name: "Reviewer"),

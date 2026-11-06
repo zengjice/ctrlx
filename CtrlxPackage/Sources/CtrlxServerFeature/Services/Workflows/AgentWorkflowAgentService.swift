@@ -7,16 +7,19 @@ import Foundation
 actor AgentWorkflowAgentService {
     private let store: AgentWorkflowStore
     private let inspect: @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance
+    private let synchronizeEvents: @Sendable (UUID) async throws -> Void
     private let now: @Sendable () -> Date
     private let attachmentReader = AgentWorkflowAttachmentReader()
 
     init(
         store: AgentWorkflowStore,
         inspect: @escaping @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance,
+        synchronizeEvents: @escaping @Sendable (UUID) async throws -> Void,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.store = store
         self.inspect = inspect
+        self.synchronizeEvents = synchronizeEvents
         self.now = now
     }
 
@@ -24,22 +27,24 @@ actor AgentWorkflowAgentService {
         if request.method == "workflow.attachments" {
             return await attachments(request, peer: peer)
         }
-        guard request.method == "workflow.finish" else {
+        let completesStep = request.method == "workflow.completeStep"
+        guard completesStep || request.method == "workflow.finish" else {
             return .methodNotFound(id: request.id, request.method)
         }
         guard
-            Set(request.params.keys) == ["invocationId", "reason"],
+            Set(request.params.keys) == (completesStep ? ["invocationId"] : ["invocationId", "reason"]),
             let rawID = request.params["invocationId"]?.stringValue,
             let invocationID = UUID(uuidString: rawID),
-            let reason = request.params["reason"]?.stringValue,
+            let reason = completesStep ? "Step complete" : request.params["reason"]?.stringValue,
             !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             reason.utf8.count <= 8_192 else {
-            return .invalidParams(id: request.id, "Expected invocationId and a nonempty reason of at most 8192 UTF-8 bytes.")
+            return .invalidParams(id: request.id, completesStep ? "Expected the invocationId supplied with this step." : "Expected invocationId and a nonempty reason of at most 8192 UTF-8 bytes.")
         }
         guard let peer else {
             return denied(request.id, "Cannot verify the workflow command's caller.")
         }
         do {
+            try await synchronizeEvents(invocationID)
             let archive = try await store.snapshot()
             guard
                 let run = archive.runs.first(where: { $0.invocations.contains { $0.id == invocationID } }),
@@ -52,22 +57,34 @@ actor AgentWorkflowAgentService {
             guard live.matchesBinding(instance) else {
                 return denied(request.id, "The Agent process or conversation changed.")
             }
+            try await synchronizeEvents(invocationID)
             let timestamp = now()
             let updated = try await store.update(runID: run.id) {
-                try $0.requestFinish(invocationID: invocationID, instance: live, reason: reason, now: timestamp)
+                if let turn = invocation.stepTurn {
+                    guard $0.run.invocations.first(where: { $0.id == invocationID })?.stepTurn?.id == turn.id else {
+                        throw AgentWorkflowError("The Agent started another turn while verifying the completion request. Retry from the current turn.")
+                    }
+                }
+                if completesStep {
+                    try $0.requestStepCompletion(invocationID: invocationID, instance: live, turnID: invocation.stepTurn?.id, now: timestamp)
+                } else {
+                    try $0.requestFinish(invocationID: invocationID, instance: live, reason: reason, now: timestamp)
+                }
             }
             return JSONRPCResponse(id: request.id, result: [
                 "runId": .string(updated.id.uuidString),
                 "invocationId": .string(invocationID.uuidString),
                 "status": .string(updated.status.rawValue),
-                "message": .string(updated.status == .paused
+                "message": .string(completesStep
+                    ? "Step completion saved. Provide this turn's final result; downstream handoff waits for verification and an unpaused workflow."
+                    : updated.status == .paused
                     ? "Finish request saved. The workflow remains paused until an operator continues it."
                     : "Finish request saved. The workflow will complete after the Host verifies this turn's final result."),
             ])
         } catch let error as AgentWorkflowError {
             return denied(request.id, error.localizedDescription)
         } catch {
-            return .internalError(id: request.id, "Could not save the workflow finish request: \(error.localizedDescription)")
+            return .internalError(id: request.id, "Could not save the workflow completion request: \(error.localizedDescription)")
         }
     }
 

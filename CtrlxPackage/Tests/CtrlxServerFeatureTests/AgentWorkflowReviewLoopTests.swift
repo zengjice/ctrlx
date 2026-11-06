@@ -58,7 +58,7 @@ struct AgentWorkflowReviewLoopTests {
         let saved = try await store.saveDefinition(definition, expectedRevision: nil)
         let run = try await store.start(definitionID: saved.id, expectedRevision: saved.revision, requestID: UUID(), now: now, authorizationExpiresAt: now.addingTimeInterval(3_600))
         #expect(run.instances.count == 2)
-        #expect(try await store.snapshot().schemaVersion == 4)
+        #expect(try await store.snapshot().schemaVersion == 5)
         let probe = ReviewLoopDeliveryProbe()
         let runner = AgentWorkflowRunner(store: store, transport: .init(inspect: { $0 }, prepare: { _, _ in }, write: { invocation, _ in
             let snapshot = try await store.snapshot().runs[0]
@@ -95,7 +95,10 @@ struct AgentWorkflowReviewLoopTests {
                     #expect(await probe.writes[2].delivery.toAgentID == agent.id)
                 }
                 let turn = "native-\(invocation.id)"
-                try await runner.accepted(runID: run.id, invocationID: invocation.id, instance: agent, nativeTurnID: turn)
+                try await runner.accepted(runID: run.id, invocationID: invocation.id, instance: agent, nativeTurnID: turn, transcriptPath: "/fixture/native.jsonl")
+                if [0, 3].contains(index) {
+                    try await store.update(runID: run.id) { try $0.requestStepCompletion(invocationID: invocation.id, instance: agent, turnID: turn, now: now) }
+                }
                 if index == 0 {
                     let files = try await store.invocationAttachments(invocation, instance: agent, status: .running, now: now)
                     #expect(try Data(contentsOf: #require(files.first?.url)) == image)
@@ -146,7 +149,10 @@ struct AgentWorkflowReviewLoopTests {
             let agent = agents[index]
             try execution.beginWriting(invocationID: task.id, instance: agent, now: now)
             try execution.didWrite(invocationID: task.id)
-            try execution.accept(invocationID: task.id, instance: agent, nativeTurnID: task.id.uuidString)
+            try execution.accept(invocationID: task.id, instance: agent, nativeTurnID: task.id.uuidString, transcriptPath: "/fixture/native.jsonl")
+            if node.completion == .explicit {
+                try execution.requestStepCompletion(invocationID: task.id, instance: agent, turnID: task.id.uuidString, now: now)
+            }
             if index == 0 {
                 #expect(throws: AgentWorkflowError.self) { try execution.requestFinish(invocationID: task.id, instance: agent, reason: "Not granted", now: now) }
             } else {
@@ -174,7 +180,10 @@ struct AgentWorkflowReviewLoopTests {
             let agent = try #require(agents.first { $0.id == node.agentInstanceID })
             try execution.beginWriting(invocationID: task.id, instance: agent, now: now)
             try execution.didWrite(invocationID: task.id)
-            try execution.accept(invocationID: task.id, instance: agent, nativeTurnID: task.id.uuidString)
+            try execution.accept(invocationID: task.id, instance: agent, nativeTurnID: task.id.uuidString, transcriptPath: "/fixture/native.jsonl")
+            if node.completion == .explicit {
+                try execution.requestStepCompletion(invocationID: task.id, instance: agent, turnID: task.id.uuidString, now: now)
+            }
             try execution.succeed(.init(invocationID: task.id, nativeTurnID: task.id.uuidString, text: node.name, completedAt: now), instance: agent, now: now)
         }
         #expect(execution.run.round == 2 && execution.readyNodeIDs == [definition.nodes[1].id])

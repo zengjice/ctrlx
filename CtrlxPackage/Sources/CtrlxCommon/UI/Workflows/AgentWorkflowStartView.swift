@@ -8,6 +8,7 @@ struct AgentWorkflowStartView: View {
     let hostID: UUID
     let definitionID: UUID
     let navigation: AgentWorkflowNavigation
+    let openAgent: (AgentWorkflowInstance) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var definition: AgentWorkflowDefinition?
     @State private var input = AgentWorkflowInput()
@@ -18,6 +19,7 @@ struct AgentWorkflowStartView: View {
     @State private var busy = false
     @State private var expiresAt = Date().addingTimeInterval(86_400)
     @State private var pendingStart: ManageAgentWorkflows.Operation?
+    @State private var startRejection: AgentWorkflowStartRejection?
     @State private var error: String?
 
     var body: some View {
@@ -47,10 +49,35 @@ struct AgentWorkflowStartView: View {
                         if pendingStart != nil {
                             Text("The start has not been confirmed. Retry checks the same task and request; you can also check Runs.")
                                 .font(.caption).foregroundStyle(.secondary)
+                                .accessibilityIdentifier("workflow-start-unconfirmed")
                         }
                     }
                 } else if error == nil {
                     ProgressView("Loading task…")
+                }
+                if let startRejection {
+                    Section {
+                        Text(startRejection.message).foregroundStyle(.red).textSelection(.enabled)
+                            .accessibilityIdentifier("workflow-start-rejection")
+                        ForEach(startRejection.conflicts) { conflict in
+                            NavigationLink {
+                                AgentWorkflowRunView(endpoint: endpoint, hostID: hostID, runID: conflict.id, openAgent: openAgent)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(conflict.run.name)
+                                    Text(conflict.agentNames.joined(separator: ", "))
+                                        .font(.caption).foregroundStyle(.secondary)
+                                    Text("\(conflict.run.status.title) · View workflow")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                            .accessibilityIdentifier("workflow-start-conflict-\(conflict.id)")
+                        }
+                    } header: { Text("Workflow not started") } footer: {
+                        if !startRejection.conflicts.isEmpty {
+                            Text("Paused workflows still reserve their Agents. Open the workflow to continue or end it, or choose other Agents in your configuration.")
+                        }
+                    }
                 }
                 if let error {
                     Section { Text(error).foregroundStyle(.red).textSelection(.enabled) }
@@ -118,6 +145,8 @@ struct AgentWorkflowStartView: View {
             initialInput: input
         )
         pendingStart = attempt
+        startRejection = nil
+        error = nil
         busy = true
         Task {
             defer { busy = false }
@@ -128,6 +157,9 @@ struct AgentWorkflowStartView: View {
                 await discard(importedIDs.subtracting(Set(input.attachmentIDs)))
                 importedIDs.removeAll()
                 dismiss()
+            } catch let rejection as AgentWorkflowStartRejection {
+                pendingStart = nil
+                startRejection = rejection
             } catch { self.error = error.localizedDescription }
         }
     }

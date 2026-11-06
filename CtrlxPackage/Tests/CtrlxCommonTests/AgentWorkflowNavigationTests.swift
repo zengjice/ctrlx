@@ -59,6 +59,37 @@ struct AgentWorkflowNavigationTests {
         }
     }
 
+    @Test(arguments: ["rejected", "missing", "timeout", "accepted"])
+    func startDistinguishesHostRefusalFromUnconfirmedOutcome(outcome: String) async throws {
+        let fixture = Fixture(), navigation = AgentWorkflowNavigation()
+        let run = fixture.makeRun()
+        navigation.path = [.host("pair")]
+        let rejection = AgentWorkflowStartRejection("Occupied", conflicts: [.init(run: .init(run), agentNames: [fixture.instance.displayName])])
+        let endpoint = AgentWorkflowEndpoint(id: "pair", name: "Host", connected: { true }, supported: { true }) { _ in
+            if outcome == "timeout" {
+                throw URLError(.timedOut)
+            }
+            var response = AgentWorkflowResponse(hostID: fixture.hostID)
+            if outcome != "missing" {
+                response.startRejection = rejection
+            }
+            if outcome == "accepted" {
+                response.run = .init(run, currentInstances: [fixture.instance])
+            }
+            return response
+        }
+        let attempt = ManageAgentWorkflows.Operation.start(definitionID: run.definition.id, expectedRevision: 1, requestID: run.id, authorizationExpiresAt: run.authorizationExpiresAt)
+        do {
+            let state = try await navigation.startRun(attempt, endpoint: endpoint, hostID: fixture.hostID, configurationID: run.definition.id)
+            #expect(outcome == "accepted" && state.summary.id == run.id)
+            #expect(navigation.path.last == .run(route: "pair", hostID: fixture.hostID, id: run.id))
+        } catch {
+            #expect(outcome != "accepted")
+            #expect((error as? AgentWorkflowStartRejection) == (outcome == "rejected" ? rejection : nil))
+            #expect(navigation.path == [.host("pair")])
+        }
+    }
+
     @Test(arguments: [false, true], ["stay", "back", "switch-host", "other-configuration", "already-away", "cancelled"])
     func delayedStartOnlyNavigatesFromItsOriginalEntry(quickStart: Bool, scenario: String) async throws {
         let fixture = Fixture(), navigation = AgentWorkflowNavigation()

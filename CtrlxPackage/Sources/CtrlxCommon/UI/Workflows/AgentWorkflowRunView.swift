@@ -131,7 +131,7 @@ struct AgentWorkflowRunView: View {
             HStack {
                 Label(node.name, symbol: node.kind == .content ? .docTextFill : .terminal).font(.headline)
                 Spacer()
-                Text(node.isSkipped ? "First round only" : (node.invocation?.status.title ?? (state.summary.status.isTerminal ? "Not run" : "Waiting")))
+                Text(node.isSkipped ? "First round only" : (node.invocation.map { $0.awaitingStepCompletion ? "Waiting for Agent completion" : $0.status.title } ?? (state.summary.status.isTerminal ? "Not run" : "Waiting")))
                     .font(.caption).foregroundStyle(.secondary)
             }
             if let instance = node.instance {
