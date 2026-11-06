@@ -35,10 +35,12 @@ struct AgentWorkflowTaskInput: View {
                 } else {
                     Button(action: add) { Label("Add images", symbol: .photoBadgePlus) }
                 }
-                PasteButton(supportedContentTypes: AgentWorkflowImageSource.contentTypes) {
-                    receiveProviders($0)
-                }
-                .labelStyle(.titleOnly)
+                #if os(macOS)
+                    PasteButton(supportedContentTypes: AgentWorkflowImageSource.contentTypes) {
+                        receiveProviders($0)
+                    }
+                    .labelStyle(.titleOnly)
+                #endif
             }
             .buttonStyle(.borderless)
             Text("Paste or drop images here. Reference other files by their workspace paths.")
