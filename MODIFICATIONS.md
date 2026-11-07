@@ -7,6 +7,21 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.150 — Actionable workflow start failures
+
+- Explain why a workflow cannot start: a missing Agent, unverifiable process or
+  conversation, unsupported capabilities, busy input, drafts, pending approval
+  or an unavailable prompt. Name the affected Agent and suggest the next action.
+- Preserve rejected task and attachment drafts for correction and retry. Check
+  readiness before per-Agent attachment limits so an unrelated attachment error
+  cannot hide the actual start failure; accepted requests retain their existing
+  retry and invocation safeguards. See [workflow starts](docs/multi-agent-design.md).
+- Validation: all 124 focused Swift tests and 120 private publication/installer/COS
+  regressions passed, along with both boundary checks and lint for seven Swift
+  files. Isolated native Codex/Claude completed the two-round workflow using a
+  deterministic loopback model. Paired-device UI and Apple Intelligence
+  evaluations were not rerun. This release builds macOS only.
+
 ## 3.0.149 — Workflow CLI version ranges
 
 - Admit stable Codex 0.160.x–0.169.x and Claude Code 2.1.300–2.1.319 for
