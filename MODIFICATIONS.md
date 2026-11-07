@@ -7,6 +7,20 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.149 — Workflow CLI version ranges
+
+- Admit stable Codex 0.160.x–0.169.x and Claude Code 2.1.300–2.1.319 for
+  workflows, including Codex 0.167.0. Reject prerelease, malformed and out-of-range
+  versions, and show the supported range in errors. Version admission remains
+  separate from native Hook, conversation and process-instance validation.
+  See [workflow compatibility](docs/multi-agent-design.md).
+- Validation: all 111 focused Swift tests, 120 private publication/installer/COS
+  regressions, both boundary checks and lint for five Swift files passed.
+  Isolated Codex 0.167.0 and Claude Code 2.1.317 completed the two-round native
+  workflow against a deterministic loopback model. Other admitted versions were
+  checked by version-parsing tests; paired-device UI and Apple Intelligence
+  evaluations were not rerun. This release builds macOS only.
+
 ## 3.0.148 — Independent Agent hooks and reliable session grouping
 
 - Separate Codex and Claude Code skills from independently versioned lifecycle
