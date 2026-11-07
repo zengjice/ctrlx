@@ -2,8 +2,12 @@ import CtrlxNetworking
 import CtrlxPluginProtocol
 
 extension CodexPluginCore: AgentWorkflowProviding {
-    public nonisolated var workflowCLIVersions: [String] {
-        ["codex-cli 0.163.0", "codex-cli 0.166.0"]
+    public nonisolated var workflowCLIVersionSupport: String? {
+        "codex-cli 0.160.x–0.169.x (stable)"
+    }
+
+    public nonisolated func supportsWorkflowCLI(_ version: String) -> Bool {
+        version.wholeMatch(of: /codex-cli 0\.16[0-9]\.(0|[1-9][0-9]*)/) != nil
     }
 
     public nonisolated var workflowComposer: AgentWorkflowComposer {
