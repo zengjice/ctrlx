@@ -107,6 +107,20 @@
                     sendKeys: sendKeys
                 )
 
+                if agentPluginID != nil {
+                    Button(action: sendSpace) {
+                        Text("␣")
+                            .terminalInputControlStyle()
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!terminalInputEnabled)
+                    .opacity(terminalInputEnabled ? 1 : 0.4)
+                    .accessibilityLabel("Space")
+                    .accessibilityHint("Insert a space without sending")
+                    .accessibilityIdentifier("terminal-space-control")
+                }
+
                 RepeatingTerminalKeyButton(
                     title: "⌫",
                     key: .backspace,
@@ -180,6 +194,10 @@
 
         private func sendEscape() {
             sendKeys([.escape])
+        }
+
+        private func sendSpace() {
+            sendKeys([.space])
         }
 
         private func sendDollar() {

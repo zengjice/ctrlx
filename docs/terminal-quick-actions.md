@@ -714,6 +714,9 @@ collect real quality evidence; record actual microphone latency separately.
 The first input row places `$`, then **Model** on Agent tabs, before the divider
 and device-local custom buttons. **Add Button** (`＋`) ends the horizontal scroll
 area. Send remains pinned outside it.
+On Agent tabs, a fixed **Space** (`␣`) button sits immediately before Delete.
+Each tap sends one Space key through the existing input queue, without Return
+or auto-send. It shares the other terminal keys' input-availability checks.
 All built-in first-row buttons, including Voice and Send, share a 44-point width
 at the default text size and scale together with Dynamic Type. Custom buttons
 keep content-sized widths; recording and loading states do not widen the row controls.
