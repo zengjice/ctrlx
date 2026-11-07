@@ -203,14 +203,29 @@ struct AgentWorkflowServiceTests {
         #expect(f.backend.scheduled.count == 1)
     }
 
-    @Test(arguments: [AgentWorkflowReadiness.draft, .awaitingHuman, .busy, .unavailable])
-    func blockedAgentPreventsStart(readiness: AgentWorkflowReadiness) async throws {
+    @Test(arguments: [
+        (AgentWorkflowReadiness.draft, "unsent input or an open editor"),
+        (.awaitingHuman, "pending question, approval, or queued input"),
+        (.busy, "working or preparing input"),
+        (.unavailable, "terminal input could not be verified as ready"),
+    ])
+    func blockedAgentPreventsStart(readiness: AgentWorkflowReadiness, reason: String) async throws {
         let f = try await fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
         f.backend.observations[1].readiness = readiness
-        await #expect(throws: AgentWorkflowError.self) { try await start(f) }
+        let request = ManageAgentWorkflows(.start(
+            definitionID: f.definition.id, expectedRevision: f.definition.revision,
+            requestID: UUID(), authorizationExpiresAt: now.addingTimeInterval(3_600)
+        ), expectedHostID: f.definition.hostID)
+        let response = try await f.service.handle(request)
+        let rejection = try #require(response.startRejection)
+        #expect(rejection.message.hasPrefix("Reviewer: ") && rejection.message.contains(reason))
+        #expect(rejection.conflicts.isEmpty && response.run == nil)
         #expect(try await f.service.snapshot().runs.isEmpty)
         #expect(f.backend.scheduled.isEmpty)
+        f.backend.observations[1].readiness = .ready
+        #expect(try await f.service.handle(request).run != nil)
+        #expect(f.backend.scheduled.count == 1)
     }
 
     @Test

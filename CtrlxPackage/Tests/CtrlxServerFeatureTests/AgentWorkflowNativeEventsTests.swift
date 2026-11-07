@@ -78,7 +78,7 @@ struct AgentWorkflowNativeEventsTests {
             pluginID: plugin, processID: 10, processRuntimeID: "501:10:100:0",
             workspacePane: .init(serverID: "tmux", sessionID: UUID(), windowID: UUID(), paneID: UUID()),
             paneID: "%1", conversationID: conversation, displayName: "Developer", workingDirectory: directory.path,
-            capabilities: .init(maximumInputBytes: 10_000), readiness: .ready
+            capabilities: .init(maximumInputBytes: 10_000, mediaTypes: ["image/png"]), readiness: .ready
         )]).first)
         var imageIDs: [UUID] = []
         let bytes = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR4nGNQaPjQAMIMMAYARzIIQdQEEEMAAAAASUVORK5CYII=")!

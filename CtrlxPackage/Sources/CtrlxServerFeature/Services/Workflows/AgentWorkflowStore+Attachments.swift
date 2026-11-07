@@ -86,15 +86,19 @@ extension AgentWorkflowStore {
         try validateAttachments(definition.attachmentIDs, in: archive)
         var files: [AgentWorkflowAttachmentFile] = []
         for node in definition.nodes {
-            let instance = archive.instances.first(where: { $0.id == node.agentInstanceID })
-            guard node.kind == .content || instance != nil else {
-                throw AgentWorkflowError("An Agent is no longer available.")
-            }
             let ids = node.input.attachmentIDs + (definition.initialTask(for: node) == .textAndAttachments ? definition.initialInput.attachmentIDs : [])
-            files += try attachmentFiles(Array(Set(ids)), instance: instance)
+            files += try attachmentFiles(Array(Set(ids)), instance: nil)
         }
         var seen: Set<UUID> = []
         return files.filter { seen.insert($0.attachment.id).inserted }
+    }
+
+    func validateStartAttachments(_ definition: AgentWorkflowDefinition, instances: [AgentWorkflowInstance]) throws {
+        for node in definition.nodes {
+            guard let instance = instances.first(where: { $0.id == node.agentInstanceID }) else { continue }
+            let ids = node.input.attachmentIDs + (definition.initialTask(for: node) == .textAndAttachments ? definition.initialInput.attachmentIDs : [])
+            _ = try attachmentFiles(Array(Set(ids)), instance: instance)
+        }
     }
 
     private func attachmentFiles(_ ids: [UUID], instance: AgentWorkflowInstance?) throws -> [AgentWorkflowAttachmentFile] {
