@@ -4,13 +4,29 @@ import Testing
 @testable import CodexPluginCore
 
 struct CodexWorkflowTranscriptTests {
-    @Test
-    func automaticHandoffRequiresVerifiedNativeCLI() {
-        let provider = CodexPluginCore()
-        #expect(provider.workflowRuntimeIssue(cliVersion: "codex-cli 0.163.0") == nil)
-        for version: String? in [nil, "", "codex-cli 0.162.1", "codex-cli 0.164.0", "codex-cli 0.163.0-beta", "2.1.308 (Claude Code)"] {
-            #expect(provider.workflowRuntimeIssue(cliVersion: version) != nil)
+    @Test(arguments: 160...169)
+    func automaticHandoffAcceptsConfiguredCLIRange(minor: Int) {
+        let provider: any AgentWorkflowProviding = CodexPluginCore()
+        for patch in [0, 1, 12] {
+            #expect(provider.workflowRuntimeIssue(cliVersion: "codex-cli 0.\(minor).\(patch)") == nil)
         }
+    }
+
+    @Test
+    func automaticHandoffRejectsOutsideRangeAndUnknownCLIFormats() {
+        let provider: any AgentWorkflowProviding = CodexPluginCore()
+        for version: String? in [
+            nil, "", "codex-cli 0.159.99", "codex-cli 0.170.0", "codex-cli 1.160.0",
+            "codex-cli 0.16.0", "codex-cli 0.160", "codex-cli 0.160.0.1",
+            "codex-cli 0.160.-1", "codex-cli 0.160.01", "codex-cli 0.0160.0",
+            "codex-cli 0.163.0-beta", "codex-cli 0.169.0+build", "codex-cli 0.160.0\n",
+            "codex-cli 0.160.x", "0.160.0", "2.1.308 (Claude Code)",
+        ] {
+            #expect(provider.workflowRuntimeIssue(cliVersion: version) != nil, "Unexpectedly accepted: \(version ?? "nil")")
+        }
+        let issue = provider.workflowRuntimeIssue(cliVersion: "codex-cli 0.170.0")
+        #expect(issue?.contains("0.160.x–0.169.x") == true)
+        #expect(issue?.contains("Verified build") == false)
     }
 
     private func record(_ type: String, _ payload: [String: Any]) throws -> Data {

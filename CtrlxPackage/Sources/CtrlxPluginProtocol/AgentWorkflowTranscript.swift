@@ -38,7 +38,8 @@ public extension AgentWorkflowTranscriptParser {
 public protocol AgentWorkflowProviding: Actor {
     nonisolated var workflowCapabilities: AgentWorkflowCapabilities { get }
     nonisolated var workflowComposer: AgentWorkflowComposer { get }
-    nonisolated var workflowCLIVersions: [String] { get }
+    nonisolated var workflowCLIVersionSupport: String? { get }
+    nonisolated func supportsWorkflowCLI(_ version: String) -> Bool
     nonisolated func workflowTranscript(
         conversationID: String,
         nativeTurnID: String,
@@ -48,20 +49,22 @@ public protocol AgentWorkflowProviding: Actor {
 }
 
 public extension AgentWorkflowProviding {
-    nonisolated var workflowCLIVersions: [String] {
-        []
+    nonisolated var workflowCLIVersionSupport: String? {
+        nil
     }
 
-    /// Native hooks and transcript formats are versioned by the Agent, not the
-    /// CtrlX wire protocol. Do not assume a newer CLI preserves these semantics.
+    nonisolated func supportsWorkflowCLI(_: String) -> Bool {
+        false
+    }
+
+    /// Version admission is separate from native hook and instance validation.
     nonisolated func workflowRuntimeIssue(cliVersion: String?) -> String? {
         guard let cliVersion, !cliVersion.isEmpty else {
             return "Cannot verify this running Agent's CLI version. Check its executable before starting a workflow."
         }
-        guard workflowCLIVersions.contains(cliVersion) else {
-            let supported = workflowCLIVersions.joined(separator: ", ")
-            return "Workflow input and completion are not verified for \(cliVersion)."
-                + (supported.isEmpty ? " This plugin has no verified CLI builds." : " Verified build: \(supported).")
+        guard supportsWorkflowCLI(cliVersion) else {
+            return "Workflows do not support \(cliVersion)."
+                + (workflowCLIVersionSupport.map { " Supported range: \($0)." } ?? " This plugin has no supported workflow CLI versions.")
         }
         return nil
     }
