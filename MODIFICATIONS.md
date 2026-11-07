@@ -7,6 +7,30 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.148 — Independent Agent hooks and reliable session grouping
+
+- Separate Codex and Claude Code skills from independently versioned lifecycle
+  hook plugins. Update only missing or older components, show partial installs
+  and preserve confirmed uninstall results. Publish skills at SessionStart;
+  skill updates no longer require changing the hook plugin. See
+  [Codex components](docs/plugins/codex.md#independent-skills-and-hook-plugins).
+- Support Hook trust on tmux 3.6a and verify completed native turns before
+  overriding stale Working metadata, while retaining input guards.
+- Keep provisional Agent status out of Viewer snapshots and grouping until its
+  tmux session is known, preventing blank session rows.
+- Explain browser routing failures from detached Codex process trees. Existing
+  sessions must finish and resume with `--no-daemon` in the intended pane; updating
+  CtrlX cannot change a running process tree. See [routing](docs/agent-browser.md).
+- Include iOS input-source changes for cursor handling, model selection styling
+  and a Space button. This release packages macOS only.
+- Validation: the filtered Swift run reported 85 tests with three opt-in checks
+  skipped. Native plugin-manager scenarios and the two-Agent workflow passed
+  separately, alongside the real Codex/tmux Hook-trust check. Workflow acceptance
+  used isolated Codex 0.166.0; installed 0.167.0 remains rejected by the existing
+  workflow version gate. All 120 private publication/installer/COS tests, 24 skill
+  checks, both boundaries and lint for 37 Swift files passed. Paired-device UI,
+  iOS target builds and Apple Intelligence evaluations were not rerun.
+
 ## 3.0.147 — User CLI setup and explicit workflow step completion
 
 - Automatically install this user's `~/.local/bin/ctrlx` launcher and managed
