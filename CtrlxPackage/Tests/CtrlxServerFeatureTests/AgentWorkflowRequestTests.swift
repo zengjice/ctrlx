@@ -1,4 +1,5 @@
 import ConcurrencyExtras
+import CryptoKit
 import CtrlxCommon
 import CtrlxNetworking
 import Dependencies
@@ -88,6 +89,13 @@ struct AgentWorkflowRequestTests {
         #expect(rejection.conflicts.map { $0.run.name } == ["Workflow", "Other workflow"])
         #expect(rejection.conflicts.map { $0.run.status } == [.running, .paused])
         #expect(rejection.conflicts.map(\.agentNames) == [[f.instances[0].displayName], [f.instances[1].displayName]])
+        let busy = f.instances.map { instance in
+            var observation = AgentWorkflowObservation(instance)
+            observation.readiness = .busy
+            return observation
+        }
+        let busyService = AgentWorkflowService(store: f.store, scan: { _ in busy }, schedule: { _ in }, now: { now })
+        #expect(try await busyService.handle(attempt).startRejection == rejection)
         #expect(try await f.store.snapshot().runs.count == 2)
         #expect(try await start(f, id: first.summary.id).summary.id == first.summary.id)
         for run in try await f.store.snapshot().runs {
@@ -97,6 +105,63 @@ struct AgentWorkflowRequestTests {
         #expect(accepted.run?.summary.name == combined.name)
         #expect(accepted.startRejection == nil)
         #expect(try await f.store.snapshot().runs.count == 3)
+    }
+
+    @Test(arguments: ["version", "hook", "missing-support", "zero-limit", "missing-agent"], [false, true])
+    func agentStartRejectionPreservesInspectionReasonAndDoesNotCreateRun(scenario: String, withImage: Bool) async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        var observation = AgentWorkflowObservation(f.instances[0])
+        let expected: String
+        switch scenario {
+        case "version":
+            observation.capabilityIssue = "Unsupported CLI version: codex-cli 0.170.0. Supported range: codex-cli 0.160.x–0.169.x (stable)."
+            observation.capabilities = nil
+            observation.readiness = .unavailable
+            expected = try "Agent 0: \(#require(observation.capabilityIssue))"
+        case "hook":
+            observation.capabilityIssue = try await f.store.bridgeIssue(for: f.instances[0])
+            observation.capabilities = nil
+            observation.readiness = .unavailable
+            expected = try "Agent 0: \(#require(observation.capabilityIssue))"
+        case "missing-support",
+             "zero-limit":
+            observation.capabilities = scenario == "zero-limit" ? .init(maximumInputBytes: 0) : nil
+            expected = "Agent 0: Workflow support could not be confirmed. Check the Agent's CtrlX plugin and CLI version, then try again."
+        default:
+            expected = "A participating Agent is no longer available. Edit the workflow and select a live Agent."
+        }
+        let observations = scenario == "missing-agent" ? [] : [observation]
+        let service = AgentWorkflowService(store: f.store, scan: { _ in observations }, schedule: { _ in Issue.record("A rejected start must not schedule a task") }, now: { now })
+        var input = AgentWorkflowInput(text: "This task must not be sent")
+        if withImage {
+            let bytes = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR4nGNQaPjQAMIMMAYARzIIQdQEEEMAAAAASUVORK5CYII="))
+            let hash = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+            let image = try #require(await f.store.uploadAttachment(.image(id: UUID(), name: "Task.png", mediaType: "image/png", data: bytes, sha256: hash)).attachment)
+            input.attachmentIDs = [image.id]
+        }
+        let request = ManageAgentWorkflows(.start(
+            definitionID: f.definition.id, expectedRevision: f.definition.revision,
+            requestID: UUID(), authorizationExpiresAt: now.addingTimeInterval(3_600), initialInput: input
+        ), expectedHostID: f.hostID)
+        let response = try await service.handle(request)
+        #expect(response.run == nil)
+        #expect(response.startRejection == AgentWorkflowStartRejection(expected))
+        #expect(try await f.store.snapshot().runs.isEmpty)
+        #expect(try await f.store.attachmentMetadata(input.attachmentIDs).map(\.id) == input.attachmentIDs)
+        if scenario == "version", withImage {
+            // Recovering the CLI must still validate the image before creating a run.
+            await #expect(throws: AgentWorkflowError.self) { try await f.service.handle(request) }
+            #expect(try await f.store.snapshot().runs.isEmpty)
+            var supported = AgentWorkflowObservation(f.instances[0])
+            supported.capabilities?.mediaTypes = ["image/png"]
+            let ready = supported
+            let recovered = AgentWorkflowService(store: f.store, scan: { _ in [ready] }, schedule: { _ in }, now: { now })
+            let accepted = try await recovered.handle(request)
+            #expect(accepted.run != nil && accepted.startRejection == nil)
+            #expect(try await f.store.snapshot().runs.first?.definition.initialInput == input)
+        }
+        await f.store.shutdownAttachmentUploads()
     }
 
     @Test

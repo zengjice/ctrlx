@@ -18,15 +18,29 @@ struct AgentWorkflowExecution: Sendable {
         guard
             instances.count == definition.agentInstanceIDs.count,
             Set(instances.map(\.id)) == definition.agentInstanceIDs else {
-            throw AgentWorkflowError("Every participating Agent must have a live binding.")
+            throw AgentWorkflowStartRejection("A participating Agent is no longer available. Edit the workflow and select a live Agent.")
         }
         for instance in instances {
             guard
                 instance.hostID == definition.hostID, instance.processID > 1,
-                !instance.processRuntimeID.isEmpty, !instance.conversationID.isEmpty || instance.pluginID == "codex",
-                let capabilities = instance.capabilities, capabilities.maximumInputBytes > 0,
-                instance.readiness == .ready else {
-                throw AgentWorkflowError("\(instance.displayName) is not ready for an authenticated workflow task.")
+                !instance.processRuntimeID.isEmpty, !instance.conversationID.isEmpty || instance.pluginID == "codex" else {
+                throw AgentWorkflowStartRejection("\(instance.displayName): The Agent's process or conversation could not be verified. Edit the workflow and select a live Agent.")
+            }
+            if let issue = instance.capabilityIssue {
+                throw AgentWorkflowStartRejection("\(instance.displayName): \(issue)")
+            }
+            guard let capabilities = instance.capabilities, capabilities.maximumInputBytes > 0 else {
+                throw AgentWorkflowStartRejection("\(instance.displayName): Workflow support could not be confirmed. Check the Agent's CtrlX plugin and CLI version, then try again.")
+            }
+            let issue: String? = switch instance.readiness {
+            case .ready: nil
+            case .busy: "The Agent is working or preparing input. Wait for it to finish, then try again."
+            case .draft: "The terminal has unsent input or an open editor. Send or clear it in the Agent tab, then try again."
+            case .awaitingHuman: "The Agent has a pending question, approval, or queued input. Resolve it in the Agent tab, then try again."
+            case .unavailable: "The terminal input could not be verified as ready. Open the Agent tab and wait for its input prompt, then try again."
+            }
+            if let issue {
+                throw AgentWorkflowStartRejection("\(instance.displayName): \(issue)")
             }
         }
         self.run = AgentWorkflowRun(

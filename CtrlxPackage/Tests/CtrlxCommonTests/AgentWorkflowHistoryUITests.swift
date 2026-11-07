@@ -200,7 +200,7 @@
             #expect(navigation.path.count == 2)
         }
 
-        @Test(arguments: ["rejected-edit", "rejected-close", "timeout", "missing", "old-host"])
+        @Test(arguments: ["rejected-edit", "rejected-close", "rejected-not-ready", "timeout", "missing", "old-host"])
         func quickStartKeepsDraftsAndDistinguishesRefusalFromUnconfirmedStart(outcome: String) async throws {
             _ = NSApplication.shared
             NSApp.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
@@ -212,7 +212,9 @@
             existing.name = "Existing review"
             var occupied = AgentWorkflowRun(definition: existing, instances: [], createdAt: Date(), authorizationExpiresAt: Date().addingTimeInterval(3_600))
             occupied.status = .paused
-            let rejection = AgentWorkflowStartRejection("These Agents already belong to an unfinished workflow.", conflicts: [.init(run: .init(occupied), agentNames: ["global · dev"])])
+            let rejection = outcome == "rejected-not-ready"
+                ? AgentWorkflowStartRejection("global · dev: This Agent has not confirmed its workflow hook. Update its CtrlX plugin, then restart the Agent or submit a normal prompt before starting a workflow.")
+                : AgentWorkflowStartRejection("These Agents already belong to an unfinished workflow.", conflicts: [.init(run: .init(occupied), agentNames: ["global · dev"])])
             let rejected = outcome.hasPrefix("rejected")
             var opened = false
             var attempts: [ManageAgentWorkflows.Operation] = [], uploaded: [UUID] = [], discarded: [UUID] = []
@@ -277,13 +279,13 @@
             #expect(attribute("accessibilityLabel", from: confirm) as? String == (rejected ? "Start" : "Retry"))
             #expect((element("workflow-start-unconfirmed", in: window) == nil) == rejected)
             #expect((element("workflow-start-rejection", in: window) != nil) == rejected)
-            #expect((element("workflow-start-conflict-\(occupied.id)", in: window) != nil) == rejected)
+            #expect((element("workflow-start-conflict-\(occupied.id)", in: window) != nil) == (rejected && !rejection.conflicts.isEmpty))
             #expect(navigation.path == [.host("start-refusal")])
             if rejected, let directory = ProcessInfo.processInfo.environment["CTRLX_WORKFLOW_UI_EVIDENCE"] {
                 hosting.layoutSubtreeIfNeeded()
                 let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
                 hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
-                try #require(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: directory).appendingPathComponent("start-refusal.png"))
+                try #require(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: directory).appendingPathComponent("start-refusal-\(outcome).png"))
             }
             if outcome == "rejected-edit" {
                 _ = try press(#require(element("workflow-start-conflict-\(occupied.id)", in: window)))
