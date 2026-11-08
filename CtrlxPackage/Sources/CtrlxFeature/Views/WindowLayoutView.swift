@@ -2101,18 +2101,26 @@
         // MARK: - Status Bar
 
         private func statusBar(_ window: TmuxWindow) -> some View {
-            HStack {
-                Text("\(window.sessionName):\(window.windowIndex)")
-                    .font(.system(.caption, design: .monospaced))
+            VStack(spacing: 4) {
+                Capsule()
+                    .fill(.secondary.opacity(0.5))
+                    .frame(width: 36, height: 5)
+                    .accessibilityHidden(true)
+                    .allowsHitTesting(false)
 
-                if window.panes.count > 1 {
-                    Divider()
-                        .frame(height: 12)
+                HStack {
+                    Text("\(window.sessionName):\(window.windowIndex)")
+                        .font(.system(.caption, design: .monospaced))
 
-                    Text("\(window.panes.count) panes")
+                    if window.panes.count > 1 {
+                        Divider()
+                            .frame(height: 12)
+
+                        Text("\(window.panes.count) panes")
+                    }
+
+                    Spacer()
                 }
-
-                Spacer()
             }
             .font(.caption)
             .foregroundStyle(.secondary)

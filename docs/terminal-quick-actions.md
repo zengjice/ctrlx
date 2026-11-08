@@ -345,7 +345,9 @@ diagonal, reversed and cancelled gestures do not navigate. Content pinch, pan,
 selection and remote input remain inside the preview, outside this bar.
 
 On iOS, swipe up from the native session/window status row (for example `cm:1`)
-or the first input-control row to open that same **Tabs** sheet. Swipe down from
+or the first input-control row to open that same **Tabs** sheet. A short, centered
+capsule above the status text mirrors the sheet's drag indicator and makes the
+status bar's swipe gesture visible. Swipe down from
 either row to hide the keyboard; an already hidden keyboard stays hidden. The
 title button and explicit keyboard controls remain available. These gestures
 exclude terminal content (including an Agent's footer), the second-row shortcut
