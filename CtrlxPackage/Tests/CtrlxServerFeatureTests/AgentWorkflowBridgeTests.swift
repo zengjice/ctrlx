@@ -75,20 +75,51 @@ struct AgentWorkflowBridgeTests {
         #expect(try await f.store.bridgeIssue(for: f.instance) == nil)
     }
 
-    @Test
-    func onlyAFreshCodexMayDeferMissingHookEvidenceUntilItsFirstReceipt() async throws {
+    @Test(arguments: [false, true])
+    func codexMayDeferMissingHookEvidenceUntilItsFirstReceipt(resumed: Bool) async throws {
         let f = try fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
-        var fresh = f.instance
-        fresh.conversationID = ""
-        #expect(try await f.store.bridgeIssue(for: fresh, allowsFirstSubmission: true) == nil)
-        #expect(try await f.store.bridgeIssue(for: fresh) != nil)
-        #expect(try await f.store.bridgeIssue(for: f.instance, allowsFirstSubmission: true) != nil)
-        var claude = AgentWorkflowObservation(fresh)
+        var instance = f.instance
+        if !resumed {
+            instance.conversationID = ""
+        }
+        #expect(try await f.store.bridgeIssue(for: instance, allowsFirstSubmission: true) == nil)
+        #expect(try await f.store.bridgeIssue(for: instance) != nil)
+        var claude = AgentWorkflowObservation(instance)
         claude.pluginID = "claude-code"
-        #expect(try await f.store.bridgeIssue(for: claude.instance(hostID: fresh.hostID, id: fresh.id), allowsFirstSubmission: true) != nil)
-        #expect(try await f.record(f.event(version: 0)))
-        #expect(try await f.store.bridgeIssue(for: fresh, allowsFirstSubmission: true) != nil)
+        #expect(try await f.store.bridgeIssue(for: claude.instance(hostID: instance.hostID, id: instance.id), allowsFirstSubmission: true) != nil)
+        for version in [0, 2] {
+            #expect(try await f.record(f.event(version: version)))
+            #expect(try await f.store.bridgeIssue(for: instance, allowsFirstSubmission: true) != nil)
+        }
+        #expect(try await f.record(f.event()))
+        #expect(try await f.store.bridgeIssue(for: instance) == nil)
+    }
+
+    @Test
+    func resumedCodexRequiresItsNewProcessHookBeforeVerifyingReceipts() async throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        #expect(try await f.record(f.event()))
+        var observation = AgentWorkflowObservation(f.instance)
+        observation.processRuntimeID = "501:10:200:0"
+        let resumed = observation.instance(hostID: f.instance.hostID, id: UUID())
+        #expect(resumed.conversationID == f.instance.conversationID)
+        #expect(try await f.store.bridgeIssue(for: resumed, allowsFirstSubmission: true) == nil)
+        #expect(try await f.store.bridgeIssue(for: resumed) != nil)
+        #expect(try await !f.store.recordBridge(f.event(), processID: resumed.processID, runtimeID: resumed.processRuntimeID, peer: f.peer))
+        #expect(try await f.store.bridgeIssue(for: resumed) != nil)
+        let peer = try #require(PluginIngressPeer.capture(peerPID: 12, userID: 501) { pid in
+            switch pid {
+            case 12: .init(processID: 12, parentProcessID: 10, userID: 501, startSeconds: 201, startMicroseconds: 0)
+            case 10: .init(processID: 10, parentProcessID: 1, userID: 501, startSeconds: 200, startMicroseconds: 0)
+            default: nil
+            }
+        })
+        #expect(try await f.store.recordBridge(f.event(), processID: resumed.processID, runtimeID: resumed.processRuntimeID, peer: peer))
+        #expect(try await f.store.bridgeIssue(for: resumed) == nil)
+        #expect(try await f.store.hasBridgeObservation(f.event(), peer: peer))
+        #expect(try await !f.store.hasBridgeObservation(f.event(), peer: f.peer))
     }
 
     @Test
