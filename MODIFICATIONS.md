@@ -7,6 +7,21 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.151 — Host file link failure diagnostics
+
+- Include the actual absolute Host path and system reason in filesystem errors.
+  File-link resolution also reports the requested relative path and captured
+  Agent workspace, while retaining cancellation and existing root/containment
+  checks. See [file links](docs/file-browser.md). Source: `19d56cd1`.
+- Add regression coverage for opening a Git child project's report from a
+  non-Git parent workspace, removed-file diagnostics and cancellation. The
+  original iPhone opening failure has not been reproduced; this change improves
+  diagnostics and does not establish that its cause is fixed.
+- Validation: 52 focused Swift tests and 120 private publication/installer/COS
+  regressions passed, alongside both boundary checks and lint for three Swift
+  files. This release packages macOS only; physical-iPhone acceptance and Apple
+  Intelligence evaluations were not run.
+
 ## 3.0.150 — Actionable workflow start failures
 
 - Explain why a workflow cannot start: a missing Agent, unverifiable process or
