@@ -9,6 +9,7 @@ final public class RemoteBrowserSession {
     public private(set) var tab: RemoteBrowserTab
     public private(set) var frame: RemoteBrowserFrame?
     public private(set) var controlID: UUID?
+    public private(set) var selectMenu: RemoteBrowserSelectMenu?
     public private(set) var error: String?
     public private(set) var frameError: String?
     public private(set) var isTakingControl = false
@@ -108,6 +109,7 @@ final public class RemoteBrowserSession {
             controlID: controlID,
             generation: generation ?? frame?.generation,
             frameMaxDimension: operation == .frame ? frameMaxDimension : nil,
+            selectMenus: managesExtensions ? nil : true,
             operation: scoped(operation)
         )
     }
@@ -213,6 +215,9 @@ final public class RemoteBrowserSession {
                 if self.frame != frame {
                     self.frame = frame
                 }
+                if selectMenu?.generation != frame.generation {
+                    selectMenu = nil
+                }
                 frameError = nil
                 if let tab = response.tab {
                     self.tab = tab
@@ -232,6 +237,7 @@ final public class RemoteBrowserSession {
             } catch is CancellationError { return }
             catch {
                 if epoch == current, !managesExtensions || sentInputEpoch == inputEpoch {
+                    dismissSelectMenu()
                     frameError = error.localizedDescription
                 }
             }
@@ -418,6 +424,7 @@ final public class RemoteBrowserSession {
     }
 
     private func invalidateInput() {
+        selectMenu = nil
         clipboardMessage = nil
         inputEpoch = UUID()
         inputs.removeAll()
@@ -483,6 +490,14 @@ final public class RemoteBrowserSession {
 
     public func submit(_ operation: RemoteBrowserOperation, generation: UInt64) {
         guard watching, let controlID else { return }
+        if selectMenu != nil, case let .pointer(pointer) = operation, pointer.kind != .up {
+            return
+        }
+        if case let .pointer(pointer) = operation, pointer.kind == .up {
+            // The up paired with an intercepted select down is still queued.
+        } else {
+            selectMenu = nil
+        }
         let activatesAudio = switch operation {
         case let .pointer(pointer): pointer.kind == .down || pointer.kind == .scroll
         default: true
@@ -545,6 +560,17 @@ final public class RemoteBrowserSession {
                     } else if operation.isClipboardPaste {
                         self.clipboardMessage = "Paste sent."
                     }
+                    if let menu = response.selectMenu {
+                        guard
+                            !self.managesExtensions, menu.isValid, menu.generation == generation,
+                            self.frame?.generation == generation, response.controlID == controlID else {
+                            throw ViewerRelayClientError.commandFailed("The select menu changed. Click it again.")
+                        }
+                        // The menu supersedes input queued while its click was in flight.
+                        // Its down was intercepted on Host, so no pressed pointer remains.
+                        self.inputs.removeAll()
+                        self.selectMenu = menu
+                    }
                 } catch {
                     guard
                         !Task.isCancelled, self.epoch == current,
@@ -567,6 +593,20 @@ final public class RemoteBrowserSession {
                 }
             }
         }
+    }
+
+    public func chooseSelectOption(menuID: UUID, index: Int) {
+        guard
+            let menu = selectMenu, menu.id == menuID,
+            menu.options.contains(where: { $0.index == index && !$0.disabled }) else { return }
+        selectMenu = nil
+        submit(.selectOption(menuID: menu.id, index: index), generation: menu.generation)
+    }
+
+    public func dismissSelectMenu() {
+        guard let menu = selectMenu else { return }
+        selectMenu = nil
+        submit(.selectOption(menuID: menu.id, index: nil), generation: menu.generation)
     }
 
     public static func open(sessionName: String, sourcePaneID: String, url: URL? = nil, client: ViewerRelayClient) async throws -> RemoteBrowserTab {

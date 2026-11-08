@@ -6,6 +6,7 @@
 #include "PageActions.h"
 #include "PageKeys.h"
 #include "RemoteBrowserFrame.h"
+#include "BrowserSelectMenu.h"
 #include "BrowserRecordingWriter.h"
 #include "EngineServer.h"
 #include <atomic>
