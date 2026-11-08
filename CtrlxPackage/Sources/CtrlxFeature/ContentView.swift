@@ -319,9 +319,6 @@
         @State private var workflowDestination: SessionNavigation?
 
         @State private var pushService = PushNotificationService.shared
-        /// Tracks the currently displayed session pane ID for deep link deduplication.
-        /// Set when navigating to a session, cleared when popping back to the list.
-        @State private var currentlyDisplayedPaneId: String?
 
         var body: some View {
             // Wrapping the NavigationStack in a Group lets the `.sheet`
@@ -354,8 +351,6 @@
             .sheet(isPresented: $showingDashboard, onDismiss: {
                 if let destination = dashboardDestination {
                     dashboardDestination = nil
-                    // Replacing a one-entry path does not trigger the count observer.
-                    currentlyDisplayedPaneId = nil
                     sessionsNavigationPath = NavigationPath()
                     sessionsNavigationPath.append(destination)
                 }
@@ -368,7 +363,6 @@
             .sheet(isPresented: $workflowNavigation.isPresented, onDismiss: {
                 if let destination = workflowDestination {
                     workflowDestination = nil
-                    currentlyDisplayedPaneId = nil
                     sessionsNavigationPath = NavigationPath()
                     sessionsNavigationPath.append(destination)
                 }
@@ -390,27 +384,14 @@
                 }
                 await connectIfNeeded()
             }
-            .onChange(of: pushService.pendingDeepLink) { _, _ in
-                // Consume so the value resets to nil — a subsequent notification
-                // with an identical payload would otherwise be suppressed by
-                // Equatable and never re-trigger this onChange.
-                if let deepLink = pushService.consumePendingDeepLink() {
-                    handleDeepLink(deepLink)
+            .task(id: pushService.pendingDeepLink) {
+                guard let deepLink = pushService.pendingDeepLink else { return }
+                await handleDeepLink(deepLink)
+                if !Task.isCancelled, pushService.pendingDeepLink == deepLink {
+                    _ = pushService.consumePendingDeepLink()
                 }
             }
             .environment(\.agentWorkflowNavigation, workflowNavigation)
-            .onChange(of: sessionsNavigationPath.count) { _, count in
-                // Clear the currently displayed pane ID when user pops back to session list
-                if count == 0 {
-                    currentlyDisplayedPaneId = nil
-                }
-            }
-            .onAppear {
-                // Check for pending deep link when view appears (e.g., app launched from notification)
-                if let deepLink = pushService.consumePendingDeepLink() {
-                    handleDeepLink(deepLink)
-                }
-            }
         }
 
         private func openDashboardNotification() {
@@ -426,48 +407,29 @@
             showingDashboard = true
         }
 
-        /// Navigate to a specific session when a deep link is received.
-        ///
-        /// Note: If the session no longer exists (e.g., notification was delayed and session ended),
-        /// ClaudeSessionTerminalView will show an appropriate empty state.
-        private func handleDeepLink(_ deepLink: PushNotificationService.DeepLinkInfo?) {
-            guard let deepLink else { return }
-
-            // Dismiss Settings sheet if open so the deep link target is visible
+        /// Open the exact Host pane once its session metadata is available.
+        private func handleDeepLink(_ deepLink: PushNotificationService.DeepLinkInfo) async {
+            dashboardDestination = nil
+            workflowDestination = nil
             showingSettings = false
+            showingDashboard = false
             workflowNavigation.isPresented = false
 
-            // If we're already displaying this session, don't navigate again.
-            // This prevents redundant navigation when receiving multiple push
-            // notifications for the same session.
-            guard currentlyDisplayedPaneId != deepLink.paneId else {
-                return
+            var destination = SessionNavigation.notification(
+                paneID: deepLink.paneId, hostID: deepLink.hostId, paneStates: sessionStore.paneStates
+            )
+            // Preserve the bounded cold-start wait; a newer notification or
+            // view removal cancels this task instead of appending an old target.
+            for _ in 0..<5 {
+                guard destination == nil else { break }
+                do { try await Task.sleep(for: .milliseconds(500)) }
+                catch { return }
+                destination = SessionNavigation.notification(
+                    paneID: deepLink.paneId, hostID: deepLink.hostId, paneStates: sessionStore.paneStates
+                )
             }
-
-            // We reset the navigation path first to ensure only one session detail view
-            // exists in the stack. Multiple push notifications would otherwise pile up
-            // session views indefinitely.
-            Task { @MainActor in
-                sessionsNavigationPath = NavigationPath()
-
-                // Pane state may not be synced yet on cold start (e.g., launched via
-                // push notification). Retry briefly to allow the session store to populate.
-                var paneState = sessionStore.paneState(for: deepLink.paneId, hostId: deepLink.hostId)
-                if paneState == nil {
-                    for _ in 0..<5 {
-                        try? await Task.sleep(for: .milliseconds(500))
-                        paneState = sessionStore.paneState(for: deepLink.paneId, hostId: deepLink.hostId)
-                        if paneState != nil {
-                            break
-                        }
-                    }
-                }
-
-                if let paneState {
-                    sessionsNavigationPath.append(SessionNavigation(sessionName: paneState.sessionName, hostId: deepLink.hostId))
-                    currentlyDisplayedPaneId = deepLink.paneId
-                }
-            }
+            guard !Task.isCancelled, pushService.pendingDeepLink == deepLink, let destination else { return }
+            sessionsNavigationPath = NavigationPath([destination])
         }
 
         private func connectIfNeeded() async {
