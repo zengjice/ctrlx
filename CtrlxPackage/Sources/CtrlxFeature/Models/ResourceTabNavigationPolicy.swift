@@ -8,8 +8,8 @@ enum ResourceTabNavigationPolicy {
         case tabs
     }
 
-    static func start(translation: CGPoint, canSwitch: Bool) -> Action? {
-        if canSwitch, let direction = TerminalWindowSwipePolicy.direction(translation: translation) {
+    static func start(translation: CGPoint) -> Action? {
+        if let direction = TerminalWindowSwipePolicy.direction(translation: translation) {
             return direction == .next ? .next : .previous
         }
         return TerminalBarSwipePolicy.direction(translation: translation) == .up ? .tabs : nil

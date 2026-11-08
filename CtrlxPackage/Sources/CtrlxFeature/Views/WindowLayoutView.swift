@@ -1387,7 +1387,6 @@
                 case .source: returnToLinkedTabSource(tab)
                 case .previous,
                      .next:
-                    guard linkedTabSource(tab) != nil else { return }
                     selectAdjacentLinkedTab(tab, direction: action == .next ? 1 : -1)
                 case .tabs: openWindowTabs()
                 }

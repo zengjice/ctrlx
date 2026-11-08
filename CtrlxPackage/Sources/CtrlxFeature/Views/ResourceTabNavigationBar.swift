@@ -18,21 +18,23 @@
                     .padding(.bottom, 2)
                     .accessibilityHidden(true)
                 navigationButtons
-                if sourceName != nil {
+                HStack(spacing: 6) {
+                    Symbols.chevronLeft2.image
                     Capsule()
-                        .fill(.secondary.opacity(0.4))
-                        .frame(width: 96, height: 4)
-                        .padding(.top, 2)
-                        .padding(.bottom, 8)
-                        .accessibilityHidden(true)
-                } else {
-                    Color.clear.frame(height: 6).accessibilityHidden(true)
+                        .frame(width: 52, height: 3)
+                    Symbols.chevronRight2.image
                 }
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary.opacity(0.5))
+                .frame(width: 96, height: 12)
+                .padding(.top, 2)
+                .padding(.bottom, 8)
+                .accessibilityHidden(true)
             }
             .background(.bar)
             .overlay(alignment: .top) { Divider() }
             .contentShape(Rectangle())
-            .gesture(ResourceTabNavigationGesture(isEnabled: isEnabled, canSwitch: sourceName != nil, onAction: onAction))
+            .gesture(ResourceTabNavigationGesture(isEnabled: isEnabled, onAction: onAction))
         }
 
         private var navigationButtons: some View {
@@ -51,13 +53,11 @@
                     .contentShape(Rectangle())
                 }
                 .accessibilityLabel(sourceName.map { "Return to \($0)" } ?? "Show Tabs")
-                .accessibilityHint(sourceName == nil ? "Swipe up to show tabs." : "Swipe left or right to switch within this group. Swipe up to show tabs.")
+                .accessibilityHint(sourceName == nil ? "Swipe left or right to switch tabs. Swipe up to show tabs." : "Swipe left or right to switch within this group. Swipe up to show tabs.")
                 .accessibilityIdentifier("resource-navigation-source")
                 .accessibilityActions {
-                    if sourceName != nil {
-                        Button("Previous Tab in Group") { onAction(.previous) }
-                        Button("Next Tab in Group") { onAction(.next) }
-                    }
+                    Button(sourceName == nil ? "Previous Tab" : "Previous Tab in Group") { onAction(.previous) }
+                    Button(sourceName == nil ? "Next Tab" : "Next Tab in Group") { onAction(.next) }
                 }
                 .disabled(!isEnabled)
                 if sourceName != nil {
@@ -78,7 +78,6 @@
     /// Only the bottom bar owns this recognizer; content touches never reach it.
     struct ResourceTabNavigationGesture: UIGestureRecognizerRepresentable {
         let isEnabled: Bool
-        let canSwitch: Bool
         let onAction: (ResourceTabNavigationPolicy.Action) -> Void
 
         func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator {
@@ -96,7 +95,6 @@
         }
 
         func updateUIGestureRecognizer(_ recognizer: UIPanGestureRecognizer, context: Context) {
-            context.coordinator.canSwitch = canSwitch
             context.coordinator.onAction = onAction
             // Keep consuming bar drags while editing, including system content Back.
             context.coordinator.isEnabled = isEnabled
@@ -116,7 +114,6 @@
                 }
             }
 
-            var canSwitch = false
             var onAction: (ResourceTabNavigationPolicy.Action) -> Void = { _ in }
             private var startLocation = CGPoint.zero
             private var pending: (action: ResourceTabNavigationPolicy.Action, send: (ResourceTabNavigationPolicy.Action) -> Void)?
@@ -131,10 +128,7 @@
 
             func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
                 guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
-                let action = ResourceTabNavigationPolicy.start(
-                    translation: translation(pan),
-                    canSwitch: canSwitch
-                )
+                let action = ResourceTabNavigationPolicy.start(translation: translation(pan))
                 pending = isEnabled ? action.map { ($0, onAction) } : nil
                 // Even an unsupported drag must cancel the button under the finger.
                 return true

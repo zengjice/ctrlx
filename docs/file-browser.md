@@ -251,8 +251,11 @@ terminal swipe navigation and the bottom bar's vertical gestures retain their
 existing behavior. Terminal navigation does not implicitly enter a child group.
 
 The iOS Files, Browser and Simulator bottom bar shows a short, centered grabber
-for swiping up to Tabs. Source-linked tabs also show a longer bar below the
-buttons for horizontal group navigation. The source shortcut uses its return-arrow
+for swiping up to Tabs (36 × 5 points, using the sheet-grabber proportions).
+All three resource types show a `«—»` hint below the buttons, including manually
+created independent tabs. Horizontal swipes use the existing mixed top-level
+order for independent tabs and the source group for linked tabs; the same
+previous/next actions are available to VoiceOver. The source shortcut uses its return-arrow
 icon and source name, without a second leading arrow. These markers stay inside
 the bar's existing gesture area and never intercept resource-content gestures.
 
