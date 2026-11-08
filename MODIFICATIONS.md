@@ -7,6 +7,25 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.152 — Remote browser dropdowns and resumed workflows
+
+- Open standard single-select dropdowns from Mac and iOS Viewers using a
+  Host-backed option list. Preserve cancellation and ordinary label-link clicks;
+  reject expired menus and replaced controls. Older peers keep their existing
+  input path. See [remote browser controls](docs/agent-browser.md). Source: `1c75df0e`.
+- Let a resumed Codex receive its first workflow task before its new process
+  emits a Hook. Receipt and completion verification still require that process's
+  genuine Hook evidence. See [workflow starts](docs/multi-agent-design.md).
+  Source: `0e0d8b5a`.
+- Include iOS source changes for exact Host/pane notification navigation,
+  repeated notification taps and consistent resource-tab swipe hints and
+  navigation. This release packages macOS only.
+- Validation: 112 focused Swift tests, the isolated real Codex/Claude two-round
+  workflow and 120 private publication/installer/COS regressions passed, along
+  with both boundary checks and lint for 24 Swift files. Native dropdown
+  acceptance runs on the signed release candidate before publication. Paired
+  iPhone UI and Apple Intelligence evaluations were not run.
+
 ## 3.0.151 — Host file link failure diagnostics
 
 - Include the actual absolute Host path and system reason in filesystem errors.
