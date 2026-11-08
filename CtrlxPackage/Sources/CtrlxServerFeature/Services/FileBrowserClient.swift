@@ -525,6 +525,10 @@ actor HostFileBrowser {
     }
 
     private func posixError(_ path: String) -> NSError {
-        NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: [NSFilePathErrorKey: path])
+        let code = errno
+        return NSError(domain: NSPOSIXErrorDomain, code: Int(code), userInfo: [
+            NSFilePathErrorKey: path,
+            NSLocalizedDescriptionKey: "\(String(cString: strerror(code))): \(path)",
+        ])
     }
 }

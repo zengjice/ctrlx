@@ -447,6 +447,10 @@ Missing context, missing files and links outside the workspace fail clearly:
 there is no shell-cwd fallback or alternate-directory search. Remote clients gate
 the operation on `supportsRepositoryFileLinks`; an older Host is not sent an
 undecodable request. No Relay implementation/deployment change is needed.
+Resolution errors include the requested relative path and captured Agent workspace.
+Host filesystem errors include the actual absolute path as well as the system
+reason, so remote errors retain the path instead of only reporting “No such file
+or directory”. Cancellation remains cancellation and does not become an error alert.
 
 The marker intentionally carries no absolute path or repository identity.
 It is not an access grant or proof of provenance. After reusing a pane/session for
