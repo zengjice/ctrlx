@@ -66,9 +66,13 @@ public struct AgentWorkflowsView: View {
                     ContentUnavailableView("Host unavailable", image: Symbols.exclamationmarkTriangle.rawValue)
                 }
             }
-            .toolbar {
-                if let close {
-                    ToolbarItem(placement: .cancellationAction) { Button("Done", action: close) }
+        }
+        .toolbar {
+            if let close {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(action: close) { Label("Close", symbol: .xmark) }
+                        .help("Close workflows")
+                        .accessibilityIdentifier("workflow-close")
                 }
             }
         }

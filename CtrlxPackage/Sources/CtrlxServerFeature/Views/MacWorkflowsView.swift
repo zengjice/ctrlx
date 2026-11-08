@@ -7,13 +7,14 @@
     public struct MacWorkflowsView: View {
         @Environment(AppCoordinator.self) private var coordinator
         @Environment(\.openWindow) private var openWindow
+        @Environment(\.dismissWindow) private var dismissWindow
         @State private var error: String?
         @State private var opening = false
 
         public init() { }
 
         public var body: some View {
-            AgentWorkflowsView(endpoints: endpoints, openAgent: openAgent, createAgent: createAgent, navigation: coordinator.workflowNavigation)
+            AgentWorkflowsView(endpoints: endpoints, openAgent: openAgent, createAgent: createAgent, close: { dismissWindow(id: "workflows") }, navigation: coordinator.workflowNavigation)
                 .frame(minWidth: 560, minHeight: 480)
                 .alert("Could not open Agent", isPresented: Binding(get: { error != nil }, set: {
                     if !$0 {
