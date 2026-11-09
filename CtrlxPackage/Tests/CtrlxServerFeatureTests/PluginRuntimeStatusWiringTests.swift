@@ -1,4 +1,5 @@
 #if os(macOS)
+    import ConcurrencyExtras
     import CtrlxCommon
     import CtrlxNetworking
     import CtrlxPluginProtocol
@@ -102,9 +103,12 @@
                         permissionMode: permissionMode
                     )
                 },
-                onAppAction: { action in
+                onAppAction: { action, event, _ in
                     if case let .sessionEnded(sessionID, _) = action {
-                        await windowManager.endAgentSession(forPane: sessionID)
+                        await MainActor.run {
+                            guard let pane = windowManager.paneStates[sessionID], AgentSessionEndContext(event: event, pane: pane) != nil else { return }
+                            windowManager.endAgentSession(forPane: sessionID)
+                        }
                     }
                 }
             )
@@ -665,6 +669,56 @@
             // idle moon. (Regression: previously the idle session lingered.)
             #expect(windowManager.paneStates["%5"]?.agentSession == nil)
             #expect(!windowManager.activeSessionPaneIds.contains("%5"))
+        }
+
+        @Test("A delayed Codex end cannot overwrite or clear a new Claude session")
+        func oldCodexEndAfterClaudeStart() async {
+            let manager = makeWindowManager()
+            let dispatcher = makeStateAndAppActionDispatcher(manager)
+            manager.applyState(pluginID: "claude-code", sessionID: "new-conversation", state: .working, tmuxPane: "%5", projectPath: "/repo")
+            await dispatcher.dispatch(PluginEvent(
+                pluginID: "codex", sessionID: "old-conversation", state: .idle,
+                appActions: [.sessionEnded(sessionID: "%5", closePaneEligible: true)], tmuxPane: "%5"
+            ))
+            #expect(manager.paneStates["%5"]?.agentSession?.pluginID == "claude-code")
+            #expect(manager.paneStates["%5"]?.agentSession?.state == .working)
+            #expect(manager.paneStates["%5"]?.claudeSessionID == "new-conversation")
+        }
+
+        @Test("OpenCode native exit identity permits cleanup and close eligibility, but rejects old runs", arguments: [false, true], [false, true])
+        func opencodeExit(closePane: Bool, stale: Bool) async {
+            let manager = makeWindowManager()
+            let closed = LockIsolated<[Bool]>([])
+            let dispatcher = PluginEventDispatcher(
+                onState: { plugin, session, state, pane, path, mode in
+                    await manager.applyState(pluginID: plugin, sessionID: session, state: state, tmuxPane: pane, projectPath: path, permissionMode: mode)
+                },
+                onAppAction: { action, event, peer in
+                    await MainActor.run {
+                        guard
+                            case let .sessionEnded(paneID, close) = action,
+                            let pane = manager.paneStates[paneID],
+                            let context = AgentSessionEndContext(event: event, pane: pane),
+                            context.accepts(detected: nil, peer: peer, runtimeID: { _ in nil }) else { return }
+                        manager.endAgentSession(forPane: paneID)
+                        closed.withValue { $0.append(close) }
+                    }
+                }
+            )
+            for state: AgentState in [.working, .doneWorking(summary: nil)] {
+                await dispatcher.dispatch(PluginEvent(pluginID: "opencode", sessionID: "ses_review", state: state, tmuxPane: "%7"))
+            }
+            if stale {
+                await dispatcher.dispatch(PluginEvent(pluginID: "opencode", sessionID: "ses_new", state: .working, tmuxPane: "%7"))
+            }
+            await dispatcher.dispatch(PluginEvent(pluginID: "opencode", sessionID: "ses_review", appActions: [.sessionEnded(sessionID: "%7", closePaneEligible: closePane)], tmuxPane: "%7"))
+            #expect(closed.value == (stale ? [] : [closePane]))
+            if stale {
+                #expect(manager.paneStates["%7"]?.claudeSessionID == "ses_new")
+                #expect(manager.paneStates["%7"]?.agentSession?.state == .working)
+            } else {
+                #expect(manager.paneStates["%7"]?.agentSession == nil)
+            }
         }
 
         @Test("state with no tmuxPane is dropped")

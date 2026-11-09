@@ -807,8 +807,8 @@
                         requiresOpenForm: false
                     )
                 },
-                onAppAction: { [weak self] action in
-                    await self?.handlePluginAppAction(action)
+                onAppAction: { [weak self] action, event, peer in
+                    await self?.handlePluginAppAction(action, event: event, peer: peer)
                 },
                 isYoloModeEnabled: { [weak self] paneID in
                     guard let self else { return false }
@@ -2205,7 +2205,7 @@
         }
 
         /// AppActionSink → drive the matching agent-blind Mac feature (spec §6).
-        private func handlePluginAppAction(_ action: AppAction) async {
+        private func handlePluginAppAction(_ action: AppAction, event: PluginEvent, peer: PluginIngressPeer?) async {
             switch action {
             case let .openFileSuggestion(sessionID, path, displayName, isPlan, projectDir):
                 // `sessionID` is the plugin's opaque session id; resolve it to a
@@ -2232,11 +2232,21 @@
                 markdownOpenSuggestionStore.userSubmittedPrompt(sessionName: sessionName)
 
             case let .sessionEnded(sessionID, closePaneEligible):
-                let workspacePane = windowManager.paneStates[sessionID]?.workspaceIdentity
+                guard
+                    let pane = windowManager.paneStates[sessionID],
+                    let context = AgentSessionEndContext(event: event, pane: pane),
+                    await acceptsSessionEnd(context, peer: peer) else { return }
+                let workspacePane = pane.workspaceIdentity
                 // `sessionID` carries the pane id in the plugin path. A session end
                 // (any reason) resets the pane's session-scoped Mac state so a fresh
                 // session doesn't inherit it.
                 var sessionStateChanged = false
+                // Snapshot the final recap and fold the session's last telemetry
+                // into the durable store (issue #598), then evict its live state
+                // from the store and the OTLP receiver (issue #597) — all before
+                // `endAgentSession` clears the pane's join key and telemetry.
+                await finalizeEndedSession(paneId: sessionID)
+                guard await acceptsSessionEnd(context, peer: peer) else { return }
                 // Yolo is per-pane app state the core never sees — clear it here.
                 // Context compaction sends no SessionEnd, so yolo correctly survives
                 // a compaction restart (issue #193).
@@ -2244,21 +2254,9 @@
                     windowManager.setYoloMode(enabled: false, for: sessionID)
                     sessionStateChanged = true
                 }
-                // Snapshot the final recap and fold the session's last telemetry
-                // into the durable store (issue #598), then evict its live state
-                // from the store and the OTLP receiver (issue #597) — all before
-                // `endAgentSession` clears the pane's join key and telemetry.
-                await finalizeEndedSession(paneId: sessionID)
-                if let workspacePane, !workspacePane.isSamePane(as: windowManager.paneStates[sessionID]?.workspaceIdentity) {
-                    return
-                }
-                // Remove the agent session so the pane reverts from the idle moon
-                // glyph to a plain terminal (the legacy `claudeSession = nil` on
-                // SessionEnd). The status path set working=false earlier in this
-                // same envelope; dispatch fans status out before app actions, so
-                // this clear is the last write and wins. Process reconciliation
-                // suppresses this pane until the exiting process disappears, so
-                // it cannot resurrect the ended session on the next scan.
+                // End only the binding validated above; no suspension between
+                // validation and clearing pane-local state.
+                agentModelCatalogs.removeValue(forKey: sessionID)
                 if windowManager.endAgentSession(forPane: sessionID) {
                     sessionStateChanged = true
                 }
@@ -2277,12 +2275,16 @@
                 // has left the pane (up to 30s), then a 1s grace, before killing.
                 // Detached so the sink returns immediately.
                 let processNames = pluginRegistry?.processNamesByPlugin ?? [:]
-                Task { [tmuxService] in
+                Task { [weak self, tmuxService] in
                     for _ in 0..<30 {
                         try? await Task.sleep(for: .seconds(1))
-                        let panes = await tmuxService.detectAgentPanes(processNamesByPlugin: processNames)
+                        guard let self, windowManager.paneStates[sessionID]?.agentSession == nil else { return }
+                        guard let panes = await tmuxService.detectAgentPanesIfAvailable(processNamesByPlugin: processNames, refreshSnapshot: true) else { return }
                         if panes[sessionID] == nil {
                             try? await Task.sleep(for: .seconds(1))
+                            guard
+                                let latest = await tmuxService.detectAgentPanesIfAvailable(processNamesByPlugin: processNames, refreshSnapshot: true),
+                                latest[sessionID] == nil, windowManager.paneStates[sessionID]?.agentSession == nil else { return }
                             try? await tmuxService.killPane(sessionID, expectedWorkspacePane: workspacePane)
                             return
                         }

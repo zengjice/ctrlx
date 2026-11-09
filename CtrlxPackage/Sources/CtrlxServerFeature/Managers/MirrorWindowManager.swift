@@ -544,8 +544,18 @@ final public class MirrorWindowManager {
     ) async -> Bool {
         var changed = false
         for (paneID, info) in detected {
-            guard processDetectedPaneIds.contains(paneID) else { continue }
             let identity = await agentIdentities.load(paneID)
+            if !processDetectedPaneIds.contains(paneID) {
+                // Hook-owned sessions still need current routing metadata after
+                // a rename/move, without requiring another native hook event.
+                if
+                    !Task.isCancelled, let identity, let pane = paneStates[paneID],
+                    let current = identity.current(in: pane, detected: info, runtimeID: agentIdentities.runtimeID(identity.processID)),
+                    current.source != identity.source {
+                    await rememberAgentSessionIdentity(forPane: paneID, processNamesByPlugin: processNamesByPlugin, recoveredIdentity: current)
+                }
+                continue
+            }
             guard
                 !Task.isCancelled, processDetectedPaneIds.contains(paneID), let pane = paneStates[paneID],
                 lastDetectedAgentProcesses[paneID]?.pluginID == info.pluginID,
@@ -556,6 +566,11 @@ final public class MirrorWindowManager {
                 if pane.claudeSessionID != identity.source.sessionID {
                     paneStates[paneID]?.claudeSessionID = identity.source.sessionID
                     changed = true
+                }
+                if
+                    let current = paneStates[paneID].flatMap({ identity.current(in: $0, detected: info, runtimeID: agentIdentities.runtimeID(identity.processID)) }),
+                    current.source != identity.source {
+                    await rememberAgentSessionIdentity(forPane: paneID, processNamesByPlugin: processNamesByPlugin, recoveredIdentity: current)
                 }
                 continue
             }

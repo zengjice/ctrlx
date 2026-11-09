@@ -152,6 +152,18 @@ The bridge closes that gap with two synthetic frames (matching Claude Code's
   skips finalizers, so no `stopped` frame is sent and the stale session lingers
   until CtrlX next reconciles.
 
+Exit events carry two distinct IDs: the `PluginEvent.sessionID` is the native
+conversation last published to the Host, while `AppAction.sessionEnded.sessionID`
+remains the tmux pane route. Each bridge instance supplies an `OPENCODE_RUN_ID`;
+the sidecar remembers only states it actually publishes, after filtering/re-keying
+child sessions, and consumes that run's binding on exit. A delayed exit therefore
+keeps its original conversation even if another OpenCode run has started in the
+same pane. This run ID scopes correlation only; Host process and conversation
+validation still decide whether cleanup and automatic pane close are permitted.
+Before the first native conversation, exit uses the same pane identity as launch.
+Existing running bridges need the updated plugin installed and OpenCode restarted
+to supply the new run context; updating CtrlX alone does not hot-reload them.
+
 ## Answering forms (permissions & questions)
 
 opencode raises two interactive forms, both rendered by CtrlX/iOS and answered

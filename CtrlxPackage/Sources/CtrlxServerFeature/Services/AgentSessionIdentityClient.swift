@@ -11,13 +11,27 @@ struct AgentSessionIdentity: Codable, Sendable, Equatable {
     let runtimeID: String
 
     func matches(pane: PaneState, detected: TmuxService.DetectedAgentPane, runtimeID: String?) -> Bool {
-        source.paneID == pane.paneId
-            && source.sessionName == pane.sessionName
-            && source.windowID == pane.stableWindowId
+        let sameLocation: Bool
+        if let saved = source.workspaceIdentity {
+            sameLocation = saved.isSamePane(as: pane.workspaceIdentity)
+        } else {
+            sameLocation = source.sessionName == pane.sessionName && source.windowID == pane.stableWindowId
+        }
+        return source.paneID == pane.paneId && sameLocation
             && source.pluginID == detected.pluginID
             && detected.processIDs == [processID]
             && UUID(uuidString: source.sessionID) != nil
             && runtimeID == self.runtimeID
+    }
+
+    /// Refresh routing metadata only after both the live process and current
+    /// conversation agree. A pane move must not revive an old conversation.
+    func current(in pane: PaneState, detected: TmuxService.DetectedAgentPane, runtimeID: String?) -> Self? {
+        guard
+            matches(pane: pane, detected: detected, runtimeID: runtimeID),
+            let current = AgentForkSource(pane: pane), current.pluginID == source.pluginID,
+            current.sessionID == source.sessionID else { return nil }
+        return Self(source: current, processID: processID, runtimeID: self.runtimeID)
     }
 }
 
@@ -32,6 +46,11 @@ struct AgentSessionIdentityClient: Sendable {
 }
 
 extension AgentSessionIdentityClient {
+    func currentIdentity(in pane: PaneState, detected: TmuxService.DetectedAgentPane) async -> AgentSessionIdentity? {
+        guard let saved = await load(pane.paneId) else { return nil }
+        return saved.current(in: pane, detected: detected, runtimeID: runtimeID(saved.processID))
+    }
+
     func workflowInputIssue(for instance: AgentWorkflowInstance, allowsInitialBinding: Bool = false) async -> String? {
         guard instance.pluginID == "codex" else { return nil }
         let pid = String(instance.processID)

@@ -85,7 +85,7 @@
                     requestID: requestID
                 ))
             },
-            onAppAction: { action in
+            onAppAction: { action, _, _ in
                 await recorder.recordAction(action)
             },
             isYoloModeEnabled: { _ in yolo }

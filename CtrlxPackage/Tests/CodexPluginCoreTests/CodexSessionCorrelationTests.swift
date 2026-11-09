@@ -14,6 +14,18 @@ struct CodexSessionCorrelationTests {
         return (CodexSessionCorrelation(root: root), root)
     }
 
+    @Test("Legacy correlation records without a registration ID remain readable")
+    func legacyRecord() throws {
+        let (store, root) = makeStore()
+        defer { try? fileManager.removeItem(at: root) }
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data(#"{"session_id":"legacy","cwd":"/repo","started_at":"2023-11-14T22:13:20Z"}"#.utf8).write(to: root.appendingPathComponent("%4.json"))
+        let record = try #require(store.record(forPane: "%4"))
+        #expect(record.sessionID == "legacy")
+        #expect(record.registrationID == nil)
+        #expect(store.pane(forSessionID: "legacy") == "%4")
+    }
+
     @Test("The default plugin keeps legacy correlations while isolated state roots stay separate")
     func stateDirectoryScope() {
         let home = URL(fileURLWithPath: "/tmp/codex-correlation-home-\(UUID())")

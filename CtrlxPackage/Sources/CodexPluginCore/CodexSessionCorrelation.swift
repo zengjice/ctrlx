@@ -48,11 +48,14 @@ struct CodexSessionCorrelation: Sendable {
         let sessionID: String
         let cwd: String?
         let startedAt: Date?
+        /// Distinguishes two starts of the same conversation within one second.
+        let registrationID: UUID?
 
         private enum CodingKeys: String, CodingKey {
             case sessionID = "session_id"
             case cwd
             case startedAt = "started_at"
+            case registrationID = "registration_id"
         }
     }
 
@@ -66,7 +69,7 @@ struct CodexSessionCorrelation: Sendable {
         guard !tmuxPane.isEmpty else { return false }
         do {
             try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
-            let record = Record(sessionID: sessionID, cwd: cwd, startedAt: startedAt)
+            let record = Record(sessionID: sessionID, cwd: cwd, startedAt: startedAt, registrationID: UUID())
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             let data = try encoder.encode(record)

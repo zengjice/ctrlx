@@ -22,6 +22,7 @@ import net from "node:net"
 import os from "node:os"
 import path from "node:path"
 import fs from "node:fs"
+import { randomUUID } from "node:crypto"
 
 // --- Baked-in identity (install substitutes these exact tokens) ---------------
 const RAW_SOCK = "__CTRLX_INGRESS_SOCK__"
@@ -326,7 +327,7 @@ export const CtrlXMonitor = async ({ client, serverUrl, directory, worktree, pro
   const serverURLString = serverUrl ? String(serverUrl.origin || serverUrl) : ""
   const projectDir = directory || worktree || project?.worktree || ""
 
-  const context = { TMUX_PANE: tmuxPane }
+  const context = { TMUX_PANE: tmuxPane, OPENCODE_RUN_ID: randomUUID() }
   if (serverURLString) context.OPENCODE_SERVER_URL = serverURLString
   if (projectDir) context.OPENCODE_PROJECT_DIR = projectDir
 

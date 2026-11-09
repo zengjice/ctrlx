@@ -56,14 +56,15 @@ extension AppCoordinator {
         guard
             let registry = pluginRegistry,
             let detected = await tmuxService.detectAgentPanesIfAvailable(processNamesByPlugin: registry.processNamesByPlugin, refreshSnapshot: request.selection != nil || request.refresh),
-            let candidate = detected[paneID], candidate.processIDs.count == 1,
-            let pid = candidate.processIDs.first, let runtime = identityClient.runtimeID(pid),
+            let candidate = detected[paneID],
             let provider = registry.core(candidate.pluginID) as? any AgentModelProviding else {
             throw AgentModelError("No supported Agent is running in the selected pane.")
         }
-        let captured = try await tmuxService.captureWorkspacePane(target: paneID)
+        let captured = try await captureAgentBinding(paneID: paneID, detected: candidate)
+        let pid = captured.binding.processID
+        let runtime = captured.binding.runtimeID
         recordAgentModelDiagnostic(paneID: paneID, phase: "identify", since: identifyStart)
-        guard captured.identity.isSamePane(as: request.workspacePane) else { throw AgentModelError("The terminal changed. Reopen this tab's model controls.") }
+        guard captured.binding.workspacePane.isSamePane(as: request.workspacePane) else { throw AgentModelError("The terminal changed. Reopen this tab's model controls.") }
         if request.selection != nil, request.runtimeID != runtime {
             throw AgentModelError("The Agent restarted. Refresh its model controls.")
         }

@@ -118,6 +118,23 @@ Third-party sidecars use the same app-facing contract, not new branches in
 shared UI. Native Fork is an optional `AgentSessionForking` capability;
 a process match alone does not prove a forkable conversation identity.
 
+Host operations share `AgentProcessBinding` for the live persistent pane,
+plugin and process incarnation. `AgentSessionIdentityClient.currentIdentity`
+adds a verified native conversation and refreshes its routing metadata. Recovery,
+resource authorization and workflows use that native identity; model discovery
+can operate before the first native conversation is created. Session names and
+window placement can change without changing the Agent binding. Persistent pane
+IDs remain scoped to the Host and running tmux server; process start identity and
+native conversation IDs still prevent an old request from reaching a successor.
+Viewer control leases and tab/model preferences retain their separate lifetimes.
+
+Session-end envelopes keep their plugin, native conversation and kernel ingress
+peer through dispatch. They bypass ordinary state delivery: the Host validates
+the current binding before cleanup, and again after asynchronous finalization.
+Synthetic process-exit events cannot clear a live successor. Codex exit polling
+captures the original correlation before awaiting and preserves any replacement
+correlation recorded during probing or event delivery.
+
 Questions have two distinct paths: structured plugin response forms and the
 conservative Codex TUI footer auto-expander. Do not replace one with the other.
 Details: [services](services-reference.md) and

@@ -45,6 +45,44 @@ struct AgentSessionIdentityTests {
         values[AgentSessionIdentityClient.self] = client
     }
 
+    @Test("Renamed and moved panes persist current recovery routing without a new hook", arguments: [false, true])
+    func persistMovedIdentity(hookOwned: Bool) async throws {
+        let rows = LockIsolated("100 1 zsh\n101 100 codex\n")
+        let stored = LockIsolated<AgentSessionIdentity?>(nil)
+        var client = AgentSessionIdentityClient.previewValue
+        client.load = { _ in stored.value }
+        client.save = { stored.setValue($0)
+            return true
+        }
+        client.runtimeID = { _ in "start" }
+        try await withDependencies {
+            defaults(&$0, rows: rows, client: client)
+        } operation: {
+            let manager = manager()
+            var pane = try #require(manager.paneStates["%5"])
+            pane.workspaceIdentity = .init(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+            pane.agentSession = .init(paneId: "%5", pluginID: "codex", state: .idle)
+            pane.claudeSessionID = UUID().uuidString
+            let source = try #require(AgentForkSource(pane: pane))
+            stored.setValue(.init(source: source, processID: "101", runtimeID: "start"))
+            let original = pane
+            pane.sessionName = "renamed"
+            pane.tmuxWindowId = "@9"
+            pane.workspaceIdentity?.sessionID = UUID()
+            pane.workspaceIdentity?.windowID = UUID()
+            if !hookOwned {
+                pane.agentSession = nil
+                pane.claudeSessionID = nil
+            }
+            manager.setPaneStatesForPreview([pane])
+            await manager.refreshDetectedAgentSessions(processNamesByPlugin: ["codex": ["codex"]], refreshSnapshot: true)
+            let current = try #require(manager.paneStates["%5"])
+            #expect(current.claudeSessionID == original.claudeSessionID)
+            #expect(stored.value?.source == AgentForkSource(pane: current))
+            #expect(stored.value?.source.workspaceIdentity?.windowID == pane.workspaceIdentity?.windowID)
+        }
+    }
+
     @Test("An idle fork's verified writer ID enables Fork, persists once and avoids further FD probes")
     func recoverIdleCodexFork() async throws {
         let rows = LockIsolated("100 1 zsh\n101 100 codex\n201 101 codex\n")

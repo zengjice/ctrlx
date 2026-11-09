@@ -141,7 +141,7 @@ class Sidecar:
 
 
 PANE = "%7"
-CTX = {"TMUX_PANE": PANE, "OPENCODE_PROJECT_DIR": "/Users/test/AcmeApp"}
+CTX = {"TMUX_PANE": PANE, "OPENCODE_PROJECT_DIR": "/Users/test/AcmeApp", "OPENCODE_RUN_ID": "test-run"}
 
 
 class TranslateEventTests(unittest.TestCase):
@@ -415,6 +415,55 @@ class TranslateEventTests(unittest.TestCase):
         self.assertEqual(r["appActions"],
                          [{"sessionEnded": {"sessionID": PANE, "closePaneEligible": True}}])
 
+    def test_lifecycle_stopped_after_conversation_uses_native_id(self):
+        for close in (False, True):
+            with self.subTest(close=close):
+                self.sc.request("apply_settings", {"settings": {"close_pane_on_session_end": close}})
+                self.evt("ctrlx.lifecycle.started", {})
+                self.evt("session.status", {"sessionID": "ses_review", "status": {"type": "busy"}})
+                self.evt("session.status", {"sessionID": "ses_review", "status": {"type": "idle"}})
+                r = self.evt("ctrlx.lifecycle.stopped", {})
+                self.assertEqual(r["sessionID"], "ses_review")
+                self.assertEqual(r["appActions"], [{"sessionEnded": {"sessionID": PANE, "closePaneEligible": close}}])
+                self.assertIsNone(r["state"])
+                self.assertIsNone(r["notification"])
+
+    def test_stopped_tracks_published_state_not_ignored_idle_or_subagents(self):
+        self.evt("session.status", {"sessionID": "ses_old", "status": {"type": "idle"}})
+        self.evt("session.status", {"sessionID": "ses_current", "status": {"type": "busy"}})
+        self.assertIsNone(self.evt("session.status", {"sessionID": "ses_old", "status": {"type": "idle"}}))
+        self.evt("session.created", {"info": {"id": "ses_child", "parentID": "ses_current"}})
+        self.assertIsNone(self.evt("session.status", {"sessionID": "ses_child", "status": {"type": "busy"}}))
+        self.evt("permission.replied", {"sessionID": "ses_child"})
+        self.assertEqual(self.evt("ctrlx.lifecycle.stopped", {})["sessionID"], "ses_current")
+
+    def test_late_exit_keeps_each_run_and_pane_separate(self):
+        old = {**CTX, "OPENCODE_RUN_ID": "old-run"}
+        new = {**CTX, "OPENCODE_RUN_ID": "new-run"}
+        other = {**new, "TMUX_PANE": "%8"}
+        for context, native in ((old, "ses_old"), (new, "ses_new"), (other, "ses_other")):
+            self.evt("ctrlx.lifecycle.started", {}, context)
+            self.evt("session.status", {"sessionID": native, "status": {"type": "busy"}}, context)
+        for context, native in ((old, "ses_old"), (new, "ses_new"), (other, "ses_other")):
+            self.assertEqual(self.evt("ctrlx.lifecycle.stopped", {}, context)["sessionID"], native)
+        # The ended run's correlation has been consumed.
+        self.assertEqual(self.evt("ctrlx.lifecycle.stopped", {}, old)["sessionID"], PANE)
+
+    def test_fresh_run_exit_keeps_launch_identity(self):
+        started = self.evt("ctrlx.lifecycle.started", {})
+        ended = self.evt("ctrlx.lifecycle.stopped", {})
+        self.assertEqual(ended["sessionID"], started["sessionID"])
+
+    def test_late_exit_preserves_a_resumed_conversations_working_state(self):
+        old = {**CTX, "OPENCODE_RUN_ID": "old-run"}
+        new = {**CTX, "OPENCODE_RUN_ID": "new-run"}
+        for context in (old, new):
+            self.evt("session.status", {"sessionID": "ses_shared", "status": {"type": "busy"}}, context)
+        self.evt("ctrlx.lifecycle.stopped", {}, old)
+        done = self.evt("session.status", {"sessionID": "ses_shared", "status": {"type": "idle"}}, new)
+        self.assertIn("doneWorking", done["state"])
+        self.assertIsNotNone(done["notification"])
+
     def test_lifecycle_stopped_without_pane_is_noop(self):
         r = self.evt("ctrlx.lifecycle.stopped", {}, ctx={"OPENCODE_PROJECT_DIR": "/x"})
         self.assertIsNone(r)  # no pane → nothing the host can key on
@@ -424,6 +473,65 @@ class TranslateEventTests(unittest.TestCase):
                      ctx={"TMUX_PANE": "%9"})
         self.assertEqual(r["state"], {"working": {}})
         self.assertEqual(r["tmuxPane"], "%9")
+
+
+@unittest.skipUnless(shutil.which("node"), "Node.js is needed to exercise the real ingress bridge")
+class BridgeLifecycleTests(unittest.TestCase):
+    def test_bridge_runs_keep_native_exit_identity_through_sidecar(self):
+        # Real bridge -> isolated Unix socket -> real sidecar. No installed
+        # OpenCode process, live tmux pane or CtrlX socket is used.
+        script = r'''
+import net from "node:net"
+import fs from "node:fs"
+const frames = []
+const server = net.createServer(socket => {
+  const chunks = []
+  socket.on("data", chunk => chunks.push(chunk))
+  socket.on("end", () => {
+    const bytes = Buffer.concat(chunks)
+    frames.push(JSON.parse(bytes.subarray(4, 4 + bytes.readUInt32BE(0))))
+    socket.end()
+  })
+})
+await new Promise(resolve => server.listen(process.env.CTRLX_INGRESS_SOCK, resolve))
+const source = fs.readFileSync(process.argv[1]).toString("base64")
+const { CtrlXMonitor } = await import(`data:text/javascript;base64,${source}`)
+try {
+  const old = await CtrlXMonitor({})
+  await old.event({event: {type: "session.status", properties: {sessionID: "ses_old", status: {type: "busy"}}}})
+  await old.event({event: {type: "session.status", properties: {sessionID: "ses_old", status: {type: "idle"}}}})
+  const current = await CtrlXMonitor({})
+  await current.event({event: {type: "session.status", properties: {sessionID: "ses_current", status: {type: "busy"}}}})
+  await old.dispose()
+  await current.dispose()
+} finally {
+  await new Promise(resolve => server.close(resolve))
+}
+console.log(JSON.stringify(frames))
+'''
+        with tempfile.TemporaryDirectory(prefix="cx-oc-", dir="/tmp") as root:
+            env = {**os.environ, "CTRLX_INGRESS_SOCK": os.path.join(root, "ingress.sock"),
+                   "TMUX_PANE": PANE, "CTRLX_PLUGIN_ID": "opencode", "CTRLX_OTLP_ENDPOINT": ""}
+            output = subprocess.run([shutil.which("node"), "--input-type=module", "-e", script,
+                                     os.path.join(ROOT, "opencode-bridge", "ctrlx.js")],
+                                    env=env, check=True, capture_output=True, text=True, timeout=15)
+            frames = json.loads(output.stdout)
+            starts = [f for f in frames if f["payload"]["type"] == "ctrlx.lifecycle.started"]
+            self.assertEqual(len(starts), 2)
+            self.assertNotEqual(starts[0]["context"]["OPENCODE_RUN_ID"], starts[1]["context"]["OPENCODE_RUN_ID"])
+            sc = Sidecar(env={"HOME": root, "XDG_DATA_HOME": root})
+            try:
+                sc.request("initialize", {"settings": {"close_pane_on_session_end": True}})
+                ends = []
+                for frame in frames:
+                    event = sc.translate(frame["payload"], frame["context"])
+                    if event and event["appActions"]:
+                        ends.append(event)
+                self.assertEqual([e["sessionID"] for e in ends], ["ses_old", "ses_current"])
+                for event in ends:
+                    self.assertEqual(event["appActions"], [{"sessionEnded": {"sessionID": PANE, "closePaneEligible": True}}])
+            finally:
+                sc.close()
 
 
 class DeliverResponseTests(unittest.TestCase):

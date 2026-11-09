@@ -835,7 +835,10 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         /// deterministically instead of waiting on the timer.
         func pollSessionEnds() async {
             guard let host else { return }
-            let known = correlation.allPanes()
+            let records = Dictionary(uniqueKeysWithValues: correlation.allPanes().compactMap { pane in
+                correlation.record(forPane: pane).map { (pane, $0) }
+            })
+            let known = Set(records.keys)
             // Nothing recorded and nothing was live → skip the ps walk entirely.
             guard !known.isEmpty || !previouslyAlivePanes.isEmpty else { return }
 
@@ -851,6 +854,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
             if !didReconcileOrphans {
                 didReconcileOrphans = true
                 for orphan in known.subtracting(alive) {
+                    guard correlation.record(forPane: orphan) == records[orphan] else { continue }
                     // Correlation files only — NOT reviewer snapshots. Orphan
                     // correlations are leftovers from a PREVIOUS app run, and
                     // the in-memory snapshot map starts empty, so there is
@@ -866,9 +870,10 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
 
             let ended = previouslyAlivePanes.subtracting(alive)
             for pane in ended {
-                await emitSessionEnded(pane: pane)
+                guard let record = records[pane], correlation.record(forPane: pane) == record else { continue }
                 removeReviewerSnapshot(pane: pane)
                 correlation.remove(pane: pane)
+                await emitSessionEnded(pane: pane, sessionID: record.sessionID)
             }
             previouslyAlivePanes = alive
         }
@@ -886,12 +891,12 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         /// have produced. `closePaneEligible` folds in the per-agent pref the same
         /// way `CodexTranslator` does for the hook path; we only emit once the
         /// process is actually gone, which is the clean-exit condition.
-        private func emitSessionEnded(pane: String) async {
+        private func emitSessionEnded(pane: String, sessionID: String) async {
             guard let host else { return }
             await log(.debug, "Codex process exited; synthesizing session end for pane \(pane)")
             await host.emit(PluginEvent(
                 pluginID: CodexPluginCore.pluginID,
-                sessionID: pane,
+                sessionID: sessionID,
                 appActions: [.sessionEnded(
                     sessionID: pane,
                     closePaneEligible: settings.closePaneOnSessionEnd

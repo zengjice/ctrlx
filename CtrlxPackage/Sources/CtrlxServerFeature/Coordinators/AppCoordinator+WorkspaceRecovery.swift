@@ -131,16 +131,15 @@ extension AppCoordinator {
                     }
                     if let identity = AgentForkSource(pane: state), let core = pluginRegistry?.core(identity.pluginID) as? any AgentSessionResuming {
                         guard
-                            let proof = await identities.load(pane.runtimeID), proof.source == identity,
-                            identities.runtimeID(proof.processID) == proof.runtimeID else {
+                            let candidate = detected?[pane.runtimeID],
+                            let proof = await identities.currentIdentity(in: state, detected: candidate) else {
                             WorkspaceAgentCapture.recordFailure("The Agent process identity could not be verified at the last capture.", in: &pane)
                             continue
                         }
                         do {
                             guard
                                 windowManager.paneStates[pane.runtimeID].flatMap(AgentForkSource.init(pane:)) == identity,
-                                let detected = detected?[identity.paneID],
-                                proof.matches(pane: state, detected: detected, runtimeID: identities.runtimeID(proof.processID)) else {
+                                proof.matches(pane: state, detected: candidate, runtimeID: identities.runtimeID(proof.processID)) else {
                                 throw WorkspaceRecoveryError("The Agent process ownership could not be verified at the last capture.")
                             }
                             WorkspaceAgentCapture.recordIdentity(proof, in: &pane)

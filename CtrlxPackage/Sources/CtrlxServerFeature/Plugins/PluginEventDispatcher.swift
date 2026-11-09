@@ -55,7 +55,7 @@
         ) async -> Void
 
         /// One discrete agent-blind Mac-side trigger (markdown suggestion, pane close…).
-        public typealias AppActionSink = @Sendable (_ action: AppAction) async -> Void
+        public typealias AppActionSink = @Sendable (_ action: AppAction, _ event: PluginEvent, _ peer: PluginIngressPeer?) async -> Void
 
         public typealias WorkflowSink = @Sendable (_ event: PluginEvent, _ peer: PluginIngressPeer) async -> Void
 
@@ -79,7 +79,7 @@
             onState: @escaping StateSink = { _, _, _, _, _, _ in },
             onNotification: @escaping NotificationSink = { _, _, _, _ in },
             onAutoApprove: @escaping AutoApproveSink = { _, _, _ in },
-            onAppAction: @escaping AppActionSink = { _ in },
+            onAppAction: @escaping AppActionSink = { _, _, _ in },
             isYoloModeEnabled: @escaping AutoApproveCheck = { _ in false },
             onWorkflow: @escaping WorkflowSink = { _, _ in }
         ) {
@@ -99,6 +99,22 @@
 
             if event.workflow != nil || event.workflowBridgeVersion != nil, let ingressPeer {
                 await onWorkflow(event, ingressPeer)
+            }
+
+            // An end envelope must be validated as a whole before it touches
+            // live state. Its idle state could otherwise overwrite a successor.
+            if
+                event.appActions.contains(where: {
+                    if case .sessionEnded = $0 {
+                        true
+                    } else {
+                        false
+                    }
+                }) {
+                for action in event.appActions {
+                    await onAppAction(action, event, ingressPeer)
+                }
+                return
             }
 
             if let state = event.state {
@@ -134,7 +150,7 @@
 
             // App actions.
             for action in event.appActions {
-                await onAppAction(action)
+                await onAppAction(action, event, ingressPeer)
             }
         }
     }

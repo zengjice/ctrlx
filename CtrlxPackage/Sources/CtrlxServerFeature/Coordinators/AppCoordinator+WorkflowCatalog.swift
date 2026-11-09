@@ -38,19 +38,16 @@ extension AppCoordinator {
             guard
                 let provider = registry.core(candidate.pluginID) as? any AgentWorkflowProviding,
                 candidate.processIDs.count == 1,
-                let process = candidate.processIDs.first, let pid = Int32(process),
-                let runtime = identities.runtimeID(process),
                 let pane = windowManager.paneStates[paneID] else { continue }
-            let captured = try await tmuxService.captureWorkspacePane(target: paneID)
-            let known = previous.first {
-                $0.pluginID == candidate.pluginID && $0.processID == pid && $0.processRuntimeID == runtime
-                    && $0.workspacePane.isSamePane(as: captured.identity)
-            }
-            let native = await identities.load(paneID)
+            let captured = try await captureAgentBinding(paneID: paneID, detected: candidate)
+            let binding = captured.binding
+            guard let pid = Int32(binding.processID) else { continue }
+            let known = previous.first { binding.matches($0) }
+            let native = await identities.currentIdentity(in: pane, detected: candidate)
             let conversation: String
             if
-                let native, native.matches(pane: pane, detected: candidate, runtimeID: runtime),
-                pane.claudeSessionID == native.source.sessionID {
+                let native, binding.matches(native),
+                windowManager.paneStates[paneID].flatMap(AgentForkSource.init(pane:)) == native.source {
                 conversation = native.source.sessionID
             } else if candidate.pluginID == "codex", known?.conversationID.isEmpty ?? true {
                 // A fresh Codex process creates its first native record only
@@ -66,7 +63,7 @@ extension AppCoordinator {
             }
             let instance = AgentWorkflowInstance(
                 id: known?.id ?? UUID(), hostID: hostID, pluginID: candidate.pluginID,
-                processID: pid, processRuntimeID: runtime, workspacePane: captured.identity,
+                processID: pid, processRuntimeID: binding.runtimeID, workspacePane: binding.workspacePane,
                 paneID: paneID, conversationID: conversation,
                 displayName: "\(pane.sessionName) · \(pane.windowName)",
                 workingDirectory: captured.info.currentPath,

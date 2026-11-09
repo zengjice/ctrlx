@@ -192,18 +192,17 @@ extension AppCoordinator {
         guard identities.runtimeID(String(instance.processID)) == instance.processRuntimeID else {
             throw AgentWorkflowError("The Agent process changed.")
         }
-        let pane = try await tmuxService.captureWorkspacePane(target: instance.paneID, expectedServerID: instance.workspacePane.serverID)
-        guard pane.identity.isSamePane(as: instance.workspacePane) else {
-            throw AgentWorkflowError("The Agent's terminal was replaced.")
-        }
         guard let detected = await tmuxService.detectAgentPanesIfAvailable(processNamesByPlugin: registry.processNamesByPlugin, refreshSnapshot: true) else {
             try Task.checkCancellation()
             throw AgentWorkflowInspectionUnavailable()
         }
         guard
-            let current = detected[instance.paneID], current.pluginID == instance.pluginID,
-            current.processIDs == [String(instance.processID)] else {
+            let current = detected[instance.paneID] else {
             throw AgentWorkflowError("Cannot verify the Agent's current process.")
+        }
+        let pane = try await captureAgentBinding(paneID: instance.paneID, detected: current)
+        guard pane.binding.matches(instance) else {
+            throw AgentWorkflowError("The Agent process or terminal changed.")
         }
         if verifyNativeWriter, instance.pluginID == "codex" {
             // The first submission can precede SessionStart. Its actual CLI
@@ -213,16 +212,16 @@ extension AppCoordinator {
             }
         } else if !instance.conversationID.isEmpty || instance.pluginID != "codex" {
             guard
-                let native = await identities.load(instance.paneID),
-                native.processID == String(instance.processID), native.runtimeID == instance.processRuntimeID,
-                native.source.pluginID == instance.pluginID, native.source.sessionID == instance.conversationID,
-                windowManager.paneStates[instance.paneID]?.claudeSessionID == instance.conversationID else {
+                let state = windowManager.paneStates[instance.paneID],
+                let native = await identities.currentIdentity(in: state, detected: current),
+                pane.binding.matches(native), native.source.sessionID == instance.conversationID,
+                windowManager.paneStates[instance.paneID].flatMap(AgentForkSource.init(pane:)) == native.source else {
                 throw AgentWorkflowError("Cannot verify the Agent's current process and conversation.")
             }
         }
         guard identities.runtimeID(String(instance.processID)) == instance.processRuntimeID else { throw AgentWorkflowError("The Agent process changed.") }
         var live = instance
-        live.workspacePane = pane.identity
+        live.workspacePane = pane.binding.workspacePane
         live.workingDirectory = pane.info.currentPath
         do {
             let invocation = try await processes.invocation(String(instance.processID), instance.processRuntimeID)

@@ -19,21 +19,20 @@ extension AppCoordinator {
         guard
             candidates.count == 1, let (paneID, process) = candidates.first,
             let pane = windowManager.paneStates[paneID],
-            let native = await identities.load(paneID),
-            native.matches(pane: pane, detected: process, runtimeID: owner.key),
-            pane.claudeSessionID == native.source.sessionID else { return nil }
+            let native = await identities.currentIdentity(in: pane, detected: process),
+            native.runtimeID == owner.key else { return nil }
         // /new can replace the conversation without replacing its process.
         if process.pluginID == "codex", await identities.codexSessionID(String(owner.pid), owner.key) != native.source.sessionID {
             return nil
         }
         guard
-            let captured = try? await tmuxService.captureWorkspacePane(target: paneID),
-            captured.identity.isSamePane(as: native.source.workspaceIdentity),
+            let captured = try? await captureAgentBinding(paneID: paneID, detected: process),
+            captured.binding.matches(native),
             identities.runtimeID(String(owner.pid)) == owner.key,
-            windowManager.paneStates[paneID]?.claudeSessionID == native.source.sessionID else { return nil }
+            windowManager.paneStates[paneID].flatMap(AgentForkSource.init(pane:)) == native.source else { return nil }
         return AgentResourceIdentity(
             hostID: hostID,
-            pane: captured.identity,
+            pane: captured.binding.workspacePane,
             pluginID: process.pluginID,
             conversationID: native.source.sessionID
         )

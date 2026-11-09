@@ -1,6 +1,6 @@
 import CtrlxNetworking
-import Foundation
 import CtrlxPluginProtocol
+import Foundation
 
 /// Records every `PluginHost` callback so the core's behavior can be asserted
 /// (spec §17.2). An `actor`, so it is `Sendable` and safe to hand to a core actor.
@@ -15,6 +15,13 @@ actor MockPluginHost: PluginHost {
     /// Panes the mock reports as running the agent process — drives the Codex
     /// session-end monitor in tests. Settable via `setAgentPanes`.
     private var agentPanesValue: [String]? = []
+    private var onProbe: (@Sendable () -> Void)?
+    private var onEmit: (@Sendable () -> Void)?
+
+    func setCallbacks(onProbe: (@Sendable () -> Void)? = nil, onEmit: (@Sendable () -> Void)? = nil) {
+        self.onProbe = onProbe
+        self.onEmit = onEmit
+    }
 
     func setAgentPanes(_ panes: [String]?) {
         agentPanesValue = panes
@@ -25,7 +32,8 @@ actor MockPluginHost: PluginHost {
     }
 
     func agentPanesIfAvailable() async -> [String]? {
-        agentPanesValue
+        onProbe?()
+        return agentPanesValue
     }
 
     func setProjects(_ projects: [AgentProject]) async {
@@ -34,6 +42,7 @@ actor MockPluginHost: PluginHost {
 
     func emit(_ event: PluginEvent) async {
         emittedEvents.append(event)
+        onEmit?()
     }
 
     func sendText(sessionID: String, _ text: String) async {

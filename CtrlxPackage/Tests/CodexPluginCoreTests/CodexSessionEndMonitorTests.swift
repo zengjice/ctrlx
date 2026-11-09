@@ -89,10 +89,35 @@ struct CodexSessionEndMonitorTests {
         #expect(events.count == 1)
         let event = try #require(events.first)
         #expect(event.pluginID == "codex")
+        #expect(event.sessionID == "sess-1")
         #expect(event.tmuxPane == "%1")
         #expect(event.appActions == [.sessionEnded(sessionID: "%1", closePaneEligible: false)])
         #expect(store.allPanes().isEmpty)
 
+        await core.shutdown()
+    }
+
+    @Test("Session starts during process probing or end delivery retain their correlation", arguments: ["probe", "emit", "resume"])
+    func replacementDuringEnd(phase: String) async throws {
+        let (core, host, store, root) = try await makeCore()
+        defer { try? fileManager.removeItem(at: root) }
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        store.record(sessionID: "old", tmuxPane: "%1", cwd: "/repo", startedAt: startedAt)
+        let original = store.record(forPane: "%1")
+        await host.setAgentPanes(["%1"])
+        await core.pollSessionEnds()
+        await host.setAgentPanes([])
+        let nextID = phase == "resume" ? "old" : "new"
+        let replace: @Sendable () -> Void = { _ = store.record(sessionID: nextID, tmuxPane: "%1", cwd: "/repo", startedAt: startedAt) }
+        await host.setCallbacks(onProbe: phase != "emit" ? replace : nil, onEmit: phase == "emit" ? replace : nil)
+        await core.pollSessionEnds()
+        #expect(store.record(forPane: "%1")?.sessionID == nextID)
+        #expect(store.record(forPane: "%1")?.registrationID != original?.registrationID)
+        let events = await host.emittedEvents
+        #expect(events.count == (phase == "emit" ? 1 : 0))
+        if let event = events.first {
+            #expect(event.sessionID == "old")
+        }
         await core.shutdown()
     }
 
