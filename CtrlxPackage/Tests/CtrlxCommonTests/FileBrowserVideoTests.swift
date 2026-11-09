@@ -14,9 +14,14 @@ struct FileBrowserVideoTests {
         .init(path: path, name: (path as NSString).lastPathComponent, kind: .unsupported, size: size, revision: "1")
     }
 
-    @Test func formatsAndRangesAreBoundedWithoutIntegerOverflow() throws {
-        for path in ["/Host/中文.MP4", "/Host/movie.MOV"] { #expect(FileBrowserVideo.supports(path: path)) }
-        for path in ["movie.mkv", "movie.mp4.txt", "movie", "movie.m3u8"] { #expect(!FileBrowserVideo.supports(path: path)) }
+    @Test
+    func formatsAndRangesAreBoundedWithoutIntegerOverflow() throws {
+        for path in ["/Host/中文.MP4", "/Host/movie.MOV"] {
+            #expect(FileBrowserVideo.supports(path: path))
+        }
+        for path in ["movie.mkv", "movie.mp4.txt", "movie", "movie.m3u8"] {
+            #expect(!FileBrowserVideo.supports(path: path))
+        }
         let entire = try FileBrowserVideoRange(offset: 7, length: 1, toEnd: true, size: 20)
         #expect(entire.start == 7 && entire.end == 20)
         let clipped = try FileBrowserVideoRange(offset: 17, length: .max, toEnd: false, size: 20)
@@ -26,15 +31,20 @@ struct FileBrowserVideoTests {
         }
     }
 
-    @Test func randomReadsCacheHitsAndLRUEviction() async throws {
+    @Test
+    func randomReadsCacheHitsAndLRUEviction() async throws {
         let data = Data((0..<(4 * block + 9)).map { UInt8($0 % 251) })
         let info = info(size: data.count)
         var offsets: [Int] = []
         let source = FileBrowserSource(id: "remote", paneID: nil) { operation in
             guard case let .download(path, offset, revision) = operation else { throw FileBrowserError.message("Expected a byte read") }
             offsets.append(offset)
-            return .chunk(.init(path: path, revision: revision, offset: offset,
-                               data: data.subdata(in: offset..<min(offset + self.block, data.count))))
+            return .chunk(.init(
+                path: path,
+                revision: revision,
+                offset: offset,
+                data: data.subdata(in: offset..<min(offset + self.block, data.count))
+            ))
         }
         let reader = try FileBrowserVideoReader(info: info, source: source, cacheBytes: 2 * block)
         #expect(try await reader.read(offset: 0, length: 7) == data.prefix(7))
@@ -57,17 +67,23 @@ struct FileBrowserVideoTests {
         let info = info(size: block + 7)
         let source = FileBrowserSource(id: "remote", paneID: nil) { operation in
             guard case let .download(path, offset, revision) = operation else { throw FileBrowserError.message("Unexpected operation") }
-            if failure == "disconnect" { throw FileBrowserError.message("Host offline") }
-            return .chunk(.init(path: failure == "path" ? "/wrong.mp4" : path,
-                               revision: failure == "revision" ? "2" : revision, offset: failure == "offset" ? offset + 1 : offset,
-                               data: Data(repeating: 7, count: failure == "empty" ? 0 : failure == "oversized" ? self.block + 1 : failure == "short" ? self.block - 1 : self.block)))
+            if failure == "disconnect" {
+                throw FileBrowserError.message("Host offline")
+            }
+            return .chunk(.init(
+                path: failure == "path" ? "/wrong.mp4" : path,
+                revision: failure == "revision" ? "2" : revision,
+                offset: failure == "offset" ? offset + 1 : offset,
+                data: Data(repeating: 7, count: failure == "empty" ? 0 : failure == "oversized" ? self.block + 1 : failure == "short" ? self.block - 1 : self.block)
+            ))
         }
         let reader = try FileBrowserVideoReader(info: info, source: source)
         await #expect(throws: FileBrowserError.self) { try await reader.read(offset: 0, length: 1) }
         #expect(reader.cachedBytes == 0)
     }
 
-    @Test func legacyAndOversizedFilesFailBeforeByteRequests() async throws {
+    @Test
+    func legacyAndOversizedFilesFailBeforeByteRequests() async throws {
         var calls = 0
         let source = FileBrowserSource(id: "legacy", paneID: nil, downloadUnavailableReason: "Update the Host Mac") { _ in
             calls += 1
@@ -83,18 +99,23 @@ struct FileBrowserVideoTests {
         _ = try FileBrowserVideoReader(info: info(size: FileBrowserLimits.maximumDownloadBytes), source: source)
     }
 
-    @Test func cancellationDropsLateBytes() async throws {
+    @Test
+    func cancellationDropsLateBytes() async throws {
         let (started, startedSignal) = AsyncStream<Void>.makeStream()
         let (gate, release) = AsyncStream<Void>.makeStream()
         let source = FileBrowserSource(id: "remote", paneID: nil) { operation in
             guard case let .download(path, offset, revision) = operation else { throw FileBrowserError.message("Unexpected operation") }
             startedSignal.yield()
-            for await _ in gate { break }
+            for await _ in gate {
+                break
+            }
             return .chunk(.init(path: path, revision: revision, offset: offset, data: Data(repeating: 1, count: self.block)))
         }
         let reader = try FileBrowserVideoReader(info: info(size: block), source: source)
         let request = Task { try await reader.read(offset: 0, length: 1) }
-        for await _ in started { break }
+        for await _ in started {
+            break
+        }
         request.cancel()
         release.yield()
         await #expect(throws: CancellationError.self) { try await request.value }
@@ -103,7 +124,8 @@ struct FileBrowserVideoTests {
         release.finish()
     }
 
-    @Test func defaultCacheStaysBoundedAcrossALongVideo() async throws {
+    @Test
+    func defaultCacheStaysBoundedAcrossALongVideo() async throws {
         let info = info(size: 100 * block)
         let source = FileBrowserSource(id: "remote", paneID: nil) { operation in
             guard case let .download(path, offset, revision) = operation else { throw FileBrowserError.message("Unexpected operation") }
@@ -123,18 +145,26 @@ struct FileBrowserVideoTests {
         let info = info(size: data.count)
         let (started, startedSignal) = AsyncStream<Void>.makeStream()
         let (gate, release) = AsyncStream<Void>.makeStream()
-        defer { startedSignal.finish(); release.finish() }
+        defer { startedSignal.finish()
+            release.finish()
+        }
         var reads = 0
         let source = FileBrowserSource(id: "remote", paneID: nil) { operation in
             if case .info = operation {
                 startedSignal.yield()
-                for await _ in gate { break }
+                for await _ in gate {
+                    break
+                }
                 return .info(info)
             }
             guard case let .download(path, offset, revision) = operation else { throw FileBrowserError.message("Unexpected operation") }
             reads += 1
-            return .chunk(.init(path: path, revision: revision, offset: offset,
-                               data: data.subdata(in: offset..<min(offset + self.block, data.count))))
+            return .chunk(.init(
+                path: path,
+                revision: revision,
+                offset: offset,
+                data: data.subdata(in: offset..<min(offset + self.block, data.count))
+            ))
         }
         let playback = FileBrowserVideoPlayback()
         defer { playback.stop() }
@@ -142,11 +172,16 @@ struct FileBrowserVideoTests {
             try await playback.prepare(path: info.path, source: source)
             playback.play()
         }
-        for await _ in started { break }
-        if lifecycle == "stop" { playback.stop() }
-        else {
+        for await _ in started {
+            break
+        }
+        if lifecycle == "stop" {
+            playback.stop()
+        } else {
             playback.setSceneActive(false)
-            if lifecycle == "foreground" { playback.setSceneActive(true) }
+            if lifecycle == "foreground" {
+                playback.setSceneActive(true)
+            }
         }
         // Do not cancel the task: even a non-cooperative late response must be rejected.
         release.yield()
@@ -156,7 +191,8 @@ struct FileBrowserVideoTests {
         #expect(reads == 0, "Aborted preparation must not create an asset or request video bytes")
     }
 
-    @Test func inactiveSceneRejectsPreparationBeforeRequests() async throws {
+    @Test
+    func inactiveSceneRejectsPreparationBeforeRequests() async throws {
         var calls = 0
         let source = FileBrowserSource(id: "remote", paneID: nil) { _ in
             calls += 1
@@ -171,30 +207,41 @@ struct FileBrowserVideoTests {
         #expect(playback.player == nil)
     }
 
-    @Test func lateMetadataDoesNotReplaceNewForegroundPreparation() async throws {
+    @Test
+    func lateMetadataDoesNotReplaceNewForegroundPreparation() async throws {
         let data = try fixture()
         let info = info(size: data.count)
         let (started, startedSignal) = AsyncStream<Void>.makeStream()
         let (gate, release) = AsyncStream<Void>.makeStream()
-        defer { startedSignal.finish(); release.finish() }
+        defer { startedSignal.finish()
+            release.finish()
+        }
         var requests = 0
         let source = FileBrowserSource(id: "remote", paneID: nil) { operation in
             if case .info = operation {
                 requests += 1
                 if requests == 1 {
                     startedSignal.yield()
-                    for await _ in gate { break }
+                    for await _ in gate {
+                        break
+                    }
                 }
                 return .info(info)
             }
             guard case let .download(path, offset, revision) = operation else { throw FileBrowserError.message("Unexpected operation") }
-            return .chunk(.init(path: path, revision: revision, offset: offset,
-                               data: data.subdata(in: offset..<min(offset + self.block, data.count))))
+            return .chunk(.init(
+                path: path,
+                revision: revision,
+                offset: offset,
+                data: data.subdata(in: offset..<min(offset + self.block, data.count))
+            ))
         }
         let playback = FileBrowserVideoPlayback()
         defer { playback.stop() }
         let oldPreparation = Task { try await playback.prepare(path: info.path, source: source) }
-        for await _ in started { break }
+        for await _ in started {
+            break
+        }
         playback.setSceneActive(false)
         playback.setSceneActive(true)
         try await playback.prepare(path: info.path, source: source)
@@ -205,12 +252,15 @@ struct FileBrowserVideoTests {
         #expect(currentPlayer.currentItem != nil)
     }
 
-    @Test func nativePlaybackPausesResumesAndReleasesTheItem() async throws {
+    @Test
+    func nativePlaybackPausesResumesAndReleasesTheItem() async throws {
         let data = try fixture()
         let info = info(size: data.count)
         var reads = 0
         let source = FileBrowserSource(id: "remote", paneID: nil) { operation in
-            if case .info = operation { return .info(info) }
+            if case .info = operation {
+                return .info(info)
+            }
             guard case let .download(path, offset, revision) = operation else { throw FileBrowserError.message("Unexpected operation") }
             reads += 1
             try await Task.sleep(for: .milliseconds(20))
@@ -252,7 +302,8 @@ struct FileBrowserVideoTests {
         #expect(reads == stoppedReads)
     }
 
-    @Test func audioLeasesOnlyDeactivateAfterTheLastOwnerReleases() throws {
+    @Test
+    func audioLeasesOnlyDeactivateAfterTheLastOwnerReleases() throws {
         var activations = 0
         var deactivations = 0
         let leases = FileBrowserVideoAudioLeases(activate: { activations += 1 }, deactivate: { deactivations += 1 })
@@ -276,13 +327,16 @@ struct FileBrowserVideoTests {
         #expect(leases.owners.isEmpty && activations == 3 && deactivations == 2)
     }
 
-    @Test func failedAudioLeaseDoesNotAcquireOrReleaseAnotherOwnersSession() throws {
+    @Test
+    func failedAudioLeaseDoesNotAcquireOrReleaseAnotherOwnersSession() throws {
         var attempts = 0
         var deactivations = 0
         let leases = FileBrowserVideoAudioLeases(
             activate: {
                 attempts += 1
-                if attempts > 1 { throw FileBrowserError.message("Audio unavailable") }
+                if attempts > 1 {
+                    throw FileBrowserError.message("Audio unavailable")
+                }
             },
             deactivate: { deactivations += 1 }
         )
@@ -303,7 +357,9 @@ struct FileBrowserVideoTests {
         var deactivations = 0
         let leases = FileBrowserVideoAudioLeases(
             activate: { sessionIsActive = true },
-            deactivate: { sessionIsActive = false; deactivations += 1 }
+            deactivate: { sessionIsActive = false
+                deactivations += 1
+            }
         )
         try await withDependencies {
             $0[FileBrowserVideoAudioClient.self] = .init(
@@ -313,7 +369,9 @@ struct FileBrowserVideoTests {
         } operation: {
             let first = FileBrowserVideoPlayback(startsMuted: false)
             let second = FileBrowserVideoPlayback(startsMuted: false)
-            defer { first.stop(); second.stop() }
+            defer { first.stop()
+                second.stop()
+            }
             let data = try fixture()
             let info = info(size: data.count)
             let source = videoSource(data: data, info: info)
@@ -345,7 +403,8 @@ struct FileBrowserVideoTests {
         }
     }
 
-    @Test func audioSessionFollowsExplicitAndNativePlayback() async throws {
+    @Test
+    func audioSessionFollowsExplicitAndNativePlayback() async throws {
         var activations = 0
         var deactivations = 0
         let leases = FileBrowserVideoAudioLeases(activate: { activations += 1 }, deactivate: { deactivations += 1 })
@@ -392,7 +451,8 @@ struct FileBrowserVideoTests {
         }
     }
 
-    @Test func audioActivationFailureDoesNotStartPlayback() async throws {
+    @Test
+    func audioActivationFailureDoesNotStartPlayback() async throws {
         var releases = 0
         try await withDependencies {
             $0[FileBrowserVideoAudioClient.self] = .init(
@@ -419,16 +479,18 @@ struct FileBrowserVideoTests {
         }
     }
 
-    @Test func defaultMutePolicyOnlyChangesOnIOS() {
+    @Test
+    func defaultMutePolicyOnlyChangesOnIOS() {
         let playback = FileBrowserVideoPlayback()
         #if os(iOS)
-        #expect(playback.isMuted)
+            #expect(playback.isMuted)
         #else
-        #expect(!playback.isMuted, "Mac playback must retain its existing audible default")
+            #expect(!playback.isMuted, "Mac playback must retain its existing audible default")
         #endif
     }
 
-    @Test func mutedPlaybackAndSoundTogglePreserveThePlayer() async throws {
+    @Test
+    func mutedPlaybackAndSoundTogglePreserveThePlayer() async throws {
         var activations = 0
         var deactivations = 0
         let leases = FileBrowserVideoAudioLeases(activate: { activations += 1 }, deactivate: { deactivations += 1 })
@@ -495,7 +557,8 @@ struct FileBrowserVideoTests {
         }
     }
 
-    @Test func failedSoundActivationKeepsTheVideoMuted() async throws {
+    @Test
+    func failedSoundActivationKeepsTheVideoMuted() async throws {
         try await withDependencies {
             $0[FileBrowserVideoAudioClient.self] = .init(
                 acquire: { _ in throw FileBrowserError.message("Audio unavailable") },
@@ -520,7 +583,8 @@ struct FileBrowserVideoTests {
         }
     }
 
-    @Test func streamedVideoPreservesItsAudioTrack() async throws {
+    @Test
+    func streamedVideoPreservesItsAudioTrack() async throws {
         let data = try fixture(name: "test_video_with_audio.mp4")
         let info = info(size: data.count)
         let reader = try FileBrowserVideoReader(info: info, source: videoSource(data: data, info: info))
@@ -535,15 +599,21 @@ struct FileBrowserVideoTests {
         try await export.export(to: output, as: .m4a)
         let audioAsset = AVURLAsset(url: output)
         #expect(try await audioAsset.loadTracks(withMediaType: .audio).count == 1)
-        #expect(CMTimeGetSeconds(try await audioAsset.load(.duration)) > 1)
+        #expect(try CMTimeGetSeconds(await audioAsset.load(.duration)) > 1)
     }
 
     private func videoSource(data: Data, info: FileBrowserEntry) -> FileBrowserSource {
         FileBrowserSource(id: "remote", paneID: nil) { operation in
-            if case .info = operation { return .info(info) }
+            if case .info = operation {
+                return .info(info)
+            }
             guard case let .download(path, offset, revision) = operation else { throw FileBrowserError.message("Unexpected operation") }
-            return .chunk(.init(path: path, revision: revision, offset: offset,
-                               data: data.subdata(in: offset..<min(offset + self.block, data.count))))
+            return .chunk(.init(
+                path: path,
+                revision: revision,
+                offset: offset,
+                data: data.subdata(in: offset..<min(offset + self.block, data.count))
+            ))
         }
     }
 
@@ -655,7 +725,9 @@ struct FileBrowserVideoTests {
             export.shouldOptimizeForNetworkUse = false
             try await export.export(to: copy, as: .mov)
             data = try Data(contentsOf: copy)
-        } else { data = try fixture() }
+        } else {
+            data = try fixture()
+        }
         let info = info(size: data.count, path: "/Host/movie.\(format.uppercased())")
         var received = 0
         var offsets: [Int] = []
@@ -679,7 +751,7 @@ struct FileBrowserVideoTests {
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
         let first = try await generator.image(at: .zero)
-        #expect(first.image.width == 1280 && first.image.height == 720)
+        #expect(first.image.width == 1_280 && first.image.height == 720)
         #expect(received < data.count, "The first decoded frame must not require a complete download")
         if format == "mov" {
             #expect(offsets.contains(data.count / block * block), "Tail-indexed MOV metadata must be reachable before decoding the first frame")
@@ -730,7 +802,8 @@ struct FileBrowserVideoTests {
         #expect(second.cachedBytes == 0)
     }
 
-    @Test func suspensionAndStopPreventFurtherRequests() async throws {
+    @Test
+    func suspensionAndStopPreventFurtherRequests() async throws {
         let data = try fixture()
         let info = info(size: data.count)
         var calls = 0
@@ -749,7 +822,7 @@ struct FileBrowserVideoTests {
         try await Task.sleep(for: .milliseconds(80))
         #expect(calls == 0)
         loader.setSuspended(false)
-        #expect(CMTimeGetSeconds(try await duration.value) > 4)
+        #expect(try CMTimeGetSeconds(await duration.value) > 4)
         #expect(calls > 0)
         loader.stop()
         let completed = calls

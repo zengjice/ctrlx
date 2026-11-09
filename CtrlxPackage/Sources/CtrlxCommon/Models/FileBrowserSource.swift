@@ -3,7 +3,9 @@ import Foundation
 
 public enum FileBrowserError: LocalizedError, Sendable {
     case message(String)
-    public var errorDescription: String? { switch self { case let .message(message): message } }
+    public var errorDescription: String? {
+        switch self { case let .message(message): message }
+    }
 }
 
 @MainActor
@@ -22,15 +24,19 @@ public struct FileBrowserSource {
     public let localPreview: (@MainActor (FileBrowserEntry) async throws -> Data)?
     public let request: @MainActor (FileBrowserOperation) async throws -> FileBrowserResponse
 
-    public init(id: String, paneID: String?, unavailableReason: String? = nil,
-                downloadUnavailableReason: String? = nil,
-                uploadUnavailableReason: String? = nil,
-                creationUnavailableReason: String? = nil,
-                connectionID: UUID? = nil,
-                createDirectory: (@MainActor (CreateSessionDirectory) async throws -> String)? = nil,
-                localFileURL: (@MainActor (FileBrowserEntry) async throws -> URL)? = nil,
-                localPreview: (@MainActor (FileBrowserEntry) async throws -> Data)? = nil,
-                request: @escaping @MainActor (FileBrowserOperation) async throws -> FileBrowserResponse) {
+    public init(
+        id: String,
+        paneID: String?,
+        unavailableReason: String? = nil,
+        downloadUnavailableReason: String? = nil,
+        uploadUnavailableReason: String? = nil,
+        creationUnavailableReason: String? = nil,
+        connectionID: UUID? = nil,
+        createDirectory: (@MainActor (CreateSessionDirectory) async throws -> String)? = nil,
+        localFileURL: (@MainActor (FileBrowserEntry) async throws -> URL)? = nil,
+        localPreview: (@MainActor (FileBrowserEntry) async throws -> Data)? = nil,
+        request: @escaping @MainActor (FileBrowserOperation) async throws -> FileBrowserResponse
+    ) {
         self.id = id
         self.paneID = paneID
         self.connectionID = connectionID
@@ -49,7 +55,9 @@ public struct FileBrowserSource {
             "Host is offline. Reconnect to browse its files."
         } else if connection?.relayClient.hostSupportsFileBrowsing != true {
             "Update the Host Mac to browse files."
-        } else { nil }
+        } else {
+            nil
+        }
         let downloadReason = reason ?? (connection?.relayClient.hostSupportsFileDownloads == true ? nil : "Update the Host Mac to download files.")
         let uploadReason = reason ?? (connection?.relayClient.hostSupportsFileUploads == true ? nil : "Update the Host Mac to upload files.")
         let creationReason = reason ?? (connection?.relayClient.hostSupportsDirectoryCreation == true ? nil : "Update the Host Mac to create folders.")
@@ -59,21 +67,35 @@ public struct FileBrowserSource {
         } else {
             nil
         }
-        return Self(id: hostID, paneID: paneID, unavailableReason: reason, downloadUnavailableReason: downloadReason,
-                    uploadUnavailableReason: uploadReason, creationUnavailableReason: creationReason, connectionID: epoch, createDirectory: { request in
-            if let creationReason { throw FileBrowserError.message(creationReason) }
-            guard let connection, connection.isHostConnected, connection.relayClient.fileTransferEpoch == epoch else {
-                throw FileBrowserError.message("Host connection changed. Try again.")
+        return Self(
+            id: hostID,
+            paneID: paneID,
+            unavailableReason: reason,
+            downloadUnavailableReason: downloadReason,
+            uploadUnavailableReason: uploadReason,
+            creationUnavailableReason: creationReason,
+            connectionID: epoch,
+            createDirectory: { request in
+                if let creationReason {
+                    throw FileBrowserError.message(creationReason)
+                }
+                guard let connection, connection.isHostConnected, connection.relayClient.fileTransferEpoch == epoch else {
+                    throw FileBrowserError.message("Host connection changed. Try again.")
+                }
+                try Task.checkCancellation()
+                let response = try await connection.sendCommand(request, paneId: "", timeout: 10).get()
+                guard let directory = response.createdDirectory else { throw FileBrowserError.message("Missing created directory. Refresh before retrying.") }
+                return directory
             }
-            try Task.checkCancellation()
-            let response = try await connection.sendCommand(request, paneId: "", timeout: 10).get()
-            guard let directory = response.createdDirectory else { throw FileBrowserError.message("Missing created directory. Refresh before retrying.") }
-            return directory
-        }) { operation in
-            if let reason { throw FileBrowserError.message(reason) }
+        ) { operation in
+            if let reason {
+                throw FileBrowserError.message(reason)
+            }
             guard let connection, connection.isHostConnected else { throw FileBrowserError.message("Host is offline.") }
             if case .upload = operation {
-                if let uploadReason { throw FileBrowserError.message(uploadReason) }
+                if let uploadReason {
+                    throw FileBrowserError.message(uploadReason)
+                }
                 guard connection.relayClient.fileTransferEpoch == epoch else { throw FileBrowserError.message("Upload connection changed. Choose the files again.") }
             }
             try Task.checkCancellation()
