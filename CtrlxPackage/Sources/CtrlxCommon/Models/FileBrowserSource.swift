@@ -10,6 +10,7 @@ public enum FileBrowserError: LocalizedError, Sendable {
 public struct FileBrowserSource {
     public let id: String
     public let paneID: String?
+    public let connectionID: UUID?
     public let unavailableReason: String?
     public let downloadUnavailableReason: String?
     public let uploadUnavailableReason: String?
@@ -25,12 +26,14 @@ public struct FileBrowserSource {
                 downloadUnavailableReason: String? = nil,
                 uploadUnavailableReason: String? = nil,
                 creationUnavailableReason: String? = nil,
+                connectionID: UUID? = nil,
                 createDirectory: (@MainActor (CreateSessionDirectory) async throws -> String)? = nil,
                 localFileURL: (@MainActor (FileBrowserEntry) async throws -> URL)? = nil,
                 localPreview: (@MainActor (FileBrowserEntry) async throws -> Data)? = nil,
                 request: @escaping @MainActor (FileBrowserOperation) async throws -> FileBrowserResponse) {
         self.id = id
         self.paneID = paneID
+        self.connectionID = connectionID
         self.unavailableReason = unavailableReason
         self.downloadUnavailableReason = downloadUnavailableReason
         self.uploadUnavailableReason = uploadUnavailableReason
@@ -57,7 +60,7 @@ public struct FileBrowserSource {
             nil
         }
         return Self(id: hostID, paneID: paneID, unavailableReason: reason, downloadUnavailableReason: downloadReason,
-                    uploadUnavailableReason: uploadReason, creationUnavailableReason: creationReason, createDirectory: { request in
+                    uploadUnavailableReason: uploadReason, creationUnavailableReason: creationReason, connectionID: epoch, createDirectory: { request in
             if let creationReason { throw FileBrowserError.message(creationReason) }
             guard let connection, connection.isHostConnected, connection.relayClient.fileTransferEpoch == epoch else {
                 throw FileBrowserError.message("Host connection changed. Try again.")

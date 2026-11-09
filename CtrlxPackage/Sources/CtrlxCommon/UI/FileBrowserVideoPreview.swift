@@ -7,11 +7,23 @@ struct FileBrowserVideoPreview: View {
     let path: String
     let source: FileBrowserSource
     let capture: FilePreviewCapture
-    @State private var started = false
-    @State private var playback = FileBrowserVideoPlayback()
+    let playback: FileBrowserVideoPlayback
+    let position: FileBrowserPreviewPosition
+    @State private var started: Bool
+    @State private var requestedPlay = false
     @State private var error: String?
     @State private var captureOwner = UUID()
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.fileBrowserPreviewIsActive) private var isActive
+
+    init(path: String, source: FileBrowserSource, capture: FilePreviewCapture, playback: FileBrowserVideoPlayback, position: FileBrowserPreviewPosition) {
+        self.path = path
+        self.source = source
+        self.capture = capture
+        self.playback = playback
+        self.position = position
+        _started = State(initialValue: position.videoWasOpened)
+    }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -21,13 +33,17 @@ struct FileBrowserVideoPreview: View {
                 FileBrowserVideoPlayer(player: player)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .overlay(alignment: .top) {
-                        if playback.isBuffering { ProgressView("Buffering Video").padding(8) }
+                        if playback.isBuffering {
+                            ProgressView("Buffering Video").padding(8)
+                        }
                     }
                 #if os(iOS)
                 Button(action: playback.toggleSound) {
-                    Label(playback.isMuted ? "Enable Sound" : "Mute",
-                          symbol: playback.isMuted ? .speakerSlashFill : .speakerWave2Fill)
-                        .frame(minHeight: 44)
+                    Label(
+                        playback.isMuted ? "Enable Sound" : "Mute",
+                        symbol: playback.isMuted ? .speakerSlashFill : .speakerWave2Fill
+                    )
+                    .frame(minHeight: 44)
                 }
                 .buttonStyle(.bordered)
                 .accessibilityValue(playback.isMuted ? "Muted" : "Sound On")
@@ -35,9 +51,13 @@ struct FileBrowserVideoPreview: View {
                 #endif
             } else if started {
                 ProgressView("Loading Video")
-                Button("Cancel", role: .cancel) { started = false; playback.stop() }
+                Button("Cancel", role: .cancel) { started = false
+                    playback.stop()
+                }
             } else {
-                Button { started = true } label: { Label("Play Video", symbol: .playFill) }
+                Button { requestedPlay = true
+                    started = true
+                } label: { Label("Play Video", symbol: .playFill) }
                     .disabled(source.unavailableReason != nil || source.downloadUnavailableReason != nil)
                 Text(source.unavailableReason ?? source.downloadUnavailableReason ?? "Plays from the Host without downloading the entire file.")
                     .font(.caption).foregroundStyle(.secondary).padding()
@@ -48,24 +68,49 @@ struct FileBrowserVideoPreview: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task(id: started) {
-            guard started, scenePhase == .active else { return }
+        .task(id: started && isActive && scenePhase == .active) {
+            guard started, isActive, scenePhase == .active else { return }
             do {
-                try await playback.prepare(path: path, source: source)
+                playback.setSceneActive(true)
+                if playback.player == nil {
+                    try await playback.prepare(path: path, source: source, position: position)
+                    position.videoWasOpened = true
+                }
+                if let seconds = playback.restorationSeconds, seconds > 0 {
+                    try await playback.restore(seconds: seconds)
+                }
                 try Task.checkCancellation()
                 if let video = playback.annotationCapture {
                     capture.bind(owner: captureOwner) { try await video.capture() }
                 }
-                playback.play()
+                if requestedPlay {
+                    playback.play()
+                    requestedPlay = false
+                }
             } catch is CancellationError {
                 // Lifecycle handlers own cleanup; an old task must not stop a newer attempt.
                 return
-            } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+            } catch {
+                if !Task.isCancelled {
+                    self.error = error.localizedDescription
+                }
+            }
         }
-        .onDisappear { capture.unbind(owner: captureOwner); started = false; playback.stop() }
+        .onDisappear { requestedPlay = false }
+        .onChange(of: isActive) { _, active in
+            playback.setSceneActive(active && scenePhase == .active)
+            if !active {
+                requestedPlay = false
+            }
+        }
         .onChange(of: scenePhase, initial: true) { _, phase in
-            playback.setSceneActive(phase == .active)
-            if phase != .active, playback.player == nil { started = false }
+            playback.setSceneActive(phase == .active && isActive)
+            if phase != .active {
+                requestedPlay = false
+            }
+            if phase != .active, playback.player == nil {
+                started = false
+            }
         }
     }
 }
@@ -83,7 +128,9 @@ private struct FileBrowserVideoPlayer: NSViewRepresentable {
     }
 
     func updateNSView(_ view: AVPlayerView, context: Context) {
-        if view.player !== player { view.player = player }
+        if view.player !== player {
+            view.player = player
+        }
     }
 
     static func dismantleNSView(_ view: AVPlayerView, coordinator: ()) {
@@ -104,7 +151,9 @@ private struct FileBrowserVideoPlayer: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
-        if controller.player !== player { controller.player = player }
+        if controller.player !== player {
+            controller.player = player
+        }
     }
 
     static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: ()) {

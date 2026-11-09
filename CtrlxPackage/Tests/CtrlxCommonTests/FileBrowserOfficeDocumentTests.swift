@@ -7,20 +7,23 @@ import Testing
 
 @MainActor
 struct FileBrowserOfficeDocumentTests {
-    @Test(arguments: ["doc", "docx", "xls", "xlsx", "ppt", "pptx"])
+    @Test("Office selection validates metadata without reading document contents", arguments: ["doc", "docx", "xls", "xlsx", "ppt", "pptx"])
     func recognizesOnlyOfficeDocumentExtensions(fileExtension: String) async {
         let path = "/Host/中文 文档.\(fileExtension.uppercased())"
         #expect(FileBrowserOfficeDocument.supports(path: path))
         #expect(!FileBrowserOfficeDocument.supports(path: path + ".pdf"))
         let tab = FileBrowserTab()
         tab.selectedFile = path
+        let info = FileBrowserEntry(path: path, name: "document", kind: .unsupported, size: 100, revision: "1")
         var requests = 0
-        let source = FileBrowserSource(id: "legacy-host", paneID: nil) { _ in
+        let source = FileBrowserSource(id: "legacy-host", paneID: nil) { operation in
             requests += 1
-            throw FileBrowserError.message("Office must not use bounded text reads")
+            guard case .info = operation else { throw FileBrowserError.message("Office must not read document contents on selection") }
+            return .info(info)
         }
         await tab.loadPreview(source: source)
-        #expect(requests == 0)
+        #expect(requests == 1)
+        #expect(tab.preview == info)
         #expect(tab.previewData == nil)
         #expect(tab.previewError == nil)
         #expect(!tab.isPreviewLoading)

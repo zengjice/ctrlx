@@ -4,8 +4,8 @@ import CtrlxNetworking
 import Dependencies
 import Foundation
 import Observation
-import UniformTypeIdentifiers
 import os
+import UniformTypeIdentifiers
 
 @MainActor @Observable
 final class FileBrowserVideoPlayback {
@@ -23,6 +23,8 @@ final class FileBrowserVideoPlayback {
     @ObservationIgnored private var timeObserver: Any?
     @ObservationIgnored private var sceneIsActive = true
     @ObservationIgnored private var preparationID = UUID()
+    @ObservationIgnored private var restoringPosition = false
+    @ObservationIgnored private(set) var restorationSeconds: Double?
     private static let logger = Logger(subsystem: "com.jicezeng.ctrlx", category: "VideoPlayback")
 
     nonisolated static var defaultMuted: Bool {
@@ -35,26 +37,34 @@ final class FileBrowserVideoPlayback {
 
     init(startsMuted: Bool = FileBrowserVideoPlayback.defaultMuted) {
         self.startsMuted = startsMuted
-        isMuted = startsMuted
+        self.isMuted = startsMuted
     }
 
-    func prepare(path: String, source: FileBrowserSource) async throws {
+    func prepare(path: String, source: FileBrowserSource, position: FileBrowserPreviewPosition? = nil) async throws {
         try Task.checkCancellation()
         guard sceneIsActive else { throw CancellationError() }
         let preparationID = UUID()
         self.preparationID = preparationID
-        if let reason = source.unavailableReason ?? source.downloadUnavailableReason { throw FileBrowserError.message(reason) }
+        if let reason = source.unavailableReason ?? source.downloadUnavailableReason {
+            throw FileBrowserError.message(reason)
+        }
         guard case let .info(info) = try await source.request(.info(path: path)) else {
             throw FileBrowserError.message("Missing video information.")
         }
         try Task.checkCancellation()
         // A late response must not revive preparation stopped while away from the foreground.
         guard sceneIsActive, self.preparationID == preparationID else { throw CancellationError() }
+        if let position {
+            position.validate(revision: info.revision)
+            isMuted = position.videoMuted
+            restorationSeconds = position.videoWasOpened && position.videoSeconds > 0 ? position.videoSeconds : nil
+        }
         let reader = try FileBrowserVideoReader(info: info, source: source)
         let loader = try FileBrowserVideoResourceLoader(reader: reader) { [weak self] message in
-            self?.error = message
-            self?.player?.pause()
-            self?.releaseAudio()
+            guard let self, self.preparationID == preparationID else { return }
+            self.error = message
+            self.player?.pause()
+            self.releaseAudio()
         }
         let asset = loader.makeAsset()
         let item = AVPlayerItem(asset: asset)
@@ -77,7 +87,7 @@ final class FileBrowserVideoPlayback {
             },
             item.observe(\.loadedTimeRanges, options: [.new]) { [weak self] _, _ in
                 Task { @MainActor [weak self] in self?.updateState() }
-            }
+            },
         ]
         timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in self?.updateState() }
@@ -87,8 +97,10 @@ final class FileBrowserVideoPlayback {
     func setSceneActive(_ active: Bool) {
         sceneIsActive = active
         guard !active else { return }
-        if player == nil { stop() }
-        else {
+        player?.currentItem?.cancelPendingSeeks()
+        if player == nil {
+            stop()
+        } else {
             player?.pause()
             loader?.setSuspended(true)
             releaseAudio()
@@ -97,8 +109,29 @@ final class FileBrowserVideoPlayback {
 
     func play() {
         guard sceneIsActive, let player else { return }
-        if !isMuted, !activateAudio() { return }
+        if !isMuted, !activateAudio() {
+            return
+        }
         player.play()
+    }
+
+    func restore(seconds: Double) async throws {
+        guard seconds.isFinite, seconds > 0, let player else { return }
+        let token = preparationID
+        restorationSeconds = seconds
+        restoringPosition = true
+        loader?.setSuspended(false)
+        defer {
+            if preparationID == token {
+                restoringPosition = false
+                updateState()
+            }
+        }
+        let finished = await player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        try Task.checkCancellation()
+        guard finished, sceneIsActive, preparationID == token else { throw CancellationError() }
+        restorationSeconds = nil
+        player.pause()
     }
 
     func toggleSound() {
@@ -107,17 +140,24 @@ final class FileBrowserVideoPlayback {
 
     func setMuted(_ muted: Bool) {
         guard isMuted != muted else { return }
-        if !muted, sceneIsActive, let player, player.timeControlStatus != .paused,
-           !activateAudio() { return }
+        if
+            !muted, sceneIsActive, let player, player.timeControlStatus != .paused,
+            !activateAudio() {
+            return
+        }
         isMuted = muted
         player?.isMuted = muted
     }
 
     private func updateState() {
         guard let player else { return }
-        if isMuted != player.isMuted { isMuted = player.isMuted }
+        if isMuted != player.isMuted {
+            isMuted = player.isMuted
+        }
         if player.currentItem?.status == .failed {
-            if error == nil { error = player.currentItem?.error?.localizedDescription ?? "This video cannot be played. Use Download and Open." }
+            if error == nil {
+                error = player.currentItem?.error?.localizedDescription ?? "This video cannot be played. Use Download and Open."
+            }
             player.pause()
             releaseAudio()
             loader?.stop()
@@ -131,17 +171,21 @@ final class FileBrowserVideoPlayback {
                 return
             }
         } else {
-            if !sceneIsActive { player.pause() }
+            if !sceneIsActive {
+                player.pause()
+            }
             releaseAudio()
         }
         let buffering = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
-        if isBuffering != buffering { isBuffering = buffering }
+        if isBuffering != buffering {
+            isBuffering = buffering
+        }
         let now = player.currentTime()
         let buffered = player.currentItem?.loadedTimeRanges.map(\.timeRangeValue).first { CMTimeRangeContainsTime($0, time: now) }
         let ahead = buffered.map { CMTimeGetSeconds(CMTimeSubtract(CMTimeRangeGetEnd($0), now)) } ?? 0
         // preferredForwardBufferDuration alone is only a hint. Also stop feeding
         // long resource requests once the native player has enough buffered time.
-        loader?.setSuspended(!sceneIsActive || player.timeControlStatus == .paused || (!buffering && ahead >= 3))
+        loader?.setSuspended(!sceneIsActive || (!restoringPosition && (player.timeControlStatus == .paused || (!buffering && ahead >= 3))))
     }
 
     private func activateAudio() -> Bool {
@@ -167,8 +211,13 @@ final class FileBrowserVideoPlayback {
 
     func stop() {
         preparationID = UUID()
+        restoringPosition = false
+        restorationSeconds = nil
+        player?.currentItem?.cancelPendingSeeks()
         observations.removeAll()
-        if let timeObserver, let player { player.removeTimeObserver(timeObserver) }
+        if let timeObserver, let player {
+            player.removeTimeObserver(timeObserver)
+        }
         timeObserver = nil
         player?.pause()
         releaseAudio()
@@ -179,6 +228,7 @@ final class FileBrowserVideoPlayback {
         annotationCapture = nil
         isBuffering = false
         isMuted = startsMuted
+        error = nil
     }
 }
 

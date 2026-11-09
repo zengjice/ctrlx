@@ -413,6 +413,9 @@ struct FileBrowserVideoTests {
             try await waitUntil { player.timeControlStatus == .paused }
             playback.stop()
             #expect(releases == 0, "A failed activation must not release audio owned by another feature")
+            #expect(playback.error == nil, "Reclaiming a preview must not carry its error into another file")
+            try await playback.prepare(path: info.path, source: videoSource(data: data, info: info))
+            #expect(playback.error == nil)
         }
     }
 

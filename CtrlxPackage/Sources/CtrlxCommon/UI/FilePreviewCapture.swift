@@ -24,6 +24,10 @@ final class FilePreviewCapture {
 
     func unbind(owner: UUID) {
         guard self.owner == owner else { return }
+        reset()
+    }
+
+    func reset() {
         self.owner = nil
         provider = nil
     }

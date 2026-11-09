@@ -16,6 +16,7 @@ struct FileBrowserOfficePreview: View {
     @State private var shouldLoad = true
     @State private var url: URL?
     @State private var error: String?
+    @Environment(\.fileBrowserPreviewIsActive) private var isActive
 
     var body: some View {
         VStack(spacing: 8) {
@@ -38,8 +39,8 @@ struct FileBrowserOfficePreview: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task(id: shouldLoad) {
-            guard shouldLoad else { return }
+        .task(id: shouldLoad && isActive) {
+            guard shouldLoad, isActive, url == nil else { return }
             do {
                 let file = try await transfer.fileForOpening(path: path, source: source,
                     maximumRemoteBytes: FileBrowserOfficeDocument.maximumPreviewBytes)

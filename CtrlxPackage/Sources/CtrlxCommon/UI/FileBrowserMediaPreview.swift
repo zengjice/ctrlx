@@ -6,21 +6,21 @@ import SwiftUI
 /// Host file viewer. Releasing the tab must stop playback and file access.
 @MainActor
 struct FileBrowserMediaPreview: NSViewRepresentable {
-    let url: URL
+    let player: AVPlayer
     let capture: FilePreviewCapture
 
     func makeNSView(context: Context) -> AVPlayerView {
         let view = AVPlayerView()
-        view.player = AVPlayer(url: url)
+        view.player = player
         view.controlsStyle = .inline
         registerCapture(view.player, coordinator: context.coordinator)
         return view
     }
 
     func updateNSView(_ view: AVPlayerView, context: Context) {
-        if (view.player?.currentItem?.asset as? AVURLAsset)?.url != url {
+        if view.player !== player {
             view.player?.pause()
-            view.player = AVPlayer(url: url)
+            view.player = player
             registerCapture(view.player, coordinator: context.coordinator)
         }
     }
