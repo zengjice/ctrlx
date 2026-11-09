@@ -251,8 +251,11 @@ terminal swipe navigation and the bottom bar's vertical gestures retain their
 existing behavior. Terminal navigation does not implicitly enter a child group.
 
 The iOS Files, Browser and Simulator bottom bar shows a short, centered grabber
-for swiping up to Tabs. Source-linked tabs also show a longer bar below the
-buttons for horizontal group navigation. The source shortcut uses its return-arrow
+for swiping up to Tabs (36 × 5 points, using the sheet-grabber proportions).
+All three resource types show a `«—»` hint below the buttons, including manually
+created independent tabs. Horizontal swipes use the existing mixed top-level
+order for independent tabs and the source group for linked tabs; the same
+previous/next actions are available to VoiceOver. The source shortcut uses its return-arrow
 icon and source name, without a second leading arrow. These markers stay inside
 the bar's existing gesture area and never intercept resource-content gestures.
 
@@ -332,9 +335,22 @@ visible members in the saved order; missing IDs and other groups keep their slot
   transfer to another workbench or passive removal from another client never
   steals focus or requests Fit. Remaining right-side content, including local
   Git, keeps a valid selection.
-- Refresh is explicit. There is no background directory polling; views release
-  their preview data when hidden. Reopening validates current Host contents;
-  local previews can reuse the Host's bounded, revision-checked memory cache.
+- Refresh is explicit. There is no background directory polling. Each live Files
+  tab owns its current native preview independently of the workbench view.
+  Switching tabs detaches the preview and pauses video/preview transfers; returning
+  validates Host metadata and reuses the preview container/data and video player
+  when its revision is unchanged. SwiftUI may recreate internal controls; reading
+  positions are reapplied when those controls mount.
+  Across the app, at most two hidden previews are retained in least-recently-used
+  order; visible previews are not evicted. NSCache pressure eviction can release
+  hidden previews sooner. A reclaimed preview retains only one current-file
+  checkpoint (text/Markdown scroll offset, PDF page/point, video time and mute).
+  Those checkpoints are in memory, not added to layout/recovery history. Other
+  system-preview state, such as Quick Look's internal navigation, is not restored.
+  Closing a tab releases its preview/player; selecting another file, refresh or a
+  changed file revision resets the checkpoint. Source/connection changes discard
+  old native callbacks and players before reuse. Local previews may also reuse
+  the Host's bounded, revision-checked file-data cache.
 
 `HostFileTabServiceTests`, `IOSFileBrowserWorkspaceStoreTests` and
 `DetachedTerminalWindowsTests` cover concurrent reuse, extras, re-entry/reconnect,
@@ -447,6 +463,10 @@ Missing context, missing files and links outside the workspace fail clearly:
 there is no shell-cwd fallback or alternate-directory search. Remote clients gate
 the operation on `supportsRepositoryFileLinks`; an older Host is not sent an
 undecodable request. No Relay implementation/deployment change is needed.
+Resolution errors include the requested relative path and captured Agent workspace.
+Host filesystem errors include the actual absolute path as well as the system
+reason, so remote errors retain the path instead of only reporting “No such file
+or directory”. Cancellation remains cancellation and does not become an error alert.
 
 The marker intentionally carries no absolute path or repository identity.
 It is not an access grant or proof of provenance. After reusing a pane/session for
@@ -582,6 +602,14 @@ video/audio using AVKit and the validated local file URL, without loading media
 into memory or applying remote preview limits. Mac supports tree expansion;
 iOS opens folders as full-area lists. Markdown attachments do not automatically
 fetch network resources or read Viewer-local `file://` URLs.
+Markdown file links resolve relative to the current document's directory on its
+source Host. Clicking one previews the target in the same Files tab; folder links
+open that directory. Missing targets show an error without replacing the current
+preview, and navigating away cancels pending link navigation. Web links retain
+their usual URL handling. Same-document heading links do not reload the preview;
+scrolling to a heading is not yet supported.
+Markdown preview text can be selected and copied with Textual's native selection
+interaction (drag and Copy/Command-C on Mac, long press and Copy on iOS).
 On Mac Host and Viewer, vertical scrolling over a Markdown code block scrolls the
 document; horizontal scrolling remains within the code block. This routing applies
 only inside the visible file preview and leaves text selection unchanged.
@@ -677,9 +705,13 @@ AVFoundation's own decoder/buffer memory. Pause/background suspend reads.
 Leaving the active scene during metadata preparation cancels that attempt;
 late replies cannot create a player, even after returning to the foreground.
 A ready player is retained but never automatically resumed on foregrounding.
+The same pause policy applies when switching Files tabs. Returning reuses the
+ready player while cached. After hidden-preview eviction, reopening that same
+video restores its saved time in a paused player; press Play to continue.
 On iOS, each opened video starts muted, with a persistent **Enable Sound / Mute**
 speaker button below the player. The choice survives pause/foregrounding within
-that preview, but closing/reopening or selecting another video starts muted again.
+that preview, including tab switches and hidden-preview eviction. Closing the tab
+or selecting another video starts muted again.
 Enabling sound during playback uses the media-playback audio session, so the
 Silent Mode switch does not prevent sound. Media volume and the selected output
 route (including headphones) remain system-controlled. Preparing or starting a

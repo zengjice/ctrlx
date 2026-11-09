@@ -225,6 +225,9 @@ actor AgentWorkflowStore {
             now: now,
             authorizationExpiresAt: authorizationExpiresAt
         )
+        // Check Agent support after readiness so a missing capability is not
+        // misreported as an unsupported image. No run has been committed yet.
+        try validateStartAttachments(definition, instances: instances)
         updated.runs.append(execution.run)
         try commit(updated)
         return execution.run

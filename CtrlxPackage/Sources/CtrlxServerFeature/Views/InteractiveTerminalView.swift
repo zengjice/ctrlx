@@ -106,13 +106,17 @@
             switch scalar.value {
             case 0:
                 return " "
-            case 1 ... 26:
+            case 1...26:
                 return Character(UnicodeScalar(scalar.value + 0x60)!)
-            case 0x41 ... 0x5A:
+            case 0x41...0x5A:
                 return Character(String(scalar).lowercased())
-            case 0x61 ... 0x7A:
+            case 0x61...0x7A:
                 return Character(scalar)
-            case 0x20, 0x40, 0x5B ... 0x5F, 0x60, 0x3F:
+            case 0x20,
+                 0x40,
+                 0x5B...0x5F,
+                 0x60,
+                 0x3F:
                 return Character(scalar)
             case 0x36:
                 return "^"
@@ -188,6 +192,8 @@
         private var contentClickEligible = false
         private let voicePress = MacVoiceInputPress()
         private var voiceOwnsMouseSequence = false
+        private enum RightMouseOwner { case menu, terminal, other }
+        private var rightMouseOwner = RightMouseOwner.other
 
         func cancelVoicePress() {
             voicePress.cancel()
@@ -243,7 +249,8 @@
         override func scrollWheel(with event: NSEvent) {
             cancelContentClick()
             voicePress.cancel()
-            if event.phase.contains(.began) || event.phase.contains(.cancelled)
+            if
+                event.phase.contains(.began) || event.phase.contains(.cancelled)
                 || event.momentumPhase.contains(.ended) {
                 scrollAccumulator.reset()
             }
@@ -260,8 +267,9 @@
 
                 let point = tv.convert(event.locationInWindow, from: nil)
                 let terminal = tv.getTerminal()
-                guard interactive.cellSize.width > 0, interactive.cellSize.height > 0,
-                      terminal.cols > 0, terminal.rows > 0 else { return }
+                guard
+                    interactive.cellSize.width > 0, interactive.cellSize.height > 0,
+                    terminal.cols > 0, terminal.rows > 0 else { return }
                 let col = min(max(0, Int(point.x / interactive.cellSize.width)), terminal.cols - 1)
                 let row = min(max(0, Int((tv.frame.height - point.y) / interactive.cellSize.height)), terminal.rows - 1)
 
@@ -425,8 +433,9 @@
 
             if shouldActivateLink, let interactive = interactiveView {
                 let point = interactive.convert(event.locationInWindow, from: nil)
-                if event.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty,
-                   let link = interactive.fileLink(at: point) {
+                if
+                    event.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty,
+                    let link = interactive.fileLink(at: point) {
                     scheduleLinkActivation(in: interactive) { $0.onOpenPath?(link.path) }
                     return
                 }
@@ -520,25 +529,64 @@
 
         override func rightMouseDown(with event: NSEvent) {
             cancelContentClick()
+            cancelPendingLinkActivation()
+            if let interactive = interactiveView, let items = interactive.contentMenuItems(for: event) {
+                rightMouseOwner = .menu
+                presentStableContextMenu(items: items, with: event, for: self)
+                return
+            }
             if interactiveView?.shouldReportMouseEvent(event) == true {
-                terminalView?.rightMouseDown(with: event)
+                rightMouseOwner = .terminal
+                forwardRightMouseEvent(event)
             } else {
+                rightMouseOwner = .other
                 super.rightMouseDown(with: event)
             }
         }
 
         override func rightMouseUp(with event: NSEvent) {
-            if interactiveView?.shouldReportMouseEvent(event) == true {
-                terminalView?.rightMouseUp(with: event)
-            } else {
-                super.rightMouseUp(with: event)
+            defer { rightMouseOwner = .other }
+            switch rightMouseOwner {
+            case .menu: break
+            case .terminal: forwardRightMouseEvent(event)
+            case .other: super.rightMouseUp(with: event)
             }
         }
 
         override func rightMouseDragged(with event: NSEvent) {
-            if interactiveView?.shouldReportMouseEvent(event) == true {
-                terminalView?.rightMouseDragged(with: event)
+            if rightMouseOwner == .terminal {
+                forwardRightMouseEvent(event)
             }
+        }
+
+        private func forwardRightMouseEvent(_ event: NSEvent) {
+            // SwiftTerm's Mac view only overrides left mouse handlers. Encode
+            // right-button input through its terminal instead of NSResponder.
+            guard let interactive = interactiveView, let view = terminalView else { return }
+            let terminal = view.getTerminal()
+            guard terminal.mouseMode != .off, interactive.cellSize.width > 0, interactive.cellSize.height > 0 else { return }
+            let release = event.type == .rightMouseUp
+            let motion = event.type == .rightMouseDragged
+            if release, terminal.mouseMode == .x10 {
+                return
+            }
+            if motion, terminal.mouseMode != .buttonEventTracking, terminal.mouseMode != .anyEvent {
+                return
+            }
+            let point = view.convert(event.locationInWindow, from: nil)
+            let x = min(max(0, Int(point.x / interactive.cellSize.width)), terminal.cols - 1)
+            let y = min(max(0, Int((view.bounds.height - point.y) / interactive.cellSize.height)), terminal.rows - 1)
+            let flags = event.modifierFlags
+            let button = terminal.encodeButton(button: 2, release: release, shift: flags.contains(.shift), meta: flags.contains(.option), control: flags.contains(.control))
+            interactive.forwardedMouseButton = terminal.encodeButton(button: 2, release: false, shift: flags.contains(.shift), meta: flags.contains(.option), control: flags.contains(.control))
+            defer { interactive.forwardedMouseButton = nil }
+            terminal.sendEvent(
+                buttonFlags: button | (motion ? 32 : 0),
+                x: x,
+                y: y,
+                pixelX: Int(max(0, point.x)),
+                pixelY: Int(max(0, view.bounds.height - point.y))
+            )
         }
 
         override func otherMouseDown(with event: NSEvent) {
@@ -596,6 +644,7 @@
         /// Callback invoked for raw escape sequences (e.g., mouse events) that must be
         /// sent to tmux as-is, bypassing TmuxKey conversion.
         var onRawInput: (@MainActor (Data) -> Void)?
+        fileprivate var forwardedMouseButton: Int?
 
         /// Pane metadata, not text/title matching. Used for wheel sensitivity,
         /// Codex color adaptation and application-owned selection copying.
@@ -693,6 +742,13 @@
         private var pendingFocusRestoration = false
         /// A completed plain content click, separate from programmatic focus and selections.
         var onContentClick: (@MainActor () -> Void)?
+        var onContextMenu: (@MainActor () -> [ContextMenuItem])?
+
+        func contentMenuItems(for event: NSEvent) -> [ContextMenuItem]? {
+            guard event.type == .rightMouseDown, !event.modifierFlags.contains(.option), !isEditorActive else { return nil }
+            return onContextMenu?()
+        }
+
         weak var voiceInputRouter: TerminalQuickActionRouter?
         weak var voiceInputEndpoint: TerminalQuickActionEndpoint?
 
@@ -875,7 +931,9 @@
 
         /// Returns cached cell size, recalculating only when the font changes.
         var cellSize: CGSize {
-            if let cached = cachedCellSize { return cached }
+            if let cached = cachedCellSize {
+                return cached
+            }
             let size = FontMetrics.calculateCellSize(font: terminalView.font as CTFont)
             cachedCellSize = size
             return size
@@ -951,11 +1009,12 @@
             cancelQuestionCheck()
             scheduleQuestionCheck(delay: .seconds(1))
 
-            if let controlKey = TerminalControlKeyMapper.key(
-                charactersIgnoringModifiers: event.charactersIgnoringModifiers,
-                keyCode: event.keyCode,
-                modifierFlags: event.modifierFlags
-            ) {
+            if
+                let controlKey = TerminalControlKeyMapper.key(
+                    charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+                    keyCode: event.keyCode,
+                    modifierFlags: event.modifierFlags
+                ) {
                 sendUserInput([controlKey])
                 return true
             }
@@ -1296,14 +1355,30 @@
             var params = ["0"] // reset first
             let style = attr.style
 
-            if style.contains(.bold) { params.append("1") }
-            if style.contains(.dim) { params.append("2") }
-            if style.contains(.italic) { params.append("3") }
-            if style.contains(.underline) { params.append("4") }
-            if style.contains(.blink) { params.append("5") }
-            if style.contains(.inverse) { params.append("7") }
-            if style.contains(.invisible) { params.append("8") }
-            if style.contains(.crossedOut) { params.append("9") }
+            if style.contains(.bold) {
+                params.append("1")
+            }
+            if style.contains(.dim) {
+                params.append("2")
+            }
+            if style.contains(.italic) {
+                params.append("3")
+            }
+            if style.contains(.underline) {
+                params.append("4")
+            }
+            if style.contains(.blink) {
+                params.append("5")
+            }
+            if style.contains(.inverse) {
+                params.append("7")
+            }
+            if style.contains(.invisible) {
+                params.append("8")
+            }
+            if style.contains(.crossedOut) {
+                params.append("9")
+            }
 
             // Foreground color
             params.append(contentsOf: sgrColorParams(attr.fg, isFg: true))
@@ -1780,14 +1855,15 @@
             guard let pos = gridPosition(for: point) else { return nil }
             let terminal = terminalView.getTerminal()
             let closures = urlClosures(for: terminal)
-            guard let url = TerminalURLDetector.urlAt(
-                col: pos.col,
-                row: pos.row,
-                cols: terminal.cols,
-                lineText: closures.lineText,
-                cellPayload: closures.cellPayload,
-                allowedSchemes: allowedSchemes
-            ) else { return nil }
+            guard
+                let url = TerminalURLDetector.urlAt(
+                    col: pos.col,
+                    row: pos.row,
+                    cols: terminal.cols,
+                    lineText: closures.lineText,
+                    cellPayload: closures.cellPayload,
+                    allowedSchemes: allowedSchemes
+                ) else { return nil }
             return URL(string: url)
         }
 
@@ -1870,14 +1946,19 @@
                 for span in links.flatMap(\.spans) where (start..<(start + terminal.rows)).contains(span.row) {
                     let underline = CALayer()
                     underline.backgroundColor = NSColor.linkColor.withAlphaComponent(0.6).cgColor
-                    underline.frame = CGRect(x: CGFloat(span.columns.lowerBound) * cellSize.width - horizontalOffset,
-                                             y: terminalView.frame.height - CGFloat(span.row - start + 1) * cellSize.height,
-                                             width: CGFloat(span.columns.count) * cellSize.width, height: 1)
+                    underline.frame = CGRect(
+                        x: CGFloat(span.columns.lowerBound) * cellSize.width - horizontalOffset,
+                        y: terminalView.frame.height - CGFloat(span.row - start + 1) * cellSize.height,
+                        width: CGFloat(span.columns.count) * cellSize.width,
+                        height: 1
+                    )
                     terminalView.layer?.addSublayer(underline)
                     urlUnderlineLayers.append(underline)
                 }
             }
-            if isMouseModeActive { return }
+            if isMouseModeActive {
+                return
+            }
             urlRowCache.retainViewportRows(in: 0..<terminal.rows)
 
             let closures = urlClosures(for: terminal)
@@ -1909,7 +1990,6 @@
                     urlUnderlineLayers.append(underline)
                 }
             }
-
         }
 
         /// Terminal output changes link decorations, not view geometry. Scheduling
@@ -2316,17 +2396,32 @@
             // Defense-in-depth: DA queries are stripped from the feed in PipePaneReader,
             // but catch any remaining auto-responses (cursor position reports, terminal
             // parameter reports) that SwiftTerm may still generate.
-            if TerminalResponseFilter.isTerminalResponse(data) { return }
+            if TerminalResponseFilter.isTerminalResponse(data) {
+                return
+            }
 
             // Mouse escape sequences (SGR, X10) can't be parsed by TmuxKey.from(bytes:)
             // because the CSI parser doesn't handle private-use parameter prefixes like '<'.
             // Send them as raw bytes to tmux via send-keys -H.
-            // Drop motion events (bit 5 set) — SwiftTerm's own tracking areas generate
+            // Drop unsolicited motion events (bit 5 set) — SwiftTerm's tracking areas generate
             // these even though the overlay doesn't forward mouseMoved, and some apps
             // misinterpret them as click events.
             if TerminalResponseFilter.isMouseEscapeSequence(data) {
-                if TerminalResponseFilter.isMouseMotionEvent(data) { return }
-                onRawInput?(Data(data))
+                if forwardedMouseButton == nil, TerminalResponseFilter.isMouseMotionEvent(data) {
+                    return
+                }
+                // SwiftTerm's legacy release encoder discards the button number.
+                // Restore it only for an explicitly forwarded SGR release; retain
+                // its coordinates (including SGR pixels) and other wire formats.
+                if
+                    let button = forwardedMouseButton, data.starts(with: [0x1B, 0x5B, 0x3C]), data.last == 0x6D,
+                    let separator = data.firstIndex(of: 0x3B) {
+                    var packet = Data("\u{1b}[<\(button)".utf8)
+                    packet.append(contentsOf: data[separator...])
+                    onRawInput?(packet)
+                } else {
+                    onRawInput?(Data(data))
+                }
                 return
             }
 
@@ -2480,9 +2575,15 @@
         func font(for style: CharacterStyle) -> NSFont {
             let isBold = style.contains(.bold)
             let isItalic = style.contains(.italic)
-            if isBold && isItalic { return boldItalic }
-            if isBold { return bold }
-            if isItalic { return italic }
+            if isBold && isItalic {
+                return boldItalic
+            }
+            if isBold {
+                return bold
+            }
+            if isItalic {
+                return italic
+            }
             return normal
         }
     }

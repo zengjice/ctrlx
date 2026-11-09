@@ -19,12 +19,105 @@
     NSMutableDictionary* params = nil;
     uint64_t generation = 0;
   };
+  struct RemoteSelect {
+    std::string id, object, lease;
+    uint64_t generation;
+    bool pendingUp = true;
+  };
+  std::map<std::string, RemoteSelect> remoteSelectMenus_;
   std::map<std::string, std::string> humanControl_;
   std::map<std::string, NSSize> remoteViewports_;
   std::map<std::string, RemotePointer> remotePressedPointers_;
   std::map<std::string, NSDictionary*> remoteClipboardPoints_;
   std::map<std::pair<int, int>, RemotePending> remotePending_;
   std::map<std::tuple<std::string, int, NSUInteger>, std::shared_ptr<RemoteFrame>> remoteFrames_;
+
+  void ReleaseSelectGroup(const std::string& id, const std::string& group) {
+    auto tab = tabs_.find(id);
+    if (tab == tabs_.end()) return;
+    auto params = CefParseJSON(JSON(@{@"objectGroup": String(group)}), JSON_PARSER_RFC);
+    tab->second.browser->GetHost()->ExecuteDevToolsMethod(++nextMessage_, "Runtime.releaseObjectGroup", params->GetDictionary());
+  }
+  void ReleaseRemoteSelect(const std::string& id) {
+    auto menu = remoteSelectMenus_.find(id);
+    if (menu == remoteSelectMenus_.end()) return;
+    ReleaseSelectGroup(id, menu->second.id);
+    remoteSelectMenus_.erase(menu);
+  }
+  bool CurrentRemoteSelect(const std::string& id, const std::string& menu) {
+    auto found = remoteSelectMenus_.find(id);
+    auto tab = tabs_.find(id);
+    return found != remoteSelectMenus_.end() && found->second.id == menu && tab != tabs_.end() &&
+      tab->second.generation == found->second.generation && humanControl_.contains(id) &&
+      humanControl_.at(id) == found->second.lease;
+  }
+  void OpenRemoteSelect(const std::string& id, NSDictionary* params, RemoteReply reply) {
+    ReleaseRemoteSelect(id);
+    std::string menu = NSUUID.UUID.UUIDString.UTF8String;
+    auto generation = tabs_.at(id).generation;
+    remoteSelectMenus_[id] = {menu, "", humanControl_.at(id), generation};
+    NSString* expression = String(BrowserSelectProbe(JSON(@{@"x": params[@"x"], @"y": params[@"y"]})));
+    RemoteCall(id, "Runtime.evaluate", @{@"expression": expression, @"objectGroup": String(menu)},
+      [this, id, menu, generation, params, reply](NSDictionary* value, NSString* error) {
+        if (!CurrentRemoteSelect(id, menu)) {
+          ReleaseSelectGroup(id, menu);
+          reply(nil, @"The page or control changed."); return;
+        }
+        NSString* object = value[@"result"][@"objectId"];
+        if (error || value[@"exceptionDetails"]) {
+          ReleaseRemoteSelect(id);
+          reply(nil, error ?: @"The select menu could not be opened."); return;
+        }
+        if (![object isKindOfClass:NSString.class]) {
+          ReleaseRemoteSelect(id);
+          remotePressedPointers_[id] = RemotePointer{[params mutableCopy], generation};
+          RemoteCall(id, "Input.dispatchMouseEvent", params, reply);
+          return;
+        }
+        remoteSelectMenus_.at(id).object = object.UTF8String;
+        RemoteCall(id, "Runtime.callFunctionOn", @{@"objectId": object,
+            @"functionDeclaration": @(BrowserSelectDescribe()), @"returnByValue": @YES},
+          [this, id, menu, generation, reply](NSDictionary* result, NSString* error) {
+            if (!CurrentRemoteSelect(id, menu)) {
+              ReleaseSelectGroup(id, menu);
+              reply(nil, @"The page or control changed."); return;
+            }
+            NSDictionary* data = result[@"result"][@"value"];
+            if (error || result[@"exceptionDetails"] || ![data isKindOfClass:NSDictionary.class]) {
+              ReleaseRemoteSelect(id);
+              reply(nil, error ?: @"The select menu could not be read."); return;
+            }
+            NSMutableDictionary* descriptor = [data mutableCopy];
+            descriptor[@"id"] = String(menu);
+            descriptor[@"generation"] = @(generation);
+            reply(@{@"selectMenu": descriptor}, nil);
+          });
+      });
+  }
+  void ChooseRemoteSelect(const std::string& id, NSDictionary* request, RemoteReply reply) {
+    auto found = remoteSelectMenus_.find(id);
+    NSString* menu = request[@"menuID"];
+    if (![menu isKindOfClass:NSString.class] || !CurrentRemoteSelect(id, menu.UTF8String) ||
+        found->second.object.empty()) {
+      reply(nil, @"The select menu expired. Click it again."); return;
+    }
+    const auto selected = found->second;
+    if (!request[@"index"]) { ReleaseRemoteSelect(id); reply(@{}, nil); return; }
+    NSNumber* index = request[@"index"];
+    if (![index isKindOfClass:NSNumber.class] || index.doubleValue != index.intValue ||
+        index.intValue < 0 || index.intValue >= 512) {
+      reply(nil, @"Invalid select option."); return;
+    }
+    // Consume before dispatch: concurrent/replayed replies cannot reuse a menu.
+    remoteSelectMenus_.erase(found);
+    RemoteCall(id, "Runtime.callFunctionOn", @{@"objectId": String(selected.object),
+        @"functionDeclaration": @(BrowserSelectChoose()), @"arguments": @[@{@"value": index}], @"returnByValue": @YES},
+      [this, id, selected, reply](NSDictionary* result, NSString* error) {
+        ReleaseSelectGroup(id, selected.id);
+        reply(error || result[@"exceptionDetails"] ? nil : @{},
+              error ?: (result[@"exceptionDetails"] ? @"The select changed or this option is unavailable. Click it again." : nil));
+      });
+  }
 
   void RemoteFrameFinish(std::string id, std::shared_ptr<RemoteFrame> capture,
                          NSDictionary* value, NSString* error) {
@@ -86,6 +179,7 @@
     for (auto& [key, pending] : remotePending_) if (key.first == browser) keys.push_back(key);
     for (auto key : keys) RemoteFinish(key, nil, @"Page closed or renderer detached.");
     for (auto& [id, tab] : tabs_) if (tab.browser->GetIdentifier() == browser) {
+      ReleaseRemoteSelect(id);
       std::vector<std::shared_ptr<RemoteFrame>> frames;
       for (auto& [key, frame] : remoteFrames_) if (std::get<0>(key) == id) frames.push_back(frame);
       for (auto& frame : frames) RemoteFrameFinish(id, frame, nil, @"Page closed or renderer detached.");
@@ -122,6 +216,7 @@
     auto found = tabs_.find(id);
     if (found == tabs_.end()) return reject(@"unknown-page");
     if (!token.length) {
+      ReleaseRemoteSelect(id);
       AgentBrowserCancelHumanInput(found->second.browser);
       humanControl_.erase(id);
       RemoteReleasePointer(id);
@@ -169,6 +264,7 @@
     NSView* nativeView = (__bridge NSView*)browser->GetHost()->GetWindowHandle();
     auto prior = remoteViewports_.find(id);
     if (prior != remoteViewports_.end() && !NSEqualSizes(prior->second, nativeView.bounds.size)) ++found->second.generation;
+    if (remoteSelectMenus_.contains(id) && !CurrentRemoteSelect(id, remoteSelectMenus_.at(id).id)) ReleaseRemoteSelect(id);
     remoteViewports_[id] = nativeView.bounds.size;
     if ([action isEqual:@"frame"]) {
       NSObject* requested = request[@"maximumDimension"];
@@ -247,6 +343,8 @@
       if ([generation isKindOfClass:NSNumber.class]) RemoteReleaseStalePointer(id, generation.unsignedLongLongValue);
       reply(nil, @"Page changed. Read a new frame before interacting."); return;
     }
+    if ([action isEqual:@"select"]) { ChooseRemoteSelect(id, request, reply); return; }
+    if (![action isEqual:@"mouse"]) ReleaseRemoteSelect(id);
     if ([action isEqual:@"navigate"]) {
       if (!ValidURL(request[@"url"]) && ![request[@"url"] isEqual:@"about:blank"]) { reply(nil, @"Invalid HTTP(S) URL."); return; }
       AgentBrowserCancelHumanInput(browser);
@@ -327,9 +425,20 @@
       NSString* button = request[@"button"] ?: @"none";
       if (![@[@"none", @"left", @"right", @"middle"] containsObject:button]) { reply(nil, @"Invalid pointer button."); return; }
       params[@"type"] = type; params[@"button"] = button;
+      auto menu = remoteSelectMenus_.find(id);
+      if ([type isEqual:@"mouseReleased"] && [button isEqual:@"left"] &&
+          menu != remoteSelectMenus_.end() && menu->second.pendingUp) {
+        menu->second.pendingUp = false;
+        reply(@{}, nil); return;
+      }
+      if ([type isEqual:@"mousePressed"]) ReleaseRemoteSelect(id);
       if ([type isEqual:@"mousePressed"]) remoteClipboardPoints_[id] = @{@"x":params[@"x"], @"y":params[@"y"]};
       if ([type isEqual:@"mousePressed"] && [button isEqual:@"left"])
         AgentBrowserHumanInput(browser, lease.UTF8String);
+      if ([type isEqual:@"mousePressed"] && [button isEqual:@"left"] &&
+          [request[@"selectMenus"] boolValue] && [params[@"modifiers"] intValue] == 0) {
+        OpenRemoteSelect(id, params, reply); return;
+      }
       if ([type isEqual:@"mousePressed"])
         remotePressedPointers_[id] = RemotePointer{[params mutableCopy], found->second.generation};
       else if ([type isEqual:@"mouseMoved"] && remotePressedPointers_.contains(id))

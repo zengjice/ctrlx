@@ -1,6 +1,7 @@
 import AVFoundation
 import CtrlxNetworking
 import Foundation
+import SwiftUI
 import Testing
 @testable import CtrlxCommon
 
@@ -19,7 +20,9 @@ struct FileBrowserVideoLifecycleTests {
         )
         var reads = 0
         let source = FileBrowserSource(id: "test-host", paneID: nil) { operation in
-            if case .info = operation { return .info(info) }
+            if case .info = operation {
+                return .info(info)
+            }
             guard case let .download(path, offset, revision) = operation else {
                 throw FileBrowserError.message("Unexpected operation")
             }
@@ -66,6 +69,67 @@ struct FileBrowserVideoLifecycleTests {
         let stoppedReads = reads
         try await Task.sleep(for: .milliseconds(100))
         #expect(reads == stoppedReads)
+    }
+
+    @Test("A reclaimed video restores paused and saves later progress across another eviction", arguments: [0.0, 60.0])
+    func restoredVideoStaysPaused(seconds: Double) async throws {
+        let data = try await longVideo()
+        let info = FileBrowserEntry(path: "/Host/long.mp4", name: "long.mp4", kind: .unsupported, size: data.count, revision: "v1")
+        var reads = 0
+        let source = FileBrowserSource(id: "host", paneID: nil) { operation in
+            if case .info = operation {
+                return .info(info)
+            }
+            guard case let .download(path, offset, revision) = operation else { throw FileBrowserError.message("Unexpected request") }
+            reads += 1
+            return .chunk(.init(path: path, revision: revision, offset: offset, data: data.subdata(in: offset..<min(offset + FileBrowserLimits.chunkBytes, data.count))))
+        }
+        let session = FileBrowserPreviewSession()
+        defer { session.close() }
+        var environment = EnvironmentValues()
+        environment.scenePhase = .active
+        let owner = UUID()
+        session.show(owner: owner, environment: environment)
+        let position = session.position
+        position.validate(revision: "v1")
+        position.videoSeconds = seconds
+        position.videoWasOpened = true
+        position.videoMuted = true
+        let playback = session.playback
+        try await playback.prepare(path: info.path, source: source, position: position)
+        if let pending = playback.restorationSeconds, pending > 0 {
+            try await playback.restore(seconds: pending)
+        }
+        #expect(playback.restorationSeconds == nil)
+        let player = try #require(playback.player)
+        #expect(player.rate == 0)
+        #expect(abs(player.currentTime().seconds - seconds) < 1)
+        try await Task.sleep(for: .milliseconds(150))
+        let pausedReads = reads
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(reads == pausedReads)
+        playback.play()
+        try await waitUntil { player.timeControlStatus == .playing && player.currentTime().seconds >= seconds + 1 }
+        session.hide(owner: owner)
+        #expect(player.rate == 0)
+        #expect(playback.player === player)
+        let saved = position.videoSeconds
+        #expect(saved >= seconds + 1)
+        #expect(abs(saved - player.currentTime().seconds) < 0.1)
+
+        session.evict()
+        #expect(playback.player == nil)
+        #expect(position.videoSeconds == saved)
+        session.show(owner: UUID(), environment: environment)
+        try await playback.prepare(path: info.path, source: source, position: position)
+        if let pending = playback.restorationSeconds, pending > 0 {
+            try await playback.restore(seconds: pending)
+        }
+        let restored = try #require(playback.player)
+        #expect(restored !== player)
+        #expect(restored.rate == 0)
+        #expect(abs(restored.currentTime().seconds - saved) < 1)
+        #expect(restored.currentTime().seconds >= seconds + 0.5)
     }
 
     private func longVideo() async throws -> Data {

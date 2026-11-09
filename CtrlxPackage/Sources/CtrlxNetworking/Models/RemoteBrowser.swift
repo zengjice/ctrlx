@@ -99,6 +99,8 @@ public struct BrowseBrowser: CommandSpec, Equatable {
     public let generation: UInt64?
     /// Optional, so older Hosts ignore it and older Viewers keep the legacy size.
     public let frameMaxDimension: Int?
+    /// Opt in to Viewer-rendered select menus. Older peers omit/ignore this field.
+    public let selectMenus: Bool?
     public let operation: RemoteBrowserOperation
     public let sourcePaneID: String?
 
@@ -109,6 +111,7 @@ public struct BrowseBrowser: CommandSpec, Equatable {
         controlID: UUID? = nil,
         generation: UInt64? = nil,
         frameMaxDimension: Int? = nil,
+        selectMenus: Bool? = nil,
         operation: RemoteBrowserOperation,
         sourcePaneID: String? = nil
     ) {
@@ -118,6 +121,7 @@ public struct BrowseBrowser: CommandSpec, Equatable {
         self.controlID = controlID
         self.generation = generation
         self.frameMaxDimension = frameMaxDimension
+        self.selectMenus = selectMenus
         self.operation = operation
         self.sourcePaneID = sourcePaneID
     }
@@ -146,6 +150,7 @@ public enum RemoteBrowserOperation: Codable, Sendable, Equatable {
     case text(String)
     case key(RemoteBrowserKey)
     case pointer(RemoteBrowserPointer)
+    case selectOption(menuID: UUID, index: Int?)
     case extensions(RemoteBrowserExtensionOperation)
     case bookmarks(BrowserBookmarkOperation)
     case networkPermission(id: UUID, allow: Bool)
@@ -310,13 +315,15 @@ public struct RemoteBrowserResponse: Codable, Sendable, Equatable {
     public let extensions: RemoteBrowserExtensionResult?
     public let clipboard: WorkspaceClipboardContent?
     public let bookmarks: [BrowserBookmark]?
+    public let selectMenu: RemoteBrowserSelectMenu?
     public init(
         tab: RemoteBrowserTab? = nil,
         frame: RemoteBrowserFrame? = nil,
         controlID: UUID? = nil,
         extensions: RemoteBrowserExtensionResult? = nil,
         clipboard: WorkspaceClipboardContent? = nil,
-        bookmarks: [BrowserBookmark]? = nil
+        bookmarks: [BrowserBookmark]? = nil,
+        selectMenu: RemoteBrowserSelectMenu? = nil
     ) {
         self.tab = tab
         self.frame = frame
@@ -324,5 +331,44 @@ public struct RemoteBrowserResponse: Codable, Sendable, Equatable {
         self.extensions = extensions
         self.clipboard = clipboard
         self.bookmarks = bookmarks
+        self.selectMenu = selectMenu
+    }
+}
+
+/// A one-use capability for the exact select element/options on the Host.
+public struct RemoteBrowserSelectMenu: Codable, Sendable, Equatable, Identifiable {
+    public struct Option: Codable, Sendable, Equatable, Identifiable {
+        public let index: Int
+        public let text: String
+        public let selected: Bool
+        public let disabled: Bool
+        public var id: Int {
+            index
+        }
+
+        public init(index: Int, text: String, selected: Bool = false, disabled: Bool = false) {
+            self.index = index
+            self.text = text
+            self.selected = selected
+            self.disabled = disabled
+        }
+    }
+
+    public let id: UUID
+    public let generation: UInt64
+    public let title: String
+    public let options: [Option]
+
+    public init(id: UUID, generation: UInt64, title: String, options: [Option]) {
+        self.id = id
+        self.generation = generation
+        self.title = title
+        self.options = options
+    }
+
+    public var isValid: Bool {
+        title.utf16.count <= 200 && !options.isEmpty && options.count <= 512
+            && options.enumerated().allSatisfy { $0.offset == $0.element.index && $0.element.text.utf16.count <= 200 }
+            && options.filter(\.selected).count <= 1
     }
 }

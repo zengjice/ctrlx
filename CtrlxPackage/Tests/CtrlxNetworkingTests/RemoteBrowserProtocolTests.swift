@@ -24,6 +24,8 @@ struct RemoteBrowserProtocolTests {
             .text("中文\nsecond line"),
             .key(.init("Enter", keyCode: 13)),
             .pointer(.init(.down, x: 2, y: 5, button: .left)),
+            .selectOption(menuID: UUID(), index: 2),
+            .selectOption(menuID: UUID(), index: nil),
         ]
         for operation in operations {
             let request = BrowseBrowser(
@@ -37,6 +39,37 @@ struct RemoteBrowserProtocolTests {
             let copy = try JSONDecoder().decode(CommandType.self, from: JSONEncoder().encode(request.commandType))
             #expect(copy == request.commandType)
         }
+    }
+
+    @Test
+    func selectMenuCompatibilityAndBounds() throws {
+        let request = BrowseBrowser(sessionName: "s", surfaceID: UUID(), selectMenus: true, operation: .frame)
+        let data = try JSONEncoder().encode(request)
+        #expect(try JSONDecoder().decode(BrowseBrowser.self, from: data) == request)
+        struct LegacyRequest: Decodable {
+            let sessionName: String
+            let operation: RemoteBrowserOperation
+        }
+        let olderHost = try JSONDecoder().decode(LegacyRequest.self, from: data)
+        #expect(olderHost.sessionName == "s" && olderHost.operation == .frame)
+        var legacy = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        legacy.removeValue(forKey: "selectMenus")
+        #expect(try JSONDecoder().decode(BrowseBrowser.self, from: JSONSerialization.data(withJSONObject: legacy)).selectMenus == nil)
+        #expect(try JSONDecoder().decode(RemoteBrowserResponse.self, from: Data("{}".utf8)).selectMenu == nil)
+        let menu = RemoteBrowserSelectMenu(id: UUID(), generation: 4, title: "选择", options: [
+            .init(index: 0, text: "A", selected: true), .init(index: 1, text: "B", disabled: true),
+        ])
+        #expect(menu.isValid)
+        let response = RemoteBrowserResponse(selectMenu: menu)
+        #expect(try JSONDecoder().decode(RemoteBrowserResponse.self, from: JSONEncoder().encode(response)) == response)
+        #expect(!RemoteBrowserSelectMenu(id: UUID(), generation: 4, title: "", options: []).isValid)
+        #expect(!RemoteBrowserSelectMenu(id: UUID(), generation: 4, title: "", options: [.init(index: 3, text: "A")]).isValid)
+        #expect(!RemoteBrowserSelectMenu(id: UUID(), generation: 4, title: "", options: [
+            .init(index: 0, text: String(repeating: "a\u{0301}", count: 200)),
+        ]).isValid)
+        #expect(!RemoteBrowserSelectMenu(id: UUID(), generation: 4, title: "", options: [
+            .init(index: 0, text: "A", selected: true), .init(index: 1, text: "B", selected: true),
+        ]).isValid)
     }
 
     @Test

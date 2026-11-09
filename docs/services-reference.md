@@ -1542,6 +1542,8 @@ other Agent toggles cannot save an unapplied path. Command drafts survive switch
 pages and Agents within the Settings window. Escape reverts a command/tmux draft;
 closing the Settings window discards all unapplied drafts. Provider deletion and Viewer unpairing require
 confirmation before any settings, credentials or pairing records are changed.
+Unchanged native text-field commits preserve validation and saved feedback;
+only actual edits clear it.
 
 Mac Settings uses a native sidebar and supports toolbar search by setting name or keyword. Choosing a result
 opens the relevant page and scrolls to its group, expanding matching Advanced
@@ -1663,6 +1665,17 @@ harness may capture live-message context but never displays it as an iOS alert.
 Update both iOS and Relay for this delivery policy: an older Relay still suppresses
 APNs while the Viewer is connected. No background-monitor compatibility mode or
 local-notification fallback is provided when APNs is unavailable.
+
+On iOS, notification taps carry `(hostId, paneId)` through the session route and
+select the owning tab and exact split pane before applying saved/default
+selection. The pane request is consumed once, outside the recoverable terminal
+view, so later tab changes and workspace recovery do not replay it. Explicit tab
+selection or starting a Terminal, Agent or Fork creation cancels a pending
+request, including when its target has disappeared. Creation keeps its existing
+reply/snapshot ordering; a late snapshot cannot override the user's choice. Each tap has
+a new destination identity, allowing the same notification to reselect its pane
+after manual navigation. New notifications cancel an older cold-start wait and
+replace the single destination rather than stacking session pages.
 
 On Mac, notification taps resolve `(hostId, paneId)` against current pane metadata
 and this Mac's window ownership. A detached terminal selects its tab and restores

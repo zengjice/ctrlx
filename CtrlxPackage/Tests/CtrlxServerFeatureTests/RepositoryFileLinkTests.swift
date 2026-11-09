@@ -7,6 +7,69 @@ import Testing
 @testable import CtrlxServerFeature
 
 struct RepositoryFileLinkTests {
+    @Test("A child Git project opens from a non-Git workspace, and failures identify the actual Host path")
+    @MainActor
+    func childProjectFileLink() async throws {
+        let files = FileManager.default
+        let workspace = files.temporaryDirectory.appendingPathComponent("workspace-child-project-\(UUID())")
+        let project = workspace.appendingPathComponent("callie")
+        let relative = "callie/docs/v0.1/AI_DESKTOP_FINDINGS.md"
+        let report = workspace.appendingPathComponent(relative)
+        try files.createDirectory(at: report.deletingLastPathComponent(), withIntermediateDirectories: true)
+        defer { try? files.removeItem(at: workspace) }
+        try Data("# Findings".utf8).write(to: report)
+
+        try await withDependencies {
+            $0[ProcessRunner.self] = .liveValue
+            $0.continuousClock = ContinuousClock()
+        } operation: {
+            _ = try await ProcessRunner.liveValue.runOrThrow(executable: "/usr/bin/git", arguments: ["-C", project.path, "init", "-q"])
+            let host = HostFileBrowser()
+            let context = RepositoryFileContext(pluginID: "codex", sessionID: "projects", projectDirectory: workspace.path)
+            let source = FileBrowserSource(id: "Host", paneID: "%1") { operation in
+                guard case let .repositoryInfo(path, received) = operation else {
+                    throw FileBrowserError.message("Unexpected operation")
+                }
+                #expect(received == context)
+                return try await .info(host.repositoryFile(path: path, projectDirectory: received.projectDirectory))
+            }
+            let expected = report.resolvingSymlinksInPath().path
+            let destination = try await TerminalFileDestination.resolve(path: relative, context: context, source: source)
+            #expect(destination.file == expected)
+            #expect(destination.directory == (expected as NSString).deletingLastPathComponent)
+
+            try files.removeItem(at: report)
+            do {
+                _ = try await host.repositoryFile(path: relative, projectDirectory: workspace.path)
+                Issue.record("A removed file must fail")
+            } catch {
+                let failure = error as NSError
+                #expect(failure.domain == NSPOSIXErrorDomain)
+                #expect(failure.code == Int(POSIXErrorCode.ENOENT.rawValue))
+                #expect(failure.userInfo[NSFilePathErrorKey] as? String == expected)
+                #expect(failure.localizedDescription.contains(expected))
+            }
+            do {
+                _ = try await TerminalFileDestination.resolve(path: relative, context: context, source: source)
+                Issue.record("A removed file must fail through the Viewer resolver")
+            } catch {
+                #expect(error.localizedDescription.contains("\"\(relative)\""))
+                #expect(error.localizedDescription.contains("\"\(context.projectDirectory)\""))
+                #expect(error.localizedDescription.contains(expected))
+            }
+        }
+    }
+
+    @Test("Cancelled file resolution stays cancelled")
+    @MainActor
+    func resolutionCancellation() async {
+        let context = RepositoryFileContext(pluginID: "codex", sessionID: "cancelled", projectDirectory: "/project")
+        let source = FileBrowserSource(id: "Host", paneID: "%1") { _ in throw CancellationError() }
+        await #expect(throws: CancellationError.self) {
+            try await TerminalFileDestination.resolve(path: "report.md", context: context, source: source)
+        }
+    }
+
     @Test("Repository files use the linked worktree root, including nested launch directories")
     func linkedWorktreeAndContainment() async throws {
         let files = FileManager.default

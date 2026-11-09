@@ -129,7 +129,7 @@
             .onPasteCommand(of: [.png, .jpeg, .tiff]) { _ in pasteImage() }
             #endif
             .onDisappear {
-                tab.releasePreview()
+                tab.suspendPreview()
                 // The iOS document picker can cover this view without closing its tab.
                 if !showsImporter {
                     cancelWrites()
@@ -141,6 +141,7 @@
                 }
             }
             .onChange(of: source.id) { _, _ in cancelWrites() }
+            .onChange(of: source.connectionID) { _, _ in cancelWrites() }
             .onChange(of: scenePhase) { _, phase in
                 #if os(iOS)
                     if phase == .background {
@@ -185,6 +186,7 @@
             let path: String?
             let refresh: Int
             let sourceID: String
+            let connectionID: UUID?
             let unavailable: String?
             let downloadUnavailable: String?
         }
@@ -194,6 +196,7 @@
                 path: tab.selectedFile,
                 refresh: tab.refresh,
                 sourceID: source.id,
+                connectionID: source.connectionID,
                 unavailable: source.unavailableReason,
                 downloadUnavailable: source.downloadUnavailableReason
             )
@@ -439,11 +442,23 @@
         let source: FileBrowserSource
         let onEditingChanged: (Bool) -> Void
         @Environment(\.browserAnnotationContext) private var annotationContext
+        @Environment(\.openURL) private var openURL
         @Dependency(ClipboardClient.self) private var clipboard
-        @State private var capture = FilePreviewCapture()
+        private var capture: FilePreviewCapture {
+            tab.previewSession.capture
+        }
+
         @State private var captureRequest: UUID?
         @State private var isAnnotating = false
         @State private var clipboardMessage: String?
+        @State private var documentLinkError: String?
+        private var documentLink: FileBrowserPreviewActions.Link? {
+            tab.previewSession.actions.link
+        }
+
+        private var documentKey: OpenKey {
+            .init(path: tab.selectedFile ?? "", sourceID: source.id, connectionID: source.connectionID, unavailable: source.unavailableReason, downloadUnavailable: source.downloadUnavailableReason)
+        }
 
         private var preferredTarget: AgentImageTarget? {
             annotationContext?.targets.first { $0.paneID == tab.sourcePaneID }
@@ -455,6 +470,7 @@
                     let key = OpenKey(
                         path: path,
                         sourceID: source.id,
+                        connectionID: source.connectionID,
                         unavailable: source.unavailableReason,
                         downloadUnavailable: source.downloadUnavailableReason
                     )
@@ -493,6 +509,12 @@
                     if let clipboardMessage {
                         Text(clipboardMessage).font(.caption).padding(.horizontal, 10)
                     }
+                    if let documentLinkError {
+                        Text(documentLinkError).font(.caption).textSelection(.enabled).padding(10)
+                    }
+                    if documentLink != nil {
+                        ProgressView("Opening link…").controlSize(.small).padding(10)
+                    }
                     Divider()
                     FileBrowserOpenActions(path: path, source: source)
                         .id(key)
@@ -518,6 +540,29 @@
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onChange(of: documentKey) {
+                tab.previewSession.actions.link = nil
+                documentLinkError = nil
+            }
+            .task(id: documentLink?.id) {
+                guard let request = documentLink else { return }
+                defer {
+                    if documentLink?.id == request.id {
+                        tab.previewSession.actions.link = nil
+                    }
+                }
+                do {
+                    if request.url.isFileURL {
+                        try await tab.openMarkdownLink(request.url, from: request.documentPath, source: source)
+                    } else {
+                        openURL(request.url)
+                    }
+                } catch {
+                    if !(error is CancellationError), !Task.isCancelled {
+                        documentLinkError = error.localizedDescription
+                    }
+                }
+            }
         }
 
         private func supportsAnnotation(_ path: String) -> Bool {
@@ -533,39 +578,42 @@
 
         @ViewBuilder
         private func fileContent(_ path: String) -> some View {
+            let session = tab.previewSession
             if tab.isPreviewLoading {
                 ProgressView().padding()
             }
             if let error = tab.previewError {
                 Text(error).padding().textSelection(.enabled)
             }
-            if FileBrowserOfficeDocument.supports(path: path) {
-                FileBrowserOfficePreview(path: path, source: source, capture: capture)
-            } else if source.localFileURL == nil, FileBrowserVideo.supports(path: path) {
-                FileBrowserVideoPreview(path: path, source: source, capture: capture)
-            } else {
-                #if os(macOS)
-                    if let url = tab.previewURL {
-                        FileBrowserMediaPreview(url: url, capture: capture).id(url)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if
+                session.isReady, session.hasContent || tab.previewData != nil || tab.previewURL != nil
+                || FileBrowserOfficeDocument.supports(path: path) || (source.localFileURL == nil && FileBrowserVideo.supports(path: path)) {
+                RetainedFileBrowserPreview(session: session) {
+                    if FileBrowserOfficeDocument.supports(path: path) {
+                        FileBrowserOfficePreview(path: path, source: source, capture: capture)
+                    } else if source.localFileURL == nil, FileBrowserVideo.supports(path: path) {
+                        FileBrowserVideoPreview(path: path, source: source, capture: capture, playback: session.playback, position: session.position)
                     } else if let data = tab.previewData, let info = tab.preview {
-                        FileBrowserPreview(data: data, kind: info.kind, capture: capture).id(info.path)
+                        FileBrowserPreview(data: data, kind: info.kind, path: info.path, capture: capture, position: session.position, onOpenFileLink: { [actions = session.actions] url in
+                            actions.link = .init(url: url, documentPath: path)
+                        }).id(info.path)
                     } else {
-                        Spacer()
+                        #if os(macOS)
+                            if let url = tab.previewURL {
+                                FileBrowserMediaPreview(player: session.player(url: url), capture: capture)
+                            }
+                        #endif
                     }
-                #else
-                    if let data = tab.previewData, let info = tab.preview {
-                        FileBrowserPreview(data: data, kind: info.kind, capture: capture).id(info.path)
-                    } else {
-                        Spacer()
-                    }
-                #endif
+                }
+                .id(session.generation)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
 
         private struct OpenKey: Hashable {
             let path: String
             let sourceID: String
+            let connectionID: UUID?
             let unavailable: String?
             let downloadUnavailable: String?
         }
@@ -639,10 +687,16 @@
     struct FileBrowserPreview: View {
         let data: Data
         let kind: FileBrowserKind
+        let path: String
         let capture: FilePreviewCapture
+        let position: FileBrowserPreviewPosition
+        let onOpenFileLink: (URL) -> Void
         @State private var image: CGImage?
         @State private var imageFailed = false
         @FocusState private var imageFocused: Bool
+        @State private var scrollPosition = ScrollPosition(edge: .top)
+        @State private var recordsScroll = false
+        @State private var restoredScroll = false
         #if os(iOS)
             @State private var readingScale: CGFloat = 1
             @GestureState private var magnification: CGFloat = 1
@@ -659,7 +713,12 @@
                     FilePreviewSnapshotView(capture: capture) {
                         ScrollView([.vertical, .horizontal]) {
                             if kind == .markdown {
-                                StructuredText(markdown: String(decoding: data, as: UTF8.self))
+                                StructuredText(markdown: String(decoding: data, as: UTF8.self), baseURL: URL(fileURLWithPath: path, isDirectory: false))
+                                    .textual.textSelection(.enabled)
+                                    .environment(\.openURL, OpenURLAction { url in
+                                        onOpenFileLink(url)
+                                        return .handled
+                                    })
                                 #if os(iOS)
                                     .textual.fontScale(displayedReadingScale)
                                 #endif
@@ -679,12 +738,38 @@
                                     .textSelection(.enabled).padding().frame(maxWidth: .infinity, alignment: .topLeading)
                             }
                         }
+                        .scrollPosition($scrollPosition)
+                        .onScrollGeometryChange(for: CGPoint.self) { geometry in
+                            CGPoint(x: geometry.contentOffset.x + geometry.contentInsets.leading, y: geometry.contentOffset.y + geometry.contentInsets.top)
+                        } action: { _, offset in
+                            if recordsScroll, position.acceptsUpdates {
+                                position.scroll = offset
+                            }
+                        }
+                        .onScrollPhaseChange { _, phase in
+                            if phase == .interacting {
+                                restoredScroll = true
+                                recordsScroll = true
+                            }
+                        }
+                        .task {
+                            guard !restoredScroll else { return }
+                            let saved = position.scroll
+                            if saved != .zero {
+                                // Textual resolves its text geometry after the first layout.
+                                do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+                                guard !restoredScroll else { return }
+                                scrollPosition.scrollTo(point: saved)
+                                do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
+                            }
+                            restoredScroll = true
+                            recordsScroll = true
+                        }
                         #if os(iOS)
                         .simultaneousGesture(MagnifyGesture()
                             .updating($magnification) { value, scale, _ in scale = value.magnification }
                             .onEnded { value in readingScale = min(3, max(1, readingScale * value.magnification)) })
                         .onGeometryChange(for: CGSize.self) { $0.size } action: { _ in readingScale = 1 }
-                        .onDisappear { readingScale = 1 }
                         #endif
                     }
                 case .image:
@@ -716,13 +801,13 @@
                     } else {
                         ProgressView()
                     }
-                case .pdf: FileBrowserPDF(data: data, capture: capture)
+                case .pdf: FileBrowserPDF(data: data, capture: capture, position: position)
                 default: Text("Preview unavailable")
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .task(id: data) {
-                guard kind == .image else { return }
+                guard kind == .image, image == nil else { return }
                 image = await Task.detached(priority: .utility) {
                     guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil as CGImage? }
                     return CGImageSourceCreateThumbnailAtIndex(source, 0, [
@@ -747,6 +832,7 @@
         private struct FileBrowserPDF: NSViewRepresentable {
             let data: Data
             let capture: FilePreviewCapture
+            let position: FileBrowserPreviewPosition
             func makeNSView(context: Context) -> PDFView {
                 let view = PDFView()
                 view.autoScales = true
@@ -758,6 +844,7 @@
                 if context.coordinator.data != data {
                     view.document = PDFDocument(data: data)
                     context.coordinator.data = data
+                    restorePDFPosition(view, position: position)
                 }
             }
 
@@ -773,6 +860,7 @@
         private struct FileBrowserPDF: UIViewRepresentable {
             let data: Data
             let capture: FilePreviewCapture
+            let position: FileBrowserPreviewPosition
             func makeUIView(context: Context) -> PDFView {
                 let view = PDFView()
                 view.autoScales = true
@@ -784,6 +872,7 @@
                 if context.coordinator.data != data {
                     view.document = PDFDocument(data: data)
                     context.coordinator.data = data
+                    restorePDFPosition(view, position: position)
                 }
             }
 
@@ -796,6 +885,24 @@
             }
         }
     #endif
+
+    @MainActor
+    private func restorePDFPosition(_ view: PDFView, position: FileBrowserPreviewPosition) {
+        if let page = view.document?.page(at: position.pdfPage) {
+            if let point = position.pdfPoint {
+                view.go(to: PDFDestination(page: page, at: point))
+            } else {
+                view.go(to: page)
+            }
+        }
+        position.capturePDF = { [weak view, weak position] in
+            guard
+                let position, let view, let document = view.document, let destination = view.currentDestination,
+                let page = destination.page else { return }
+            position.pdfPage = document.index(for: page)
+            position.pdfPoint = destination.point
+        }
+    }
 
     @MainActor
     private func registerPDFCapture(_ view: PDFView, capture: FilePreviewCapture, owner: UUID) {

@@ -6,6 +6,26 @@ import Testing
 
 @MainActor
 struct IOSPaneLinkedTabsTests {
+    @Test("Independent Files, Browser and Simulator follow the mixed top-level order")
+    func independentResourceOrder() throws {
+        let file = FileBrowserTab(path: "/project")
+        let child = FileBrowserTab(path: "/child", sourcePaneID: "%1")
+        let browser = RemoteBrowserTab(id: UUID(), sessionName: "work", title: "Web", url: "about:blank", isLoading: false, isAgentOwned: false)
+        let simulator = RemoteSimulatorTab(id: UUID(), sessionName: "work", title: "Phone", runtime: "iOS", isPrimary: true)
+        let windows = TmuxWindow.groupPanes([
+            PaneState(paneId: "%1", sessionName: "work", tmuxWindowId: "@1", paneIndex: 0, windowName: "dev"),
+        ])
+        let window = try #require(windows.first)
+        let order: [IOSTopLevelTabID] = [
+            .resource(.browser(browser.id)), IOSTopLevelTabID(window: window),
+            .resource(.simulator(simulator.id)), .resource(.file(file.id)),
+        ]
+        let layout = IOSPaneLinkedTabs(files: [file, child], browsers: [browser], simulators: [simulator], windows: windows, storedOrder: [])
+
+        #expect(layout.topLevel(stored: order) == order)
+        #expect(!layout.topLevel(stored: order).contains(.resource(.file(child.id))))
+    }
+
     @Test("Reordering visible children preserves missing IDs and other pane groups")
     func moveWithPartialCatalog() throws {
         let a = FileBrowserTab(path: "/A", sourcePaneID: "%1")

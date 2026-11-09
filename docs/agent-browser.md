@@ -627,6 +627,10 @@ the Viewer does not load a second copy of the URL or receive browser credentials
   viewport ratio and pinch scale convert source pixels before JPEG downscaling.
   Input coordinates remain independent of thumbnail pixels. Navigation/resize/
   close invalidates pending results, and shutdown waits for image workers.
+  Viewers silently discard the specific page-changed capture response and wait
+  for the next regular poll, preserving the last image and control lease. Stale
+  select menus close locally without sending cancellation input to the changed
+  page. Other capture errors remain visible until a valid frame arrives.
   The request size is an optional `BrowseBrowser.frameMaxDimension` field, not
   a new operation: old Hosts ignore it, and old Viewers still receive a frame
   capped at 1024 pixels. The adaptive budget remains below the existing encrypted
@@ -679,7 +683,25 @@ the Viewer does not load a second copy of the URL or receive browser credentials
   sending text, with explicit Keyboard and Paste buttons. One finger scrolls;
   two fingers drag; long press holds a pointer for selection. Copy/Paste transfer
   bounded text/images with the current page lease (see Viewer clipboard above).
-  System/CEF popup UI and file chooser, video streaming and remote DevTools are
+  Remote clicks on standard single-select dropdowns in the main document
+  (including open shadow roots) open a Viewer-rendered option list on Mac and iOS.
+  Plain label text also opens the menu; links and other interactive label
+  descendants keep their normal click behavior. The Host intercepts the click
+  before opening a native popup and retains the exact select/option nodes in a
+  temporary CDP object group. Accepting a menu discards page input queued while
+  its opening click was in flight, so it cannot invalidate the displayed menu.
+  The menu is one-use and bound to the
+  current control lease and page generation; changed/replaced controls or
+  options are rejected. Selection sets the native selected index and emits
+  programmatic `input`/`change` events, matching the existing CLI select
+  semantics; it does not claim trusted OS-popup events. Cancel preserves the
+  value, and page/viewport changes or control release dismiss the list.
+  Options are bounded to 512 entries and labels to 200 UTF-16 units. A Viewer
+  opts in with the optional `selectMenus` request field; old Viewers retain
+  their existing input path and old Hosts ignore the field. Only a returned
+  menu capability enables the new `selectOption` operation. Inline listboxes
+  and multiple-select controls retain their existing page input path.
+  Other system/CEF popup UI and file chooser, video streaming and remote DevTools are
   not included. Page audio has its own bounded stream below.
 
 On iOS, read-only page previews support local pinch zoom from fit to 4x and

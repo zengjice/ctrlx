@@ -14,6 +14,7 @@
             var blocked = false
             var controls: [String: String] = [:]
             var requests: [[String: Any]] = []
+            var onBrowserRequest: (([String: Any]) throws -> Data)?
             var closed: [String] = []
             var extensionGrant: (tab: String, token: String)?
             var extensionRequests: [[String: Any]] = []
@@ -88,6 +89,11 @@
                     return
                 }
                 requests.append(object)
+                if let onBrowserRequest {
+                    do { try completion(onBrowserRequest(object), nil) }
+                    catch { completion(nil, error.localizedDescription) }
+                    return
+                }
                 let frame = RemoteBrowserFrame(jpeg: Data([1, 2, 3]), width: 1_000, height: 700, generation: 4)
                 completion(object["action"] as? String == "frame" ? try? JSONEncoder().encode(frame) : Data("{}".utf8), nil)
             }

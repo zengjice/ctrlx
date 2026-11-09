@@ -101,20 +101,24 @@ struct WorkspaceGitState: Codable, Equatable, Sendable {
 final class GitStoreEntry {
     let path: String
     let store: GitWorkbenchStore
-    let retainsRecoveredDirectory: Bool
+    var retainsDirectory: Bool
     private(set) var pendingRecovery: WorkspaceGitState?
     private(set) var recoveryIssue: String?
     @ObservationIgnored private var loadTask: Task<Void, Never>?
 
-    init(path: String, provider: any GitWorkbenchProvider, configuration: WorkbenchConfiguration, recovery: WorkspaceGitState? = nil) {
+    init(path: String, provider: any GitWorkbenchProvider, configuration: WorkbenchConfiguration, recovery: WorkspaceGitState? = nil, retainsDirectory: Bool = false) {
         let pendingRecovery = recovery?.directory == path ? recovery : nil
         self.path = path
-        self.retainsRecoveredDirectory = pendingRecovery != nil
+        self.retainsDirectory = retainsDirectory || pendingRecovery != nil
         self.pendingRecovery = pendingRecovery
         self.store = GitWorkbenchStore(provider: WorkspaceGitProvider.recovering(provider, state: pendingRecovery), configuration: configuration)
         if let pendingRecovery {
             store.setCommitMessage(pendingRecovery.commitMessage)
         }
+    }
+
+    func directory(for requestedPath: String) -> String {
+        retainsDirectory ? path : requestedPath
     }
 
     var snapshot: WorkspaceGitState {

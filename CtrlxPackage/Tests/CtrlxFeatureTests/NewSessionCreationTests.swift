@@ -11,7 +11,9 @@ struct NewSessionCreationTests {
         let store = SessionStore()
         var creation = NewSessionCreation()
         let revision = creation.begin(hostID: "office", automaticFit: true)
-        if snapshotFirst { pushSnapshot(to: store) }
+        if snapshotFirst {
+            pushSnapshot(to: store)
+        }
         #expect(creation.takeDestination(paneStates: store.paneStates, isConnected: true) == nil)
         let acceptedReply = creation.receivePaneID("%5", revision: revision)
         #expect(acceptedReply)
@@ -71,7 +73,9 @@ struct NewSessionCreationTests {
         let store = SessionStore()
         var creation = NewSessionCreation()
         let revision = creation.begin(hostID: "office", automaticFit: true)
-        if replyFirst { creation.receivePaneID("%5", revision: revision) }
+        if replyFirst {
+            creation.receivePaneID("%5", revision: revision)
+        }
         creation.cancel()
         let acceptedReply = creation.receivePaneID("%5", revision: revision)
         #expect(!acceptedReply)
@@ -84,7 +88,9 @@ struct NewSessionCreationTests {
         let store = SessionStore()
         var creation = NewSessionCreation()
         let revision = creation.begin(hostID: "office", automaticFit: true)
-        if replyFirst { creation.receivePaneID("%5", revision: revision) }
+        if replyFirst {
+            creation.receivePaneID("%5", revision: revision)
+        }
         #expect(creation.takeDestination(paneStates: store.paneStates, isConnected: false) == nil)
         let acceptedReply = creation.receivePaneID("%5", revision: revision)
         #expect(!acceptedReply)
@@ -109,6 +115,52 @@ struct NewSessionCreationTests {
         let destination = try #require(resolved)
         #expect(destination.hostID == "home")
         #expect(destination.initialFit == nil)
+    }
+
+    @Test("New window creation supersedes a missing notification in either delivery order", arguments: [true, false])
+    func creationSupersedesNotification(snapshotFirst: Bool) throws {
+        let store = SessionStore()
+        let existing = WindowSelectionCandidate(windowId: "codex-2:0", paneId: "%1", isActive: true)
+        let created = WindowSelectionCandidate(windowId: "codex-2:2", paneId: "%5", isActive: false)
+        var notification = InitialPaneSelection(paneID: "%2")
+        #expect(notification.resolve(candidates: [existing]) == .unchanged)
+        #expect(notification.isPending)
+
+        notification.cancel()
+        var creation = NewSessionCreation()
+        let revision = creation.begin(hostID: "office", automaticFit: true)
+        if snapshotFirst {
+            pushSnapshot(to: store)
+        }
+        #expect(creation.takeWindowDestination(selectedPaneID: "%1", paneStates: store.paneStates, isConnected: true) == nil)
+        let acceptedReply = creation.receivePaneID("%5", revision: revision)
+        #expect(acceptedReply)
+        if !snapshotFirst {
+            #expect(WindowSelectionReconciliation.resolve(
+                selectedWindowId: existing.windowId, candidates: [existing],
+                requestedPaneId: notification.paneID, createdPaneId: creation.paneID, selectedPaneId: existing.paneId
+            ) == .unchanged)
+            #expect(creation.takeWindowDestination(selectedPaneID: "%1", paneStates: store.paneStates, isConnected: true) == nil)
+            pushSnapshot(to: store)
+        }
+        #expect(!notification.isPending)
+        #expect(WindowSelectionReconciliation.resolve(
+            selectedWindowId: existing.windowId, candidates: [existing, created],
+            requestedPaneId: notification.paneID, createdPaneId: creation.paneID, selectedPaneId: existing.paneId
+        ) == .select(windowId: created.windowId, paneId: created.paneId))
+        let resolved = creation.takeWindowDestination(
+            selectedPaneID: created.paneId, paneStates: store.paneStates, isConnected: true
+        )
+        let destination = try #require(resolved)
+        #expect(destination.sessionName == "codex-2" && destination.initialFit?.paneID == "%5")
+        #expect(creation.takeWindowDestination(selectedPaneID: created.paneId, paneStates: store.paneStates, isConnected: true) == nil)
+
+        let oldTarget = WindowSelectionCandidate(windowId: "codex-2:1", paneId: "%2", isActive: true)
+        #expect(notification.resolve(candidates: [existing, oldTarget, created]) == .unchanged)
+        #expect(WindowSelectionReconciliation.resolve(
+            selectedWindowId: created.windowId, candidates: [existing, oldTarget, created],
+            requestedPaneId: notification.paneID, createdPaneId: creation.paneID, selectedPaneId: created.paneId
+        ) == .unchanged)
     }
 
     private func pushSnapshot(to store: SessionStore, hostID: String = "office", paneID: String = "%5") {

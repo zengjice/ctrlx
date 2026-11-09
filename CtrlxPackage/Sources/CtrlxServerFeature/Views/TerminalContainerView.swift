@@ -63,6 +63,7 @@ struct TerminalContainerView: NSViewRepresentable {
     @Environment(\.terminalQuickActions) private var quickActions
     @Environment(\.openTerminalFileLink) private var openFileLink
     @Environment(\.terminalViewportInteraction) private var viewportInteraction
+    @Environment(\.terminalContentMenu) private var contextMenu
 
     private var openPathAction: (@MainActor (String) -> Void)? {
         guard let openFileLink else { return nil }
@@ -100,6 +101,9 @@ struct TerminalContainerView: NSViewRepresentable {
         coordinator.terminalView.onOpenURL = { url, behavior in onOpenURL?(url, paneState.paneId, behavior) ?? false }
         coordinator.terminalView.onOpenPath = openPathAction
         coordinator.terminalView.onContentClick = { viewportInteraction?(nil, paneState.paneId) }
+        if let contextMenu {
+            coordinator.terminalView.onContextMenu = { contextMenu(nil, paneState.paneId) }
+        }
         coordinator.terminalView.onFocusRestored = { viewportInteraction?(nil, paneState.paneId) }
         coordinator.bindQuickActions(quickActions, onFocus: onFocus)
 
@@ -135,6 +139,11 @@ struct TerminalContainerView: NSViewRepresentable {
         nsView.onOpenURL = { url, behavior in onOpenURL?(url, paneState.paneId, behavior) ?? false }
         nsView.onOpenPath = openPathAction
         nsView.onContentClick = { viewportInteraction?(nil, paneState.paneId) }
+        if let contextMenu {
+            nsView.onContextMenu = { contextMenu(nil, paneState.paneId) }
+        } else {
+            nsView.onContextMenu = nil
+        }
         coordinator.terminalView.onFocusRestored = { viewportInteraction?(nil, paneState.paneId) }
         coordinator.bindQuickActions(quickActions, onFocus: onFocus)
 
@@ -545,6 +554,7 @@ struct TerminalContainerView: NSViewRepresentable {
             terminalView.onFileDrop = nil
             terminalView.onOpenPath = nil
             terminalView.onContentClick = nil
+            terminalView.onContextMenu = nil
 
             pendingKeyTask?.cancel()
             pendingKeyTask = nil

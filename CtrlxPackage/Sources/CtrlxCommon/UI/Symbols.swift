@@ -43,7 +43,9 @@ public enum Symbols: String {
     case checkmarkSquareFill = "checkmark.square.fill"
     case chevronDown = "chevron.down"
     case chevronLeft = "chevron.left"
+    case chevronLeft2 = "chevron.left.2"
     case chevronRight = "chevron.right"
+    case chevronRight2 = "chevron.right.2"
     case chevronUp = "chevron.up"
     case circle
     case circleLefthalfFilled = "circle.lefthalf.filled"

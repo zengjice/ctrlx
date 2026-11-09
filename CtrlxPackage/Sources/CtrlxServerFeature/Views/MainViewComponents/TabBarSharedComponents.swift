@@ -163,30 +163,32 @@ struct NewTabMenuButton: View {
     }
 
     var items: [NewTabMenuItem] {
-        var items: [NewTabMenuItem] = [
-            .init(id: .agent, title: "New Agent…", image: Symbols.sparkles.image) {
+        var newResource: (@MainActor (ResourceTabKind) -> Void)?
+        if let onNewResource {
+            newResource = { kind in
+                isPresented = false
+                onNewResource(kind)
+            }
+        }
+        var openGit: (@MainActor () -> Void)?
+        if let onOpenGit {
+            openGit = {
+                isPresented = false
+                onOpenGit()
+            }
+        }
+        return NewTabMenuItem.creationItems(
+            isTerminalDisabled: isTerminalDisabled,
+            onNewAgent: {
                 presentedAgents = agentConfiguration
             },
-            .init(id: .terminal, title: "New Terminal", image: Symbols.terminal.image, isEnabled: !isTerminalDisabled) {
+            onNewTerminal: {
                 isPresented = false
                 onNewTerminal()
             },
-        ]
-        if let onNewResource {
-            for (kind, title, symbol) in [(ResourceTabKind.files, "New Files", Symbols.folder), (.browser, "New Browser", .globe), (.simulator, "New iOS Simulator", .iphone)] {
-                items.append(.init(id: .resource(kind), title: title, image: symbol.image) {
-                    isPresented = false
-                    onNewResource(kind)
-                })
-            }
-        }
-        if let onOpenGit {
-            items.append(.init(id: .git, title: "Open Git", image: CustomSymbol.gitLogo.image) {
-                isPresented = false
-                onOpenGit()
-            })
-        }
-        return items
+            onNewResource: newResource,
+            onOpenGit: openGit
+        )
     }
 }
 

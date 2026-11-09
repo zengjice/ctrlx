@@ -6,6 +6,28 @@ struct WindowSelectionCandidate: Equatable, Hashable, Sendable {
     var stableWindowId: String?
 }
 
+struct InitialPaneSelection: Equatable, Sendable {
+    private(set) var paneID: String?
+    var isPending: Bool {
+        paneID != nil
+    }
+
+    mutating func cancel() {
+        paneID = nil
+    }
+
+    mutating func resolve(candidates: [WindowSelectionCandidate]) -> WindowSelectionReconciliation {
+        guard let paneID else { return .unchanged }
+        let selection = WindowSelectionReconciliation.resolve(
+            selectedWindowId: nil, candidates: candidates, requestedPaneId: paneID
+        )
+        if case .select = selection {
+            cancel()
+        }
+        return selection
+    }
+}
+
 enum WindowSelectionReconciliation: Equatable, Sendable {
     case unchanged
     case select(windowId: String, paneId: String?)
@@ -24,10 +46,15 @@ enum WindowSelectionReconciliation: Equatable, Sendable {
     static func resolve(
         selectedWindowId: String?,
         candidates: [WindowSelectionCandidate],
+        requestedPaneId: String? = nil,
         createdPaneId: String? = nil,
         selectedPaneId: String? = nil,
         previousCandidates: [WindowSelectionCandidate] = []
     ) -> Self {
+        if let requestedPaneId {
+            guard let candidate = candidates.first(where: { $0.paneId == requestedPaneId || $0.paneIDs.contains(requestedPaneId) }) else { return .unchanged }
+            return .select(windowId: candidate.windowId, paneId: requestedPaneId)
+        }
         if
             let createdPaneId,
             let candidate = candidates.first(where: { $0.paneId == createdPaneId || $0.paneIDs.contains(createdPaneId) }) {

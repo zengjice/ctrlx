@@ -98,7 +98,22 @@ struct AgentWorkflowRunView: View {
         }
         .navigationTitle(state?.summary.name ?? "Workflow")
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
+            ToolbarItemGroup(placement: .primaryAction) {
+                if let state, !state.summary.status.isTerminal {
+                    let paused = state.summary.status == .paused
+                    let title = paused ? "Continue workflow" : "Pause workflow"
+                    Button {
+                        change(paused
+                            ? .resume(runID, expectedRevision: state.summary.revision, roundLimit: roundLimit)
+                            : .pause(runID, expectedRevision: state.summary.revision))
+                    } label: {
+                        Label(title, symbol: paused ? .play : .pause).labelStyle(.iconOnly)
+                    }
+                    .disabled(changing || !endpoint.isConnected)
+                    .help(title)
+                    .accessibilityValue(state.summary.status.title)
+                    .accessibilityIdentifier("workflow-run-control")
+                }
                 Button { Task { await refresh() } } label: { Label("Refresh", symbol: .arrowClockwise) }
                     .disabled(changing || !endpoint.isConnected)
             }

@@ -7,6 +7,98 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.155 — Retained file previews and quieter remote browsing
+
+- Keep each Files tab's preview across tab switches and restore text/Markdown
+  scrolling, PDF position and paused video time/mute after hidden-preview
+  eviction. Retain at most two hidden previews, validate Host revisions on
+  return and release content on close. See [file previews](docs/file-browser.md).
+  Source: `d7c68355`.
+- Open Markdown file and folder links on the document's source Host; preserve
+  the current preview when a target is missing. Enable native text selection
+  and copying in Markdown previews. Source: `d7c68355`.
+- Let remote browser Viewers recover silently when navigation or resizing
+  expires a captured frame. Keep the last image and control lease, discard stale
+  select menus locally and preserve real transport errors until recovery.
+  See [remote frames](docs/agent-browser.md). Source: `29647900`.
+- Validation: all 238 focused tests passed after formatting, including native
+  AppKit preview retention and playback checks. Both boundary checks and lint
+  for 20 changed Swift files passed. The formal Mac package checks Developer ID
+  signatures, App/DMG notarization and Gatekeeper before publication. This
+  release packages macOS only; physical-iPhone UI and Apple Intelligence
+  evaluations were not run.
+
+## 3.0.154 — Mac settings and terminal menus
+
+- Organize Mac settings by task, add searchable navigation, adaptive lists and
+  a live terminal appearance preview. Keep Agent command and tmux edits in
+  drafts until explicitly applied; discard unapplied edits on window close and
+  confirm Provider deletion and Viewer unpairing. Application updates now live
+  in About. See [settings](docs/services-reference.md). Source: `4a6f2bb3`.
+- Preserve command-save and tmux validation feedback when native text fields
+  commit an unchanged value; only actual edits clear that feedback.
+- Add a terminal content context menu while preserving application mouse input,
+  text selection and file-link actions. Bind menu actions to their captured Host
+  and pane identity. See [terminal actions](docs/terminal-quick-actions.md).
+- Keep the workflow close action reachable during navigation and expose pause
+  and continue controls in the toolbar. Preserve the saved Git workspace when
+  restoring navigation. See [workflows](docs/multi-agent-design.md).
+- Validation: 88 focused Swift tests and 120 private publication/installer/COS
+  regressions passed; Settings checks were rerun after the feedback fix.
+  Both boundary checks and lint for 56 Swift files passed. Native Settings
+  interaction acceptance runs on an isolated signed
+  release candidate before publication. This release packages macOS only;
+  paired-iPhone UI and Apple Intelligence evaluations were not run.
+
+## 3.0.152 — Remote browser dropdowns and resumed workflows
+
+- Open standard single-select dropdowns from Mac and iOS Viewers using a
+  Host-backed option list. Preserve cancellation and ordinary label-link clicks;
+  reject expired menus and replaced controls. Older peers keep their existing
+  input path. See [remote browser controls](docs/agent-browser.md). Source: `1c75df0e`.
+- Let a resumed Codex receive its first workflow task before its new process
+  emits a Hook. Receipt and completion verification still require that process's
+  genuine Hook evidence. See [workflow starts](docs/multi-agent-design.md).
+  Source: `0e0d8b5a`.
+- Include iOS source changes for exact Host/pane notification navigation,
+  repeated notification taps and consistent resource-tab swipe hints and
+  navigation. This release packages macOS only.
+- Validation: 112 focused Swift tests, the isolated real Codex/Claude two-round
+  workflow and 120 private publication/installer/COS regressions passed, along
+  with both boundary checks and lint for 24 Swift files. Native dropdown
+  acceptance runs on the signed release candidate before publication. Paired
+  iPhone UI and Apple Intelligence evaluations were not run.
+
+## 3.0.151 — Host file link failure diagnostics
+
+- Include the actual absolute Host path and system reason in filesystem errors.
+  File-link resolution also reports the requested relative path and captured
+  Agent workspace, while retaining cancellation and existing root/containment
+  checks. See [file links](docs/file-browser.md). Source: `19d56cd1`.
+- Add regression coverage for opening a Git child project's report from a
+  non-Git parent workspace, removed-file diagnostics and cancellation. The
+  original iPhone opening failure has not been reproduced; this change improves
+  diagnostics and does not establish that its cause is fixed.
+- Validation: 52 focused Swift tests and 120 private publication/installer/COS
+  regressions passed, alongside both boundary checks and lint for three Swift
+  files. This release packages macOS only; physical-iPhone acceptance and Apple
+  Intelligence evaluations were not run.
+
+## 3.0.150 — Actionable workflow start failures
+
+- Explain why a workflow cannot start: a missing Agent, unverifiable process or
+  conversation, unsupported capabilities, busy input, drafts, pending approval
+  or an unavailable prompt. Name the affected Agent and suggest the next action.
+- Preserve rejected task and attachment drafts for correction and retry. Check
+  readiness before per-Agent attachment limits so an unrelated attachment error
+  cannot hide the actual start failure; accepted requests retain their existing
+  retry and invocation safeguards. See [workflow starts](docs/multi-agent-design.md).
+- Validation: all 124 focused Swift tests and 120 private publication/installer/COS
+  regressions passed, along with both boundary checks and lint for seven Swift
+  files. Isolated native Codex/Claude completed the two-round workflow using a
+  deterministic loopback model. Paired-device UI and Apple Intelligence
+  evaluations were not rerun. This release builds macOS only.
+
 ## 3.0.149 — Workflow CLI version ranges
 
 - Admit stable Codex 0.160.x–0.169.x and Claude Code 2.1.300–2.1.319 for

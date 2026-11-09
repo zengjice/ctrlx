@@ -15,6 +15,29 @@ struct NewTabMenuItem: Identifiable {
     let image: Image
     var isEnabled = true
     let action: @MainActor () -> Void
+
+    @MainActor
+    static func creationItems(
+        isTerminalDisabled: Bool = false,
+        onNewAgent: @escaping @MainActor () -> Void,
+        onNewTerminal: @escaping @MainActor () -> Void,
+        onNewResource: (@MainActor (ResourceTabKind) -> Void)? = nil,
+        onOpenGit: (@MainActor () -> Void)? = nil
+    ) -> [Self] {
+        var items: [Self] = [
+            .init(id: .agent, title: "New Agent…", image: Symbols.sparkles.image, action: onNewAgent),
+            .init(id: .terminal, title: "New Terminal", image: Symbols.terminal.image, isEnabled: !isTerminalDisabled, action: onNewTerminal),
+        ]
+        if let onNewResource {
+            for (kind, title, symbol) in [(ResourceTabKind.files, "New Files", Symbols.folder), (.browser, "New Browser", .globe), (.simulator, "New iOS Simulator", .iphone)] {
+                items.append(.init(id: .resource(kind), title: title, image: symbol.image) { onNewResource(kind) })
+            }
+        }
+        if let onOpenGit {
+            items.append(.init(id: .git, title: "Open Git", image: CustomSymbol.gitLogo.image, action: onOpenGit))
+        }
+        return items
+    }
 }
 
 struct NewTabPicker: View {

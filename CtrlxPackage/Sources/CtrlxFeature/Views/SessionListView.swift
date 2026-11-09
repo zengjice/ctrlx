@@ -3,16 +3,6 @@
     import CtrlxNetworking
     import SwiftUI
 
-    // MARK: - Navigation
-
-    /// Navigation value for the session list
-    struct SessionNavigation: Hashable {
-        let sessionName: String
-        let hostId: String
-        var reference: ViewerWorkspaceReference? = nil
-        var restoresSelection = false
-    }
-
     /// View displaying a list of active Claude sessions and terminals from all paired hosts.
     struct SessionListView: View {
         @Binding var navigationPath: NavigationPath
@@ -53,6 +43,7 @@
                     destination: destination, initialSessionFit: $initialSessionFit,
                     automaticallyFitOnEntry: destination != createdSessionDestination
                 )
+                .id(destination)
             }
             .onChange(of: fileWorkspaces.catalogs, initial: true) {
                 guard

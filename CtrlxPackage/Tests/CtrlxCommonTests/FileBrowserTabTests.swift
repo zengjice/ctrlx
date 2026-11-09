@@ -160,6 +160,19 @@ struct FileBrowserTabTests {
         #expect(paths[2] == nil)
     }
 
+    @Test("Replacing the connection reloads a Files source even when its Host identity is unchanged")
+    func connectionReplacementInvalidatesLoad() {
+        let tab = FileBrowserTab(path: "/host")
+        func source(_ connectionID: UUID) -> FileBrowserSource {
+            .init(id: "host", paneID: nil, connectionID: connectionID) { _ in
+                throw FileBrowserError.message("No request expected")
+            }
+        }
+        let first = source(UUID())
+        #expect(tab.loadKey(source: first) == tab.loadKey(source: first))
+        #expect(tab.loadKey(source: first) != tab.loadKey(source: source(UUID())))
+    }
+
     @Test
     func lateReplyCannotOverwriteNewHostOrPath() async {
         let tab = FileBrowserTab()

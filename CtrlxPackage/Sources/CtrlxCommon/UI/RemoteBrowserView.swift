@@ -211,7 +211,7 @@
                     RemoteBrowserCanvas(
                         image: image,
                         frame: displayedFrame,
-                        acceptsInput: session.controlID != nil && !editingAddress && !isAnnotating,
+                        acceptsInput: session.controlID != nil && session.selectMenu == nil && !editingAddress && !isAnnotating,
                         keyboardRequested: keyboardRequested,
                         allowsLocalZoom: session.controlID == nil,
                         zoomIdentity: session.tab.id.uuidString + session.tab.url,
@@ -275,7 +275,24 @@
             .onChange(of: client.hostSupportsWorkspaceClipboard, initial: true) { _, supported in session.supportsClipboard = supported }
             .onChange(of: client.hostSupportsBrowserAudio, initial: true) { _, supported in session.setAudioSupport(supported) }
             .onDisappear { session.stop() }
+            .onChange(of: session.selectMenu?.id) { _, id in
+                if id != nil {
+                    keyboardRequested = false
+                    editingAddress = false
+                }
+            }
             .accessibilityIdentifier("remote-browser-page")
+            .sheet(item: Binding(get: { session.selectMenu }, set: { value in
+                if value == nil {
+                    session.dismissSelectMenu()
+                }
+            })) { menu in
+                RemoteBrowserSelectMenuView(
+                    menu: menu,
+                    choose: { session.chooseSelectOption(menuID: menu.id, index: $0) },
+                    cancel: session.dismissSelectMenu
+                )
+            }
             .sheet(item: $extensionRequest) { request in
                 RemoteBrowserExtensionsView(
                     tab: session.tab,

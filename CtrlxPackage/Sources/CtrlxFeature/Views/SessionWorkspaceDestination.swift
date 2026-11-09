@@ -12,6 +12,14 @@
         @Environment(IOSSettings.self) private var settings
         @Environment(\.dismiss) private var dismiss
         @State private var observedReference: ViewerWorkspaceReference?
+        @State private var initialPaneSelection: InitialPaneSelection
+
+        init(destination: SessionNavigation, initialSessionFit: Binding<NewSessionSizing.InitialFit?>, automaticallyFitOnEntry: Bool) {
+            self.destination = destination
+            self._initialSessionFit = initialSessionFit
+            self.automaticallyFitOnEntry = automaticallyFitOnEntry
+            self._initialPaneSelection = State(initialValue: .init(paneID: destination.paneSelection?.paneID))
+        }
 
         private var catalog: ViewerWorkspaceCatalog? {
             workspaces.catalogs[destination.hostId]
@@ -38,7 +46,7 @@
                         sessionName: sessionName, hostId: destination.hostId,
                         relayClient: connection.relayClient, settings: settings, fileWorkspace: workspace,
                         initialSessionFit: $initialSessionFit, automaticallyFitOnEntry: automaticallyFitOnEntry,
-                        restoresSelection: destination.restoresSelection
+                        restoresSelection: destination.restoresSelection, initialPaneSelection: $initialPaneSelection
                     )
                     .id(workspace.recoveryID)
                 } else {

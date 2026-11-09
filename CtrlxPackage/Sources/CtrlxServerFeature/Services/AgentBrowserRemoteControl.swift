@@ -216,6 +216,7 @@ extension AgentBrowserService {
             var payload = try Self.nativePayload(request.operation)
             payload["lease"] = lease.id.uuidString
             payload["generation"] = request.generation
+            payload["selectMenus"] = request.selectMenus
             let data = try await nativeBrowserRequest(tabID, payload: payload)
             try Task.checkCancellation()
             guard !tab.isClosed, remoteControls[tabID]?.id == lease.id else {
@@ -226,7 +227,16 @@ extension AgentBrowserService {
                 let content = try JSONDecoder().decode(WorkspaceClipboardContent.self, from: data)
                 clipboard = try WorkspaceClipboard.prepare(content)
             }
-            return RemoteBrowserResponse(tab: descriptor(tab), controlID: lease.id, clipboard: clipboard)
+            var selectMenu: RemoteBrowserSelectMenu?
+            if
+                request.selectMenus == true, case let .pointer(event) = request.operation,
+                event.kind == .down, event.button == .left, event.modifiers == 0 {
+                selectMenu = try JSONDecoder().decode(RemoteBrowserResponse.self, from: data).selectMenu
+                if let selectMenu, !selectMenu.isValid || selectMenu.generation != request.generation {
+                    throw RemoteBrowserError.message("The Host returned an invalid select menu.")
+                }
+            }
+            return RemoteBrowserResponse(tab: descriptor(tab), controlID: lease.id, clipboard: clipboard, selectMenu: selectMenu)
         }
     }
 
@@ -318,6 +328,13 @@ extension AgentBrowserService {
                 "modifiers": event.modifiers,
                 "clickCount": event.clickCount,
             ]
+        case let .selectOption(menuID, index):
+            if let index, !(0..<512).contains(index) {
+                throw RemoteBrowserError.message("Invalid select option.")
+            }
+            var payload: [String: Any] = ["action": "select", "menuID": menuID.uuidString]
+            payload["index"] = index
+            return payload
         default: throw RemoteBrowserError.message("This operation is handled by the Host registry.")
         }
     }

@@ -18,6 +18,7 @@
         @Binding var initialSessionFit: NewSessionSizing.InitialFit?
         let automaticallyFitOnEntry: Bool
         let restoresSelection: Bool
+        @Binding private var initialPaneSelection: InitialPaneSelection
 
         @Environment(SessionStore.self) private var sessionStore
         @Environment(IOSFileBrowserWorkspaceStore.self) private var fileWorkspaces
@@ -159,18 +160,21 @@
             fileWorkspace: IOSFileBrowserWorkspace,
             initialSessionFit: Binding<NewSessionSizing.InitialFit?>,
             automaticallyFitOnEntry: Bool = true,
-            restoresSelection: Bool = false
+            restoresSelection: Bool = false,
+            initialPaneSelection: Binding<InitialPaneSelection> = .constant(.init(paneID: nil))
         ) {
             self.sessionName = sessionName
             self.hostId = hostId
             self.relayClient = relayClient
             self.settings = settings
             self.fileWorkspace = fileWorkspace
-            self._selectedWindowId = State(initialValue: fileWorkspace.restoredWindowID)
-            self._activePaneId = State(initialValue: fileWorkspace.restoredPaneID)
+            let restoresTerminal = !initialPaneSelection.wrappedValue.isPending
+            self._selectedWindowId = State(initialValue: restoresTerminal ? fileWorkspace.restoredWindowID : nil)
+            self._activePaneId = State(initialValue: restoresTerminal ? fileWorkspace.restoredPaneID : nil)
             self._initialSessionFit = initialSessionFit
             self.automaticallyFitOnEntry = automaticallyFitOnEntry
             self.restoresSelection = restoresSelection
+            self._initialPaneSelection = initialPaneSelection
             self._isKeyboardActive = State(initialValue: settings.showTerminalKeyboardOnEntry)
         }
 
@@ -194,7 +198,7 @@
 
         /// The current window data from the session store
         private var window: TmuxWindow? {
-            guard !fileWorkspace.hasPendingTerminalSelection else { return nil }
+            guard !initialPaneSelection.isPending, !fileWorkspace.hasPendingTerminalSelection else { return nil }
             // Window indexes change during reordering; the focused pane does not.
             if let activePaneId, let owner = sessionWindows.first(where: { $0.panes.contains { $0.paneId == activePaneId } }) {
                 return owner
@@ -285,6 +289,7 @@
             }
             switch PaneLinkedTabs.adjacent(to: source, direction: direction, groups: linkedTabs.groups) {
             case let .tab(item):
+                initialPaneSelection.cancel()
                 fileWorkspace.selectedID = nil
                 browserSelection.selectedID = nil
                 simulatorSelection.selectedID = nil
@@ -1387,7 +1392,6 @@
                 case .source: returnToLinkedTabSource(tab)
                 case .previous,
                      .next:
-                    guard linkedTabSource(tab) != nil else { return }
                     selectAdjacentLinkedTab(tab, direction: action == .next ? 1 : -1)
                 case .tabs: openWindowTabs()
                 }
@@ -1511,6 +1515,7 @@
                 browserSelection.selectedID = nil
                 simulatorSelection.selectedID = nil
                 guard fileWorkspace.tabs.contains(where: { $0.id == id }) else { return }
+                initialPaneSelection.cancel()
                 cancelCreationFollowUp()
                 isKeyboardActive = false
                 quickActionPresentation.dismiss()
@@ -1544,6 +1549,7 @@
                 newAgentConfiguration = agentTabConfiguration()
             case let .selectSimulator(id):
                 guard sessionSimulators.contains(where: { $0.id == id }) else { return }
+                initialPaneSelection.cancel()
                 cancelCreationFollowUp()
                 isKeyboardActive = false
                 quickActionPresentation.dismiss()
@@ -1552,6 +1558,7 @@
                 simulatorSelection.selectedID = id
             case let .selectBrowser(id):
                 guard sessionBrowsers.contains(where: { $0.id == id }) else { return }
+                initialPaneSelection.cancel()
                 cancelCreationFollowUp()
                 isKeyboardActive = false
                 quickActionPresentation.dismiss()
@@ -1618,6 +1625,7 @@
         }
 
         private func selectTerminalWindow(_ target: TmuxWindow, preferredPaneID: String? = nil) {
+            initialPaneSelection.cancel()
             pendingSimulatorRequest = nil
             pendingResourceRequest = nil
             fileWorkspace.hasPendingTerminalSelection = false
@@ -1734,6 +1742,7 @@
                 throw AgentForkError(reason)
             }
             guard request.source.sessionName == sessionName else { throw AgentForkError("Reopen Fork in the source session.") }
+            initialPaneSelection.cancel()
             isCreatingWindow = true
             automaticTabFit.cancel()
             initialSessionFit?.cancel(hostID: hostId, sessionName: sessionName)
@@ -1773,6 +1782,7 @@
                 ) {
                 throw NewAgentTabConfiguration.LaunchError(reason)
             }
+            initialPaneSelection.cancel()
             isCreatingWindow = true
             initialSessionFit?.cancel(hostID: hostId, sessionName: sessionName)
             let revision = windowCreation.begin(hostID: hostId, automaticFit: settings.newSessionAutoFit, sessionBinding: resourceID == nil ? binding : nil)
@@ -1804,6 +1814,14 @@
             if !didPrepareEntrySelection {
                 didPrepareEntrySelection = true
                 fileWorkspaces.prepareForEntry(fileWorkspace, restoresSelection: restoresSelection)
+            }
+            if initialPaneSelection.isPending {
+                if case let .select(windowID, paneID) = initialPaneSelection.resolve(candidates: candidates) {
+                    selectedWindowId = windowID
+                    activePaneId = paneID
+                    fileWorkspace.hasPendingTerminalSelection = false
+                }
+                return
             }
             if !windowCreation.validateSessionBinding(relayClient.workspaceInputState.sessionBinding(name: sessionName)) {
                 initialSessionFit?.cancel(hostID: hostId, sessionName: sessionName)

@@ -41,6 +41,7 @@ final public class FileBrowserTab: Identifiable {
     public private(set) var isPreviewLoading = false
     @ObservationIgnored private var loadID = UUID()
     @ObservationIgnored private var previewID = UUID()
+    @ObservationIgnored let previewSession = FileBrowserPreviewSession()
 
     public init(id: UUID = UUID(), path: String? = nil, sourcePaneID: String? = nil) {
         self.id = id
@@ -48,7 +49,13 @@ final public class FileBrowserTab: Identifiable {
         self.requestedPath = path
         self.pathInput = path ?? ""
         self.sourcePaneID = sourcePaneID
+        previewSession.onEvict = { [weak self] in
+            self?.previewData = nil
+            self?.previewURL = nil
+        }
     }
+
+    isolated deinit { previewSession.close() }
 
     public var title: String {
         "Files · \(path.map { ($0 as NSString).lastPathComponent }.flatMap { $0.isEmpty ? "/" : $0 } ?? "…")"
@@ -107,6 +114,15 @@ final public class FileBrowserTab: Identifiable {
 
     public func releasePreview() {
         previewID = UUID()
+        previewSession.close()
+        previewData = nil
+        previewURL = nil
+        isPreviewLoading = false
+    }
+
+    func suspendPreview() {
+        guard !previewSession.hasContent else { return }
+        previewID = UUID()
         previewData = nil
         previewURL = nil
         isPreviewLoading = false
@@ -129,6 +145,7 @@ final public class FileBrowserTab: Identifiable {
         let hidden: Bool
         let refresh: Int
         let sourceID: String
+        let connectionID: UUID?
         let unavailable: String?
     }
 
@@ -140,11 +157,13 @@ final public class FileBrowserTab: Identifiable {
             hidden: includeHidden,
             refresh: refresh,
             sourceID: source.id,
+            connectionID: source.connectionID,
             unavailable: source.unavailableReason
         )
     }
 
     public func navigate(_ path: String?) {
+        previewSession.close()
         loadID = UUID()
         previewID = UUID()
         self.path = path
@@ -163,6 +182,36 @@ final public class FileBrowserTab: Identifiable {
         }
         navigate(destination.directory)
         selectedFile = destination.file
+    }
+
+    /// A file URL here identifies a path on the captured source, never a Viewer-local file.
+    func openMarkdownLink(_ url: URL, from documentPath: String, source: FileBrowserSource) async throws {
+        try Task.checkCancellation()
+        guard selectedFile == documentPath else { return }
+        let navigationID = loadID
+        let selectionID = previewID
+        let target = url.absoluteURL
+        guard
+            target.isFileURL, target.host == nil || target.host == "" || target.host == "localhost",
+            target.path.hasPrefix("/"), !target.path.contains("\0") else {
+            throw FileBrowserError.message("This link does not identify a file on the source Host.")
+        }
+        // A heading link within this document must not reload the preview.
+        guard target.path != (preview?.path ?? documentPath) else { return }
+        if let reason = source.unavailableReason {
+            throw FileBrowserError.message(reason)
+        }
+        guard case let .info(info) = try await source.request(.info(path: target.path)) else {
+            throw FileBrowserError.message("The Host returned no information for this link.")
+        }
+        try Task.checkCancellation()
+        guard selectedFile == documentPath, loadID == navigationID, previewID == selectionID else { return }
+        if info.kind == .directory {
+            navigate(info.path)
+        } else {
+            navigate((info.path as NSString).deletingLastPathComponent)
+            selectedFile = info.path
+        }
     }
 
     /// A closed/moved source must not attach to a later window or pane with the same ID.
@@ -245,32 +294,43 @@ final public class FileBrowserTab: Identifiable {
     }
 
     public func loadPreview(source: FileBrowserSource) async {
+        previewSession.configure(.init(sourceID: source.id, connectionID: source.connectionID, path: selectedFile, refresh: refresh))
         let token = UUID()
         previewID = token
-        preview = nil
-        previewData = nil
-        previewURL = nil
+        if !previewSession.hasContent {
+            preview = nil
+            previewData = nil
+            previewURL = nil
+        }
         previewError = nil
         isPreviewLoading = false
         guard let selectedFile else { return }
-        // Office uses a native file-URL preview with its own cancellable transfer,
-        // including on older Hosts that classify these binary documents as text.
-        guard !FileBrowserOfficeDocument.supports(path: selectedFile) else { return }
-        // Remote video starts only when Play is tapped, using random-access reads.
-        guard source.localFileURL != nil || !FileBrowserVideo.supports(path: selectedFile) else { return }
-        isPreviewLoading = true
+        isPreviewLoading = !previewSession.hasContent
         defer {
             if token == previewID {
                 isPreviewLoading = false
             }
         }
         do {
+            if let reason = source.unavailableReason {
+                throw FileBrowserError.message(reason)
+            }
             guard case let .info(info) = try await source.request(.info(path: selectedFile)) else {
                 throw FileBrowserError.message("Missing file information.")
             }
             try Task.checkCancellation()
             guard token == previewID else { return }
+            previewSession.acceptRevision(info.revision)
             preview = info
+            if previewSession.hasContent {
+                return
+            }
+            // These previews own their bounded transfer/player after metadata validation.
+            if
+                FileBrowserOfficeDocument.supports(path: selectedFile)
+                || (source.localFileURL == nil && FileBrowserVideo.supports(path: selectedFile)) {
+                return
+            }
             if let localFileURL = source.localFileURL, Self.isMedia(path: info.path) {
                 let url = try await localFileURL(info)
                 try Task.checkCancellation()
@@ -314,6 +374,7 @@ final public class FileBrowserTab: Identifiable {
         } catch is CancellationError { }
         catch {
             if token == previewID {
+                previewSession.evict()
                 previewError = error.localizedDescription
             }
         }
