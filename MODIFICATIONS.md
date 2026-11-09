@@ -7,6 +7,27 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.155 — Retained file previews and quieter remote browsing
+
+- Keep each Files tab's preview across tab switches and restore text/Markdown
+  scrolling, PDF position and paused video time/mute after hidden-preview
+  eviction. Retain at most two hidden previews, validate Host revisions on
+  return and release content on close. See [file previews](docs/file-browser.md).
+  Source: `d7c68355`.
+- Open Markdown file and folder links on the document's source Host; preserve
+  the current preview when a target is missing. Enable native text selection
+  and copying in Markdown previews. Source: `d7c68355`.
+- Let remote browser Viewers recover silently when navigation or resizing
+  expires a captured frame. Keep the last image and control lease, discard stale
+  select menus locally and preserve real transport errors until recovery.
+  See [remote frames](docs/agent-browser.md). Source: `29647900`.
+- Validation: all 238 focused tests passed after formatting, including native
+  AppKit preview retention and playback checks. Both boundary checks and lint
+  for 20 changed Swift files passed. The formal Mac package checks Developer ID
+  signatures, App/DMG notarization and Gatekeeper before publication. This
+  release packages macOS only; physical-iPhone UI and Apple Intelligence
+  evaluations were not run.
+
 ## 3.0.154 — Mac settings and terminal menus
 
 - Organize Mac settings by task, add searchable navigation, adaptive lists and
