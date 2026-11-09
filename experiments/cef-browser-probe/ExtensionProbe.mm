@@ -59,6 +59,7 @@ NSString *installedFixtureID;
 NSWindow *embeddedWindow;
 std::map<int, CefRefPtr<CefBrowser>> browsers;
 std::map<int, CefRefPtr<CefBrowser>> extensionTools;
+CefRefPtr<CefBrowser> browserSettings;
 std::map<int, NSView *> containers;
 std::map<int, CefRefPtr<CefRegistration>> observers;
 std::map<int, int> completedLoads;
@@ -249,6 +250,7 @@ class ExtensionToolClient final : public Client {
   }
   void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
     extensionTools.erase(browser->GetIdentifier());
+    if (browserSettings == browser) browserSettings = nullptr;
     Client::OnBeforeClose(browser);
   }
 };

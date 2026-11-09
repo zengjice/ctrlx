@@ -963,6 +963,50 @@ Both native tests require the acceptance-only `CTRLX_UPSTREAM_BROWSER_PROBE`
 runtime and exercise the same native method as the button; they are not
 toolbar-click or real-Codex tests. No automatic reload/replay recovery is used.
 
+## Inline video codecs
+
+The codec-enabled CEF 152.0.8 / Chromium 152.0.7977.134 SDK supports inline H.264
+MP4 playback. It was rebuilt from CEF
+`1ce985cb23056548b9cc51483bbef4faf68b1cd3` and Chromium
+`066c60fad7c77efe3a81ad78c8109afba848b18d` with
+`proprietary_codecs=true ffmpeg_branding="Chrome"` in its GN build configuration,
+as described in [Google's CEF build instructions](https://support.google.com/webdesigner/answer/10043691?hl=en).
+It retains the existing
+[extension header-client patch](../CtrlxPackage/AgentBrowser/cef-patches/extension-header-client.patch).
+These are Chromium build arguments, not CtrlX runtime switches or CMake flags
+for the wrapper; rebuilding the wrapper against the existing SDK cannot add
+missing decoders.
+
+Select this SDK with `CTRLX_CEF_SDK_ROOT` in the environment or ignored
+`Config/Local-macOS.xcconfig` before building the native runtime and Mac app.
+The default Spotify binary SDK and previously retained SDK lack these codecs;
+they return an empty `canPlayType`, false `MediaSource.isTypeSupported` and
+`DEMUXER_ERROR_NO_SUPPORTED_STREAMS` for the H.264 samples. The accepted replacement
+framework's SHA-256 before CtrlX signing is
+`38e0805ed9c7890e76db1a21b3ca27df065a1eed5d4ed91c0ccc47ba7aac246f`;
+its Mach-O UUID is `4C4C4444-5555-3144-A11A-CBA62EA5EFA9`. Signing changes the file
+hash, so compare UUIDs when checking the embedded App. Replacing the SDK or
+building an App does not update an already installed App.
+
+An isolated signed arm64 Mac Host passed all four playback cases on 2026-11-09:
+VP9/WebM, silent H.264 MP4, H.264 + AAC MP4, and fragmented H.264/AAC MP4 through
+Media Source Extensions. Each decoded at least five frames at 160×96 and advanced
+playback beyond 0.1 seconds without media errors. These checks use generated local
+samples; they do not establish arbitrary website or DRM compatibility. The
+AVFoundation-backed H.264 recording/export path is separate.
+The same SDK also passed the isolated extension fixture's CORS checks in Alloy
+and Chrome contexts, including header injection, redirects, normal preflights
+and rejection of disallowed page origins/headers.
+
+`CtrlxPackage/AgentBrowser/tests/media_playback.py <acceptance-app> <engine> <identity>`
+uses the existing isolated signed acceptance fixture and mock Keychain. It needs
+`websockets >= 15` and existing ffmpeg with VideoToolbox, AAC and VP9 encoders
+(`--ffmpeg` overrides its path). It generates tiny samples locally, checks actual
+inline playback time, dimensions and decoded frames, including H.264/AAC
+fragmented MP4 through Media Source Extensions, and writes
+`media-playback.json` in the printed private fixture directory. VP9 is a positive
+control. H.264 failures remain test failures; rerun when changing the SDK.
+
 ## Build and checks
 
 For the historical unmodified Vercel engine compatibility proof, see
