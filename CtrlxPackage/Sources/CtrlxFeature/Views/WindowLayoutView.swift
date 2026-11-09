@@ -110,6 +110,7 @@
         @State private var agentForkConfiguration: AgentForkConfiguration?
         @State private var creationSheetIsPresented = false
         @State private var isCreatingWindow = false
+        @State private var restartingAgentPaneIDs: Set<String> = []
         /// Follow and fit the returned pane independently of snapshot arrival order.
         @State private var windowCreation = NewSessionCreation()
 
@@ -1351,6 +1352,8 @@
                 canForkOtherDirectory: sessionStore.hostsSupportingAgentForkDirectory.contains(hostId),
                 includesWindowManagement: includesWindowManagement,
                 includesFork: scope.includesFork,
+                restartUnavailableReason: sessionStore.agentRestartUnavailableReason(hostID: hostId, isConnected: relayClient.isHostConnected),
+                restartingAgentPaneIDs: restartingAgentPaneIDs,
                 choose: { action in
                     performWindowTabAction(action, preferredPaneID: scope.sourcePaneID)
                 }
@@ -1431,6 +1434,8 @@
             switch action {
             case let .newResource(kind):
                 openResource(kind)
+            case let .restartAgent(source):
+                restartAgent(source)
             case let .window(_, operation):
                 guard let target = action.targetWindow(in: sessionWindows) else {
                     commandError = "This window has been closed. Reopen the tab list."
@@ -1700,6 +1705,22 @@
                     } else {
                         commandError = response.error ?? "Hook approval failed. Check the terminal before trying again."
                     }
+                } catch { commandError = error.localizedDescription }
+            }
+        }
+
+        private func restartAgent(_ request: RestartAgentSession) {
+            let source = request.source
+            guard restartingAgentPaneIDs.insert(source.paneID).inserted else { return }
+            let binding = relayClient.workspaceInputState.binding(paneID: source.paneID)
+            Task {
+                defer { restartingAgentPaneIDs.remove(source.paneID) }
+                do {
+                    if let reason = sessionStore.agentRestartUnavailableReason(hostID: hostId, isConnected: relayClient.isHostConnected) {
+                        throw AgentRestartError(reason)
+                    }
+                    _ = try await connectionManager.sendCommand(request, paneId: "", hostId: hostId, timeout: 45, inputBinding: binding).get()
+                    await connectionManager.requestSessionState(for: hostId)
                 } catch { commandError = error.localizedDescription }
             }
         }

@@ -278,6 +278,7 @@ public struct MainView: View {
     @State private var showingNewTabMenu = false
     @State private var showingSessionSwitcher = false
     @State private var pendingAgentFork: AgentForkConfiguration?
+    @State private var restartingAgents: Set<PaneKey> = []
     @State private var pendingTerminalAgent: NewAgentTabConfiguration?
     @State private var showingNewLocalSession = false
     @State private var detailPaneSize: CGSize = .zero
@@ -1682,7 +1683,10 @@ public struct MainView: View {
                     onTrustAgentHooks: connection.relayClient.hostSupportsAgentHookTrust ? { pane in trustAgentHooks(pane, hostID: remote.hostId) } : nil,
                     onDetachWindow: { sourceWindow, point in
                         detachTerminal(hostID: remote.hostId, windowID: sourceWindow.stableId, position: point)
-                    }
+                    },
+                    onRestartAgent: { restartAgent($0, hostID: remote.hostId) },
+                    restartUnavailableReason: agentRestartUnavailableReason(hostID: remote.hostId),
+                    restartingAgentPaneIDs: restartingAgentPaneIDs(hostID: remote.hostId)
                 )
                 .environment(\.workbenchTabContext, tabContext(hostID: remote.hostId, session: remote.sessionName))
 
@@ -1886,7 +1890,9 @@ public struct MainView: View {
                         onTrustAgentHooks: { pane in trustAgentHooks(pane, hostID: nil) },
                         onDetachWindow: { sourceWindow, point in
                             detachTerminal(hostID: nil, windowID: sourceWindow.stableId, position: point)
-                        }
+                        },
+                        onRestartAgent: { restartAgent($0, hostID: nil) },
+                        restartingAgentPaneIDs: restartingAgentPaneIDs(hostID: nil)
                     )
                     .environment(\.workbenchTabContext, tabContext(hostID: nil, session: session.sessionName))
                 }
@@ -6984,6 +6990,41 @@ public struct MainView: View {
                     refreshed = request.refreshIfTrusted == true && result == .alreadyTrusted
                 }
                 hookTrustMessage = "\(pane.sessionName) / \(pane.windowName) · \(pane.paneId)\n\n" + AgentHookTrustMenu.feedbackMessage(for: result, refreshed: refreshed)
+            } catch { attachError = error.localizedDescription }
+        }
+    }
+
+    private func restartingAgentPaneIDs(hostID: String?) -> Set<String> {
+        Set(restartingAgents.filter { $0.pairId == (hostID ?? "local") }.map(\.paneId))
+    }
+
+    private func agentRestartUnavailableReason(hostID: String) -> String? {
+        let connected = coordinator.viewerConnectionManager?.connection(for: hostID)?.isHostConnected == true
+        guard let store = coordinator.remoteSessionStore else {
+            return connected ? "Update this Host to exit and resume Agent conversations." : "Host is offline."
+        }
+        return store.agentRestartUnavailableReason(hostID: hostID, isConnected: connected)
+    }
+
+    private func restartAgent(_ request: RestartAgentSession, hostID: String?) {
+        let source = request.source
+        let key = PaneKey(pairId: hostID ?? "local", paneId: source.paneID)
+        guard restartingAgents.insert(key).inserted else { return }
+        let connection = hostID.flatMap { coordinator.viewerConnectionManager?.connection(for: $0) }
+        let binding = connection?.relayClient.workspaceInputState.binding(paneID: source.paneID)
+        Task {
+            defer { restartingAgents.remove(key) }
+            do {
+                if let hostID {
+                    if let reason = agentRestartUnavailableReason(hostID: hostID) {
+                        throw AgentRestartError(reason)
+                    }
+                    guard let connection else { throw AgentRestartError("Viewer connection is unavailable.") }
+                    _ = try await connection.sendCommand(request, paneId: "", timeout: 45, inputBinding: binding ?? .unavailable).get()
+                    await connection.relayClient.requestSessionState()
+                } else {
+                    try await coordinator.restartAgentSession(request)
+                }
             } catch { attachError = error.localizedDescription }
         }
     }

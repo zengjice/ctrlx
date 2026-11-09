@@ -62,6 +62,9 @@ struct RemoteWindowTabBar: View {
     var onViewWorkflow: ((PaneState) -> Void)?
     var onTrustAgentHooks: ((PaneState) -> Void)?
     var onDetachWindow: ((TmuxWindow, CGPoint?) -> Void)?
+    var onRestartAgent: ((RestartAgentSession) -> Void)?
+    var restartUnavailableReason: String?
+    var restartingAgentPaneIDs: Set<String> = []
 
     /// Cached width of the split-mode tab strip. Measured via the background
     /// `onGeometryChange` so the HStack can drive intrinsic height instead of
@@ -435,7 +438,12 @@ struct RemoteWindowTabBar: View {
                 allowsOtherDirectory: supportsOtherDirectoryFork,
                 choose: { onForkWindow(window, $0) }
             ).contextMenuItem,
-        ] + AgentHookTrustMenu.items(panes: window.panes, isEnabled: isHostConnected && hasCurrentHostState, approve: onTrustAgentHooks) + AgentWorkflowMenu.items(panes: window.panes, isEnabled: isHostConnected && hasCurrentHostState, open: onViewWorkflow)
+        ] + restartMenuItems(for: window) + AgentHookTrustMenu.items(panes: window.panes, isEnabled: isHostConnected && hasCurrentHostState, approve: onTrustAgentHooks) + AgentWorkflowMenu.items(panes: window.panes, isEnabled: isHostConnected && hasCurrentHostState, open: onViewWorkflow)
+    }
+
+    private func restartMenuItems(for window: TmuxWindow) -> [ContextMenuItem] {
+        guard let onRestartAgent else { return [] }
+        return AgentRestartMenu(panes: window.panes, unavailableReason: restartUnavailableReason, busyPaneIDs: restartingAgentPaneIDs, choose: onRestartAgent).contextMenuItems
     }
 
     private func openBrowserTabView(_ tab: BrowserTab) -> some View {

@@ -388,6 +388,103 @@ final public class TmuxService {
     }
 
     @ObservationIgnored var workspaceCloseHandler: WorkspaceRecoveryCloseHandler?
+    @ObservationIgnored private var restartedAgentSessions: [String: AgentSessionIdentity] = [:]
+
+    func shouldCloseAgentPane(after context: AgentSessionEndContext, eligible: Bool) -> Bool {
+        guard
+            let restarted = restartedAgentSessions.removeValue(forKey: context.pane.paneId),
+            restarted.source.pluginID == context.pluginID,
+            restarted.source.sessionID == context.conversationID,
+            restarted.runtimeID == context.pane.agentSession?.processRuntimeID,
+            restarted.source.workspaceIdentity?.isSamePane(as: context.pane.workspaceIdentity) == true else { return eligible }
+        return false
+    }
+
+    func restartAgent(_ proof: AgentSessionIdentity, command: AgentForkLaunch, validate: @escaping @MainActor @Sendable () async throws -> Void) async throws {
+        guard let gate = workflowInputGate else { throw AgentRestartError("The terminal input queue is not ready.") }
+        try await gate.human(paneID: proof.source.paneID) {
+            try await self.performAgentRestart(proof, command: command, validate: validate)
+        }
+    }
+
+    private func restartTerminal(_ source: AgentForkSource) async throws -> AgentRestartTerminal.Snapshot {
+        let result = try await runWorkspaceCommand([
+            ["display-message", "-p", "-t", source.paneID, AgentRestartTerminal.format],
+            ["show-options", "-p", "-q", "-t", source.paneID, "remain-on-exit"],
+        ], target: source.paneID, identity: source.workspaceIdentity)
+        return try AgentRestartTerminal.Snapshot(output: result.stdoutString)
+    }
+
+    private func performAgentRestart(_ proof: AgentSessionIdentity, command: AgentForkLaunch, validate: @MainActor @Sendable () async throws -> Void) async throws {
+        let source = proof.source
+        guard let workspace = source.workspaceIdentity else { throw AgentRestartError("The Agent terminal identity is not verified.") }
+        let preparation = SessionLaunchPreparation(workingDirectory: source.workingDirectory, fork: command)
+        guard let launch = try agentLaunch(preparation) else { throw AgentRestartError("The Agent returned no Resume command.") }
+        let shell = await recoveryShell()
+        // Return to a shell even if Resume reports a CLI error, preserving this tab.
+        let invocation = overrideCommandPrefix().map { "\($0); \(launch.command)" } ?? launch.command
+        let process = [loginShellPath, "-l", "-i", "-c", invocation + "; exec /bin/sh -c " + shell.command.posixSingleQuoted]
+        let original = try await restartTerminal(source)
+        let retain = AgentRestartTerminal.guardedCommands(paneID: source.paneID, snapshot: original, commands: [["set-option", "-p", "-t", source.paneID, "remain-on-exit", "on"]])
+        let retained = try await runWorkspaceCommand(retain, target: source.paneID, identity: workspace)
+        guard retained.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines) != AgentRestartTerminal.rejection else {
+            throw AgentRestartError("The terminal process changed before restart.")
+        }
+        @Dependency(AgentSessionIdentityClient.self) var identities
+        @Dependency(AgentRestartProcessClient.self) var processes
+        do {
+            // Recheck after taking the input queue, immediately before signalling.
+            try await validate()
+            try processes.terminate(proof.processID, proof.runtimeID)
+            // No suspension between SIGTERM and recording its owner. Keep this
+            // through timeouts/launch failures until that process's end is handled.
+            restartedAgentSessions[source.paneID] = proof
+            let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+            var ready: AgentRestartTerminal.Snapshot
+            while true {
+                ready = try await restartTerminal(source)
+                guard ready.processID == original.processID, ready.tty == original.tty else {
+                    throw AgentRestartError("The terminal process changed during restart. Its current process was kept.")
+                }
+                if identities.runtimeID(proof.processID) != proof.runtimeID {
+                    let occupants = try await processRunner.run(executable: "/bin/ps", arguments: ["-t", ready.tty, "-o", "pid="], environment: nil, timeout: 5)
+                    let pids = Set(occupants.stdoutString.split(whereSeparator: \.isWhitespace).map(String.init))
+                    guard occupants.isSuccess || (occupants.exitCode == 1 && pids.isEmpty) else {
+                        throw AgentRestartError("Could not verify that the Agent terminal is free.")
+                    }
+                    if ready.isDead ? pids.isEmpty : (pids == [ready.processID] && Self.knownShells.contains(ready.command)) {
+                        break
+                    }
+                }
+                guard ContinuousClock.now < deadline else {
+                    throw AgentRestartError("The Agent or one of its tools has not exited. Check the terminal before resuming manually.")
+                }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            let commands = try AgentRestartTerminal.launchCommands(paneID: source.paneID, original: original, ready: ready, directory: source.workingDirectory, process: process, environment: shell.environment, payload: launch.payload)
+            let guarded = try WorkspaceTerminalInputGuard.arguments(target: source.paneID, identity: workspace, commands: commands)
+            var arguments = ["source-file", "-"]
+            if let socketPath {
+                arguments = ["-S", socketPath] + arguments
+            }
+            // Provider secrets stay on stdin, never in tmux client arguments.
+            let script = guarded.map(\.posixSingleQuoted).joined(separator: " ") + "\n"
+            let result = try await processRunner.runWithInput(executable: tmuxPath, arguments: arguments, environment: ["TMUX": "", "TMUX_PANE": ""], timeout: nil, input: Data(script.utf8))
+            guard result.isSuccess, result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines) == AgentRestartTerminal.success else {
+                throw AgentRestartError("Could not resume the Agent in its original terminal. Check the tab before retrying. \(result.stderrString)")
+            }
+        } catch {
+            do {
+                let current = try await restartTerminal(source)
+                // Keep a dead pane for recovery; never alter a replacement process.
+                if !current.isDead, current.processID == original.processID {
+                    let restore = AgentRestartTerminal.guardedCommands(paneID: source.paneID, snapshot: current, commands: AgentRestartTerminal.restoreCommands(paneID: source.paneID, snapshot: original))
+                    _ = try await runWorkspaceCommand(restore, target: source.paneID, identity: workspace)
+                }
+            } catch { logger.warning("Could not restore terminal exit settings after Agent restart: \(error)") }
+            throw error
+        }
+    }
 
     @ObservationIgnored
     @Dependency(ProcessRunner.self) private var processRunner
@@ -666,6 +763,7 @@ final public class TmuxService {
         let retainedPaneIDs = Set(newPanes.map(\.paneId)).union(newerQuestionPaneIDs)
         codexQuestionStates = codexQuestionStates.filter { retainedPaneIDs.contains($0.key) }
         codexQuestionIDs = codexQuestionIDs.filter { retainedPaneIDs.contains($0.key) }
+        restartedAgentSessions = restartedAgentSessions.filter { retainedPaneIDs.contains($0.key) }
         // Even an unchanged snapshot can now confirm closure of a pane whose
         // question was protected during the preceding refresh.
         guard Set(panes) != Set(newPanes) else { return }

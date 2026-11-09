@@ -23,22 +23,31 @@ public struct AgentSession: Codable, Sendable, Equatable {
     /// (`markHandled`). The open response form, when any, rides the `awaiting*`
     /// cases, so it travels in the snapshot/status messages automatically.
     public var state: AgentState
+    /// Host-verified process incarnation; absent on older Hosts or before detection.
+    public var processRuntimeID: String?
 
     public init(
         paneId: String,
         pluginID: String = "claude-code",
         detectedProjectPath: String? = nil,
-        state: AgentState = .idle
+        state: AgentState = .idle,
+        processRuntimeID: String? = nil
     ) {
         self.paneId = paneId
         self.pluginID = pluginID
         self.detectedProjectPath = detectedProjectPath
         self.state = state
+        self.processRuntimeID = processRuntimeID
     }
 
     /// Derived for the many UI/sort read sites that still ask these questions.
-    public var isWorking: Bool { state.isActiveWorking }
-    public var needsAttention: Bool { state.needsAttention }
+    public var isWorking: Bool {
+        state.isActiveWorking
+    }
+
+    public var needsAttention: Bool {
+        state.needsAttention
+    }
 
     /// The project folder name from the detected project path (last component),
     /// e.g. "Ctrlx" from "/Users/user/Dev/Ctrlx".
@@ -69,7 +78,9 @@ public struct AgentSession: Codable, Sendable, Equatable {
     /// an `awaiting*` state here). This replaces the former `panesWithBlockingForm`
     /// guard entirely (spec §"Ownership of transitions").
     public mutating func markHandled() {
-        if case .doneWorking = state { state = .idle }
+        if case .doneWorking = state {
+            state = .idle
+        }
     }
 
     // MARK: - Codable
@@ -81,6 +92,7 @@ public struct AgentSession: Codable, Sendable, Equatable {
         case pluginID
         case detectedProjectPath
         case state
+        case processRuntimeID
     }
 
     public init(from decoder: Decoder) throws {
@@ -89,5 +101,6 @@ public struct AgentSession: Codable, Sendable, Equatable {
         self.pluginID = try container.decodeIfPresent(String.self, forKey: .pluginID) ?? "claude-code"
         self.detectedProjectPath = try container.decodeIfPresent(String.self, forKey: .detectedProjectPath)
         self.state = try container.decodeIfPresent(AgentState.self, forKey: .state) ?? .idle
+        self.processRuntimeID = try container.decodeIfPresent(String.self, forKey: .processRuntimeID)
     }
 }

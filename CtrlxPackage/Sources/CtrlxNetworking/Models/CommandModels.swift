@@ -1224,6 +1224,7 @@ public enum CommandType: Codable, Sendable, Equatable {
     case createTmuxWindow(CreateTmuxWindow)
     case prepareAgentFork(PrepareAgentFork)
     case forkAgentSession(ForkAgentSession)
+    case restartAgentSession(RestartAgentSession)
     /// Submit edited prompt content from a viewer
     case submitEditorContent(SubmitEditorContent)
     /// Cancel an active editor session from a viewer

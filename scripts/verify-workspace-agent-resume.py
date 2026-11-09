@@ -8,9 +8,11 @@ Artifacts remain at --output; temporary fixture paths are included in the report
 import argparse
 import ctypes
 import json
+import os
 import pathlib
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -36,7 +38,7 @@ def verify_process_root(pid, name, root):
 
 
 
-def verify(agent, scenario, output, tmux_path):
+def verify(agent, scenario, output, tmux_path, exit_and_resume=False):
     cli = shutil.which(agent)
     if not cli:
         raise RuntimeError(f"{agent} is not installed")
@@ -73,8 +75,11 @@ trust_level = "trusted"
     def tmux(*arguments, check=True):
         return subprocess.run([tmux_path, "-S", socket, "-f", "/dev/null", *arguments], text=True, capture_output=True, check=check, timeout=10)
 
-    def start(arguments):
+    def start(arguments, resume=False):
         command = "exec /usr/bin/env -i " + shlex.join([f"{key}={value}" for key, value in env.items()] + arguments)
+        if resume:
+            tmux("respawn-pane", "-t", "fixture:", command)
+            return
         tmux("new-session", "-d", "-s", "fixture", "-x", "120", "-y", "40", "-c", str(repo), "/bin/sleep 60")
         tmux("set-option", "-p", "-t", "fixture:", "remain-on-exit", "on")
         tmux("respawn-pane", "-k", "-t", "fixture:", command)
@@ -83,7 +88,7 @@ trust_level = "trusted"
         return tmux("capture-pane", "-p", "-S", "-200", "-t", "fixture:").stdout
 
     prefix = output / f"{agent}-{scenario}"
-    report = {"agent": agent, "scenario": scenario, "version": version, "fixture_root": str(root), "automatic_resume_safe": False}
+    report = {"agent": agent, "scenario": scenario, "version": version, "fixture_root": str(root), "automatic_resume_safe": False, "exit_and_resume": exit_and_resume}
     try:
         start(initial)
         accepted_key = accepted_folder = False
@@ -129,9 +134,20 @@ trust_level = "trusted"
         report["session_id"] = session_id
         report["initial_arguments"] = initial[1:]
         report["resume_arguments"] = resumed[1:]
-        tmux("kill-session", "-t", "fixture")
+        before_route = tmux("display-message", "-p", "-t", "fixture:", "#{pid}:#{start_time}:#{pane_id}").stdout.strip()
+        if exit_and_resume:
+            if not verify_process_root(pid, root_key, config):
+                raise RuntimeError("The fixture process changed before exit")
+            os.kill(pid, signal.SIGTERM)
+            deadline = time.monotonic() + 10
+            while tmux("display-message", "-p", "-t", "fixture:", "#{pane_dead}").stdout.strip() != "1":
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("The native Agent did not exit after SIGTERM")
+                time.sleep(0.1)
+        else:
+            tmux("kill-session", "-t", "fixture")
         requests_before = len(server.requests)
-        start(resumed)
+        start(resumed, resume=exit_and_resume)
         # Observe real native startup, including delayed background continuation.
         time.sleep(8)
         text = screen()
@@ -140,8 +156,10 @@ trust_level = "trusted"
         same_history = list(config.rglob("rollout-*.jsonl" if agent == "codex" else session_id + ".jsonl")) == histories
         new_requests = len(server.requests) - requests_before
         report.update({"new_requests_on_resume": new_requests, "approval_executed": marker.exists(), "same_history": same_history, "alive": alive})
+        if exit_and_resume:
+            report["same_pane"] = before_route == tmux("display-message", "-p", "-t", "fixture:", "#{pid}:#{start_time}:#{pane_id}").stdout.strip()
         recovered_text = "RECOVERY_IDLE_FIXTURE" in text if scenario == "idle" else "Say fixture ready." in text
-        report["automatic_resume_safe"] = alive and same_history and recovered_text and not marker.exists() and new_requests == 0
+        report["automatic_resume_safe"] = alive and same_history and recovered_text and not marker.exists() and new_requests == 0 and report.get("same_pane", True)
     except Exception as error:
         report["error"] = str(error)
     finally:
@@ -158,12 +176,13 @@ def main():
     parser.add_argument("--agent", choices=["codex", "claude", "all"], default="all")
     parser.add_argument("--scenario", choices=["idle", "interrupted", "approval", "all"], default="all")
     parser.add_argument("--output", type=pathlib.Path, required=True)
+    parser.add_argument("--exit-and-resume", action="store_true", help="Ask the fixture Agent to exit with SIGTERM, then resume in the same pane")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     tmux = shutil.which("tmux")
     if not tmux:
         parser.error("tmux is required")
-    reports = [verify(agent, scenario, args.output, tmux)
+    reports = [verify(agent, scenario, args.output, tmux, args.exit_and_resume)
                for agent in (["codex", "claude"] if args.agent == "all" else [args.agent])
                for scenario in (["idle", "interrupted", "approval"] if args.scenario == "all" else [args.scenario])]
     (args.output / "report.json").write_text(json.dumps(reports, indent=2) + "\n")

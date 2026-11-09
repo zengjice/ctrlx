@@ -136,6 +136,7 @@ public actor TmuxCommandExecutor {
                  .createTmuxWindow,
                  .prepareAgentFork,
                  .forkAgentSession,
+                 .restartAgentSession,
                  .setSharedTerminalLayout,
                  .setYoloMode,
                  .markHandled,

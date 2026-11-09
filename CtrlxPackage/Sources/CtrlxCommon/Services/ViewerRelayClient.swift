@@ -686,6 +686,8 @@ final public class ViewerRelayClient {
             targetBinding = workspaceInputState.binding(paneID: spec.sourcePaneID)
         case let .forkAgentSession(spec):
             targetBinding = workspaceInputState.binding(paneID: spec.source.paneID)
+        case let .restartAgentSession(spec):
+            targetBinding = workspaceInputState.binding(paneID: spec.source.paneID)
         case let .createTmuxWindow(spec):
             targetBinding = spec.resourceSessionID == nil ? workspaceInputState.sessionBinding(name: spec.sessionName) : nil
         case let .moveTmuxWindows(spec):
@@ -882,6 +884,8 @@ final public class ViewerRelayClient {
         case let .prepareSessionWorktree(spec):
             return await (try? sendCommand(spec, paneId: "").get()) != nil
         case let .forkAgentSession(spec):
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
+        case let .restartAgentSession(spec):
             return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .submitEditorContent(spec):
             return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
