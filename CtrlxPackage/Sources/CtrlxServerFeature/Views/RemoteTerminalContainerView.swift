@@ -601,6 +601,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
     @Environment(\.terminalQuickActions) private var quickActions
     @Environment(\.openTerminalFileLink) private var openFileLink
     @Environment(\.terminalViewportInteraction) private var viewportInteraction
+    @Environment(\.terminalContentMenu) private var contextMenu
 
     private var openPathAction: (@MainActor (String) -> Void)? {
         guard let openFileLink else { return nil }
@@ -652,6 +653,9 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
         coordinator.terminalView.onOpenURL = { url, behavior in onOpenURL?(url, paneId, behavior) ?? false }
         coordinator.terminalView.onOpenPath = openPathAction
         coordinator.terminalView.onContentClick = { viewportInteraction?(connection.id, paneId) }
+        if let contextMenu {
+            coordinator.terminalView.onContextMenu = { contextMenu(connection.id, paneId) }
+        }
         // Route image pastes through the SwiftUI parent so the upload state
         // and cancel popover live alongside the terminal view in the body
         // hierarchy. Returning `true` consumes the paste — `Ctrl+V` is sent
@@ -692,6 +696,11 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
         nsView.onOpenURL = { url, behavior in onOpenURL?(url, paneId, behavior) ?? false }
         nsView.onOpenPath = openPathAction
         nsView.onContentClick = { viewportInteraction?(connection.id, paneId) }
+        if let contextMenu {
+            nsView.onContextMenu = { contextMenu(connection.id, paneId) }
+        } else {
+            nsView.onContextMenu = nil
+        }
         nsView.onImagePaste = { [weak coordinator] image in
             coordinator?.quickActionEndpoint?.recordInput()
             onImagePaste(image)
@@ -909,6 +918,7 @@ private struct RemoteTerminalNSView: NSViewRepresentable {
             terminalView.onOpenURL = nil
             terminalView.onOpenPath = nil
             terminalView.onContentClick = nil
+            terminalView.onContextMenu = nil
 
             keystrokeDebouncer?.cancelAll()
             keystrokeDebouncer = nil

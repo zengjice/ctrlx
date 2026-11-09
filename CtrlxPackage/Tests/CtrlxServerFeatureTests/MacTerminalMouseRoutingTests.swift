@@ -19,6 +19,106 @@
     @MainActor
     @Suite("Mac terminal mouse routing", .serialized)
     struct MacTerminalMouseRoutingTests {
+        @Test("Content right clicks preserve selection, keyboard focus and terminal input", arguments: [0, 1], [false, true])
+        func contentMenuMouseOwnership(paneIndex: Int, mouseMode: Bool) throws {
+            let (window, panes) = makeTerminalWindow()
+            defer { withExtendedLifetime(window) { } }
+            let view = panes[paneIndex]
+            try drag(in: view)
+            let selection = view.getSelectedTextTrimmed()
+            panes[1 - paneIndex].focusTerminal()
+            if mouseMode {
+                enableMouseMode(1_002, in: view)
+            }
+            var raw: [Data] = []
+            var keys: [TmuxKey] = []
+            var menus = 0
+            view.onRawInput = { raw.append($0) }
+            view.onInput = { keys += $0 }
+            view.onContextMenu = {
+                menus += 1
+                return []
+            }
+            let recipient = try mouseRecipient(in: view)
+            try recipient.rightMouseDown(with: rightMouse(.rightMouseDown, in: view))
+            view.feed(byteArray: Array("\u{1b}[4;1Houtput while menu is open".utf8)[...])
+            try recipient.rightMouseDragged(with: rightMouse(.rightMouseDragged, in: view, modifiers: .option))
+            try recipient.rightMouseUp(with: rightMouse(.rightMouseUp, in: view, modifiers: .option))
+            #expect(menus == 1)
+            #expect(raw.isEmpty && keys.isEmpty)
+            #expect(view.getSelectedTextTrimmed() == selection)
+            #expect(window.firstResponder === panes[1 - paneIndex].terminalView)
+        }
+
+        @Test("Option right click preserves complete SGR, pixel and legacy mouse sequences", arguments: [false, true], [1_006, 1_016, 0])
+        func contentMenuOptionBypass(releaseOption: Bool, encoding: Int) throws {
+            let (window, panes) = makeTerminalWindow()
+            defer { withExtendedLifetime(window) { } }
+            let view = panes[1]
+            enableMouseMode(1_002, in: view)
+            if encoding == 1_016 {
+                view.feed(byteArray: Array("\u{1b}[?1016h".utf8)[...])
+            } else if encoding == 0 {
+                view.feed(byteArray: Array("\u{1b}[?1006l".utf8)[...])
+            }
+            var raw: [Data] = []
+            view.onRawInput = { raw.append($0) }
+            view.onContextMenu = { Issue.record("Option right click must bypass CtrlX")
+                return []
+            }
+            let recipient = try mouseRecipient(in: view)
+            try recipient.rightMouseDown(with: rightMouse(.rightMouseDown, in: view, modifiers: .option))
+            let flags: NSEvent.ModifierFlags = releaseOption ? [] : .option
+            try recipient.rightMouseDragged(with: rightMouse(.rightMouseDragged, in: view, modifiers: flags))
+            try recipient.rightMouseUp(with: rightMouse(.rightMouseUp, in: view, modifiers: flags))
+            if encoding == 0 {
+                #expect(raw == [
+                    Data([0x1B, 0x5B, 0x4D, 42, 37, 38]),
+                    Data([0x1B, 0x5B, 0x4D, releaseOption ? 66 : 74, 37, 38]),
+                    Data([0x1B, 0x5B, 0x4D, releaseOption ? 35 : 43, 37, 38]),
+                ])
+            } else {
+                let x = encoding == 1_006 ? 5 : Int(view.cellSize.width * 4.5)
+                let y = encoding == 1_006 ? 6 : Int(view.cellSize.height * 5.5)
+                let expected = [
+                    "\u{1b}[<10;\(x);\(y)M",
+                    "\u{1b}[<\(releaseOption ? 34 : 42);\(x);\(y)M",
+                    "\u{1b}[<\(releaseOption ? 2 : 10);\(x);\(y)m",
+                ].map { Data($0.utf8) }
+                #expect(raw == expected)
+            }
+            let ordinaryRelease = Array("\u{1b}[<0;5;6m".utf8)
+            view.send(source: view.terminalView, data: ordinaryRelease[...])
+            #expect(raw.last == Data(ordinaryRelease))
+        }
+
+        @Test("The composer and non-right-click events do not open the content menu")
+        func contentMenuEligibility() throws {
+            let (window, panes) = makeTerminalWindow()
+            defer { withExtendedLifetime(window) { } }
+            let view = panes[0]
+            var menus = 0
+            view.onContextMenu = { menus += 1
+                return []
+            }
+            view.isEditorActive = true
+            let editorItems = try view.contentMenuItems(for: rightMouse(.rightMouseDown, in: view))
+            #expect(editorItems == nil)
+            view.isEditorActive = false
+            let releaseItems = try view.contentMenuItems(for: rightMouse(.rightMouseUp, in: view))
+            #expect(releaseItems == nil)
+            #expect(menus == 0)
+        }
+
+        private func rightMouse(_ type: NSEvent.EventType, in view: InteractiveTerminalView, modifiers: NSEvent.ModifierFlags = []) throws -> NSEvent {
+            let window = try #require(view.window)
+            return try #require(NSEvent.mouseEvent(
+                with: type, location: view.terminalView.convert(NSPoint(x: view.cellSize.width * 4.5, y: view.terminalView.frame.height - view.cellSize.height * 5.5), to: nil),
+                modifierFlags: modifiers, timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+            ))
+        }
+
         @Test("Focus Fit requires a real first-responder transition")
         func focusRestoration() {
             let (window, panes) = makeTerminalWindow(key: true)

@@ -9,6 +9,35 @@ import Testing
 
 @MainActor
 struct WorkspaceGitRecoveryTests {
+    @Test("Explicit and recovered Git directories survive another pane's cwd and refresh", arguments: [false, true])
+    func retainedDirectory(recovered: Bool) async {
+        let provider = MockGitProvider(delay: .zero)
+        let saved = WorkspaceGitState(directory: "/repo/B", store: GitWorkbenchStore(provider: provider))
+        let entry = GitStoreEntry(
+            path: "/repo/B",
+            provider: provider,
+            configuration: .init(),
+            recovery: recovered ? saved : nil,
+            retainsDirectory: !recovered
+        )
+        for directory in ["/repo/A", "/repo/A/later"] {
+            #expect(entry.directory(for: directory) == "/repo/B")
+            await entry.load()
+            #expect(entry.directory(for: directory) == "/repo/B")
+            #expect(entry.snapshot.directory == "/repo/B")
+        }
+        let restored = GitStoreEntry(path: "/repo/B", provider: provider, configuration: .init(), recovery: entry.snapshot)
+        #expect(restored.directory(for: "/repo/A") == "/repo/B")
+    }
+
+    @Test("An unpinned store still follows directory changes, and explicit reuse can retain it")
+    func retainExistingDirectory() {
+        let entry = GitStoreEntry(path: "/repo/B", provider: MockGitProvider(delay: .zero), configuration: .init())
+        #expect(entry.directory(for: "/repo/A") == "/repo/A")
+        entry.retainsDirectory = true
+        #expect(entry.directory(for: "/repo/A") == "/repo/B")
+    }
+
     private struct Repository {
         let url: URL
 

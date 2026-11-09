@@ -33,6 +33,24 @@ Host; an older Viewer still disables the action locally from cached Working stat
 See [Codex hook approval](plugins/codex.md#approving-changed-hooks-without-leaving-the-conversation)
 for input checks and compatibility limits.
 
+## Mac terminal content menu
+
+Right-click the content of an Agent or Terminal tab to open **New Agent…**,
+**New Terminal**, **New Files**, **New Browser**, **New iOS Simulator**, and
+**Open Git**, followed by **Fit Terminal**. Creation uses the same actions and
+Host capabilities as the tab strip's **＋** picker; Open Git remains local-only.
+This works in the main workbench, split panes and detached workbenches on Mac
+Host and Viewer. The clicked pane supplies the Host, session and current directory,
+even when another pane has keyboard focus. New tabs follow the existing picker’s
+placement and selection rules. Fit targets the clicked terminal's tmux window.
+Open Git retains the explicitly chosen directory for rendering, changed-file
+counts and background refresh; another pane's directory cannot retarget it.
+
+Opening the native menu preserves text selection and sends no terminal input.
+Hold **Option** while right-clicking to bypass it and pass the click to a terminal
+application with mouse reporting enabled. The native prompt editor retains its
+own editing menu. A disconnected or replaced source cannot run stale menu actions.
+
 ## Mac keyboard shortcuts
 
 The File, Edit, View and Window menus show the fixed shortcuts. New-session,

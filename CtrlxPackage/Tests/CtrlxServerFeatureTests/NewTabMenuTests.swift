@@ -54,6 +54,25 @@
             #expect(menu.items.last?.isEnabled == false)
         }
 
+        @Test("Content menus reuse creation actions without triggering them while opening")
+        func sharedCreationActions() {
+            var invoked: [NewTabMenuItem.ID] = []
+            let items = NewTabMenuItem.creationItems(
+                onNewAgent: { invoked.append(.agent) },
+                onNewTerminal: { invoked.append(.terminal) },
+                onNewResource: { invoked.append(.resource($0)) },
+                onOpenGit: { invoked.append(.git) }
+            )
+            #expect(items.map(\.title) == ["New Agent…", "New Terminal", "New Files", "New Browser", "New iOS Simulator", "Open Git"])
+            #expect(invoked.isEmpty)
+            for item in items {
+                item.action()
+            }
+            #expect(invoked == items.map(\.id))
+            let remote = NewTabMenuItem.creationItems(onNewAgent: { }, onNewTerminal: { }, onNewResource: { _ in })
+            #expect(remote.map(\.id) == Array(items.dropLast()).map(\.id))
+        }
+
         @Test("Return opens Agent by default; arrows select other enabled entries", arguments: [0, 1, 2])
         func keyboardSelection(mode: Int) async throws {
             _ = NSApplication.shared

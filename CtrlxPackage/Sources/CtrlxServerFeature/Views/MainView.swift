@@ -278,6 +278,7 @@ public struct MainView: View {
     @State private var showingNewTabMenu = false
     @State private var showingSessionSwitcher = false
     @State private var pendingAgentFork: AgentForkConfiguration?
+    @State private var pendingTerminalAgent: NewAgentTabConfiguration?
     @State private var showingNewLocalSession = false
     @State private var detailPaneSize: CGSize = .zero
     @State private var automaticTabFit = TerminalTabFit()
@@ -430,6 +431,7 @@ public struct MainView: View {
             .environment(\.workbenchWindowID, detachedWorkspace?.id)
             .environment(\.terminalQuickActions, terminalQuickActions)
             .environment(\.terminalViewportInteraction, fitTerminalIfViewportChanged)
+            .environment(\.terminalContentMenu, terminalContentMenuItems)
             .environment(\.openTerminalFileLink) { request in pendingFileLink = request }
             .terminalFileLinkTask($pendingFileLink) { request in
                 await openTerminalFile(request)
@@ -688,6 +690,10 @@ public struct MainView: View {
         .sheet(item: $pendingAgentFork) { configuration in
             AgentForkPanel(configuration: configuration)
         }
+        .sheet(item: $pendingTerminalAgent) { configuration in
+            NewAgentTabPanel(configuration: configuration)
+        }
+        .onChange(of: sidebarSessionSelection.wrappedValue) { pendingTerminalAgent = nil }
         // Consent dialog for the editor-override conflict (issue #591). Deferred
         // to the first session so "Ctrl-G" has context; fires on whichever of
         // {session appears, probe finishes} happens last.
@@ -1812,26 +1818,7 @@ public struct MainView: View {
                             tabs?.selectedBrowserTabId = nil
                         },
                         onSelectGitBrowser: {
-                            // Build the per-session store synchronously now (it's
-                            // cheap) so gitPane takes its `if` branch and renders
-                            // GitBrowserView immediately, instead of flashing a
-                            // ProgressView for one frame while a `.task` runs.
-                            // ensureGitStore is idempotent, so this is harmless when
-                            // the store already exists for this folder.
-                            ensureGitStore(sessionName: session.sessionName, directoryPath: directoryPath)
-                            if sessionFileTabsStates[session.sessionName] == nil {
-                                sessionFileTabsStates[session.sessionName] = SessionFileTabsState()
-                            }
-                            let tabs = sessionFileTabsStates[session.sessionName]
-                            if tabs?.rightSide.contains(.git) == true {
-                                // Git button lives on the right pane: route the
-                                // click to the right-side selection so the left
-                                // pane is untouched.
-                                tabs?.selectedRight = .git
-                                return
-                            }
-                            fileBrowserActiveWindowIds.remove(windowID)
-                            tabs?.selectLeftGit()
+                            openGitTab(sessionName: session.sessionName, directory: directoryPath, windowID: windowID)
                         },
                         onCloseGitBrowser: {
                             closeGitTab(sessionName: session.sessionName)
@@ -2411,7 +2398,7 @@ public struct MainView: View {
         directoryPath requestedPath: String
     ) -> some View {
         let existing = gitWorkbenchStores[sessionName]
-        let directoryPath = existing?.retainsRecoveredDirectory == true ? existing?.path ?? requestedPath : requestedPath
+        let directoryPath = existing?.directory(for: requestedPath) ?? requestedPath
         if let entry = gitWorkbenchStores[sessionName], entry.path == directoryPath {
             GitRecoveryContent(entry: entry) {
                 GitBrowserView(
@@ -2456,7 +2443,7 @@ public struct MainView: View {
     private func gitChangedFileCount(sessionName: String, directoryPath: String) -> Int {
         guard
             let entry = gitWorkbenchStores[sessionName],
-            entry.path == directoryPath || entry.retainsRecoveredDirectory
+            entry.path == directoryPath || entry.retainsDirectory
         else { return 0 }
         return entry.store.summary?.changedFileCount ?? 0
     }
@@ -2466,11 +2453,7 @@ public struct MainView: View {
     @MainActor
     private func eagerlyLoadGitStatus(sessionName: String, directoryPath: String) async {
         guard coordinator.workspaceRecoveryReady else { return }
-        // A recovered Git preview owns its saved directory. Only an explicit Git
-        // selection may retarget it; a terminal's startup cwd must not erase it.
-        if tabStore.pendingGitRecoverySessions.contains(sessionName) || gitWorkbenchStores[sessionName]?.retainsRecoveredDirectory != true {
-            ensureGitStore(sessionName: sessionName, directoryPath: directoryPath)
-        }
+        ensureGitStore(sessionName: sessionName, directoryPath: directoryPath)
         await gitWorkbenchStores[sessionName]?.load()
     }
 
@@ -2480,11 +2463,15 @@ public struct MainView: View {
     /// root is passed as `repositoryURL` so the Changes-tab file callbacks get
     /// absolute URLs.
     @MainActor
-    private func ensureGitStore(sessionName: String, directoryPath requestedPath: String) {
+    private func ensureGitStore(sessionName: String, directoryPath requestedPath: String, selectingDirectory: Bool = false) {
         guard coordinator.workspaceRecoveryReady else { return }
         let recovery = tabStore.takeGitRecovery(for: sessionName)
-        let directoryPath = recovery?.directory ?? requestedPath
+        let directoryPath = selectingDirectory ? requestedPath
+            : recovery?.directory ?? gitWorkbenchStores[sessionName]?.directory(for: requestedPath) ?? requestedPath
         if recovery == nil, let entry = gitWorkbenchStores[sessionName], entry.path == directoryPath {
+            if selectingDirectory {
+                entry.retainsDirectory = true
+            }
             return
         }
         let provider = gitProviderClient.provider(URL(fileURLWithPath: directoryPath))
@@ -2495,7 +2482,8 @@ public struct MainView: View {
                 repositoryURL: URL(fileURLWithPath: directoryPath),
                 preferences: preferences
             ),
-            recovery: recovery
+            recovery: recovery,
+            retainsDirectory: selectingDirectory
         )
         gitWorkbenchStores[sessionName] = entry
     }
@@ -3680,14 +3668,108 @@ public struct MainView: View {
         return currentLocalSession() != nil
     }
 
-    private func createTerminalTab() {
+    private func terminalMenuPane(hostID: String?, paneID: String) -> PaneState? {
+        if let hostID {
+            return coordinator.remoteSessionStore?.paneState(for: paneID, hostId: hostID)
+        }
+        return windowManager.paneStates[paneID]
+    }
+
+    private func terminalMenuTargetIsCurrent(_ target: TerminalContentMenuTarget, binding: ViewerWorkspaceInputBinding) -> Bool {
+        guard
+            target.hostID == selectedRemoteSession?.hostId,
+            target.sessionName == (selectedRemoteSession?.sessionName ?? currentLocalSession()?.sessionName),
+            ownsTerminal(hostID: target.hostID, windowID: target.windowID),
+            target.matches(hostID: target.hostID, pane: terminalMenuPane(hostID: target.hostID, paneID: target.paneID)) else { return false }
+        if let hostID = target.hostID {
+            guard let client = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient, client.isHostConnected else { return false }
+            do { _ = try binding.expectedPane(current: client.workspaceInputState.binding(paneID: target.paneID)) }
+            catch { return false }
+            return true
+        }
+        return coordinator.workspaceRecoveryReady && target.workspacePane != nil
+    }
+
+    private func terminalContentMenuItems(hostID: String?, paneID: String) -> [ContextMenuItem] {
+        guard let pane = terminalMenuPane(hostID: hostID, paneID: paneID), let target = TerminalContentMenuTarget(hostID: hostID, pane: pane) else { return [] }
+        let client = hostID.flatMap { coordinator.viewerConnectionManager?.connection(for: $0)?.relayClient }
+        let binding = client?.workspaceInputState.binding(paneID: paneID) ?? .unavailable
+        let available = terminalMenuTargetIsCurrent(target, binding: binding)
+        let configuration = agentTabConfiguration(sessionName: target.sessionName, hostID: hostID, fallbackDirectory: target.directory, sourcePaneID: paneID)
+        let resourceID = hostID == nil
+            ? coordinator.resourceSessions.sessions.first { $0.name == target.sessionName }?.id
+            : client?.resourceSessions.first { $0.name == target.sessionName }?.id
+        var newResource: (@MainActor (ResourceTabKind) -> Void)?
+        if supportsIndependentResources(hostID: hostID), let resourceID {
+            newResource = { kind in
+                openIndependentResource(
+                    kind,
+                    hostID: hostID,
+                    sessionName: target.sessionName,
+                    location: kind == .files ? target.directory : nil,
+                    expectedSessionID: resourceID
+                )
+            }
+        }
+        var openGit: (@MainActor () -> Void)?
+        if hostID == nil, let directory = target.directory {
+            openGit = { openGitTab(sessionName: target.sessionName, directory: directory, windowID: pane.windowId, selectingDirectory: true) }
+        }
+        let actions = NewTabMenuItem.creationItems(
+            isTerminalDisabled: !canCreateTerminal,
+            onNewAgent: { pendingTerminalAgent = configuration },
+            onNewTerminal: { createTerminalTab(source: target) },
+            onNewResource: newResource, onOpenGit: openGit
+        )
+        var items = actions.map { item in
+            ContextMenuItem.button(title: item.title, isEnabled: available && item.isEnabled) {
+                guard terminalMenuTargetIsCurrent(target, binding: binding) else {
+                    attachError = "This terminal changed or disconnected. Reopen its menu."
+                    return
+                }
+                item.action()
+            }
+        }
+        let fit = resizeRequest(
+            hostID: hostID,
+            sessionName: target.sessionName,
+            windowTarget: target.windowID,
+            width: effectiveTerminalWidth(tabs: currentSessionTabs, windowId: target.windowID)
+        )
+        items.append(.divider)
+        items.append(.button(title: "Fit Terminal", isEnabled: available && (hostID == nil || client?.hostSupportsTerminalFit == true)) {
+            guard terminalMenuTargetIsCurrent(target, binding: binding) else {
+                attachError = "This terminal changed or disconnected. Reopen its menu."
+                return
+            }
+            automaticTabFit.cancel()
+            Task { await performResize([fit]) }
+        })
+        return items
+    }
+
+    private func openGitTab(sessionName: String, directory: String, windowID: String, selectingDirectory: Bool = false) {
+        ensureGitStore(sessionName: sessionName, directoryPath: directory, selectingDirectory: selectingDirectory)
+        if sessionFileTabsStates[sessionName] == nil {
+            sessionFileTabsStates[sessionName] = SessionFileTabsState()
+        }
+        let tabs = sessionFileTabsStates[sessionName]
+        if tabs?.rightSide.contains(.git) == true {
+            tabs?.selectedRight = .git
+        } else {
+            fileBrowserActiveWindowIds.remove(windowID)
+            tabs?.selectLeftGit()
+        }
+    }
+
+    private func createTerminalTab(source: TerminalContentMenuTarget? = nil) {
         guard canCreateTerminal, let selection = sidebarSessionSelection.wrappedValue else { return }
         recordUserTabSelection()
         let hostID = selectedRemoteSession?.hostId
         let sessionName = selectedRemoteSession?.sessionName ?? currentLocalSession()?.sessionName ?? ""
         let onRight = targetsRightPane
         let tabs = currentSessionTabs
-        let sourceID = menuTerminalWindowID
+        let sourceID = source?.windowID ?? menuTerminalWindowID
         let focused = terminalQuickActions.active
         let sourcePane = focused.flatMap { endpoint -> PaneState? in
             guard endpoint.isAvailable, endpoint.hostID == hostID else { return nil }
@@ -3699,14 +3781,15 @@ public struct MainView: View {
             }
             return pane?.sessionName == sessionName && pane?.stableWindowId == sourceID ? pane : nil
         }
-        let directory = tabs?.selectedDirectoryPath(onRight: onRight) ?? sourcePane?.currentPath ?? (hostID == nil
+        let inheritedDirectory = tabs?.selectedDirectoryPath(onRight: onRight) ?? sourcePane?.currentPath ?? (hostID == nil
             ? localDirectoryPath(
                 sessionName: sessionName,
                 window: currentLocalSession()?.windows.first { $0.stableId == sourceID },
                 onRight: onRight
             )
             : selectedRemoteSessionWindows.first { $0.stableId == sourceID }?.activePane?.currentPath)
-        let localIdentity = tmuxService.panes.first { $0.sessionName == sessionName }?.workspaceIdentity
+        let directory = source.map { $0.directory } ?? inheritedDirectory
+        let localIdentity = source?.workspacePane ?? tmuxService.panes.first { $0.sessionName == sessionName }?.workspaceIdentity
         let remoteBinding = hostID.flatMap { coordinator.viewerConnectionManager?.connection(for: $0)?.relayClient.workspaceInputState.sessionBinding(name: sessionName) } ?? .unavailable
         isCreatingTerminal = true
         Task {
@@ -5466,27 +5549,29 @@ public struct MainView: View {
         hostID == nil || hostID.flatMap { coordinator.viewerConnectionManager?.connection(for: $0)?.relayClient.hostSupportsIndependentResources } == true
     }
 
-    private func requestIndependentResource(_ kind: ResourceTabKind, hostID: String?, sessionName: String, location: String? = nil) async throws -> ResourceTabResponse {
+    private func requestIndependentResource(_ kind: ResourceTabKind, hostID: String?, sessionName: String, location: String? = nil, expectedSessionID: UUID? = nil) async throws -> ResourceTabResponse {
         if let hostID {
             guard
                 let client = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient,
                 let session = client.resourceSessions.first(where: { $0.name == sessionName }) else {
                 throw FileBrowserError.message("Refresh the Host session list before opening a tab.")
             }
+            guard expectedSessionID == nil || session.id == expectedSessionID else { throw FileBrowserError.message("The session changed. Reopen its terminal menu.") }
             return try await ResourceTabClient.request(.init(sessionID: session.id, operation: .open(kind: kind, location: location)), client: client)
         }
         guard let session = coordinator.resourceSessions.sessions.first(where: { $0.name == sessionName }) else {
             throw FileBrowserError.message("The session is still being discovered. Try again shortly.")
         }
+        guard expectedSessionID == nil || session.id == expectedSessionID else { throw FileBrowserError.message("The session changed. Reopen its terminal menu.") }
         return try await coordinator.handleResourceTab(.init(sessionID: session.id, operation: .open(kind: kind, location: location)))
     }
 
-    private func openIndependentResource(_ kind: ResourceTabKind, hostID: String?, sessionName: String, location: String? = nil, selectedFile: String? = nil, focusSearch: Bool = false) {
+    private func openIndependentResource(_ kind: ResourceTabKind, hostID: String?, sessionName: String, location: String? = nil, selectedFile: String? = nil, focusSearch: Bool = false, expectedSessionID: UUID? = nil) {
         let target = ManualBrowserTarget(hostID: hostID, sessionName: sessionName)
         let selection = browserOpenSelection(for: target)
         Task {
             do {
-                let result = try await requestIndependentResource(kind, hostID: hostID, sessionName: sessionName, location: location)
+                let result = try await requestIndependentResource(kind, hostID: hostID, sessionName: sessionName, location: location, expectedSessionID: expectedSessionID)
                 if let file = result.file {
                     _ = try claimHostFileTab(file, hostID: hostID)
                     guard browserOpenSelection(for: target) == selection else { return }
@@ -6816,7 +6901,7 @@ public struct MainView: View {
     }
 
     private func agentTabConfiguration(
-        sessionName: String, hostID: String?, fallbackDirectory: String?
+        sessionName: String, hostID: String?, fallbackDirectory: String?, sourcePaneID: String? = nil
     ) -> NewAgentTabConfiguration {
         let store = coordinator.remoteSessionStore
         let connection = hostID.flatMap { coordinator.viewerConnectionManager?.connection(for: $0) }
@@ -6841,7 +6926,7 @@ public struct MainView: View {
         // A right-hand tab or non-active pane may own native keyboard focus.
         // Scope that focus to this Host/session before inheriting its cwd.
         var directory = fallbackDirectory
-        if let focused = terminalQuickActions.active, focused.isAvailable, focused.hostID == hostID {
+        if sourcePaneID == nil, let focused = terminalQuickActions.active, focused.isAvailable, focused.hostID == hostID {
             if
                 let hostID,
                 let pane = store?.paneStates[PaneKey(pairId: hostID, paneId: focused.paneID)],
@@ -6854,7 +6939,7 @@ public struct MainView: View {
             }
         }
         let initialDirectory = directory.flatMap { SessionDirectoryPath.isValid($0) ? $0 : nil } ?? "~/"
-        let localIdentity = tmuxService.panes.first { $0.sessionName == sessionName }?.workspaceIdentity
+        let localIdentity = tmuxService.panes.first { $0.sessionName == sessionName && (sourcePaneID == nil || $0.paneId == sourcePaneID) }?.workspaceIdentity
         let remoteBinding = connection?.relayClient.workspaceInputState.sessionBinding(name: sessionName) ?? .unavailable
         return NewAgentTabConfiguration(
             id: .init(hostID: hostID, sessionName: sessionName),
