@@ -44,7 +44,7 @@
                         .disabled(service.isInstalling)
                     } else {
                         Button("Review in Settings…") {
-                            settings.selectedSettingsTab = .general
+                            settings.selectedSettingsTab = .about
                             openSettings()
                         }
                     }

@@ -17,67 +17,67 @@ struct EditorsSettingsView: View {
     var body: some View {
         @Bindable var settings = settings
 
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Editors that appear in the file context menu and the Cmd+E menu when a file tab is focused.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal)
-                    .padding(.top, 12)
-
-                List(selection: $selection) {
-                    ForEach(settings.editors) { editor in
-                        editorRow(editor)
-                            .tag(editor.id)
-                    }
+        GeometryReader { geometry in
+            Form {
+                Section("File Opening") {
+                    Toggle("Open clicked file links in a new tab", isOn: $settings.openClickedFileInNewTab)
+                        .accessibilityIdentifier("settings-open-clicked-file-in-new-tab")
+                    Toggle("Always open files in split tab", isOn: $settings.alwaysOpenFilesInSplit)
                 }
-                .listStyle(.inset(alternatesRowBackgrounds: true))
-                .frame(height: 200)
-                .accessibilityIdentifier("editors-list")
+                .settingsAnchor(.fileOpening)
 
-                HStack(spacing: 8) {
-                    Button {
-                        addEditorPickerVisible = true
-                    } label: {
-                        Label("Add Editor", symbol: .plus)
-                    }
-                    .help("Add an editor by selecting its application")
-                    .accessibilityLabel("Add Editor")
-
-                    Button {
-                        if let selection {
-                            settings.removeEditor(id: selection)
-                            self.selection = nil
+                Section {
+                    List(selection: $selection) {
+                        ForEach(settings.editors) { editor in
+                            editorRow(editor).tag(editor.id)
                         }
-                    } label: {
-                        Label("Remove", symbol: .minusCircleFill)
                     }
-                    .disabled(selection == nil)
-                    .accessibilityLabel("Remove Editor")
+                    .listStyle(.inset(alternatesRowBackgrounds: true))
+                    .frame(height: min(max(96, CGFloat(settings.editors.count) * 46), max(120, geometry.size.height * 0.4)))
+                    .accessibilityIdentifier("editors-list")
 
-                    Spacer()
-
-                    Button("Detect Installed Editors") {
-                        @Dependency(EditorClient.self) var client
-                        Task {
-                            let detected = await client.detectInstalledKnownEditors()
-                            let existingBundles = Set(settings.editors.compactMap(\.bundleIdentifier))
-                            for editor in detected where !existingBundles.contains(editor.bundleIdentifier ?? "") {
-                                settings.addEditor(editor)
+                    HStack(spacing: 8) {
+                        Button { addEditorPickerVisible = true } label: {
+                            Label("Add Editor", symbol: .plus)
+                        }
+                        .accessibilityLabel("Add Editor")
+                        Button {
+                            if let selection {
+                                settings.removeEditor(id: selection)
+                                self.selection = nil
+                            }
+                        } label: {
+                            Label("Remove", symbol: .minusCircleFill)
+                        }
+                        .disabled(selection == nil)
+                        .accessibilityLabel("Remove Editor")
+                        Spacer(minLength: 4)
+                        Button("Detect Editors") {
+                            @Dependency(EditorClient.self) var client
+                            Task {
+                                let detected = await client.detectInstalledKnownEditors()
+                                let existingBundles = Set(settings.editors.compactMap(\.bundleIdentifier))
+                                for editor in detected where !existingBundles.contains(editor.bundleIdentifier ?? "") {
+                                    settings.addEditor(editor)
+                                }
                             }
                         }
+                        .help("Detect installed editors and add any missing ones")
                     }
-                    .help("Re-scan for known editors that are installed and add any missing ones")
+                    .controlSize(.small)
+                } header: {
+                    Text("External Editors")
+                } footer: {
+                    Text("Used by Open in Editor and Cmd+E. Double-click a name to rename it.")
                 }
-                .padding(.horizontal)
+                .settingsAnchor(.editors)
 
-                Divider()
-                    .padding(.horizontal)
-
-                PromptEditorOverrideSection()
-                    .padding(.horizontal)
-                    .padding(.bottom, 12)
+                Section {
+                    PromptEditorOverrideSection()
+                }
+                .settingsAnchor(.promptEditor)
             }
+            .formStyle(.grouped)
         }
         .fileImporter(
             isPresented: $addEditorPickerVisible,
@@ -108,9 +108,12 @@ struct EditorsSettingsView: View {
                     renamingId = nil
                 })
                 .textFieldStyle(.roundedBorder)
+                .onExitCommand { renamingId = nil
+                    renameDraft = ""
+                }
             } else {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(editor.displayName)
+                    Text(editor.displayName).lineLimit(1)
                     if let detail = detailString(for: editor) {
                         Text(detail)
                             .font(.caption)

@@ -1,6 +1,7 @@
 import AppKit
 import CtrlxCommon
 import CtrlxEncryption
+import CtrlxPluginProtocol
 import Dependencies
 import SwiftUI
 import Testing
@@ -15,9 +16,11 @@ struct SettingsContentLayoutTests {
             $0[PreferencesService.self] = .inMemory()
             $0[SecretsService.self] = .inMemory()
             $0[SimulatorSystemClient.self] = SimulatorSystemClient()
+            $0[LoginItemService.self] = .previewValue
         } operation: {
             _ = NSApplication.shared
             let coordinator = AppCoordinator()
+            coordinator.pluginRegistry = PluginRegistry()
             coordinator.settings.selectedSettingsTab = .appearance
             let host = NSHostingView(rootView: SettingsView()
                 .environment(coordinator)
@@ -31,19 +34,26 @@ struct SettingsContentLayoutTests {
             window.makeKeyAndOrderFront(nil)
             defer { window.close() }
 
-            for size in [CGSize(width: 900, height: 600), CGSize(width: 1_100, height: 700)] {
+            for size in [CGSize(width: 760, height: 520), CGSize(width: 900, height: 600), CGSize(width: 1_100, height: 700)] {
                 window.setContentSize(size)
-                for tab in [SettingsTab.appearance, .browser, .sidebarLayout, .editors, .appearance, .sidebarLayout] {
+                for tab in [SettingsTab.appearance, .browser, .sidebarLayout, .editors, .agents, .about, .appearance, .sidebarLayout] {
                     coordinator.settings.selectedSettingsTab = tab
                     try await Task.sleep(for: .milliseconds(100))
                     host.layoutSubtreeIfNeeded()
                     // Previously Sidebar raised the minimum height to 1472 pt,
                     // centering the entire navigation above the visible window.
                     #expect(host.fittingSize.height <= host.bounds.height)
+                    #expect(host.fittingSize.width <= host.bounds.width)
                     let split = try #require(splitView(in: host))
                     let frame = split.convert(split.bounds, to: host)
                     #expect(frame.minY >= -1)
                     #expect(frame.maxY <= host.bounds.maxY + 1)
+                    if let folder = ProcessInfo.processInfo.environment["CTRLX_SETTINGS_UI_SNAPSHOTS"] {
+                        let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                        host.cacheDisplay(in: host.bounds, to: bitmap)
+                        let png = try #require(bitmap.representation(using: .png, properties: [:]))
+                        try png.write(to: URL(fileURLWithPath: folder).appendingPathComponent("\(tab.rawValue)-\(Int(size.width)).png"))
+                    }
                 }
             }
         }

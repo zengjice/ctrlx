@@ -408,6 +408,8 @@ public enum TestStep: Sendable {
     case macSetSidebarFields(_ fields: [String], instance: Int = 0)
     /// Focus a text field by title so subsequent typing goes into it
     case macFocusElement(titled: String, instance: Int = 0)
+    /// Focus an identified native field without mouse tracking.
+    case macFocusElementQuery(ElementQuery, instance: Int = 0)
     /// Replace the focused native text field through Accessibility, without the
     /// user's input method or system clipboard participating in the fixture.
     case macSetFocusedText(String, instance: Int = 0)

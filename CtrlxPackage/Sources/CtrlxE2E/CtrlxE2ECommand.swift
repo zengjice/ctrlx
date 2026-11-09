@@ -399,6 +399,7 @@ struct CtrlxE2ECommand: AsyncParsableCommand {
         CodexFormsParityScenario.scenario,
         PermissionSuggestionDenyScenario.scenario,
         AgentsSettingsTabScenario.scenario,
+        SettingsInteractionScenario.scenario,
         TabCycleReorderScenario.scenario,
         SessionAndFontHotkeysScenario.scenario,
         BadgeClearsOnAgentResumeScenario.scenario,

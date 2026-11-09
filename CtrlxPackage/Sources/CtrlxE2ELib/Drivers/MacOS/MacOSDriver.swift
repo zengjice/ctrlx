@@ -206,12 +206,10 @@ public actor MacOSDriver {
 
     /// Select a tab in the Settings window by clicking it via AX.
     public func selectSettingsTab(_ tabName: String) async throws {
-        let pid = try requirePID()
+        _ = try requirePID()
         logger.info("Selecting settings tab: \(tabName)")
-        try await waitForAXElement(pid: pid, titled: tabName, timeout: 5)
-        if !MacOSAccessibility.press(appPID: pid, titled: tabName) {
-            throw MacOSDriverError.elementNotFound(tabName)
-        }
+        try await activate()
+        try await cgClick(titled: "\(tabName) settings")
         try await Task.sleep(for: .milliseconds(500))
     }
 
@@ -242,7 +240,7 @@ public actor MacOSDriver {
         let deadline = Date().addingTimeInterval(3)
         while Date() < deadline {
             try await Task.sleep(for: .milliseconds(300))
-            if MacOSAccessibility.press(appPID: pid, titled: itemTitle) {
+            if MacOSAccessibility.pressMenuItem(appPID: pid, titled: itemTitle) {
                 return
             }
         }
@@ -581,6 +579,14 @@ public actor MacOSDriver {
         }
     }
 
+    public func focusElement(matching query: ElementQuery) async throws {
+        let pid = try requirePID()
+        try await activate()
+        guard MacOSAccessibility.focusElement(appPID: pid, matching: query) else {
+            throw MacOSDriverError.elementNotFound("\(query)")
+        }
+    }
+
     /// Write text to the system pasteboard so a subsequent `paste()` (Cmd+V)
     /// inserts it into the focused field. Useful for input AppleScript
     /// keystroke can't deliver — emoji, multi-codepoint glyphs, etc.
@@ -630,7 +636,19 @@ public actor MacOSDriver {
         guard let role = role as? String, [kAXTextAreaRole, kAXTextFieldRole].contains(role) else {
             throw MacOSDriverError.accessibilityFailed("Focused element is not a native text field")
         }
-        let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)
+        var currentValue: CFTypeRef?
+        _ = AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &currentValue)
+        var range = CFRange(location: 0, length: (currentValue as? String ?? "").utf16.count)
+        guard let selection = AXValueCreate(.cfRange, &range) else {
+            throw MacOSDriverError.accessibilityFailed("Unable to create text selection")
+        }
+        let selectionResult = AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, selection)
+        guard selectionResult == .success else {
+            throw MacOSDriverError.accessibilityFailed("Unable to select focused text: \(selectionResult.rawValue)")
+        }
+        // Replace the editor's selection so SwiftUI receives an editing change.
+        // Setting AXValue alone can leave the displayed value and binding out of sync.
+        let result = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString)
         guard result == .success else {
             throw MacOSDriverError.accessibilityFailed("Unable to set focused text: \(result.rawValue)")
         }
@@ -944,8 +962,7 @@ public actor MacOSDriver {
 
     /// Wait for an element with the given title to appear in the macOS app
     public func waitForElement(titled: String, timeout: TimeInterval = 10) async throws {
-        let pid = try requirePID()
-        try await waitForAXElement(pid: pid, titled: titled, timeout: timeout)
+        _ = try await waitForElement(matching: .anyTextMatches(titled), timeout: timeout)
     }
 
     /// Wait for an element to disappear from the macOS app's accessibility tree
@@ -991,12 +1008,17 @@ public actor MacOSDriver {
     public func waitForElementVisible(titled: String, timeout: TimeInterval = 10) async throws {
         let pid = try requirePID()
         logger.info("Waiting for element to be visible in window: \(titled)")
-        try await Polling.waitUntil(
-            description: "macOS UI element '\(titled)' to be visible in the window",
-            timeout: timeout,
-            pollInterval: 0.5
-        ) {
-            MacOSAccessibility.isElementVisibleInWindow(appPID: pid, matching: .anyTextMatches(titled))
+        do {
+            try await Polling.waitUntil(
+                description: "macOS UI element '\(titled)' to be visible in the window",
+                timeout: timeout,
+                pollInterval: 0.5
+            ) {
+                MacOSAccessibility.isElementVisibleInWindow(appPID: pid, matching: .anyTextMatches(titled))
+            }
+        } catch {
+            logger.warning("Visibility diagnostic: \(MacOSAccessibility.diagnoseQuery(appPID: pid, query: .anyTextMatches(titled)))")
+            throw error
         }
     }
 

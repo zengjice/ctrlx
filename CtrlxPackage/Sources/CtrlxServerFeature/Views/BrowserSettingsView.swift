@@ -28,6 +28,14 @@ struct BrowserSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Link Placement") {
+                Toggle("Always open links in split tab", isOn: $settings.alwaysOpenLinksInSplit)
+                    .accessibilityIdentifier("settings-always-open-links-in-split")
+                    .help("When opening a web link in an in-app browser tab, route it to the split-view right pane instead of the left.")
+            }
+
+            .settingsAnchor(.browserPlacement)
+
             Section("Default Behavior") {
                 Picker("When clicking web links in terminal", selection: $settings.browserLinkBehavior) {
                     ForEach(BrowserLinkBehavior.allCases) { behavior in
@@ -39,6 +47,8 @@ struct BrowserSettingsView: View {
                         "Domain-specific rules below override this for matching hosts."
                 )
             }
+
+            .settingsAnchor(.browserDefault)
 
             Section("Per-Domain Rules") {
                 Text("Override the default for specific domains.")
@@ -56,6 +66,8 @@ struct BrowserSettingsView: View {
                     }
                 }
             }
+
+            .settingsAnchor(.browserRules)
 
             Section("Add Domain Rule") {
                 HStack {
@@ -115,7 +127,7 @@ struct BrowserSettingsView: View {
                 }
             }
             .labelsHidden()
-            .frame(width: 220)
+            .frame(maxWidth: 220)
             .accessibilityIdentifier("domain-rule-behavior-\(rule.domain)")
 
             Button {

@@ -8,6 +8,8 @@ public enum ElementQuery: Sendable, CustomStringConvertible {
     case labelContains(String)
     /// Match by AXRole
     case role(String)
+    /// Match a native control subtype, such as AXSearchField.
+    case subrole(String)
     /// Match by AXIdentifier
     case identifier(String)
     /// Match by AXRole and AXLabel containing substring
@@ -29,6 +31,8 @@ public enum ElementQuery: Sendable, CustomStringConvertible {
             "labelContains(\"\(text)\")"
         case let .role(role):
             "role(\"\(role)\")"
+        case let .subrole(subrole):
+            "subrole(\"\(subrole)\")"
         case let .identifier(id):
             "identifier(\"\(id)\")"
         case let .roleAndLabelContains(role, label):
@@ -59,6 +63,8 @@ public enum ElementQuery: Sendable, CustomStringConvertible {
             .labelContains(resolve(text))
         case let .role(role):
             .role(resolve(role))
+        case let .subrole(subrole):
+            .subrole(resolve(subrole))
         case let .identifier(id):
             .identifier(resolve(id))
         case let .roleAndLabelContains(role, label):
@@ -83,6 +89,8 @@ public enum ElementQuery: Sendable, CustomStringConvertible {
             element.label?.localizedCaseInsensitiveContains(text) ?? false
         case let .role(role):
             element.role == role
+        case let .subrole(subrole):
+            element.subrole == subrole
         case let .identifier(id):
             element.identifier == id
         case let .roleAndLabelContains(role, label):

@@ -79,7 +79,7 @@
                             .buttonStyle(.borderedProminent)
                         } else {
                             Button("Review in Settings...") {
-                                coordinator.settings.selectedSettingsTab = .general
+                                coordinator.settings.selectedSettingsTab = .about
                                 openSettings()
                                 dismissWindow(id: Self.windowID)
                             }

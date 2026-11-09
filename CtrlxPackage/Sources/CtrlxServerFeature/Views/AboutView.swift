@@ -5,10 +5,36 @@
 
     /// CtrlX build, source, upstream, and license information.
     public struct AboutView: View {
+        @Environment(AppCoordinator.self) private var coordinator
+
         public init() { }
 
         public var body: some View {
             Form {
+                CtrlXAppUpdateSettingsSection(service: coordinator.ctrlXAppUpdateService)
+                    .settingsAnchor(.updates)
+
+                Section {
+                    Picker(
+                        "Remind me again after",
+                        selection: Binding(
+                            get: { coordinator.agentUpdateReminderInterval },
+                            set: { coordinator.agentUpdateReminderInterval = $0 }
+                        )
+                    ) {
+                        ForEach(AgentUpdateReminderInterval.allCases) { interval in
+                            Text(interval.title).tag(interval)
+                        }
+                    }
+                    .accessibilityIdentifier("agentUpdateReminderInterval")
+                } header: {
+                    Text("Update Reminders")
+                } footer: {
+                    Text("Applies to dismissed CtrlX, plugin and CLI update notices.")
+                }
+
+                .settingsAnchor(.updateReminders)
+
                 Section("Build") {
                     LabeledContent("Version") {
                         Text(AppBuildInfo.current.displayVersion)
@@ -16,6 +42,8 @@
                             .textSelection(.enabled)
                     }
                 }
+
+                .settingsAnchor(.build)
 
                 Section("Origin and license") {
                     VStack(alignment: .leading, spacing: 12) {
@@ -64,6 +92,8 @@
                     Text("Licenses")
                 }
 
+                .settingsAnchor(.licenses)
+
                 ForEach(ThirdPartyLicense.Usage.allCases, id: \.self) { usage in
                     Section(usage.rawValue) {
                         ForEach(ThirdPartyLicense.all(in: usage)) { license in
@@ -79,6 +109,6 @@
     }
 
     #Preview {
-        AboutView()
+        AboutView().environment(AppCoordinator(settings: AppSettings()))
     }
 #endif

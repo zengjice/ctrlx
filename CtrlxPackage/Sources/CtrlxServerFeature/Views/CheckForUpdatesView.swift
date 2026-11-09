@@ -147,7 +147,7 @@ public struct CheckForUpdatesView: View {
     }
 
     private func openUpdateSettings() {
-        coordinator.settings.selectedSettingsTab = .general
+        coordinator.settings.selectedSettingsTab = .about
         openSettings()
     }
 }

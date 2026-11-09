@@ -31,16 +31,20 @@ public struct RemoteHostsSettingsView: View {
                 Text("Connection Status")
             }
 
+            .settingsAnchor(.connection)
+
             // Paired Hosts Section
             Section {
                 pairedHostsContent
             } header: {
                 Text("Paired Hosts")
             } footer: {
-                Text("Hosts you can connect to for viewing their Claude sessions remotely.")
+                Text("Connect to other Hosts to view their Agent and terminal sessions.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            .settingsAnchor(.pairing)
 
             ViewerRelayAccessSettingsSections(
                 server: settings.externalServerURL,
@@ -50,6 +54,8 @@ public struct RemoteHostsSettingsView: View {
                 await coordinator.viewerConnectionManager?.connection(for: id)?.enableReconnectAndRetry()
             }
 
+            RemoteReconnectSettingsSection()
+
             // Server Configuration
             Section {
                 @Bindable var settings = settings
@@ -58,10 +64,11 @@ public struct RemoteHostsSettingsView: View {
             } header: {
                 Text("Server")
             } footer: {
-                Text("The relay server URL (same as for iOS pairing)")
+                Text("Shared relay address for pairing on this Mac. Changes also appear in Remote Access.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            .settingsAnchor(.relay)
         }
         .formStyle(.grouped)
         .frame(minWidth: 400, minHeight: 300)

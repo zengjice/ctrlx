@@ -10,8 +10,9 @@ struct AppearanceSettingsView: View {
 
         Form {
             Section {
-                LabeledContent("Theme") {
-                    HStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("App Appearance").font(.headline)
+                    HStack(spacing: 12) {
                         ForEach(AppearanceMode.allCases) { mode in
                             AppearanceTile(
                                 mode: mode,
@@ -24,6 +25,37 @@ struct AppearanceSettingsView: View {
                     .padding(.vertical, 4)
                 }
             }
+            .settingsAnchor(.appAppearance)
+
+            Section("Terminal Appearance") {
+                Picker("Font", selection: $settings.fontName) {
+                    ForEach(availableFonts, id: \.self) { font in
+                        Text(font).tag(font)
+                    }
+                }
+
+                HStack {
+                    Text("Size")
+                    Slider(value: $settings.fontSize, in: AppSettings.minFontSize...AppSettings.maxFontSize, step: 1)
+                        .accessibilityLabel("Font size")
+                        .accessibilityIdentifier("settings-font-size")
+                    Text("\(Int(settings.fontSize)) pt")
+                        .monospacedDigit()
+                        .frame(width: 40)
+                }
+
+                Picker("Terminal Colors", selection: $settings.theme) {
+                    ForEach(TerminalTheme.allCases, id: \.self) { theme in
+                        Text(theme.rawValue).tag(theme)
+                    }
+                }
+
+                TerminalAppearancePreview(fontName: settings.fontName, fontSize: settings.fontSize, theme: settings.theme)
+
+                Toggle("Highlight selected session in sidebar", isOn: $settings.highlightSelectedSidebarSession)
+                    .help("Use a subtle theme-matched background behind the selected local or remote session")
+            }
+            .settingsAnchor(.terminalAppearance)
         }
         .formStyle(.grouped)
     }
@@ -41,7 +73,7 @@ private struct AppearanceTile: View {
         Button(action: action) {
             VStack(spacing: 8) {
                 AppearancePreview(mode: mode)
-                    .frame(width: 96, height: 64)
+                    .frame(width: 80, height: 54)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .overlay(
                         RoundedRectangle(cornerRadius: 8)
@@ -164,4 +196,17 @@ private struct MiniWindow: View {
     AppearanceSettingsView()
         .environment(AppSettings())
         .frame(width: 600, height: 300)
+}
+
+private var availableFonts: [String] {
+    [
+        "SF Mono",
+        "Menlo",
+        "Monaco",
+        "Courier New",
+        "Andale Mono",
+        "Source Code Pro",
+        "Fira Code",
+        "JetBrains Mono",
+    ]
 }

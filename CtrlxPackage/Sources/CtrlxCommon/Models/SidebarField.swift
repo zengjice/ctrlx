@@ -9,12 +9,14 @@ public enum SidebarSortMode: String, Codable, Sendable, CaseIterable, Identifiab
     case recentActivity
     case sessionName
 
-    public var id: String { rawValue }
+    public var id: String {
+        rawValue
+    }
 
     public var displayName: String {
         switch self {
         case .alphabetical: "Alphabetical (by primary label)"
-        case .claudeFirst: "Claude sessions first"
+        case .claudeFirst: "Agent sessions first"
         case .statusPriority: "Status priority (attention > working > idle)"
         case .statusPriorityIdleFirst: "Status priority (attention > idle > working)"
         case .recentActivity: "Most recent activity"
@@ -39,7 +41,9 @@ public enum SidebarField: String, Codable, Sendable, CaseIterable, Identifiable 
     case latestEvent
     case tokenUsage
 
-    public var id: String { rawValue }
+    public var id: String {
+        rawValue
+    }
 
     /// Human-readable label for the preferences UI
     public var displayName: String {

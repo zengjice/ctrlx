@@ -1307,7 +1307,7 @@ exposed to the Mac app, Viewer, and iOS clients.
   **Check Again** to restore installation availability.
 - Gives the detached installer a private `TMPDIR` and follows the DMG file's
   actual growth against the HTTPS `Content-Length` so the foreground update
-  window and General settings show determinate download progress. If either
+  window and About settings show determinate download progress. If either
   size cannot be determined, they fall back to an indeterminate indicator.
 - Viewers with the separate `supportsCtrlXAppUpdateCheck` capability can ask the
   Host to refresh the feed on demand, then request the exact resulting
@@ -1526,7 +1526,33 @@ command, currentPath, width, height, isActive
 - **Coding agents:** owned by plugin settings/registry, not per-agent fields in AppSettings
 - **Prompt editor (Ctrl-G):** editorOverrideMode (`ask` / `overrideInCtrlxSessions` / `useMyEditor`) — see [Editor Override](#editor-override-ctrl-g)
 
-Mac **Settings → General → Terminal → Theme** includes **Codex Light**. Its
+Mac Settings keeps font, size, terminal colors and selection highlighting in
+**Appearance**, file-opening preferences in **Files & Editors**, and web-link
+placement in **Browser**. Reconnection preferences appear on both remote pages;
+**About** owns application updates and update-reminder intervals. **General →
+Advanced** contains tmux configuration and diagnostics. Display-name changes do
+not change existing settings keys or Agent identifiers.
+
+tmux fields use a local draft. **Save for Next Launch** validates the executable
+and socket syntax, then writes only the next-launch preferences; the running
+`AppSettings` values and control clients retain their original configuration.
+The page shows a restart reminder. Saving the running configuration cancels a
+pending change. Agent command paths have their own **Apply** action and validation;
+other Agent toggles cannot save an unapplied path. Command drafts survive switching
+pages and Agents within the Settings window. Escape reverts a command/tmux draft;
+closing the Settings window discards all unapplied drafts. Provider deletion and Viewer unpairing require
+confirmation before any settings, credentials or pairing records are changed.
+
+Mac Settings uses a native sidebar and supports toolbar search by setting name or keyword. Choosing a result
+opens the relevant page and scrolls to its group, expanding matching Advanced
+controls when needed. The layout has a 760-point minimum width and the Settings
+scene defaults to 860 × 680, retaining the system Settings window behavior. Editor and
+sidebar lists size to their content or available height. **Agents** puts CLI/plugin
+status, setup actions and Providers before Advanced log, telemetry and extra-folder
+options. **Appearance** includes a read-only terminal sample that immediately follows
+the selected font, size and terminal palette; the sidebar preview remains available.
+
+Mac **Settings → Appearance → Terminal Colors** includes **Codex Light**. Its
 white terminal (`#FFFFFF` / `#0D0D0D`), near-white sidebar/tab bar (`#FCFCFC`),
 gray secondary text (`#626262`) and blue accent (`#0169CC`) share the existing
 theme setting across local, remote and detached workspaces. Sidebar selection

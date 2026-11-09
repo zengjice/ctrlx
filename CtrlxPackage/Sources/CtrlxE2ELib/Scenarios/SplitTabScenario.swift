@@ -10,7 +10,7 @@ import Foundation
 /// becomes empty the layout collapses back to single-pane and split icons
 /// reappear on every tab.
 ///
-/// Two global Behavior settings round out the feature:
+/// Placement settings in Files & Editors and Browser round out the feature:
 /// - "Always open files in split tab" — when on, opening any new file tab
 ///   sends it to the right pane (creating one if needed).
 /// - "Always open links in split tab" — same idea for browser tabs.
@@ -288,23 +288,12 @@ public enum SplitTabScenario {
         // ── Phase 6: alwaysOpenLinksInSplit routes a click to the right ─
         TestStep.log("Phase 6: Toggle 'Always open links in split tab' and click a terminal link")
         TestStep.macOpenSettings()
-        TestStep.macWaitForWindow(titled: "General", timeout: 5)
-        // Scroll the form so the new toggle is on screen even though the
-        // Settings window is fixed-size on this macOS build.
-        TestStep.macScrollWheel(deltaY: -5, count: 4)
-        TestStep.wait(seconds: 0.5)
-        // Click via the toggle's help string. AXPress on the visible title can
-        // hit the Text label next to the switch instead of the switch itself,
-        // mirroring the pattern in `TerminalFileLinkScenario`.
-        TestStep.macClickButton(
-            titled: "When opening a web link in an in-app browser tab, route it to the split-view right pane instead of the left."
-        )
-        TestStep.wait(seconds: 0.5)
-        // Flip browserLinkBehavior to .alwaysInApp so the click doesn't pop
-        // the "Open this link?" confirmation sheet. The picker now lives on
-        // its own Browser tab (per-domain rules PR), not under General.
         TestStep.macSelectSettingsTab("Browser")
         TestStep.macWaitForWindow(titled: "Browser", timeout: 5)
+        TestStep.macCGClickElement(query: .identifier("settings-always-open-links-in-split"))
+        TestStep.wait(seconds: 0.5)
+        // Flip browserLinkBehavior to .alwaysInApp so the click doesn't pop
+        // the "Open this link?" confirmation sheet.
         TestStep.macClickMenuItem(
             menuButtonTitle: "How http/https/ftp links clicked in the terminal should open by default. " +
                 "Domain-specific rules below override this for matching hosts.",
@@ -312,12 +301,7 @@ public enum SplitTabScenario {
         )
         TestStep.wait(seconds: 0.5)
         TestStep.macScreenshot(label: "mac-split-settings-toggled-on")
-        // Switch back to General so the teardown (and any later scenario)
-        // finds Settings on the tab it expects — Settings remembers the last
-        // selected tab between opens.
-        TestStep.macSelectSettingsTab("General")
-        TestStep.macWaitForWindow(titled: "General", timeout: 5)
-        TestStep.macCloseWindow(titled: "General")
+        TestStep.macCloseWindow(titled: "Browser")
         TestStep.wait(seconds: 1)
 
         // Click the terminal-link in the split:0 window. The new in-app
@@ -375,14 +359,11 @@ public enum SplitTabScenario {
         // Turn the always-open-links-in-split setting back off so this state
         // doesn't leak into other scenarios that run on the same instance.
         TestStep.macOpenSettings()
-        TestStep.macWaitForWindow(titled: "General", timeout: 5)
-        TestStep.macScrollWheel(deltaY: -5, count: 4)
+        TestStep.macSelectSettingsTab("Browser")
+        TestStep.macWaitForWindow(titled: "Browser", timeout: 5)
+        TestStep.macCGClickElement(query: .identifier("settings-always-open-links-in-split"))
         TestStep.wait(seconds: 0.5)
-        TestStep.macClickButton(
-            titled: "When opening a web link in an in-app browser tab, route it to the split-view right pane instead of the left."
-        )
-        TestStep.wait(seconds: 0.5)
-        TestStep.macCloseWindow(titled: "General")
+        TestStep.macCloseWindow(titled: "Browser")
         TestStep.wait(seconds: 1)
 
         Shortcut.tmuxRunCommand(target: "split:0", command: "exit")

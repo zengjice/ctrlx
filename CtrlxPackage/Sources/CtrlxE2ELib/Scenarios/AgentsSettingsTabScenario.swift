@@ -1,6 +1,6 @@
 import Foundation
 
-/// E2E: the **Agents** settings tab (renamed from "Plugin") — a segmented
+/// E2E: the **Agents** settings tab (renamed from "Plugin") — a menu-driven
 /// per-agent settings form (command / auto-run / log level / per-agent
 /// close-pane), a per-folder install list with an Install/Uninstall button, and
 /// proof that the General tab no longer carries the old per-agent sections.
@@ -13,13 +13,14 @@ import Foundation
 public enum AgentsSettingsTabScenario {
     public static let scenario = CtrlxE2ELib.scenario(
         "Agents Settings Tab",
-        tags: ["agents", "settings", "plugin"]
+        tags: ["agents", "settings", "plugin", "macos-only"]
     ) {
         Shortcut.macOnlySetup
 
         // 1. Open Settings → Agents tab (the tab formerly named "Plugin").
         TestStep.macOpenSettings()
         TestStep.macSelectSettingsTab("Agents")
+        TestStep.macClickMenuItem(menuButtonTitle: "Codex", itemTitle: "Claude Code")
         // The default config-folder row offers Install when not yet installed.
         TestStep.macWaitForElement(titled: "Install", timeout: 5)
         TestStep.wait(seconds: 0.5)
@@ -49,8 +50,8 @@ public enum AgentsSettingsTabScenario {
         TestStep.wait(seconds: 0.5)
         TestStep.macScreenshot(label: "mac-agents-claude-installed")
 
-        // 4. Switch the segmented picker to Codex — its own settings + folder row.
-        TestStep.macClickButton(titled: "Codex")
+        // 4. Switch the Agent picker to Codex — its own settings + folder row.
+        TestStep.macClickMenuItem(menuButtonTitle: "Claude Code", itemTitle: "Codex")
         TestStep.macWaitForElement(titled: "Install", timeout: 5)
         TestStep.wait(seconds: 0.5)
         TestStep.macScreenshot(label: "mac-agents-codex")
