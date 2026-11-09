@@ -7,6 +7,25 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.153 — Mac settings and terminal menus
+
+- Organize Mac settings by task, add searchable navigation, adaptive lists and
+  a live terminal appearance preview. Keep Agent command and tmux edits in
+  drafts until explicitly applied; discard unapplied edits on window close and
+  confirm Provider deletion and Viewer unpairing. Application updates now live
+  in About. See [settings](docs/services-reference.md). Source: `4a6f2bb3`.
+- Add a terminal content context menu while preserving application mouse input,
+  text selection and file-link actions. Bind menu actions to their captured Host
+  and pane identity. See [terminal actions](docs/terminal-quick-actions.md).
+- Keep the workflow close action reachable during navigation and expose pause
+  and continue controls in the toolbar. Preserve the saved Git workspace when
+  restoring navigation. See [workflows](docs/multi-agent-design.md).
+- Validation: 88 focused Swift tests and 120 private publication/installer/COS
+  regressions passed, alongside both boundary checks and lint for 56 Swift
+  files. Native Settings interaction acceptance runs on an isolated signed
+  release candidate before publication. This release packages macOS only;
+  paired-iPhone UI and Apple Intelligence evaluations were not run.
+
 ## 3.0.152 — Remote browser dropdowns and resumed workflows
 
 - Open standard single-select dropdowns from Mac and iOS Viewers using a

@@ -318,7 +318,7 @@
             #expect(window.firstResponder === view.terminalView)
         }
 
-        @Test("Shift drag selects locally in every tracking mode", arguments: [1000, 1002, 1003])
+        @Test("Shift drag selects locally in every tracking mode", arguments: [1_000, 1_002, 1_003])
         func shiftSelection(mode: Int) throws {
             let (window, panes) = makeTerminalWindow()
             defer { withExtendedLifetime(window) { } }
@@ -338,7 +338,7 @@
             try assertSelectionDuringOutput(paneIndex: paneIndex, modifiers: holdShift ? .shift : [])
         }
 
-        @Test("Shift selection survives output while the app tracks the mouse", arguments: [1000, 1002, 1003])
+        @Test("Shift selection survives output while the app tracks the mouse", arguments: [1_000, 1_002, 1_003])
         func shiftSelectionDuringMouseTracking(mode: Int) throws {
             try assertSelectionDuringOutput(paneIndex: 1, modifiers: .shift, mouseMode: mode)
         }
@@ -355,7 +355,9 @@
                 let (window, panes) = makeTerminalWindow()
                 defer { withExtendedLifetime(window) { } }
                 let view = panes[paneIndex]
-                if let mouseMode { enableMouseMode(mouseMode, in: view) }
+                if let mouseMode {
+                    enableMouseMode(mouseMode, in: view)
+                }
                 var rawInput: [Data] = []
                 view.onRawInput = { rawInput.append($0) }
                 view.autoCopyOnSelect = true
@@ -371,7 +373,9 @@
                         // keep the drag alive, including split control sequences.
                         view.feed(byteArray: Array("\u{1b}[?25h".utf8)[...])
                         let output = "\u{1b}[4;1Hstatus update\r\n"
-                        for byte in output.utf8 { view.feedPreservingScroll([byte][...]) }
+                        for byte in output.utf8 {
+                            view.feedPreservingScroll([byte][...])
+                        }
                         #expect(view.getTerminal().getLine(row: 3)?.translateToString(trimRight: true) == "status update")
                     }
                 )
@@ -383,7 +387,7 @@
             }
         }
 
-        @Test("Ordinary app drag still reports press, motion and release", arguments: [1002, 1003])
+        @Test("Ordinary app drag still reports press, motion and release", arguments: [1_002, 1_003])
         func applicationDrag(mode: Int) throws {
             let (window, panes) = makeTerminalWindow()
             defer { withExtendedLifetime(window) { } }
@@ -523,7 +527,7 @@
             let (window, panes) = makeTerminalWindow()
             defer { withExtendedLifetime(window) { } }
             let view = panes[1]
-            enableMouseMode(1002, in: view)
+            enableMouseMode(1_002, in: view)
             view.feed(byteArray: Array("\u{1b}[>1s".utf8)[...])
             var rawInput: [Data] = []
             view.onRawInput = { rawInput.append($0) }
@@ -539,7 +543,7 @@
             let (window, panes) = makeTerminalWindow()
             defer { withExtendedLifetime(window) { } }
             let view = panes[1]
-            enableMouseMode(1002, in: view)
+            enableMouseMode(1_002, in: view)
             view.terminalView.allowMouseReporting = false
             var rawInput: [Data] = []
             view.onRawInput = { rawInput.append($0) }
@@ -559,7 +563,7 @@
                 let (window, panes) = makeTerminalWindow()
                 defer { withExtendedLifetime(window) { } }
                 let view = panes[1]
-                enableMouseMode(1002, in: view)
+                enableMouseMode(1_002, in: view)
                 view.terminalView.allowMouseReporting = reportingEnabled
                 view.autoCopyOnSelect = true
 
@@ -574,7 +578,7 @@
             let (window, panes) = makeTerminalWindow()
             defer { withExtendedLifetime(window) { } }
             let view = panes[1]
-            enableMouseMode(1002, in: view)
+            enableMouseMode(1_002, in: view)
             var rawInput: [Data] = []
             view.onRawInput = { rawInput.append($0) }
 
@@ -595,7 +599,7 @@
             defer { withExtendedLifetime(window) { } }
             let view = panes[1]
             view.feed(byteArray: Array("\u{1b}[Hhttps://example.com".utf8)[...])
-            enableMouseMode(1002, in: view)
+            enableMouseMode(1_002, in: view)
             var rawInput: [Data] = []
             view.onRawInput = { rawInput.append($0) }
 
@@ -708,7 +712,7 @@
             let (window, panes) = makeTerminalWindow()
             defer { withExtendedLifetime(window) { } }
             let view = panes[1]
-            enableMouseMode(1002, in: view)
+            enableMouseMode(1_002, in: view)
             if captureShift {
                 view.feed(byteArray: Array("\u{1b}[>1s".utf8)[...])
             }
@@ -738,7 +742,7 @@
             let view = panes[1]
             view.scrollingAgentID = "codex"
             view.feed(byteArray: Array("\u{1b}[?1049h".utf8)[...])
-            enableMouseMode(1002, in: view)
+            enableMouseMode(1_002, in: view)
             var raw = Data()
             var keys: [TmuxKey] = []
             view.onRawInput = { raw.append($0) }
@@ -759,8 +763,10 @@
             defer { withExtendedLifetime(window) { } }
             let view = panes[1]
             view.scrollingAgentID = agent
-            if agent != "codex" { view.feed(byteArray: Array("\u{1b}[?1049h".utf8)[...]) }
-            enableMouseMode(1002, in: view)
+            if agent != "codex" {
+                view.feed(byteArray: Array("\u{1b}[?1049h".utf8)[...])
+            }
+            enableMouseMode(1_002, in: view)
             var raw = Data()
             view.onRawInput = { raw.append($0) }
             try mouseRecipient(in: view).scrollWheel(with: TerminalTestScrollEvent(
@@ -776,7 +782,7 @@
             let view = panes[1]
             view.scrollingAgentID = "codex"
             view.feed(byteArray: Array("\u{1b}[?1049h".utf8)[...])
-            enableMouseMode(1002, in: view)
+            enableMouseMode(1_002, in: view)
             var raw: [Data] = []
             view.onRawInput = { raw.append($0) }
             let recipient = try mouseRecipient(in: view)
@@ -804,7 +810,7 @@
                 contentRect: NSRect(x: 0, y: 0, width: 1_600, height: 600),
                 styleMask: .borderless, backing: .buffered, defer: false
             )
-            let root = NSView(frame: NSRect(x: 0, y: 0, width: 1600, height: 600))
+            let root = NSView(frame: NSRect(x: 0, y: 0, width: 1_600, height: 600))
             window.contentView = root
             let panes = [0, 1].map { index in
                 let view = InteractiveTerminalView(
@@ -902,28 +908,59 @@
             delta: CGFloat = 1, precise: Bool = false,
             phase: NSEvent.Phase = [], momentum: NSEvent.Phase = []
         ) {
-            targetWindow = window
-            targetWindowNumber = window.windowNumber
-            point = location
-            flags = modifiers
+            self.targetWindow = window
+            self.targetWindowNumber = window.windowNumber
+            self.point = location
+            self.flags = modifiers
             self.delta = delta
             self.precise = precise
-            eventPhase = phase
+            self.eventPhase = phase
             self.momentum = momentum
             super.init()
         }
 
-        required init?(coder: NSCoder) { nil }
+        required init?(coder: NSCoder) {
+            nil
+        }
 
-        override var type: NSEvent.EventType { .scrollWheel }
-        override var window: NSWindow? { targetWindow }
-        override var windowNumber: Int { targetWindowNumber }
-        override var locationInWindow: NSPoint { point }
-        override var modifierFlags: NSEvent.ModifierFlags { flags }
-        override var scrollingDeltaY: CGFloat { delta }
-        override var scrollingDeltaX: CGFloat { 0 }
-        override var hasPreciseScrollingDeltas: Bool { precise }
-        override var phase: NSEvent.Phase { eventPhase }
-        override var momentumPhase: NSEvent.Phase { momentum }
+        override var type: NSEvent.EventType {
+            .scrollWheel
+        }
+
+        override var window: NSWindow? {
+            targetWindow
+        }
+
+        override var windowNumber: Int {
+            targetWindowNumber
+        }
+
+        override var locationInWindow: NSPoint {
+            point
+        }
+
+        override var modifierFlags: NSEvent.ModifierFlags {
+            flags
+        }
+
+        override var scrollingDeltaY: CGFloat {
+            delta
+        }
+
+        override var scrollingDeltaX: CGFloat {
+            0
+        }
+
+        override var hasPreciseScrollingDeltas: Bool {
+            precise
+        }
+
+        override var phase: NSEvent.Phase {
+            eventPhase
+        }
+
+        override var momentumPhase: NSEvent.Phase {
+            momentum
+        }
     }
 #endif
