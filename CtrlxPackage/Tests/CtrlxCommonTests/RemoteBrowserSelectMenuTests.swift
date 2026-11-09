@@ -156,13 +156,13 @@ struct RemoteBrowserSelectMenuTests {
         #expect(session.controlID == control && session.error == nil)
     }
 
-    @Test
-    func failedFrameDismissesAndCancelsOpenMenu() async throws {
+    @Test(arguments: [false, true])
+    func frameFailureClosesMenu(stale: Bool) async throws {
         let host = RemoteBrowserSessionTests.Host(agent: false), menu = menu()
         let failure = FrameFailure()
         let session = RemoteBrowserSession(tab: host.tab) { request in
             if request.operation == .frame, failure.enabled {
-                throw ViewerRelayClientError.commandFailed("Frame unavailable")
+                throw ViewerRelayClientError.commandFailed(stale ? "Page changed. Read a new frame before interacting." : "Frame unavailable")
             }
             let response = try await host.send(request)
             if case .pointer = request.operation {
@@ -175,10 +175,20 @@ struct RemoteBrowserSelectMenuTests {
             watch.cancel()
         }
         try await wait { session.controlID != nil }
+        let control = session.controlID
         session.submit(.pointer(.init(.down, x: 10, y: 20, button: .left, buttons: 1)))
         try await wait { session.selectMenu != nil }
         failure.enabled = true
         try await wait { session.selectMenu == nil }
-        try await wait { host.operations.contains(.selectOption(menuID: menu.id, index: nil)) }
+        if stale {
+            try await Task.sleep(for: .milliseconds(20))
+            #expect(!host.operations.contains(.selectOption(menuID: menu.id, index: nil)))
+            #expect(session.frameError == nil)
+            #expect(session.error == nil)
+            #expect(session.controlID == control)
+        } else {
+            try await wait { host.operations.contains(.selectOption(menuID: menu.id, index: nil)) }
+            #expect(session.frameError != nil)
+        }
     }
 }

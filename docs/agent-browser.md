@@ -627,6 +627,10 @@ the Viewer does not load a second copy of the URL or receive browser credentials
   viewport ratio and pinch scale convert source pixels before JPEG downscaling.
   Input coordinates remain independent of thumbnail pixels. Navigation/resize/
   close invalidates pending results, and shutdown waits for image workers.
+  Viewers silently discard the specific page-changed capture response and wait
+  for the next regular poll, preserving the last image and control lease. Stale
+  select menus close locally without sending cancellation input to the changed
+  page. Other capture errors remain visible until a valid frame arrives.
   The request size is an optional `BrowseBrowser.frameMaxDimension` field, not
   a new operation: old Hosts ignore it, and old Viewers still receive a frame
   capped at 1024 pixels. The adaptive budget remains below the existing encrypted

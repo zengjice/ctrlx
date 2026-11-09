@@ -237,8 +237,13 @@ final public class RemoteBrowserSession {
             } catch is CancellationError { return }
             catch {
                 if epoch == current, !managesExtensions || sentInputEpoch == inputEpoch {
-                    dismissSelectMenu()
-                    frameError = error.localizedDescription
+                    if case ViewerRelayClientError.commandFailed("Page changed. Read a new frame before interacting.") = error {
+                        // Navigation/resize can invalidate a capture. The next regular poll refreshes it.
+                        selectMenu = nil
+                    } else {
+                        dismissSelectMenu()
+                        frameError = error.localizedDescription
+                    }
                 }
             }
             do { try await Task.sleep(for: .milliseconds(180)) } catch { return }

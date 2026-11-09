@@ -206,6 +206,76 @@ struct RemoteBrowserSessionTests {
         Issue.record("Timed out waiting for browser state")
     }
 
+    @Test("Expired frames stay silent on opening and during viewing, then polling recovers", arguments: [false, true])
+    func expiredFramesKeepPolling(afterFirstFrame: Bool) async throws {
+        let host = Host(agent: false)
+        var failuresRemaining = afterFirstFrame ? 0 : 3
+        var failedFrames = 0
+        var attempts: [ContinuousClock.Instant] = []
+        let session = RemoteBrowserSession(tab: host.tab) { request in
+            let response = try await host.send(request)
+            if request.operation == .frame {
+                attempts.append(.now)
+                if failuresRemaining > 0 {
+                    failuresRemaining -= 1
+                    failedFrames += 1
+                    throw ViewerRelayClientError.commandFailed("Page changed. Read a new frame before interacting.")
+                }
+            }
+            return response
+        }
+        let watch = Task { await session.watch() }
+        defer { session.stop()
+            watch.cancel()
+        }
+        if afterFirstFrame {
+            try await wait { session.controlID != nil }
+            failuresRemaining = 3
+        }
+        let frame = session.frame
+        let control = session.controlID
+        host.frameGeneration = 2
+        for count in 1...3 {
+            try await wait { failedFrames >= count }
+            #expect(session.frameError == nil)
+            #expect(session.error == nil)
+            #expect(session.frame == frame)
+            #expect(session.controlID == control)
+        }
+        try await wait { session.frame?.generation == 2 && session.controlID != nil }
+        #expect(session.frameError == nil)
+        #expect(!host.operations.contains(.releaseControl))
+        #expect(host.operations.filter { $0 == .takeControl }.count == 1)
+        #expect(host.maximumFrames == 1)
+        #expect(zip(attempts, attempts.dropFirst()).allSatisfy { $1 - $0 >= .milliseconds(180) })
+    }
+
+    @Test("A real frame failure remains visible through expired frames until a valid frame arrives", arguments: [URLError.Code.timedOut, .networkConnectionLost])
+    func realFrameFailuresRemainVisible(code: URLError.Code) async throws {
+        let host = Host(agent: false)
+        let failure = URLError(code)
+        var failures: [any Error] = [failure, ViewerRelayClientError.commandFailed("Page changed. Read a new frame before interacting.")]
+        var failedFrames = 0
+        let session = RemoteBrowserSession(tab: host.tab) { request in
+            let response = try await host.send(request)
+            if request.operation == .frame, !failures.isEmpty {
+                failedFrames += 1
+                throw failures.removeFirst()
+            }
+            return response
+        }
+        let watch = Task { await session.watch() }
+        defer { session.stop()
+            watch.cancel()
+        }
+        for count in 1...2 {
+            try await wait { failedFrames >= count }
+            #expect(session.frameError == failure.localizedDescription)
+        }
+        try await wait { session.frame != nil && session.controlID != nil }
+        #expect(session.frameError == nil)
+    }
+
     @Test
     func coordinatesRespectLetterboxing() {
         let page = CGSize(width: 1_000, height: 500), view = CGSize(width: 400, height: 800)
