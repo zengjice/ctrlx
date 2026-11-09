@@ -341,7 +341,9 @@
                     HStack {
                         TextField("Command path", text: Binding(
                             get: { commandDraft ?? commandPath },
-                            set: { commandDraft = $0
+                            set: { value in
+                                guard value != (commandDraft ?? commandPath) else { return }
+                                commandDraft = value
                                 commandApplied = false
                             }
                         ))

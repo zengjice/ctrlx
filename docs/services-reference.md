@@ -1542,6 +1542,8 @@ other Agent toggles cannot save an unapplied path. Command drafts survive switch
 pages and Agents within the Settings window. Escape reverts a command/tmux draft;
 closing the Settings window discards all unapplied drafts. Provider deletion and Viewer unpairing require
 confirmation before any settings, credentials or pairing records are changed.
+Unchanged native text-field commits preserve validation and saved feedback;
+only actual edits clear it.
 
 Mac Settings uses a native sidebar and supports toolbar search by setting name or keyword. Choosing a result
 opens the relevant page and scrolls to its group, expanding matching Advanced

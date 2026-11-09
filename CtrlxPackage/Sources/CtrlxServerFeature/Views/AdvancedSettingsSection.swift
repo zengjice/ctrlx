@@ -15,7 +15,9 @@ struct AdvancedSettingsSection: View {
     }
 
     private var draftBinding: Binding<TmuxSettingsDraft> {
-        Binding(get: { draft }, set: { drafts.tmux = $0
+        Binding(get: { draft }, set: { value in
+            guard value != draft else { return }
+            drafts.tmux = value
             errorMessage = nil
         })
     }
