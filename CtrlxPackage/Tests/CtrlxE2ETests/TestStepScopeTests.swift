@@ -21,6 +21,7 @@ struct TestStepScopeTests {
         #expect(TestStep.macClickButton(titled: "OK").failureScope == .macOS(instance: 0))
         #expect(TestStep.macWaitForWindow(titled: "Settings").failureScope == .macOS(instance: 0))
         #expect(TestStep.macScreenshot(label: "x").failureScope == .macOS(instance: 0))
+        #expect(TestStep.macFocusElementQuery(.subrole("AXSearchField")).failureScope == .macOS(instance: 0))
     }
 
     @Test("macOS steps preserve explicit instance")
@@ -28,6 +29,7 @@ struct TestStepScopeTests {
         #expect(TestStep.launchMacApp(instance: 1).failureScope == .macOS(instance: 1))
         #expect(TestStep.macClickButton(titled: "OK", instance: 2).failureScope == .macOS(instance: 2))
         #expect(TestStep.macReadClipboard(storeAs: "k", instance: 3).failureScope == .macOS(instance: 3))
+        #expect(TestStep.macFocusElementQuery(.identifier("command"), instance: 2).failureScope == .macOS(instance: 2))
         #expect(TestStep.macSendHookEvent(json: "{}", tmuxPane: "x", instance: 4).failureScope == .macOS(instance: 4))
     }
 

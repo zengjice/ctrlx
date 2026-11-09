@@ -39,6 +39,11 @@ enum MacOSAccessibility {
     /// For `.allOf` queries, checks each sub-query individually.
     static func diagnoseQuery(appPID: pid_t, query: ElementQuery) -> String {
         let elements = describeUI(appPID: appPID)
+        if let path = ProcessInfo.processInfo.environment["CTRLX_E2E_AX_DUMP"] {
+            let dump = describeUI(appPID: appPID, maxDepth: 40).flatMap { $0.flattened() }.map(\.description).joined(separator: "\n")
+            do { try dump.write(toFile: path, atomically: true, encoding: .utf8) }
+            catch { logger.warning("Could not save AX diagnostic: \(error)") }
+        }
         switch query {
         case let .allOf(subQueries):
             var parts: [String] = []

@@ -137,10 +137,11 @@ public enum TerminalFileLinkScenario {
         // ── Phase 2: Disable setting → click does NOT open a tab ─
         TestStep.log("Phase 2: Disable setting and verify clicks no longer open tabs")
         TestStep.macOpenSettings()
-        TestStep.macWaitForWindow(titled: "General", timeout: 5)
-        TestStep.macClickButton(titled: "When a file:// link is clicked in the terminal, open the file in a new tab instead of the system default browser")
+        TestStep.macSelectSettingsTab("Files & Editors")
+        TestStep.macWaitForWindow(titled: "Files & Editors", timeout: 5)
+        TestStep.macCGClickElement(query: .identifier("settings-open-clicked-file-in-new-tab"))
         TestStep.wait(seconds: 1)
-        TestStep.macCloseWindow(titled: "General")
+        TestStep.macCloseWindow(titled: "Files & Editors")
         TestStep.wait(seconds: 1)
 
         // Re-select the pane after Settings closes so the terminal regains focus.

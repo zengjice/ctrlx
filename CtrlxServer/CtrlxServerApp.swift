@@ -565,6 +565,8 @@ struct TmuxPaneMirrorApp: App {
                 .environment(coordinator.licenseManager)
                 .environment(\.e2eeService, coordinator.e2eeService)
         }
+        .defaultSize(width: 860, height: 680)
+        .windowResizability(.contentMinSize)
 
         // Menu bar extra - always visible, main entry point to the app
         MenuBarExtra {

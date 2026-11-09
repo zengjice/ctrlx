@@ -8,70 +8,108 @@ import UniformTypeIdentifiers
 public struct SettingsView: View {
     @Environment(AppSettings.self) private var settings
 
+    static let minimumContentSize = CGSize(width: 760, height: 520)
+
+    @State private var drafts = SettingsDrafts()
+    @State private var searchQuery = ""
+    @State private var searchRequest: SettingsSearchRequest?
+
     public init() { }
 
     public var body: some View {
         @Bindable var settings = settings
 
-        TabView(selection: $settings.selectedSettingsTab) {
-            Tab(value: SettingsTab.general) {
-                GeneralSettingsView()
-            } label: {
-                Label("General", symbol: .gearshape)
+        NavigationSplitView {
+            List(selection: Binding<SettingsTab?>(
+                get: { settings.selectedSettingsTab },
+                set: {
+                    if let tab = $0 {
+                        settings.selectedSettingsTab = tab
+                    }
+                }
+            )) {
+                ForEach(Self.tabs, id: \.self) { tab in
+                    Label(tab.title, symbol: tab.symbol)
+                        .accessibilityLabel("\(tab.title) settings")
+                        .accessibilityIdentifier("settings-tab-\(tab.rawValue)")
+                        .tag(tab)
+                }
             }
-            Tab(value: SettingsTab.appearance) {
-                AppearanceSettingsView()
-            } label: {
-                Label("Appearance", symbol: .circleLefthalfFilled)
+            .listStyle(.sidebar)
+            .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 260)
+        } detail: {
+            page(settings.selectedSettingsTab) {
+                selectedPage
             }
-            Tab(value: SettingsTab.browser) {
-                BrowserSettingsView()
-            } label: {
-                Label("Browser", symbol: .globe)
+            .navigationTitle(settings.selectedSettingsTab.title)
+            .frame(minWidth: 480)
+        }
+        .navigationSplitViewStyle(.balanced)
+        .frame(minWidth: Self.minimumContentSize.width, maxWidth: .infinity, minHeight: Self.minimumContentSize.height, maxHeight: .infinity)
+        .searchable(text: $searchQuery, placement: .toolbar, prompt: "Search Settings")
+        .searchSuggestions {
+            let results = SettingsSearchItem.matching(searchQuery)
+            if !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, results.isEmpty {
+                Text("No matching settings")
             }
-            Tab(value: SettingsTab.sidebarLayout) {
-                SidebarLayoutSettingsView()
-            } label: {
-                Label("Sidebar", symbol: .listBulletClipboard)
-            }
-            Tab(value: SettingsTab.editors) {
-                EditorsSettingsView()
-            } label: {
-                Label("Editors", symbol: .pencil)
-            }
-            Tab(value: SettingsTab.remoteAccess) {
-                RemoteAccessSettingsView()
-            } label: {
-                Label("Remote Access", symbol: .iphone)
-            }
-            Tab(value: SettingsTab.remoteHosts) {
-                RemoteHostsSettingsView()
-            } label: {
-                Label("Remote Hosts", symbol: .laptopcomputer)
-            }
-            inputTabs
-            Tab(value: SettingsTab.agents) {
-                AgentsSettingsView()
-            } label: {
-                Label("Agents", symbol: .puzzlepiece)
-            }
-            Tab(value: SettingsTab.about) {
-                AboutView()
-            } label: {
-                Label("About", symbol: .infoCircle)
+            ForEach(results) { item in
+                Button { navigate(to: item) } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(item.title)
+                        Text(item.tab.title).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
             }
         }
-        .tabViewStyle(.sidebarAdaptable)
-        .frame(minWidth: 900, minHeight: 500)
+        .onSubmit(of: .search) {
+            if let item = SettingsSearchItem.matching(searchQuery).first {
+                navigate(to: item)
+            }
+        }
+        .background(SettingsWindowLifecycle {
+            drafts.discard()
+            searchQuery = ""
+            searchRequest = nil
+        })
     }
 
-    @TabContentBuilder<SettingsTab> private var inputTabs: some TabContent<SettingsTab> {
-        Tab(value: SettingsTab.quickPhraseSync) {
-            QuickPhraseSyncSettingsView(store: settings.quickPhrases)
-        } label: {
-            Label("Quick Phrase Sync", symbol: .textBubbleFill)
+    private func navigate(to item: SettingsSearchItem) {
+        settings.selectedSettingsTab = item.tab
+        searchRequest = SettingsSearchRequest(item: item)
+        searchQuery = ""
+    }
+
+    private func page<Content: View>(_ tab: SettingsTab, @ViewBuilder content: @escaping () -> Content) -> some View {
+        let request = searchRequest?.item.tab == tab ? searchRequest : nil
+        return ScrollViewReader { proxy in
+            content()
+                .environment(\.settingsSearchSection, request?.item.section)
+                .environment(\.settingsSearchRequestID, request?.id)
+                .task(id: request?.id) {
+                    guard let section = request?.item.section else { return }
+                    // Let the tab mount and any matching disclosure expand before scrolling.
+                    await Task.yield()
+                    proxy.scrollTo(section, anchor: .top)
+                }
         }
-        Tab(value: SettingsTab.voiceInput) {
+    }
+
+    private static let tabs: [SettingsTab] = [
+        .general, .appearance, .browser, .sidebarLayout, .editors,
+        .remoteAccess, .remoteHosts, .quickPhraseSync, .voiceInput, .agents, .about,
+    ]
+
+    @ViewBuilder private var selectedPage: some View {
+        switch settings.selectedSettingsTab {
+        case .general: GeneralSettingsView(drafts: drafts)
+        case .appearance: AppearanceSettingsView()
+        case .browser: BrowserSettingsView()
+        case .sidebarLayout: SidebarLayoutSettingsView()
+        case .editors: EditorsSettingsView()
+        case .remoteAccess: RemoteAccessSettingsView()
+        case .remoteHosts: RemoteHostsSettingsView()
+        case .quickPhraseSync: QuickPhraseSyncSettingsView(store: settings.quickPhrases)
+        case .voiceInput:
             Form {
                 Section {
                     Text("Use the microphone beside the terminal quick actions to dictate into the focused pane. Audio is recognized on this Mac. Text is inserted without pressing Enter.")
@@ -79,8 +117,8 @@ public struct SettingsView: View {
                 VoiceCorrectionSettingsSection(settings: settings.voiceCorrection)
             }
             .formStyle(.grouped)
-        } label: {
-            Label("Voice Input", symbol: .micFill)
+        case .agents: AgentsSettingsView(drafts: drafts)
+        case .about: AboutView()
         }
     }
 }
@@ -89,6 +127,8 @@ public struct SettingsView: View {
 struct GeneralSettingsView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(AppCoordinator.self) private var coordinator
+
+    @Bindable var drafts: SettingsDrafts
 
     @State private var launchAtLoginEnabled = false
     @State private var showingLoginItemError = false
@@ -99,6 +139,7 @@ struct GeneralSettingsView: View {
 
         Form {
             FullDiskAccessSettingsSection()
+                .settingsAnchor(.diskAccess)
 
             Section("Terminal") {
                 Picker("Terminal App", selection: $settings.terminalApp) {
@@ -125,20 +166,6 @@ struct GeneralSettingsView: View {
                     }
                 }
 
-                Picker("Font", selection: $settings.fontName) {
-                    ForEach(availableFonts, id: \.self) { font in
-                        Text(font).tag(font)
-                    }
-                }
-
-                HStack {
-                    Text("Size")
-                    Slider(value: $settings.fontSize, in: AppSettings.minFontSize...AppSettings.maxFontSize, step: 1)
-                    Text("\(Int(settings.fontSize)) pt")
-                        .monospacedDigit()
-                        .frame(width: 40)
-                }
-
                 HStack {
                     Text("Scrollback")
                     Spacer()
@@ -147,16 +174,9 @@ struct GeneralSettingsView: View {
                         .frame(width: 200)
                     Text("lines")
                 }
-
-                Picker("Theme", selection: $settings.theme) {
-                    ForEach(TerminalTheme.allCases, id: \.self) { theme in
-                        Text(theme.rawValue).tag(theme)
-                    }
-                }
-
-                Toggle("Highlight selected session in sidebar", isOn: $settings.highlightSelectedSidebarSession)
-                    .help("Use a subtle theme-matched background behind the selected local or remote session")
             }
+
+            .settingsAnchor(.terminal)
 
             Section("Behavior") {
                 Toggle("Launch at login", isOn: $launchAtLoginEnabled)
@@ -180,32 +200,14 @@ struct GeneralSettingsView: View {
                 Toggle("Auto-copy selected text", isOn: $settings.autoCopyOnSelect)
                     .help("Automatically copy selected text to the clipboard when the mouse is released")
 
-                Toggle("Open clicked file links in a new tab", isOn: $settings.openClickedFileInNewTab)
-                    .help("When a file:// link is clicked in the terminal, open the file in a new tab instead of the system default browser")
-
-                Toggle("Always open files in split tab", isOn: $settings.alwaysOpenFilesInSplit)
-                    .help("When opening a file in a new tab, route it to the split-view right pane instead of the left.")
-
-                Toggle("Always open links in split tab", isOn: $settings.alwaysOpenLinksInSplit)
-                    .help("When opening a web link in an in-app browser tab, route it to the split-view right pane instead of the left.")
-
                 Toggle("Prevent sleep during active sessions", isOn: $settings.preventSleepDuringSessions)
-                    .help("Keep host awake while Claude Code sessions are running")
-
-                Toggle("Auto-reconnect on connection loss", isOn: $settings.autoReconnect)
-
-                if settings.autoReconnect {
-                    LabeledContent("Reconnect delay") {
-                        HStack {
-                            TextField("", value: $settings.reconnectDelay, format: .number)
-                                .frame(width: 60)
-                            Text("seconds")
-                        }
-                    }
-                }
+                    .help("Keep this Host awake while Agent sessions are running")
             }
 
+            .settingsAnchor(.behavior)
+
             IPAFileAssociationSettingsSection()
+                .settingsAnchor(.ipaAssociation)
 
             Section("Workspace Recovery") {
                 Picker("Restore at startup", selection: $settings.workspaceRecoveryMode) {
@@ -217,33 +219,9 @@ struct GeneralSettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
-            Section("tmux") {
-                HStack {
-                    TextField("Path to tmux", text: $settings.tmuxPath)
-                        .textFieldStyle(.roundedBorder)
-                    Button("Browse...") {
-                        browseForTmux(settings: settings)
-                    }
-                }
+            .settingsAnchor(.recovery)
 
-                HStack {
-                    Text("Socket")
-                    TextField("Default", text: $settings.tmuxSocket)
-                        .help("Leave empty to use the default tmux socket")
-                }
-            }
-
-            Section {
-                Toggle("Debug Mode", isOn: $settings.debugModeEnabled)
-                    .accessibilityIdentifier("debug-mode-toggle")
-            } header: {
-                Text("Diagnostics")
-            } footer: {
-                Text("Show additional diagnostic information across CtrlX. Off by default on this device.")
-                Text("On Mac, browser recording diagnostics are saved locally while enabled. Turning this off stops collection and keeps existing logs.")
-            }
-
-            CtrlXAppUpdateSettingsSection(service: coordinator.ctrlXAppUpdateService)
+            AdvancedSettingsSection(drafts: drafts)
         }
         .formStyle(.grouped)
         .onAppear {
@@ -258,7 +236,7 @@ struct GeneralSettingsView: View {
     }
 }
 
-private struct CtrlXAppUpdateSettingsSection: View {
+struct CtrlXAppUpdateSettingsSection: View {
     let service: CtrlXAppUpdateService
 
     var body: some View {
@@ -370,33 +348,6 @@ private struct CtrlXAppUpdateSettingsSection: View {
 }
 
 // MARK: - Helpers
-
-private var availableFonts: [String] {
-    [
-        "SF Mono",
-        "Menlo",
-        "Monaco",
-        "Courier New",
-        "Andale Mono",
-        "Source Code Pro",
-        "Fira Code",
-        "JetBrains Mono",
-    ]
-}
-
-@MainActor
-private func browseForTmux(settings: AppSettings) {
-    let panel = NSOpenPanel()
-    panel.canChooseFiles = true
-    panel.canChooseDirectories = false
-    panel.allowsMultipleSelection = false
-    panel.directoryURL = URL(fileURLWithPath: "/usr/local/bin")
-    panel.message = "Select the tmux executable"
-
-    if panel.runModal() == .OK, let url = panel.url {
-        settings.tmuxPath = url.path
-    }
-}
 
 @MainActor
 private func browseForTerminalApp(settings: AppSettings) {

@@ -49,7 +49,7 @@ struct ElementQueryTests {
                 ),
                 UIElement(
                     role: "AXTextField",
-                    subrole: nil,
+                    subrole: "AXSearchField",
                     label: "Search",
                     value: "hello",
                     title: nil,
@@ -82,6 +82,13 @@ struct ElementQueryTests {
         let query = ElementQuery.role("AXTextField")
         let result = query.findFirst(in: sampleTree)
         #expect(result?.identifier == "search-field")
+    }
+
+    @Test("Native search field matches its subrole without matching every text field")
+    func subroleMatch() {
+        let query = ElementQuery.subrole("AXSearchField")
+        #expect(query.findFirst(in: sampleTree)?.identifier == "search-field")
+        #expect(ElementQuery.subrole("AXSecureTextField").findFirst(in: sampleTree) == nil)
     }
 
     @Test("Identifier match")

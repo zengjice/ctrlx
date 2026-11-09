@@ -10,7 +10,7 @@ struct SidebarLayoutSettingsView: View {
     @State private var selectedSessionType: SessionType = .claude
 
     enum SessionType: String, CaseIterable, Identifiable {
-        case claude = "Claude Sessions"
+        case claude = "Agent Sessions"
         case terminal = "Terminals"
 
         var id: String {
@@ -21,71 +21,78 @@ struct SidebarLayoutSettingsView: View {
     var body: some View {
         @Bindable var settings = settings
 
-        ScrollView {
-            VStack(spacing: 0) {
-                Picker("Session Type", selection: $selectedSessionType) {
-                    ForEach(SessionType.allCases) { type in
-                        Text(type.rawValue).tag(type)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal)
-                .padding(.top)
-
-                HStack(alignment: .top, spacing: 16) {
-                    FieldList(
-                        title: "Available Fields",
-                        fields: .init(
-                            get: { availableFields },
-                            set: { _ in }
-                        ),
-                        isSource: false,
-                        onAdd: { field in
-                            switch selectedSessionType {
-                            case .claude: settings.sidebarFields.append(field)
-                            case .terminal: settings.sidebarTerminalFields.append(field)
-                            }
+        GeometryReader { geometry in
+            ScrollView {
+                VStack(spacing: 0) {
+                    Picker("Session Type", selection: $selectedSessionType) {
+                        ForEach(SessionType.allCases) { type in
+                            Text(type.rawValue).tag(type)
                         }
-                    )
-
-                    FieldList(
-                        title: "Visible Fields",
-                        fields: selectedSessionType == .claude
-                            ? $settings.sidebarFields
-                            : $settings.sidebarTerminalFields,
-                        isSource: true
-                    )
-                }
-                .padding()
-
-                Divider()
-
-                HStack {
-                    SidebarPreview(
-                        fields: activeFields,
-                        isTerminal: selectedSessionType == .terminal
-                    )
-
-                    Spacer()
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Sort Order")
-                            .font(.headline)
-
-                        Picker("Sort Order", selection: $settings.sidebarSortMode) {
-                            ForEach(SidebarSortMode.allCases) { mode in
-                                Text(mode.displayName).tag(mode)
-                            }
-                        }
-                        .pickerStyle(.radioGroup)
-                        .labelsHidden()
-                        Text("Drag sessions to use manual order. Use the sort button beside + to restore automatic sorting.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
                     }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal)
+                    .padding(.top)
+
+                    HStack(alignment: .top, spacing: 16) {
+                        FieldList(
+                            title: "Available Fields",
+                            height: max(120, min(280, geometry.size.height * 0.4)),
+                            fields: .init(
+                                get: { availableFields },
+                                set: { _ in }
+                            ),
+                            isSource: false,
+                            onAdd: { field in
+                                switch selectedSessionType {
+                                case .claude: settings.sidebarFields.append(field)
+                                case .terminal: settings.sidebarTerminalFields.append(field)
+                                }
+                            }
+                        )
+
+                        FieldList(
+                            title: "Visible Fields",
+                            height: max(120, min(280, geometry.size.height * 0.4)),
+                            fields: selectedSessionType == .claude
+                                ? $settings.sidebarFields
+                                : $settings.sidebarTerminalFields,
+                            isSource: true
+                        )
+                    }
+                    .padding()
+                    .settingsAnchor(.sidebarFields)
+
+                    Divider()
+
+                    let layout = geometry.size.width < 600
+                        ? AnyLayout(VStackLayout(alignment: .leading, spacing: 20))
+                        : AnyLayout(HStackLayout(alignment: .top, spacing: 24))
+                    layout {
+                        SidebarPreview(
+                            fields: activeFields,
+                            isTerminal: selectedSessionType == .terminal
+                        )
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Sort Order")
+                                .font(.headline)
+
+                            Picker("Sort Order", selection: $settings.sidebarSortMode) {
+                                ForEach(SidebarSortMode.allCases) { mode in
+                                    Text(mode.displayName).tag(mode)
+                                }
+                            }
+                            .pickerStyle(.radioGroup)
+                            .labelsHidden()
+                            Text("Drag sessions to use manual order. Use the sort button beside + to restore automatic sorting.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding()
+                    .settingsAnchor(.sidebarSort)
                 }
-                .padding()
             }
         }
         .onChange(of: settings.sidebarSortMode) {
@@ -120,6 +127,7 @@ struct SidebarLayoutSettingsView: View {
 
 private struct FieldList: View {
     let title: String
+    let height: CGFloat
     @Binding var fields: [SidebarField]
     let isSource: Bool
     var onAdd: ((SidebarField) -> Void)?
@@ -149,7 +157,7 @@ private struct FieldList: View {
                 }
             }
             .listStyle(.bordered)
-            .frame(height: 200)
+            .frame(height: height)
             .dropDestination(for: String.self) { items, _ in
                 guard isSource else { return false }
                 for rawValue in items {
@@ -179,7 +187,7 @@ private struct FieldRow: View {
                     .foregroundStyle(.tertiary)
             }
 
-            Text(field.displayName)
+            Text(field.displayName).lineLimit(1)
 
             Spacer()
 

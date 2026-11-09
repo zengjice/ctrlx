@@ -26,7 +26,11 @@ public struct RemoteAccessSettingsView: View {
                 connectionStatusRow
             } header: {
                 Text("Connection Status")
+            } footer: {
+                Text("Allow paired devices to view sessions running on this Mac.")
             }
+
+            .settingsAnchor(.connection)
 
             // Paired Devices Section
             Section {
@@ -34,6 +38,10 @@ public struct RemoteAccessSettingsView: View {
             } header: {
                 Text("Paired Viewers")
             }
+
+            .settingsAnchor(.pairing)
+
+            RemoteReconnectSettingsSection()
 
             // Server Configuration
             Section {
@@ -44,10 +52,12 @@ public struct RemoteAccessSettingsView: View {
             } header: {
                 Text("Server")
             } footer: {
-                Text("The relay server URL (WSS for secure connection)")
+                Text("Shared relay address for pairing on this Mac. Changes also appear in Remote Hosts. Use WSS for a secure connection.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            .settingsAnchor(.relay)
 
             RelayAccessSettingsSection(server: settings.externalServerURL, onMeteredChange: { meteredRelay = $0 }) {
                 await coordinator.connectedViewerManager?.enableReconnectAndRetryAll()
@@ -386,6 +396,7 @@ private struct ViewerRow: View {
     let viewer: PairedViewer
     let connection: ConnectedViewer?
     let onUnpair: () -> Void
+    @State private var showUnpairConfirmation = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -408,7 +419,7 @@ private struct ViewerRow: View {
                 .foregroundStyle(.secondary)
 
             Menu {
-                Button("Unpair", role: .destructive, action: onUnpair)
+                Button("Unpair…", role: .destructive) { showUnpairConfirmation = true }
             } label: {
                 Symbols.ellipsisCircle.image
             }
@@ -417,6 +428,12 @@ private struct ViewerRow: View {
             .fixedSize()
         }
         .padding(.vertical, 4)
+        .confirmationDialog("Unpair \(viewer.displayName)?", isPresented: $showUnpairConfirmation, titleVisibility: .visible) {
+            Button("Unpair \(viewer.displayName)", role: .destructive, action: onUnpair)
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This disconnects \(viewer.displayName) and removes its pairing. A new pairing code will be needed to connect again.")
+        }
     }
 
     @ViewBuilder

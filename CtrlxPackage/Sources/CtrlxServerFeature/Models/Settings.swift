@@ -326,6 +326,21 @@ final public class AppSettings {
 
     // MARK: - tmux Settings
 
+    private(set) var pendingTmuxConfiguration: TmuxSettingsDraft?
+
+    var savedTmuxConfiguration: TmuxSettingsDraft {
+        pendingTmuxConfiguration ?? .init(tmuxPath: tmuxPath, socketPath: tmuxSocket)
+    }
+
+    func saveTmuxConfigurationForNextLaunch(_ configuration: TmuxSettingsDraft) {
+        // Existing control clients retain their launch configuration. Persist the
+        // next launch without changing settings read by live terminal launchers.
+        preferences.setString(configuration.tmuxPath, Keys.tmuxPath)
+        preferences.setString(configuration.socketPath, Keys.tmuxSocket)
+        let running = TmuxSettingsDraft(tmuxPath: tmuxPath, socketPath: tmuxSocket)
+        pendingTmuxConfiguration = configuration == running ? nil : configuration
+    }
+
     /// Path to tmux binary
     public var tmuxPath: String = Defaults.tmuxPath {
         didSet { preferences.setString(tmuxPath, Keys.tmuxPath) }

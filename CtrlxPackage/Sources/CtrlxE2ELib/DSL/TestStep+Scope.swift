@@ -121,7 +121,8 @@ public extension TestStep {
             return .macOS(instance: instance)
         case let .macSetSidebarFields(_, instance):
             return .macOS(instance: instance)
-        case let .macFocusElement(_, instance):
+        case let .macFocusElement(_, instance),
+             let .macFocusElementQuery(_, instance):
             return .macOS(instance: instance)
         case let .macSetFocusedText(_, instance):
             return .macOS(instance: instance)

@@ -976,6 +976,9 @@ public actor TestOrchestrator {
         case let .macFocusElement(titled, instance):
             try await macDriver(for: instance).focusElement(titled: titled)
 
+        case let .macFocusElementQuery(query, instance):
+            try await macDriver(for: instance).focusElement(matching: query.resolved { context.resolve($0) })
+
         case let .macType(text, pressReturn, charDelay, instance):
             let resolvedText = context.resolve(text)
             try await macDriver(for: instance).type(text: resolvedText, pressReturn: pressReturn, charDelay: charDelay)

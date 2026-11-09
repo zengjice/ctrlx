@@ -13,13 +13,17 @@
     // MARK: - AgentsSettingsView
 
     /// Settings tab listing all registered agent plugins (Claude Code, Codex CLI, …)
-    /// with a segmented picker and per-agent form. Thin MV view — all data/actions go
+    /// with a menu picker and per-agent form. Thin MV view — all data/actions go
     /// through `AppCoordinator`.
     public struct AgentsSettingsView: View {
         @Environment(AppCoordinator.self) private var coordinator
-        @Environment(\.openWindow) private var openWindow
+        @Bindable private var drafts: SettingsDrafts
 
-        @State private var selectedAgentID = ""
+        private var selectedAgentID: String {
+            get { drafts.selectedAgentID }
+            nonmutating set { drafts.selectedAgentID = newValue }
+        }
+
         /// Single source-of-truth driving the Add-Plugin sheet (URL or zip). Two
         /// sibling `.sheet` modifiers can be flaky on macOS (one may fail to
         /// present), so both flows funnel through one `.sheet(item:)`.
@@ -27,7 +31,13 @@
         @State private var pluginToRemove: String?
         @State private var showRemoveConfirmation = false
 
-        public init() { }
+        public init() {
+            self.drafts = SettingsDrafts()
+        }
+
+        init(drafts: SettingsDrafts) {
+            self.drafts = drafts
+        }
 
         public var body: some View {
             VStack(spacing: 0) {
@@ -48,56 +58,31 @@
                     .accessibilityIdentifier("pluginRestartBanner")
                 }
 
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Update reminders")
-                        Text("Dismissed CtrlX, plugin, and CLI notices reappear after")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Picker(
-                        "Dismissed update reminders reappear after",
-                        selection: Binding(
-                            get: { coordinator.agentUpdateReminderInterval },
-                            set: { coordinator.agentUpdateReminderInterval = $0 }
-                        )
-                    ) {
-                        ForEach(AgentUpdateReminderInterval.allCases) { interval in
-                            Text(interval.title).tag(interval)
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(width: 110)
-                    .accessibilityIdentifier("agentUpdateReminderInterval")
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 10)
-
-                Divider()
-
                 let agents = coordinator.agentPluginList()
 
-                // Segmented picker at the top
+                // A menu keeps additional Agent names from widening the window.
                 if agents.count > 1 {
-                    Picker("Agent", selection: $selectedAgentID) {
+                    Picker("Agent", selection: $drafts.selectedAgentID) {
                         ForEach(agents) { agent in
                             Text(agent.name).tag(agent.id)
                         }
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .fixedSize()
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier("agentPicker")
                     .padding()
                 }
 
                 if selectedAgentID.isEmpty {
-                    // Not yet loaded — show nothing (task below will set it)
-                    Spacer()
+                    ContentUnavailableView {
+                        Label("No Agents Available", symbol: .puzzlepiece)
+                    } description: {
+                        Text("Add an Agent plugin to configure it here.")
+                    }
                 } else {
                     PluginAgentForm(
                         pluginID: selectedAgentID,
+                        commandDraft: commandDraftBinding(for: selectedAgentID),
                         onRemove: {
                             pluginToRemove = selectedAgentID
                             showRemoveConfirmation = true
@@ -110,20 +95,6 @@
                 }
 
                 Divider()
-
-                HStack {
-                    Text("Codex & Claude Code CLI").foregroundStyle(.secondary)
-                    Spacer()
-                    Button(coordinator.agentCLIInstallations?.isPerformingOperation == true ? "View Agent Setup…" : "Agent Setup…") {
-                        coordinator.agentCLIInstallations?.dismissStartupPrompt()
-                        coordinator.agentCLIInstallations?.refresh()
-                        openWindow(id: "agent-cli-setup")
-                    }
-                    .disabled(coordinator.agentCLIInstallations == nil)
-                    .accessibilityIdentifier("agentCLISetupButton")
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 8)
 
                 // Toolbar row at the bottom of the tab
                 HStack {
@@ -175,7 +146,7 @@
             } message: { id in
                 Text("This will uninstall the \"\(pluginDisplayName(id))\" plugin and delete its files. This cannot be undone.")
             }
-            .task {
+            .task(id: coordinator.pluginCatalogRevision) {
                 if let requested = coordinator.agentSettingsSelection {
                     selectedAgentID = requested
                     coordinator.agentSettingsSelection = nil
@@ -203,6 +174,10 @@
         }
 
         // MARK: - Helpers
+
+        private func commandDraftBinding(for id: String) -> Binding<String?> {
+            Binding(get: { drafts.agentCommands[id] }, set: { drafts.agentCommands[id] = $0 })
+        }
 
         private func pluginDisplayName(_ id: String) -> String {
             coordinator.agentPluginList().first { $0.id == id }?.name ?? id
@@ -272,6 +247,7 @@
     /// change. Config-folder rows appear below with Install/Uninstall actions.
     private struct PluginAgentForm: View {
         let pluginID: String
+        @Binding var commandDraft: String?
         /// Invoked when the user taps "Remove Plugin…". The parent owns the
         /// confirmation dialog and selection reset, since removal mutates the
         /// outer `selectedAgentID`.
@@ -281,9 +257,17 @@
         let onReviewUpdate: (URL) -> Void
 
         @Environment(AppCoordinator.self) private var coordinator
+        @Environment(\.openWindow) private var openWindow
+        @Environment(\.settingsSearchSection) private var searchSection
+        @Environment(\.settingsSearchRequestID) private var searchRequestID
+        @State private var advancedExpanded = false
 
         // The decoded field values (shared between both concrete types)
         @State private var commandPath = ""
+        @State private var isApplyingCommand = false
+        @State private var commandApplied = false
+        @State private var providerToDelete: AgentProviderDraft?
+        @State private var showDeleteProviderConfirmation = false
         @State private var autoRun = true
         @State private var logLevel: LogLevel = .info
         @State private var closePaneOnSessionEnd = false
@@ -311,6 +295,7 @@
 
         /// Whether the agent binary was not found
         @State private var agentUnavailable = false
+        @State private var availabilityError: String?
 
         /// Inline write error
         @State private var writeError: String?
@@ -320,16 +305,27 @@
 
         var body: some View {
             Form {
-                // Agent-unavailable banner
-                if agentUnavailable {
-                    Section {
-                        Label(
-                            "\(agentDisplayName) CLI not found — install it to enable this agent.",
-                            symbol: .exclamationmarkTriangle
-                        )
-                        .foregroundStyle(.orange)
+                Section("Status") {
+                    LabeledContent("CLI") {
+                        if !isLoaded {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Label(availabilityError != nil ? "Could not check" : agentUnavailable ? "Not found" : "Available", symbol: agentUnavailable || availabilityError != nil ? .exclamationmarkTriangle : .checkmarkCircle)
+                                .foregroundStyle(agentUnavailable || availabilityError != nil ? .orange : .secondary)
+                        }
+                    }
+                    configFolderRow(path: defaultConfigRoot, removable: false)
+                    if InstallableAgentCLI(rawValue: pluginID) != nil {
+                        Button("Agent Setup…") {
+                            coordinator.agentCLIInstallations?.dismissStartupPrompt()
+                            coordinator.agentCLIInstallations?.refresh()
+                            openWindow(id: "agent-cli-setup")
+                        }
+                        .disabled(coordinator.agentCLIInstallations == nil)
+                        .accessibilityIdentifier("agentCLISetupButton")
                     }
                 }
+                .settingsAnchor(.agentStatus)
 
                 // Inline write-error banner
                 if let writeError {
@@ -343,18 +339,38 @@
                 // Command + Browse
                 Section("Command") {
                     HStack {
-                        TextField("Command path", text: $commandPath)
-                            .textFieldStyle(.roundedBorder)
-                            .onSubmit { persist() }
-                            .accessibilityIdentifier("agentCommandPath-\(pluginID)")
+                        TextField("Command path", text: Binding(
+                            get: { commandDraft ?? commandPath },
+                            set: { commandDraft = $0
+                                commandApplied = false
+                            }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { Task { await applyCommand() } }
+                        .onExitCommand { commandDraft = nil
+                            writeError = nil
+                            commandApplied = false
+                        }
+                        .accessibilityIdentifier("agentCommandPath-\(pluginID)")
                         Button("Browse…") {
                             browseForCommand()
                         }
+                        Button(isApplyingCommand ? "Applying…" : "Apply") {
+                            Task { await applyCommand() }
+                        }
+                        .disabled(commandDraft == nil || commandDraft == commandPath)
+                        .accessibilityIdentifier("agentApplyCommand-\(pluginID)")
                     }
+                    Text(commandApplied ? "Command path saved." : "Apply to save. Drafts are kept when switching pages or Agents and discarded when this window closes. Escape reverts this field.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
-                if let agent = InstallableAgentCLI(rawValue: pluginID) {
-                    AgentCLIUpdateSection(agent: agent)
+                .settingsAnchor(.agentCommand)
+
+                // Providers
+                if pluginID == CodexPluginCore.pluginID || pluginID == ClaudeCodePluginCore.pluginID {
+                    providerSettingsSection
                 }
 
                 // Behaviour
@@ -362,14 +378,6 @@
                     Toggle("Auto-run \(agentDisplayName) in project folders", isOn: $autoRun)
                         .onChange(of: autoRun) { _, _ in persist() }
                         .accessibilityIdentifier("agentAutoRun-\(pluginID)")
-
-                    Picker("Log level", selection: $logLevel) {
-                        ForEach(LogLevel.allCases, id: \.self) { level in
-                            Text(level.rawValue.capitalized).tag(level)
-                        }
-                    }
-                    .onChange(of: logLevel) { _, _ in persist() }
-                    .accessibilityIdentifier("agentLogLevel-\(pluginID)")
 
                     Toggle("Close session when \(agentDisplayName) exits", isOn: $closePaneOnSessionEnd)
                         .onChange(of: closePaneOnSessionEnd) { _, _ in persist() }
@@ -431,20 +439,13 @@
                             }
                         }
                     }
+                }
 
-                    // Codex configures OTEL through its own config (it doesn't read
-                    // `OTEL_*` env vars like Claude), so the export is opt-out-able
-                    // per-agent here (#602). Claude has no equivalent toggle.
-                    if pluginID == "codex" {
-                        Toggle("Export telemetry (tokens, latency, model)", isOn: $exportTelemetry)
-                            .onChange(of: exportTelemetry) { _, _ in persist() }
-                            .accessibilityIdentifier("agentExportTelemetry-\(pluginID)")
-                            .help(
-                                "Point this agent's OpenTelemetry export at CtrlX's loopback receiver "
-                                    + "so the session's token meter, latency, and model show in the UI. "
-                                    + "One-way and local only — no prompt or tool content leaves your Mac."
-                            )
-                    }
+                .settingsAnchor(.agentBehavior)
+
+                if let agent = InstallableAgentCLI(rawValue: pluginID) {
+                    AgentCLIUpdateSection(agent: agent)
+                        .settingsAnchor(.agentUpdates)
                 }
 
                 // Updates (URL-installed plugins only — bundled and
@@ -485,42 +486,46 @@
 
                         updateStatusRow(updateManager)
                     }
+                    .settingsAnchor(.agentUpdates)
                 }
 
-                // Config folders
-                if pluginID == CodexPluginCore.pluginID || pluginID == ClaudeCodePluginCore.pluginID {
-                    providerSettingsSection
-                }
-
-                // Config folders
                 Section {
-                    // Default root row (not removable)
-                    configFolderRow(path: defaultConfigRoot, removable: false)
+                    DisclosureGroup("Advanced", isExpanded: $advancedExpanded) {
+                        Picker("Log level", selection: $logLevel) {
+                            ForEach(LogLevel.allCases, id: \.self) { level in
+                                Text(level.rawValue.capitalized).tag(level)
+                            }
+                        }
+                        .onChange(of: logLevel) { _, _ in persist() }
+                        .accessibilityIdentifier("agentLogLevel-\(pluginID)")
 
-                    // Additional folders
-                    ForEach(additionalConfigFolders, id: \.self) { folder in
-                        configFolderRow(path: folder, removable: true)
-                    }
-
-                    Button("Add Folder…") {
-                        addConfigFolder()
-                    }
-                    .accessibilityIdentifier("agentAddFolder-\(pluginID)")
-                } header: {
-                    // The explanation lives beside the title rather than in a
-                    // section footer: the Agents window's bottom toolbar
-                    // (Add Plugin from URL / Install from Zip) can occlude the
-                    // last section's footer, so a footer here would be unseen.
-                    HStack(alignment: .firstTextBaseline) {
-                        Text("Config Folders")
-                        Spacer(minLength: 12)
-                        Text("Additional folders where the \(agentDisplayName) plugin should be installed.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .textCase(nil)
-                            .multilineTextAlignment(.trailing)
+                        // Codex configures OTEL through its own config (it doesn't read
+                        // `OTEL_*` env vars like Claude), so the export is opt-out-able
+                        // per-agent here (#602). Claude has no equivalent toggle.
+                        if pluginID == "codex" {
+                            Toggle("Export telemetry (tokens, latency, model)", isOn: $exportTelemetry)
+                                .onChange(of: exportTelemetry) { _, _ in persist() }
+                                .accessibilityIdentifier("agentExportTelemetry-\(pluginID)")
+                                .help(
+                                    "Point this agent's OpenTelemetry export at CtrlX's loopback receiver "
+                                        + "so the session's token meter, latency, and model show in the UI. "
+                                        + "One-way and local only — no prompt or tool content leaves your Mac."
+                                )
+                        }
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Additional Config Folders").font(.headline)
+                            Text("Install the plugin into additional \(agentDisplayName) configuration folders.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            ForEach(additionalConfigFolders, id: \.self) { folder in
+                                configFolderRow(path: folder, removable: true)
+                            }
+                            Button("Add Folder…") { addConfigFolder() }
+                                .accessibilityIdentifier("agentAddFolder-\(pluginID)")
+                        }
+                        .padding(.top, 8)
                     }
                 }
+                .settingsAnchor(.agentAdvanced)
 
                 // Remove plugin (only for non-bundled, folder-dropped/URL plugins)
                 if !coordinator.isBundledPlugin(id: pluginID) {
@@ -540,6 +545,17 @@
                 }
             }
             .formStyle(.grouped)
+            .onChange(of: commandDraft) { _, draft in
+                if draft == nil {
+                    writeError = nil
+                }
+            }
+            .onChange(of: searchRequestID, initial: true) { _, _ in
+                if searchSection == .agentAdvanced {
+                    advancedExpanded = true
+                }
+            }
+            .disabled(!isLoaded || isApplyingCommand)
             // Load settings whenever the selected plugin changes
             .task(id: pluginID) {
                 await loadSettings()
@@ -553,6 +569,7 @@
                 }
                 if case .available = coordinator.agentCLIInstallations?.entries[agent]?.availability {
                     agentUnavailable = false
+                    availabilityError = nil
                 }
             }
             .sheet(item: $providerEditor) { presentation in
@@ -570,13 +587,23 @@
                     })
                 )
             }
+            .confirmationDialog("Delete Provider", isPresented: $showDeleteProviderConfirmation, titleVisibility: .visible, presenting: providerToDelete) { provider in
+                Button("Delete \(provider.name)", role: .destructive) {
+                    deleteProvider(provider)
+                    providerToDelete = nil
+                }
+                .accessibilityIdentifier("agentConfirmDeleteProvider-\(pluginID)")
+                Button("Cancel", role: .cancel) { providerToDelete = nil }
+            } message: { provider in
+                Text("This removes \(provider.name), its stored API key and its model shortcuts. If it is the launch default, launches using the default will return to the current CLI configuration.")
+            }
         }
 
         // MARK: - Computed helpers
 
         private var providerSettingsSection: some View {
             Section {
-                Picker("Default Provider", selection: $defaultProviderID) {
+                Picker("Launch Default Provider", selection: $defaultProviderID) {
                     Text("Current CLI configuration").tag(String?.none)
                     Text(builtInProviderName).tag(Optional(builtInProviderID))
                     ForEach(providers) { provider in
@@ -624,7 +651,8 @@
                         }
                         .buttonStyle(.borderless)
                         Button(role: .destructive) {
-                            deleteProvider(provider)
+                            providerToDelete = provider
+                            showDeleteProviderConfirmation = true
                         } label: {
                             Symbols.minusCircleFill.image
                         }
@@ -644,9 +672,11 @@
             } header: {
                 Text("Providers")
             } footer: {
+                Text("The launch default applies when no Provider is selected. New Agent and Fork can choose a Provider for that launch.")
                 Text("Provider settings stay on this Host. API keys are stored in Keychain and never included in settings, synchronized state, or recovery snapshots.")
                     .font(.caption)
             }
+            .settingsAnchor(.agentProviders)
         }
 
         private var builtInProviderID: String {
@@ -854,6 +884,11 @@
             let loadedCommand = commandPath
             let status = await coordinator.pluginInstallStatus(id: pluginID, configRoot: nil)
             agentUnavailable = (status == .agentUnavailable)
+            if case let .checkFailed(message) = status {
+                availabilityError = message
+            } else {
+                availabilityError = nil
+            }
             // CLI setup may finish while the plugin check is suspended. Preserve typed drafts,
             // but don't let the next toggle save the pre-install command back over the new path.
             if let agent = InstallableAgentCLI(rawValue: pluginID), commandPath == loadedCommand {
@@ -879,13 +914,14 @@
             }
         }
 
-        private func encodeSettings() -> Data {
+        private func encodeSettings(commandPath: String? = nil) -> Data {
+            let savedCommand = commandPath ?? self.commandPath
             let encoder = JSONEncoder()
             encoder.outputFormatting = .sortedKeys
             switch pluginID {
             case "claude-code":
                 let s = ClaudeCodeSettings(
-                    commandPath: commandPath,
+                    commandPath: savedCommand,
                     autoRun: autoRun,
                     logLevel: logLevel,
                     additionalConfigFolders: additionalConfigFolders,
@@ -898,7 +934,7 @@
                 return (try? encoder.encode(s)) ?? Data()
             case "codex":
                 let s = CodexSettings(
-                    commandPath: commandPath,
+                    commandPath: savedCommand,
                     autoRun: autoRun,
                     logLevel: logLevel,
                     closePaneOnSessionEnd: closePaneOnSessionEnd,
@@ -911,7 +947,7 @@
                 return (try? encoder.encode(s)) ?? Data()
             default:
                 let s = SidecarPluginSettings(
-                    commandPath: commandPath,
+                    commandPath: savedCommand,
                     autoRun: autoRun,
                     logLevel: logLevel,
                     additionalConfigFolders: additionalConfigFolders,
@@ -923,18 +959,42 @@
 
         // MARK: - Browse
 
+        private func applyCommand() async {
+            guard isLoaded, !isApplyingCommand, let draft = commandDraft, draft != commandPath else { return }
+            isApplyingCommand = true
+            writeError = nil
+            defer { isApplyingCommand = false }
+            do {
+                let path = try await SettingsCommandValidation.resolve(draft, preserveCommandName: true)
+                if let error = await coordinator.setPluginSettings(id: pluginID, encodeSettings(commandPath: path)) {
+                    writeError = error
+                    return
+                }
+                commandPath = path
+                commandDraft = nil
+                commandApplied = true
+                agentUnavailable = false
+                availabilityError = nil
+            } catch {
+                writeError = error.localizedDescription
+            }
+        }
+
         @MainActor
         private func browseForCommand() {
             let panel = NSOpenPanel()
             panel.canChooseFiles = true
             panel.canChooseDirectories = false
             panel.allowsMultipleSelection = false
-            panel.directoryURL = URL(fileURLWithPath: "/usr/local/bin")
+            let path = commandDraft ?? commandPath
+            panel.directoryURL = path.hasPrefix("/")
+                ? URL(fileURLWithPath: path).deletingLastPathComponent()
+                : URL(fileURLWithPath: "/opt/homebrew/bin")
             panel.message = "Select the \(agentDisplayName) executable"
 
             if panel.runModal() == .OK, let url = panel.url {
-                commandPath = url.path
-                persist()
+                commandDraft = url.path
+                commandApplied = false
             }
         }
 

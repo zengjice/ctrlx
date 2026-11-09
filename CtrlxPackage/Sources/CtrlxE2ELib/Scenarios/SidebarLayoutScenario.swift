@@ -153,8 +153,8 @@ public enum SidebarLayoutScenario {
 
         TestStep.log("Phase 2: Change fields to Session Name + Command only")
         TestStep.macOpenSettings()
-        TestStep.macWaitForWindow(titled: "General", timeout: 5)
         TestStep.macSelectSettingsTab("Sidebar")
+        TestStep.macWaitForWindow(titled: "Sidebar", timeout: 5)
         TestStep.wait(seconds: 1)
         TestStep.macScreenshot(label: "sidebar-settings-default")
 
@@ -192,8 +192,8 @@ public enum SidebarLayoutScenario {
         TestStep.wait(seconds: 0.5)
         TestStep.macClickButton(titled: "Add Current Command")
         TestStep.wait(seconds: 0.5)
-        // Switch back to Claude Sessions tab
-        TestStep.macClickButton(titled: "Claude Sessions")
+        // Switch back to Agent Sessions tab
+        TestStep.macClickButton(titled: "Agent Sessions")
         TestStep.wait(seconds: 0.5)
 
         TestStep.macCloseWindow(titled: "Sidebar")
@@ -246,7 +246,7 @@ public enum SidebarLayoutScenario {
         TestStep.wait(seconds: 0.5)
         TestStep.macClickButton(titled: "Add Current Command")
         TestStep.wait(seconds: 0.5)
-        TestStep.macClickButton(titled: "Claude Sessions")
+        TestStep.macClickButton(titled: "Agent Sessions")
         TestStep.wait(seconds: 0.5)
 
         TestStep.macCloseWindow(titled: "Sidebar")
@@ -346,11 +346,11 @@ public enum SidebarLayoutScenario {
         // Order: AlphaProject, BetaProject, delta-terminal, GammaProject
         TestStep.macScreenshot(label: "sort-alphabetical")
 
-        // Sort mode 4: Claude first
-        TestStep.log("Phase 5d: Sort Claude First")
+        // Sort mode 4: Agents first
+        TestStep.log("Phase 5d: Sort Agents First")
         TestStep.macOpenSettings()
         TestStep.macWaitForWindow(titled: "Sidebar", timeout: 5)
-        TestStep.macClickButton(titled: "Claude sessions first")
+        TestStep.macClickButton(titled: "Agent sessions first")
         TestStep.wait(seconds: 0.5)
         TestStep.macCloseWindow(titled: "Sidebar")
         TestStep.wait(seconds: 1)
