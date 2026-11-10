@@ -1,3 +1,4 @@
+import ConcurrencyExtras
 import CtrlxCommon
 import CtrlxNetworking
 import Dependencies
@@ -14,7 +15,7 @@ struct AgentWorkflowTerminalTransportTests {
         let invocation: AgentWorkflowInvocation
     }
 
-    private func fixture(text: String = "Initial task", attachments: [UUID] = []) async throws -> Fixture {
+    private func fixture(text: String = "Initial task", attachments: [UUID] = [], selection: AgentModelSelection? = nil) async throws -> Fixture {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-workflow-input-test-\(UUID())")
         let hostID = UUID()
         let store = AgentWorkflowStore(fileURL: root.appendingPathComponent("ledger.json"), hostID: hostID)
@@ -25,7 +26,7 @@ struct AgentWorkflowTerminalTransportTests {
             capabilities: .init(maximumInputBytes: 100_000), readiness: .ready
         )])
         let instance = try #require(instances.first)
-        let node = AgentWorkflowNode(name: "Developer", agentInstanceID: instance.id)
+        let node = AgentWorkflowNode(name: "Developer", agentInstanceID: instance.id, modelSelection: selection)
         let definition = try await store.saveDefinition(.init(name: "Test", hostID: hostID, nodes: [node], edges: [], entryNodeID: node.id, initialInput: .init(text: text, attachmentIDs: attachments)), expectedRevision: nil)
         let run = try await store.start(definitionID: definition.id, expectedRevision: 1, requestID: UUID(), now: Date(), authorizationExpiresAt: Date().addingTimeInterval(3_600))
         let updated = try await store.update(runID: run.id) { _ = try $0.prepareInvocation(nodeID: node.id, now: Date()) }
@@ -36,6 +37,99 @@ struct AgentWorkflowTerminalTransportTests {
         try await fixture.store.update(runID: fixture.invocation.delivery.runID) {
             try $0.beginWriting(invocationID: fixture.invocation.id, instance: fixture.instance, now: Date())
         }
+    }
+
+    @Test(arguments: [false, true])
+    func modelsArePreparedOutsideTheQueueAndConfirmedBeforeTaskInput(configured: Bool) async throws {
+        let selection = AgentModelSelection(model: "other", effort: "high")
+        let f = try await fixture(selection: configured ? selection : nil)
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let gate = AgentWorkflowInputGate()
+        let actions = LockIsolated<[String]>([])
+        let delivery = AgentWorkflowTerminalTransport(store: f.store, gate: gate, temporaryDirectory: f.root.appendingPathComponent("input"), inspect: { $0 }, loadModels: { _ in
+            actions.withValue { $0.append("load") }
+        }, configureModel: { instance, value, input in
+            #expect(value == selection)
+            #expect(try await f.store.isStagingInput(for: instance))
+            try gate.validate(input.claim)
+            try input.authorization.performConfiguration { actions.withValue { $0.append("switch") } }
+        }, submit: { _, _, _, validate, _ in
+            #expect(try await !f.store.isStagingInput(for: f.instance))
+            try validate { actions.withValue { $0.append("task") } }
+        }, onFailure: { Issue.record("\($0)") })
+        try await delivery.transport.prepare(f.invocation, f.instance)
+        #expect(actions.value == (configured ? ["load"] : []))
+        try await markWriting(f)
+        try await delivery.transport.write(f.invocation, f.instance)
+        await delivery.transport.discard(f.invocation.id)
+        #expect(actions.value == (configured ? ["load", "switch", "task"] : ["task"]))
+    }
+
+    @Test(arguments: ["pause", "end", "human", "failed", "replacement"])
+    func configurationFailureOrRevocationNeverSendsTheTask(mode: String) async throws {
+        let f = try await fixture(selection: .init(model: "other", effort: "high"))
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let gate = AgentWorkflowInputGate()
+        var changed = false
+        var human: Task<Void, Error>?
+        let delivery = AgentWorkflowTerminalTransport(store: f.store, gate: gate, temporaryDirectory: f.root.appendingPathComponent("input"), inspect: {
+            if changed && mode == "replacement" {
+                var observation = AgentWorkflowObservation($0)
+                observation.processRuntimeID = "replacement"
+                return observation.instance(hostID: $0.hostID, id: $0.id)
+            }
+            return $0
+        }, configureModel: { _, _, input in
+            if mode == "failed" {
+                throw AgentWorkflowError("The model is unavailable")
+            }
+            changed = true
+            try input.authorization.performConfiguration { }
+            if mode == "human" {
+                human = Task { try await gate.human(paneID: f.instance.paneID) { } }
+                while (try? gate.validate(input.claim)) != nil {
+                    await Task.yield()
+                }
+                try gate.validate(input.claim)
+            } else if mode != "replacement" {
+                try await f.store.update(runID: f.invocation.delivery.runID) {
+                    if mode == "end" {
+                        $0.end()
+                    } else {
+                        $0.pause(reason: "Paused during model selection")
+                    }
+                }
+                #expect(throws: AgentWorkflowError.self) { try input.authorization.performConfiguration { Issue.record("Model input after revocation") } }
+            }
+        }, submit: { _, _, _, validate, _ in
+            try validate { Issue.record("Task submitted after configuration was invalidated") }
+        }, onFailure: { Issue.record("\($0)") })
+        try await delivery.transport.prepare(f.invocation, f.instance)
+        try await markWriting(f)
+        await #expect(throws: AgentWorkflowInputNotWritten.self) { try await delivery.transport.write(f.invocation, f.instance) }
+        try await human?.value
+        await delivery.transport.discard(f.invocation.id)
+    }
+
+    @Test
+    func configurationDoesNotConsumeTheTaskWriteAndCannotOutliveRevocation() throws {
+        let permit = AgentWorkflowWriteAuthorization(expiresAt: .distantFuture)
+        try permit.beginConfiguration()
+        for _ in 0..<4 {
+            try permit.performConfiguration { }
+        }
+        #expect(permit.isStaging)
+        #expect(throws: AgentWorkflowError.self) { try permit.perform { } }
+        permit.endConfiguration()
+        #expect(!permit.isStaging)
+        try permit.perform { }
+        #expect(throws: AgentWorkflowError.self) { try permit.perform { } }
+        let revoked = AgentWorkflowWriteAuthorization(expiresAt: .distantFuture)
+        try revoked.beginConfiguration()
+        revoked.revoke()
+        revoked.endConfiguration()
+        #expect(throws: AgentWorkflowError.self) { try revoked.beginConfiguration() }
+        #expect(throws: AgentWorkflowError.self) { try revoked.performConfiguration { } }
     }
 
     @Test

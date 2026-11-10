@@ -28,6 +28,10 @@ struct AgentWorkflowEditor: View {
     @State private var importing = false
     @State private var activeImport: AgentWorkflowImageImport?
     @State private var showingReviewTemplate = false
+    @State private var showingInitialTask = false
+    @State private var showingAgents: Bool
+    @State private var showingExecution = false
+    @State private var expandedStepID: UUID?
 
     init(endpoint: AgentWorkflowEndpoint, definition: AgentWorkflowDefinition, isNew: Bool, createAgent: ((UUID) async throws -> AgentWorkflowAgentCreation)?) {
         self.endpoint = endpoint
@@ -40,16 +44,31 @@ struct AgentWorkflowEditor: View {
             editable.nodes[index].initialTask = definition.initialTask(for: definition.nodes[index])
         }
         self._draft = State(initialValue: editable)
+        self._showingAgents = State(initialValue: editable.nodes.isEmpty && editable.agents.isEmpty)
     }
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Task") {
+                Section("Workflow") {
                     TextField("Workflow name", text: $draft.name)
-                    taskInput("Initial task", input: $draft.initialInput)
-                    Text("Choose which steps receive the original task and attachments. The review template sends them only to initial development.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    DisclosureGroup(isExpanded: expansion($showingInitialTask)) {
+                        taskInput("Initial task", input: $draft.initialInput)
+                        Text("Choose which steps receive the original task and attachments. You can also set the task when starting a run.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text("Saved initial task")
+                                Spacer()
+                                if !draft.initialInput.attachmentIDs.isEmpty {
+                                    Text(draft.initialInput.attachmentIDs.count == 1 ? "1 image" : "\(draft.initialInput.attachmentIDs.count) images")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                            Text(inputSummary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }.disclosureGroupStyle(AgentWorkflowEditorDisclosureStyle(id: "workflow-initial-task-toggle", disabled: importing))
                 }
                 if draft.nodes.isEmpty {
                     Section("Quick start") {
@@ -60,110 +79,140 @@ struct AgentWorkflowEditor: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                Section("Participating Agents") {
-                    ForEach(draft.agents) { participant in
-                        VStack(alignment: .leading, spacing: 8) {
-                            TextField("Role name", text: participantName(participant.id))
-                            Picker("Agent", selection: participantBinding(participant.id)) {
-                                ForEach(instances.filter { instance in instance.id == participant.id || !draft.agents.contains(where: { $0.id == instance.id }) }) { instance in
-                                    Text(instance.displayName).tag(instance.id)
-                                }
-                                if !instances.contains(where: { $0.id == participant.id }) {
-                                    Text("Agent unavailable · choose a replacement").tag(participant.id)
-                                }
-                            }
-                            Button("Remove Agent", role: .destructive) {
-                                draft.participants?.removeAll { $0.id == participant.id }
-                            }.disabled(draft.nodes.contains { $0.agentInstanceID == participant.id })
-                        }
-                    }
-                    Menu {
-                        ForEach(instances.filter { instance in !draft.agents.contains(where: { $0.id == instance.id }) }) { instance in
-                            Button(instance.displayName) { add(instance) }
-                        }
-                    } label: { Label("Add existing Agent", symbol: .plus) }
-                    if createAgent != nil {
-                        Button("New Agent tab") { showingCreation = true }.disabled(createdAgent != nil)
-                    }
-                    if createdAgent != nil {
-                        Text("Agent created. Complete any setup in its terminal, then refresh Agents.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Button("Choose another Agent") { createdAgent = nil }
-                    }
-                    Button { Task { await refreshInstances() } } label: {
-                        Label("Refresh Agents", symbol: .arrowClockwise)
-                    }.disabled(refreshing)
-                    Text("Each participant keeps one Agent and conversation. Multiple steps can use that same Agent in sequence.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                ForEach($draft.nodes) { $node in
-                    Section {
-                        TextField("Step name", text: $node.name)
-                        if node.kind == .agent {
-                            Picker("Run as", selection: $node.agentInstanceID) {
-                                ForEach(draft.agents) { participant in
-                                    Text(participant.name).tag(Optional(participant.id))
-                                }
-                                if !draft.agents.contains(where: { $0.id == node.agentInstanceID }) {
-                                    Text("Choose a participating Agent").tag(node.agentInstanceID)
-                                }
-                            }
-                            if let instance = instances.first(where: { $0.id == node.agentInstanceID }) {
-                                Text(instance.displayName).font(.caption).foregroundStyle(.secondary)
-                                Text(instance.workingDirectory).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                                if let issue = instance.capabilityIssue {
-                                    Text(issue).font(.caption).foregroundStyle(.orange)
-                                } else if instance.readiness != .ready {
-                                    Text(instance.readiness.title).font(.caption).foregroundStyle(.orange)
-                                }
-                            }
-                        } else {
-                            Label("Content step", symbol: .docTextFill).font(.caption).foregroundStyle(.secondary)
-                            Text("Prepares text and attachments without calling an Agent. Connect an Agent step to send this material.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        taskInput("Instructions or skill for this step", input: $node.input)
-                        Picker("Original task", selection: Binding(get: { draft.initialTask(for: node) }, set: { node.initialTask = $0 })) {
-                            ForEach(AgentWorkflowNode.InitialTask.allCases, id: \.self) { Text($0.title).tag($0) }
-                        }
-                        NavigationLink(node.kind == .content ? "Preview output" : "Preview task input") {
-                            AgentWorkflowInputPreview(definition: draft, node: node, attachments: attachments)
-                        }
-                        if node.kind == .agent {
-                            Picker("Complete step", selection: $node.completion) {
-                                ForEach(AgentWorkflowNode.Completion.allCases, id: \.self) { Text($0.title).tag($0) }
-                            }
-                            if node.completion == .explicit {
-                                Text("Discussion can continue across replies. Downstream steps wait until the Agent explicitly completes this task.")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                            Toggle("Allow this step to end the workflow", isOn: $node.allowsFinish)
-                            if node.allowsFinish {
-                                Text("Define when to finish in this step's instructions. This switch grants permission; it does not define the completion condition.")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                        DisclosureGroup("Wait for upstream steps") {
-                            ForEach(draft.nodes.filter { $0.id != node.id }) { source in
-                                Toggle(source.name, isOn: connection(from: source.id, to: node.id))
-                                if draft.edges.contains(where: { $0.source == source.id && $0.target == node.id }) {
-                                    Picker("Receive from \(source.name)", selection: includesResult(from: source.id, to: node.id)) {
-                                        Text("Completion only").tag(false)
-                                        Text("Output and attachments").tag(true)
+                Section {
+                    DisclosureGroup(isExpanded: expansion($showingAgents)) {
+                        ForEach(draft.agents) { participant in
+                            VStack(alignment: .leading, spacing: 8) {
+                                TextField("Role name", text: participantName(participant.id))
+                                Picker("Agent", selection: participantBinding(participant.id)) {
+                                    ForEach(instances.filter { instance in instance.id == participant.id || !draft.agents.contains(where: { $0.id == instance.id }) }) { instance in
+                                        Text(instance.displayName).tag(instance.id)
+                                    }
+                                    if !instances.contains(where: { $0.id == participant.id }) {
+                                        Text("Agent unavailable · choose a replacement").tag(participant.id)
                                     }
                                 }
+                                Button("Remove Agent", role: .destructive) {
+                                    draft.participants?.removeAll { $0.id == participant.id }
+                                }.disabled(draft.nodes.contains { $0.agentInstanceID == participant.id })
                             }
-                            Text("Always waits for all selected steps. Completion only sends no upstream text or attachments.")
+                        }
+                        Menu {
+                            ForEach(instances.filter { instance in !draft.agents.contains(where: { $0.id == instance.id }) }) { instance in
+                                Button(instance.displayName) { add(instance) }
+                            }
+                        } label: { Label("Add existing Agent", symbol: .plus) }
+                        if createAgent != nil {
+                            Button("New Agent tab") { showingCreation = true }.disabled(createdAgent != nil)
+                        }
+                        if createdAgent != nil {
+                            Text("Agent created. Complete any setup in its terminal, then refresh Agents.")
                                 .font(.caption).foregroundStyle(.secondary)
+                            Button("Choose another Agent") { createdAgent = nil }
                         }
-                        let targets = draft.nodes.filter { target in
-                            draft.edges.contains { $0.source == node.id && $0.target == target.id }
-                        }
-                        Text(targets.isEmpty ? "No downstream steps." : "Then: " + targets.map(\.name).joined(separator: ", "))
+                        Button { Task { await refreshInstances() } } label: {
+                            Label("Refresh Agents", symbol: .arrowClockwise)
+                        }.disabled(refreshing)
+                        Text("Each participant keeps one Agent and conversation. Multiple steps can use that same Agent in sequence.")
                             .font(.caption).foregroundStyle(.secondary)
-                        Button("Remove step", role: .destructive) { remove(node.id) }.disabled(importing)
-                    } header: {
-                        Text("Step \((draft.nodes.firstIndex { $0.id == node.id } ?? 0) + 1) · \(node.name)")
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Participating Agents")
+                            Text(draft.agents.isEmpty ? "Add an Agent to start building steps." : draft.agents.map(\.name).joined(separator: ", "))
+                                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            if draft.agents.contains(where: { participant in !instances.contains { $0.id == participant.id } }), !refreshing {
+                                Text("Some Agents are unavailable. Choose a replacement.").font(.caption).foregroundStyle(.orange)
+                            }
+                        }
+                    }.disclosureGroupStyle(AgentWorkflowEditorDisclosureStyle(id: "workflow-agents-toggle", disabled: importing))
+                }
+                Section("Steps") {
+                    if draft.nodes.isEmpty {
+                        Text("Add a step below, or use the review template.").foregroundStyle(.secondary)
+                    }
+                    ForEach($draft.nodes) { $node in
+                        DisclosureGroup(isExpanded: stepExpansion(node.id)) {
+                            TextField("Step name", text: $node.name)
+                                .accessibilityIdentifier("workflow-step-name-\(node.id)")
+                            if node.kind == .agent {
+                                Picker("Run as", selection: Binding(get: { node.agentInstanceID }, set: { replacement in
+                                    guard node.agentInstanceID != replacement else { return }
+                                    node.agentInstanceID = replacement
+                                    node.modelSelection = nil
+                                })) {
+                                    ForEach(draft.agents) { participant in
+                                        Text(participant.name).tag(Optional(participant.id))
+                                    }
+                                    if !draft.agents.contains(where: { $0.id == node.agentInstanceID }) {
+                                        Text("Choose a participating Agent").tag(node.agentInstanceID)
+                                    }
+                                }
+                                if let instance = instances.first(where: { $0.id == node.agentInstanceID }) {
+                                    if let issue = instance.capabilityIssue {
+                                        Text(issue).font(.caption).foregroundStyle(.orange)
+                                    } else if instance.readiness != .ready {
+                                        Text(instance.readiness.title).font(.caption).foregroundStyle(.orange)
+                                    }
+                                }
+                            } else {
+                                Label("Content step", symbol: .docTextFill).font(.caption).foregroundStyle(.secondary)
+                                Text("Prepares text and attachments without calling an Agent. Connect an Agent step to send this material.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            taskInput("Instructions or skill for this step", input: $node.input)
+                            DisclosureGroup("More options") {
+                                if node.kind == .agent {
+                                    if let instance = instances.first(where: { $0.id == node.agentInstanceID }) {
+                                        Text(instance.displayName).font(.caption).foregroundStyle(.secondary)
+                                        Text(instance.workingDirectory).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                                    }
+                                    AgentWorkflowModelSettings(endpoint: endpoint, hostID: draft.hostID, instance: instances.first { $0.id == node.agentInstanceID }, selection: $node.modelSelection)
+                                        .accessibilityIdentifier("workflow-model-\(node.id)")
+                                }
+                                Picker("Original task", selection: Binding(get: { draft.initialTask(for: node) }, set: { node.initialTask = $0 })) {
+                                    ForEach(AgentWorkflowNode.InitialTask.allCases, id: \.self) { Text($0.title).tag($0) }
+                                }
+                                NavigationLink(node.kind == .content ? "Preview output" : "Preview task input") {
+                                    AgentWorkflowInputPreview(definition: draft, node: node, attachments: attachments)
+                                }
+                                if node.kind == .agent {
+                                    Picker("Complete step", selection: $node.completion) {
+                                        ForEach(AgentWorkflowNode.Completion.allCases, id: \.self) { Text($0.title).tag($0) }
+                                    }
+                                    if node.completion == .explicit {
+                                        Text("Discussion can continue across replies. Downstream steps wait until the Agent explicitly completes this task.")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Toggle("Allow this step to end the workflow", isOn: $node.allowsFinish)
+                                    if node.allowsFinish {
+                                        Text("Define when to finish in this step's instructions. This switch grants permission; it does not define the completion condition.")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                                DisclosureGroup("Wait for upstream steps") {
+                                    ForEach(draft.nodes.filter { $0.id != node.id }) { source in
+                                        Toggle(source.name, isOn: connection(from: source.id, to: node.id))
+                                        if draft.edges.contains(where: { $0.source == source.id && $0.target == node.id }) {
+                                            Picker("Receive from \(source.name)", selection: includesResult(from: source.id, to: node.id)) {
+                                                Text("Completion only").tag(false)
+                                                Text("Output and attachments").tag(true)
+                                            }
+                                        }
+                                    }
+                                    Text("Always waits for all selected steps. Completion only sends no upstream text or attachments.")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                let targets = draft.nodes.filter { target in
+                                    draft.edges.contains { $0.source == node.id && $0.target == target.id }
+                                }
+                                Text(targets.isEmpty ? "No downstream steps." : "Then: " + targets.map(\.name).joined(separator: ", "))
+                                    .font(.caption).foregroundStyle(.secondary)
+                                Button("Remove step", role: .destructive) { remove(node.id) }.disabled(importing)
+                            }.disclosureGroupStyle(AgentWorkflowEditorDisclosureStyle(id: "workflow-step-options-\(node.id)", disabled: importing))
+                        } label: {
+                            stepSummary(node)
+                        }
+                        .disclosureGroupStyle(AgentWorkflowEditorDisclosureStyle(id: "workflow-step-toggle-\(node.id)", disabled: importing))
                     }
                 }
                 Section {
@@ -175,30 +224,40 @@ struct AgentWorkflowEditor: View {
                         }
                     } label: { Label("Add Agent step", symbol: .plus) }
                         .disabled(draft.agents.isEmpty)
+                        .accessibilityIdentifier("workflow-add-agent-step")
                     Button {
                         addNode(.init(name: "Content", content: .init(), initialTask: draft.nodes.isEmpty ? .textAndAttachments : .omit))
                     } label: { Label("Add content step", symbol: .docTextFill) }
+                        .accessibilityIdentifier("workflow-add-content-step")
                 }
+                .disabled(importing)
                 if !draft.nodes.isEmpty {
-                    Section("Execution") {
-                        Picker("First step", selection: $draft.entryNodeID) {
-                            ForEach(draft.nodes) { Text($0.name).tag($0.id) }
-                        }
-                        Toggle("Repeat rounds", isOn: Binding(get: { draft.loop != nil }, set: { enabled in
-                            draft.loop = enabled ? .init(finalNodeID: draft.nodes.last?.id ?? draft.entryNodeID) : nil
-                        }))
-                        if draft.loop != nil {
-                            Picker("Final step", selection: Binding(get: { draft.loop?.finalNodeID ?? draft.entryNodeID }, set: { draft.loop?.finalNodeID = $0 })) {
+                    Section {
+                        DisclosureGroup(isExpanded: $showingExecution) {
+                            Picker("First step", selection: $draft.entryNodeID) {
                                 ForEach(draft.nodes) { Text($0.name).tag($0.id) }
                             }
-                            Picker("Repeat from", selection: Binding(get: { draft.loop?.entryNodeID ?? draft.entryNodeID }, set: { draft.loop?.entryNodeID = $0 })) {
-                                ForEach(draft.nodes) { Text($0.name).tag($0.id) }
+                            Toggle("Repeat rounds", isOn: Binding(get: { draft.loop != nil }, set: { enabled in
+                                draft.loop = enabled ? .init(finalNodeID: draft.nodes.last?.id ?? draft.entryNodeID) : nil
+                            }))
+                            if draft.loop != nil {
+                                Picker("Final step", selection: Binding(get: { draft.loop?.finalNodeID ?? draft.entryNodeID }, set: { draft.loop?.finalNodeID = $0 })) {
+                                    ForEach(draft.nodes) { Text($0.name).tag($0.id) }
+                                }
+                                Picker("Repeat from", selection: Binding(get: { draft.loop?.entryNodeID ?? draft.entryNodeID }, set: { draft.loop?.entryNodeID = $0 })) {
+                                    ForEach(draft.nodes) { Text($0.name).tag($0.id) }
+                                }
+                                Toggle("Include final output on repeat", isOn: Binding(get: { draft.loop?.includesResult ?? true }, set: { draft.loop?.includesResult = $0 }))
+                                TextField("Maximum rounds", value: Binding(get: { draft.loop?.maximumRounds ?? 5 }, set: { draft.loop?.maximumRounds = $0 }), format: .number)
+                                Text("The first round starts at First step; later rounds start at Repeat from. Earlier steps are not repeated. All branches must reach Final step. The limit pauses the workflow.")
+                                    .font(.caption).foregroundStyle(.secondary)
                             }
-                            Toggle("Include final output on repeat", isOn: Binding(get: { draft.loop?.includesResult ?? true }, set: { draft.loop?.includesResult = $0 }))
-                            TextField("Maximum rounds", value: Binding(get: { draft.loop?.maximumRounds ?? 5 }, set: { draft.loop?.maximumRounds = $0 }), format: .number)
-                            Text("The first round starts at First step; later rounds start at Repeat from. Earlier steps are not repeated. All branches must reach Final step. The limit pauses the workflow.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Execution")
+                                Text(executionSummary).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }.disclosureGroupStyle(AgentWorkflowEditorDisclosureStyle(id: "workflow-execution-toggle", disabled: false))
                     }
                 }
                 if let validationIssue {
@@ -226,6 +285,7 @@ struct AgentWorkflowEditor: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { save() }.disabled(saving || importing || validationIssue != nil || !endpoint.isConnected)
+                        .accessibilityIdentifier("workflow-editor-save")
                 }
             }
         }
@@ -295,6 +355,52 @@ struct AgentWorkflowEditor: View {
         } catch { return error.localizedDescription }
     }
 
+    private var inputSummary: String {
+        let text = draft.initialInput.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let images = draft.initialInput.attachmentIDs.count
+        if text.isEmpty, images == 0 {
+            return "Optional · set the task when starting a run."
+        }
+        return text.isEmpty ? "Images attached." : text
+    }
+
+    private var executionSummary: String {
+        let start = draft.nodes.first { $0.id == draft.entryNodeID }?.name ?? "Choose a first step"
+        guard let loop = draft.loop else { return "Starts at \(start) · runs once" }
+        let repeated = draft.nodes.first { $0.id == (loop.entryNodeID ?? draft.entryNodeID) }?.name ?? "Choose a repeat step"
+        return "Starts at \(start) · repeats from \(repeated) · up to \(loop.maximumRounds) rounds"
+    }
+
+    private func stepSummary(_ node: AgentWorkflowNode) -> some View {
+        let role = draft.agents.first { $0.id == node.agentInstanceID }?.name ?? (node.kind == .content ? "Content" : "Choose an Agent")
+        let upstream = draft.upstream(of: node.id).map(\.name)
+        return VStack(alignment: .leading, spacing: 4) {
+            Text("\((draft.nodes.firstIndex { $0.id == node.id } ?? 0) + 1). \(node.name)").font(.headline)
+            Text(role + " · " + (node.id == draft.entryNodeID ? "Starts here" : upstream.isEmpty ? "No upstream steps" : "After " + upstream.joined(separator: ", ")))
+                .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            if let selection = node.modelSelection {
+                Text(selection.model + (selection.effort.map { " · \($0)" } ?? ""))
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func expansion(_ binding: Binding<Bool>) -> Binding<Bool> {
+        Binding(get: { binding.wrappedValue }, set: {
+            if !importing {
+                binding.wrappedValue = $0
+            }
+        })
+    }
+
+    private func stepExpansion(_ id: UUID) -> Binding<Bool> {
+        Binding(get: { expandedStepID == id }, set: { expanded in
+            guard !importing else { return }
+            expandedStepID = expanded ? id : nil
+        })
+    }
+
     private func connection(from source: UUID, to target: UUID) -> Binding<Bool> {
         Binding(get: { draft.edges.contains { $0.source == source && $0.target == target } }, set: { connected in
             draft.edges.removeAll { $0.source == source && $0.target == target }
@@ -322,10 +428,12 @@ struct AgentWorkflowEditor: View {
 
     private func participantBinding(_ id: UUID) -> Binding<UUID> {
         Binding(get: { id }, set: { replacement in
+            guard replacement != id else { return }
             guard let index = draft.participants?.firstIndex(where: { $0.id == id }) else { return }
             draft.participants?[index].agentInstanceID = replacement
             for step in draft.nodes.indices where draft.nodes[step].agentInstanceID == id {
                 draft.nodes[step].agentInstanceID = replacement
+                draft.nodes[step].modelSelection = nil
             }
         })
     }
@@ -336,10 +444,12 @@ struct AgentWorkflowEditor: View {
     }
 
     private func addNode(_ node: AgentWorkflowNode) {
+        guard !importing else { return }
         if draft.nodes.isEmpty {
             draft.entryNodeID = node.id
         }
         draft.nodes.append(node)
+        expandedStepID = node.id
     }
 
     private func remove(_ nodeID: UUID) {
@@ -442,6 +552,36 @@ struct AgentWorkflowEditor: View {
             catch {
                 Logger(subsystem: "com.jicezeng.ctrlx", category: "WorkflowUploads")
                     .error("Could not remove unused workflow imports: \(error.localizedDescription)")
+            }
+        }
+    }
+}
+
+private struct AgentWorkflowEditorDisclosureStyle: DisclosureGroupStyle {
+    let id: String
+    let disabled: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Button { configuration.isExpanded.toggle() } label: {
+                HStack(spacing: 8) {
+                    Symbols.chevronRight.image
+                        .font(.caption).foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(configuration.isExpanded ? 90 : 0))
+                        .accessibilityHidden(true)
+                    configuration.label
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .multilineTextAlignment(.leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(disabled)
+            .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
+            .accessibilityIdentifier(id)
+            if configuration.isExpanded {
+                configuration.content.padding(.leading, 20)
             }
         }
     }

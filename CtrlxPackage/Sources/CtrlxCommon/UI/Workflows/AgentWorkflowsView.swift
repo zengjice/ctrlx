@@ -356,6 +356,10 @@ struct AgentWorkflowConfigurationView: View {
             }
             Text(node.id == definition.entryNodeID ? "Entry" : "Waits for: " + definition.upstream(of: node.id).map(\.name).joined(separator: ", "))
                 .font(.caption).foregroundStyle(.secondary)
+            if let selection = node.modelSelection {
+                Text(selection.model + (selection.effort.map { " · \($0)" } ?? ""))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             ForEach(definition.edges.filter { $0.target == node.id }, id: \.source) { edge in
                 let source = definition.nodes.first { $0.id == edge.source }?.name ?? "Unavailable"
                 Text("\(source): \(edge.includesResult ? "output and attachments" : "completion only")")

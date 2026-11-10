@@ -1,6 +1,12 @@
 import CtrlxNetworking
 import Foundation
 
+/// Used only while the workflow transport owns the pane's input queue.
+struct AgentWorkflowModelInput: Sendable {
+    let claim: AgentWorkflowInputGate.Claim
+    let authorization: AgentWorkflowWriteAuthorization
+}
+
 /// Keeps preparation outside the input queue. The final identity/readiness
 /// inspection and paste/submit share the same queue as human input.
 @MainActor
@@ -9,6 +15,7 @@ final class AgentWorkflowTerminalTransport {
         let claim: AgentWorkflowInputGate.Claim
         let file: URL
         let images: [URL]
+        let modelSelection: AgentModelSelection?
     }
 
     private let store: AgentWorkflowStore
@@ -18,6 +25,8 @@ final class AgentWorkflowTerminalTransport {
     private let inspect: @MainActor @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance
     private let submit: @MainActor @Sendable (AgentWorkflowInstance, URL, [URL], @escaping @MainActor @Sendable (@Sendable () throws -> Void) throws -> Void, @escaping @MainActor @Sendable ([Int]) async throws -> Void) async throws -> Void
     private let onFailure: @Sendable (String) -> Void
+    private let configureModel: @MainActor @Sendable (AgentWorkflowInstance, AgentModelSelection, AgentWorkflowModelInput) async throws -> Void
+    private let loadModels: @MainActor @Sendable (AgentWorkflowInstance) async throws -> Void
     private var prepared: [UUID: Prepared] = [:]
 
     init(
@@ -25,6 +34,8 @@ final class AgentWorkflowTerminalTransport {
         gate: AgentWorkflowInputGate,
         temporaryDirectory: URL,
         inspect: @escaping @MainActor @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance,
+        loadModels: @escaping @MainActor @Sendable (AgentWorkflowInstance) async throws -> Void = { _ in },
+        configureModel: @escaping @MainActor @Sendable (AgentWorkflowInstance, AgentModelSelection, AgentWorkflowModelInput) async throws -> Void = { _, _, _ in throw AgentWorkflowError("This Agent does not support step model selection.") },
         submit: @escaping @MainActor @Sendable (AgentWorkflowInstance, URL, [URL], @escaping @MainActor @Sendable (@Sendable () throws -> Void) throws -> Void, @escaping @MainActor @Sendable ([Int]) async throws -> Void) async throws -> Void,
         onFailure: @escaping @Sendable (String) -> Void
     ) {
@@ -32,6 +43,8 @@ final class AgentWorkflowTerminalTransport {
         self.gate = gate
         self.files = AgentWorkflowInputFiles(directory: temporaryDirectory)
         self.inspect = inspect
+        self.configureModel = configureModel
+        self.loadModels = loadModels
         self.submit = submit
         self.onFailure = onFailure
     }
@@ -48,6 +61,11 @@ final class AgentWorkflowTerminalTransport {
     private func prepare(_ invocation: AgentWorkflowInvocation, instance: AgentWorkflowInstance) async throws {
         guard prepared[invocation.id] == nil else { throw AgentWorkflowError("This input is already prepared.") }
         let claim = gate.claim(paneID: instance.paneID)
+        let modelSelection = try await store.modelSelection(for: invocation)
+        if modelSelection != nil {
+            try await loadModels(instance)
+            try gate.validate(claim)
+        }
         let text = invocation.delivery.input.text
         guard
             let limit = instance.capabilities?.maximumInputBytes, text.utf8.count <= limit,
@@ -83,7 +101,7 @@ final class AgentWorkflowTerminalTransport {
             }
             throw error
         }
-        prepared[invocation.id] = Prepared(claim: claim, file: file, images: imageFiles)
+        prepared[invocation.id] = Prepared(claim: claim, file: file, images: imageFiles, modelSelection: modelSelection)
         try Task.checkCancellation()
         try gate.validate(claim)
     }
@@ -98,6 +116,20 @@ final class AgentWorkflowTerminalTransport {
                     throw AgentWorkflowError("The Agent changed or its input is no longer empty. Nothing was sent.")
                 }
                 let authorization = try await self.store.authorizeWrite(invocation, numberOfWrites: prepared.images.count + 1)
+                if let selection = prepared.modelSelection {
+                    try authorization.beginConfiguration()
+                    do {
+                        try await self.configureModel(live, selection, .init(claim: prepared.claim, authorization: authorization))
+                        authorization.endConfiguration()
+                    } catch {
+                        authorization.endConfiguration()
+                        throw error
+                    }
+                    let configured = try await self.inspect(instance)
+                    guard configured.matchesBinding(instance), configured.readiness == .ready else {
+                        throw AgentWorkflowError("The Agent changed or its input is no longer empty after switching models. Nothing was sent.")
+                    }
+                }
                 try Task.checkCancellation()
                 try self.gate.validate(prepared.claim)
                 try await self.submit(live, prepared.file, prepared.images, { launch in

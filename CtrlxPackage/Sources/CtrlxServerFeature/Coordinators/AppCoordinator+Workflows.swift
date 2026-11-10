@@ -52,6 +52,16 @@ extension AppCoordinator {
                     guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
                     return try await inspectWorkflowInput(instance)
                 },
+                loadModels: { [weak self] instance in
+                    guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
+                    _ = try await inspectWorkflowInstance(instance)
+                    _ = try await handleAgentModels(.init(workspacePane: instance.workspacePane), paneID: instance.paneID)
+                },
+                configureModel: { [weak self] instance, selection, input in
+                    guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
+                    _ = try await inspectWorkflowInstance(instance)
+                    _ = try await handleAgentModels(.init(workspacePane: instance.workspacePane, runtimeID: instance.processRuntimeID, selection: selection), paneID: instance.paneID, workflowInput: input)
+                },
                 submit: { [weak self] instance, file, images, beforeWrite, imagesReady in
                     guard
                         let self,
@@ -73,7 +83,13 @@ extension AppCoordinator {
             agentWorkflowService = AgentWorkflowService(store: store, scan: { [weak self] previous in
                 guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
                 return try await scanWorkflowInstances(previous: previous, hostID: hostID)
-            }, schedule: { await runner.schedule(runID: $0) }, onFailure: { workflowLogger.error("\($0)") })
+            }, schedule: { await runner.schedule(runID: $0) }, models: { [weak self] instance, refresh in
+                guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
+                _ = try await inspectWorkflowInstance(instance)
+                let snapshot = try await handleAgentModels(.init(workspacePane: instance.workspacePane, refresh: refresh), paneID: instance.paneID)
+                guard snapshot.runtimeID == instance.processRuntimeID else { throw AgentWorkflowError("The Agent restarted. Refresh the Agent list.") }
+                return snapshot
+            }, onFailure: { workflowLogger.error("\($0)") })
             await agentWorkflowService?.startMonitoring()
             agentWorkflowEvents = AgentWorkflowEventRouter(store: store, runner: runner, inspect: { [weak self] instance in
                 guard let self else { throw AgentWorkflowError("The Host is shutting down.") }

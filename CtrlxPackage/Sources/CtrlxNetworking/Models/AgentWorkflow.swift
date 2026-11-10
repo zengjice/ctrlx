@@ -45,6 +45,7 @@ public struct AgentWorkflowNode: Codable, Equatable, Identifiable, Sendable {
     public var input: AgentWorkflowInput
     public var allowsFinish: Bool
     public var completion: Completion
+    public var modelSelection: AgentModelSelection?
     /// Nil preserves the input policy of configurations saved before steps.
     public var initialTask: InitialTask?
 
@@ -55,7 +56,8 @@ public struct AgentWorkflowNode: Codable, Equatable, Identifiable, Sendable {
         input: AgentWorkflowInput = .init(),
         allowsFinish: Bool = false,
         initialTask: InitialTask? = nil,
-        completion: Completion = .replyEnded
+        completion: Completion = .replyEnded,
+        modelSelection: AgentModelSelection? = nil
     ) {
         self.id = id
         self.kind = .agent
@@ -65,6 +67,7 @@ public struct AgentWorkflowNode: Codable, Equatable, Identifiable, Sendable {
         self.allowsFinish = allowsFinish
         self.completion = completion
         self.initialTask = initialTask
+        self.modelSelection = modelSelection
     }
 
     public init(id: UUID = UUID(), name: String, content: AgentWorkflowInput = .init(), initialTask: InitialTask? = nil) {
@@ -76,9 +79,10 @@ public struct AgentWorkflowNode: Codable, Equatable, Identifiable, Sendable {
         self.allowsFinish = false
         self.completion = .replyEnded
         self.initialTask = initialTask
+        self.modelSelection = nil
     }
 
-    private enum CodingKeys: String, CodingKey { case id, kind, name, agentInstanceID, input, allowsFinish, initialTask, completion }
+    private enum CodingKeys: String, CodingKey { case id, kind, name, agentInstanceID, input, allowsFinish, initialTask, completion, modelSelection }
 
     public init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -90,6 +94,7 @@ public struct AgentWorkflowNode: Codable, Equatable, Identifiable, Sendable {
         self.allowsFinish = try values.decode(Bool.self, forKey: .allowsFinish)
         self.completion = try values.decodeIfPresent(Completion.self, forKey: .completion) ?? .replyEnded
         self.initialTask = try values.decodeIfPresent(InitialTask.self, forKey: .initialTask)
+        self.modelSelection = try values.decodeIfPresent(AgentModelSelection.self, forKey: .modelSelection)
     }
 }
 
@@ -273,6 +278,16 @@ public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendabl
         }
         guard nodes.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
             throw AgentWorkflowError("Each node needs a role name.")
+        }
+        for node in nodes {
+            if let selection = node.modelSelection {
+                let values = [selection.model] + (selection.effort.map { [$0] } ?? [])
+                guard
+                    node.kind == .agent, values.allSatisfy({
+                        !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.utf8.count <= 256
+                            && !$0.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+                    }) else { throw AgentWorkflowError("Only Agent steps can select a model and effort, with nonempty identifiers up to 256 bytes.") }
+            }
         }
         guard
             Set(edges.map { AgentWorkflowEdge(source: $0.source, target: $0.target) }).count == edges.count,
