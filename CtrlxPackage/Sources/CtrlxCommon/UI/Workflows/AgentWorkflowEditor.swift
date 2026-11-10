@@ -28,8 +28,9 @@ struct AgentWorkflowEditor: View {
     @State private var importing = false
     @State private var activeImport: AgentWorkflowImageImport?
     @State private var showingReviewTemplate = false
+    @State private var showingAgentPicker = false
     @State private var showingInitialTask = false
-    @State private var showingAgents: Bool
+    @State private var showingAgents = false
     @State private var showingExecution = false
     @State private var expandedStepID: UUID?
 
@@ -44,7 +45,6 @@ struct AgentWorkflowEditor: View {
             editable.nodes[index].initialTask = definition.initialTask(for: definition.nodes[index])
         }
         self._draft = State(initialValue: editable)
-        self._showingAgents = State(initialValue: editable.nodes.isEmpty && editable.agents.isEmpty)
     }
 
     var body: some View {
@@ -102,14 +102,6 @@ struct AgentWorkflowEditor: View {
                                 Button(instance.displayName) { add(instance) }
                             }
                         } label: { Label("Add existing Agent", symbol: .plus) }
-                        if createAgent != nil {
-                            Button("New Agent tab") { showingCreation = true }.disabled(createdAgent != nil)
-                        }
-                        if createdAgent != nil {
-                            Text("Agent created. Complete any setup in its terminal, then refresh Agents.")
-                                .font(.caption).foregroundStyle(.secondary)
-                            Button("Choose another Agent") { createdAgent = nil }
-                        }
                         Button { Task { await refreshInstances() } } label: {
                             Label("Refresh Agents", symbol: .arrowClockwise)
                         }.disabled(refreshing)
@@ -118,7 +110,7 @@ struct AgentWorkflowEditor: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Participating Agents")
-                            Text(draft.agents.isEmpty ? "Add an Agent to start building steps." : draft.agents.map(\.name).joined(separator: ", "))
+                            Text(draft.agents.isEmpty ? "Choose an Agent when adding a step." : draft.agents.map(\.name).joined(separator: ", "))
                                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                             if draft.agents.contains(where: { participant in !instances.contains { $0.id == participant.id } }), !refreshing {
                                 Text("Some Agents are unavailable. Choose a replacement.").font(.caption).foregroundStyle(.orange)
@@ -191,21 +183,19 @@ struct AgentWorkflowEditor: View {
                                 }
                                 DisclosureGroup("Wait for upstream steps") {
                                     ForEach(draft.nodes.filter { $0.id != node.id }) { source in
-                                        Toggle(source.name, isOn: connection(from: source.id, to: node.id))
-                                        if draft.edges.contains(where: { $0.source == source.id && $0.target == node.id }) {
-                                            Picker("Receive from \(source.name)", selection: includesResult(from: source.id, to: node.id)) {
-                                                Text("Completion only").tag(false)
-                                                Text("Output and attachments").tag(true)
+                                        Picker(stepTitle(source), selection: connection(from: source.id, to: node.id)) {
+                                            ForEach(AgentWorkflowConnectionMode.allCases, id: \.self) { mode in
+                                                Text(mode.rawValue).tag(mode)
                                             }
                                         }
                                     }
                                     Text("Always waits for all selected steps. Completion only sends no upstream text or attachments.")
                                         .font(.caption).foregroundStyle(.secondary)
-                                }
+                                }.disclosureGroupStyle(AgentWorkflowEditorDisclosureStyle(id: "workflow-step-upstream-\(node.id)", disabled: importing))
                                 let targets = draft.nodes.filter { target in
                                     draft.edges.contains { $0.source == node.id && $0.target == target.id }
                                 }
-                                Text(targets.isEmpty ? "No downstream steps." : "Then: " + targets.map(\.name).joined(separator: ", "))
+                                Text(targets.isEmpty ? "No downstream steps." : "Then: " + targets.map { stepTitle($0) }.joined(separator: ", "))
                                     .font(.caption).foregroundStyle(.secondary)
                                 Button("Remove step", role: .destructive) { remove(node.id) }.disabled(importing)
                             }.disclosureGroupStyle(AgentWorkflowEditorDisclosureStyle(id: "workflow-step-options-\(node.id)", disabled: importing))
@@ -216,36 +206,39 @@ struct AgentWorkflowEditor: View {
                     }
                 }
                 Section {
-                    Menu {
-                        ForEach(draft.agents) { participant in
-                            Button(participant.name) {
-                                addNode(.init(name: "\(participant.name) task", agentInstanceID: participant.id, initialTask: draft.nodes.isEmpty ? .textAndAttachments : .omit))
-                            }
-                        }
-                    } label: { Label("Add Agent step", symbol: .plus) }
-                        .disabled(draft.agents.isEmpty)
+                    Button { showingAgentPicker = true } label: { Label("Add Agent step", symbol: .plus) }
                         .accessibilityIdentifier("workflow-add-agent-step")
                     Button {
                         addNode(.init(name: "Content", content: .init(), initialTask: draft.nodes.isEmpty ? .textAndAttachments : .omit))
                     } label: { Label("Add content step", symbol: .docTextFill) }
                         .accessibilityIdentifier("workflow-add-content-step")
+                    Text(draft.nodes.isEmpty ? "The first step receives the original task." : "Added after: " + draft.terminalSteps.map { stepTitle($0) }.joined(separator: ", ") + ". Receives their output; change upstream connections to branch.")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    if createAgent != nil {
+                        Button("New Agent tab") { showingCreation = true }.disabled(createdAgent != nil)
+                    }
+                    if createdAgent != nil {
+                        Text("Agent created. Complete any setup in its terminal, then refresh Agents.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Button("Choose another Agent") { createdAgent = nil }
+                    }
                 }
                 .disabled(importing)
                 if !draft.nodes.isEmpty {
                     Section {
                         DisclosureGroup(isExpanded: $showingExecution) {
                             Picker("First step", selection: $draft.entryNodeID) {
-                                ForEach(draft.nodes) { Text($0.name).tag($0.id) }
+                                ForEach(draft.nodes) { Text(stepTitle($0)).tag($0.id) }
                             }
                             Toggle("Repeat rounds", isOn: Binding(get: { draft.loop != nil }, set: { enabled in
                                 draft.loop = enabled ? .init(finalNodeID: draft.nodes.last?.id ?? draft.entryNodeID) : nil
                             }))
                             if draft.loop != nil {
                                 Picker("Final step", selection: Binding(get: { draft.loop?.finalNodeID ?? draft.entryNodeID }, set: { draft.loop?.finalNodeID = $0 })) {
-                                    ForEach(draft.nodes) { Text($0.name).tag($0.id) }
+                                    ForEach(draft.nodes) { Text(stepTitle($0)).tag($0.id) }
                                 }
                                 Picker("Repeat from", selection: Binding(get: { draft.loop?.entryNodeID ?? draft.entryNodeID }, set: { draft.loop?.entryNodeID = $0 })) {
-                                    ForEach(draft.nodes) { Text($0.name).tag($0.id) }
+                                    ForEach(draft.nodes) { Text(stepTitle($0)).tag($0.id) }
                                 }
                                 Toggle("Include final output on repeat", isOn: Binding(get: { draft.loop?.includesResult ?? true }, set: { draft.loop?.includesResult = $0 }))
                                 TextField("Maximum rounds", value: Binding(get: { draft.loop?.maximumRounds ?? 5 }, set: { draft.loop?.maximumRounds = $0 }), format: .number)
@@ -330,6 +323,14 @@ struct AgentWorkflowEditor: View {
                 AgentWorkflowReviewTemplate.apply(to: &draft, developerID: developer, reviewerID: reviewer)
             }
         }
+        .sheet(isPresented: $showingAgentPicker) {
+            AgentWorkflowAgentPicker(instances: instances, participants: draft.agents, refreshing: refreshing, error: error, refresh: refreshInstances) { instance in
+                guard !importing else { return }
+                add(instance)
+                let name = draft.agents.first { $0.id == instance.id }?.name ?? instance.displayName
+                addNode(.init(name: "\(name) task", agentInstanceID: instance.id, initialTask: draft.nodes.isEmpty ? .textAndAttachments : .omit))
+            }
+        }
         .task {
             await refreshInstances()
             await refreshAttachments()
@@ -365,17 +366,21 @@ struct AgentWorkflowEditor: View {
     }
 
     private var executionSummary: String {
-        let start = draft.nodes.first { $0.id == draft.entryNodeID }?.name ?? "Choose a first step"
+        let start = draft.nodes.first { $0.id == draft.entryNodeID }.map { stepTitle($0) } ?? "Choose a first step"
         guard let loop = draft.loop else { return "Starts at \(start) · runs once" }
-        let repeated = draft.nodes.first { $0.id == (loop.entryNodeID ?? draft.entryNodeID) }?.name ?? "Choose a repeat step"
+        let repeated = draft.nodes.first { $0.id == (loop.entryNodeID ?? draft.entryNodeID) }.map { stepTitle($0) } ?? "Choose a repeat step"
         return "Starts at \(start) · repeats from \(repeated) · up to \(loop.maximumRounds) rounds"
+    }
+
+    private func stepTitle(_ node: AgentWorkflowNode) -> String {
+        "\((draft.nodes.firstIndex { $0.id == node.id } ?? 0) + 1). \(node.name)"
     }
 
     private func stepSummary(_ node: AgentWorkflowNode) -> some View {
         let role = draft.agents.first { $0.id == node.agentInstanceID }?.name ?? (node.kind == .content ? "Content" : "Choose an Agent")
-        let upstream = draft.upstream(of: node.id).map(\.name)
+        let upstream = draft.upstream(of: node.id).map { stepTitle($0) }
         return VStack(alignment: .leading, spacing: 4) {
-            Text("\((draft.nodes.firstIndex { $0.id == node.id } ?? 0) + 1). \(node.name)").font(.headline)
+            Text(stepTitle(node)).font(.headline)
             Text(role + " · " + (node.id == draft.entryNodeID ? "Starts here" : upstream.isEmpty ? "No upstream steps" : "After " + upstream.joined(separator: ", ")))
                 .font(.caption).foregroundStyle(.secondary).lineLimit(2)
             if let selection = node.modelSelection {
@@ -401,21 +406,8 @@ struct AgentWorkflowEditor: View {
         })
     }
 
-    private func connection(from source: UUID, to target: UUID) -> Binding<Bool> {
-        Binding(get: { draft.edges.contains { $0.source == source && $0.target == target } }, set: { connected in
-            draft.edges.removeAll { $0.source == source && $0.target == target }
-            if connected {
-                draft.edges.append(.init(source: source, target: target))
-            }
-        })
-    }
-
-    private func includesResult(from source: UUID, to target: UUID) -> Binding<Bool> {
-        Binding(get: { draft.edges.first { $0.source == source && $0.target == target }?.includesResult ?? true }, set: { includes in
-            if let index = draft.edges.firstIndex(where: { $0.source == source && $0.target == target }) {
-                draft.edges[index].includesResult = includes
-            }
-        })
+    private func connection(from source: UUID, to target: UUID) -> Binding<AgentWorkflowConnectionMode> {
+        Binding(get: { draft.connectionMode(from: source, to: target) }, set: { draft.setConnectionMode($0, from: source, to: target) })
     }
 
     private func participantName(_ id: UUID) -> Binding<String> {
@@ -445,10 +437,7 @@ struct AgentWorkflowEditor: View {
 
     private func addNode(_ node: AgentWorkflowNode) {
         guard !importing else { return }
-        if draft.nodes.isEmpty {
-            draft.entryNodeID = node.id
-        }
-        draft.nodes.append(node)
+        draft.appendStep(node)
         expandedStepID = node.id
     }
 

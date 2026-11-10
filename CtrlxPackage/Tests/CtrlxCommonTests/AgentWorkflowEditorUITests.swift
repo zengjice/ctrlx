@@ -31,6 +31,13 @@
                     }
                 }
             }
+            if let window = object as? NSWindow {
+                for sheet in window.sheets {
+                    if let found = element(id, in: sheet, attributeName: attributeName) {
+                        return found
+                    }
+                }
+            }
             return nil
         }
 
@@ -172,6 +179,7 @@
             try await wait("Switching steps should show only the second step's instructions") { inputs(in: hosting).count == 1 && inputs(in: hosting).first?.string == second.input.text }
             try await click("workflow-step-options-\(second.id)", in: window)
             #expect(element("workflow-model-\(second.id)", in: window) != nil)
+            try await click("workflow-step-upstream-\(second.id)", in: window)
             try capture(hosting, name: "expanded-step-options")
             try await click("workflow-step-toggle-\(first.id)", in: window)
             try await wait { inputs(in: hosting).count == 1 }
@@ -222,11 +230,71 @@
             window.orderBack(nil)
             defer { window.close() }
             try await wait { loaded }
-            #expect((element("Refresh Agents", in: window, attributeName: "accessibilityLabel") != nil) == empty)
+            #expect(element("Refresh Agents", in: window, attributeName: "accessibilityLabel") == nil)
             #expect(inputs(in: hosting).isEmpty)
             try await click("workflow-add-content-step", in: window)
             try await wait("A new step should open its instruction editor") { inputs(in: hosting).count == 1 }
             #expect(inputs(in: hosting).first?.string == "")
+        }
+
+        @Test(arguments: [false, true])
+        func addingAgentStepsChoosesInstancesDirectlyAndReusesParticipants(empty: Bool) async throws {
+            _ = NSApplication.shared
+            NSApp.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
+            let hostID = UUID()
+            let instances = ["Developer", "Reviewer"].enumerated().map { index, name in
+                AgentWorkflowInstance(hostID: hostID, pluginID: "codex", processID: Int32(index + 42), processRuntimeID: "runtime-\(index)", workspacePane: .init(serverID: "1:1", sessionID: UUID(), windowID: UUID(), paneID: UUID()), paneID: "%\(index)", conversationID: "conversation-\(index)", displayName: name, workingDirectory: "/fixture", capabilities: .init(maximumInputBytes: 100_000), readiness: .ready)
+            }
+            let content = AgentWorkflowNode(name: "Instructions", content: .init(text: "Build the feature"), initialTask: .textAndAttachments)
+            let definition = AgentWorkflowDefinition(name: "Direct selection", hostID: hostID, nodes: empty ? [] : [content], edges: [], entryNodeID: content.id, initialInput: .init(text: "Build the feature"))
+            var saved: AgentWorkflowDefinition?
+            var loaded = false
+            let endpoint = AgentWorkflowEndpoint(id: "fixture", name: "Host", connected: { true }, supported: { true }) { request in
+                var response = AgentWorkflowResponse(hostID: hostID)
+                switch request.operation {
+                case .catalog:
+                    response.instances = .init(items: instances, nextOffset: nil)
+                    loaded = true
+                case .attachments: response.attachments = []
+                case let .save(value, revision):
+                    #expect(revision == (empty ? nil : definition.revision))
+                    try AgentWorkflowWire.validate(value)
+                    saved = value
+                    response.definition = value
+                default: Issue.record("Unexpected Agent picker request")
+                }
+                return response
+            }
+            let hosting = NSHostingView(rootView: AgentWorkflowEditor(endpoint: endpoint, definition: definition, isNew: empty, createAgent: nil))
+            let window = NSWindow(contentRect: CGRect(x: -10_000, y: -10_000, width: 700, height: 1_100), styleMask: .titled, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = hosting
+            window.orderBack(nil)
+            defer { window.close() }
+            try await wait { loaded }
+            try await click("workflow-add-agent-step", in: window)
+            try await wait { element("workflow-choose-agent-\(instances[0].id)", in: window) != nil }
+            if let contentView = window.sheets.first?.contentView {
+                try capture(contentView, name: "agent-picker")
+            }
+            try await click("workflow-agent-picker-cancel", in: window)
+            try await wait { window.sheets.isEmpty }
+            for _ in 0..<2 {
+                try await click("workflow-add-agent-step", in: window)
+                try await click("workflow-choose-agent-\(instances[0].id)", in: window)
+                try await wait { window.sheets.isEmpty && inputs(in: hosting).count == 1 }
+            }
+            try capture(hosting, name: "direct-agent-steps")
+            try await click("workflow-editor-save", in: window)
+            try await wait { saved != nil }
+            let value = try #require(saved)
+            #expect(value.nodes.count == (empty ? 2 : 3))
+            #expect(value.agents.map(\.id) == [instances[0].id])
+            #expect(value.nodes.suffix(2).allSatisfy { $0.agentInstanceID == instances[0].id })
+            #expect(value.edges == zip(value.nodes, value.nodes.dropFirst()).map { .init(source: $0.0.id, target: $0.1.id) })
+            #expect(value.entryNodeID == value.nodes.first?.id)
+            #expect(value.nodes.first?.initialTask == .textAndAttachments)
+            #expect(value.nodes.last?.initialTask == .omit)
         }
     }
 #endif
