@@ -7,6 +7,31 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.157 — Workflow steps and notification navigation
+
+- Configure model and reasoning effort per workflow Agent step, using the
+  running Agent's supported choices. Apply the selection before task delivery;
+  pause without delivering the task when switching fails. Preserve selections
+  in configurations and run snapshots, with protocol gating for older peers.
+  See [workflow models](docs/multi-agent-design.md). Source: `9a20316b`.
+- Simplify workflow editing with expandable step summaries and advanced options.
+  Add steps directly from searchable Host Agents, reuse participants and connect
+  new steps after all current endpoints. Preserve branching and loop settings,
+  and label referenced steps with their numbers.
+  Sources: `532b151c`, `b064f86a`.
+- Preserve the intended Mac terminal when notification navigation races layout
+  restoration. Focus the current pane owner, clear conflicting Files/Browser
+  selection and cancel stale requests after manual navigation.
+  See [notifications](docs/services-reference.md). Source: `3dec450c`.
+
+- Validation: focused Swift suites reported 321 tests and passed, including
+  native AppKit workflow editor interactions and notification pane selection.
+  The opt-in real-Agent review-loop test was skipped. Lint for 31 changed Swift
+  files, both boundary checks and diff checks passed. The codec SDK hash/UUID
+  matches 3.0.156; its unchanged browser media acceptance evidence is reused.
+  This release packages macOS only; physical-iPhone UI and Apple Intelligence
+  evaluations were not run.
+
 ## 3.0.156 — Agent restart and browser media playback
 
 - Add Exit and Resume to Mac Agent-tab menus for Codex and Claude Code. Resume
