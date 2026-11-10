@@ -169,6 +169,7 @@
         @ObservationIgnored var agentWorkflowCompletion: AgentWorkflowCompletionMonitor?
 
         @ObservationIgnored private lazy var agentForkService = makeAgentForkService()
+        @ObservationIgnored lazy var agentRestartService = makeAgentRestartService()
 
         private func makeAgentForkService() -> AgentForkService {
             AgentForkService(
@@ -2205,7 +2206,7 @@
         }
 
         /// AppActionSink → drive the matching agent-blind Mac feature (spec §6).
-        private func handlePluginAppAction(_ action: AppAction, event: PluginEvent, peer: PluginIngressPeer?) async {
+        func handlePluginAppAction(_ action: AppAction, event: PluginEvent, peer: PluginIngressPeer?) async {
             switch action {
             case let .openFileSuggestion(sessionID, path, displayName, isPlan, projectDir):
                 // `sessionID` is the plugin's opaque session id; resolve it to a
@@ -2247,6 +2248,7 @@
                 // `endAgentSession` clears the pane's join key and telemetry.
                 await finalizeEndedSession(paneId: sessionID)
                 guard await acceptsSessionEnd(context, peer: peer) else { return }
+                let shouldClosePane = tmuxService.shouldCloseAgentPane(after: context, eligible: closePaneEligible)
                 // Yolo is per-pane app state the core never sees — clear it here.
                 // Context compaction sends no SessionEnd, so yolo correctly survives
                 // a compaction restart (issue #193).
@@ -2268,7 +2270,7 @@
                 await broadcastBadgeDecreaseIfNeeded()
                 // Close the pane when the core signals eligibility (the core folds
                 // in both the clean-exit check and the per-agent pref).
-                guard closePaneEligible, let workspacePane else { return }
+                guard shouldClosePane, let workspacePane else { return }
                 // The SessionEnd hook fires while the agent is still mid-exit, so
                 // killing the pane now would truncate its final output. Mirror the
                 // legacy `closePaneWhenClaudeExits`: poll until the agent process
@@ -3880,6 +3882,13 @@
                     do { return try .success(for: command.id, paneId: await forkAgentSession(spec, expectedWorkspacePane: command.expectedWorkspacePane)) }
                     catch { return .failure(for: command.id, error: error.localizedDescription) }
                 }
+                if case let .restartAgentSession(spec) = command.command {
+                    guard let self else { return .failure(for: command.id, error: "Host is shutting down.") }
+                    do {
+                        try await restartAgentSession(spec, expectedWorkspacePane: command.expectedWorkspacePane)
+                        return .success(for: command.id, paneId: spec.source.paneID)
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                }
                 if case let .createTmuxWindow(spec) = command.command {
                     return await Self.handleCreateWindow(
                         command: command,
@@ -4003,6 +4012,7 @@
                     supportsSessionWorktrees: true,
                     supportsAgentWindowLaunch: true,
                     supportsAgentFork: true,
+                    supportsAgentRestart: true,
                     supportsAgentForkDirectory: true,
                     supportsTerminalPaste: true,
                     supportsCodexQuestionAcknowledgement: true,

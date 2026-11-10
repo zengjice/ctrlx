@@ -915,6 +915,54 @@ selection. Ordinary Terminal requests still omit `pluginID`, and the Host create
 them through `TmuxService`, including its manual Codex shell integration and
 Claude telemetry environment. No agent command/config is constructed by iOS.
 
+### Exit and Resume an Agent (Mac/iOS)
+
+Mac terminal-tab context menus and the iOS **More** (ellipsis) menu offer **Exit and
+Resume** for Codex and Claude Code. One action interrupts the current Agent and
+reopens its exact native conversation in the same tmux pane. Multiple Agent panes
+require a source choice. The tab, pane UUID and directory are retained; no new
+conversation, Fork or continuation prompt is created.
+
+The Host reuses each plugin's existing Resume descriptor and command, preserving
+its configuration root, Provider identity and supported startup options. Native
+history, executable and configuration are checked before exit. Unverified IDs or
+unsupported startup options fail before signalling. Arbitrary shell environment
+and unsent drafts are not captured. Codex resumes with `--no-daemon`.
+
+The Host uses the shared live process binding and rechecks the conversation after
+acquiring the pane's input queue. It sends SIGTERM only to that process incarnation,
+waits for exit and an empty terminal or idle shell, then replaces that shell with
+the prepared Resume command. It checks for unrelated foreground/background jobs
+before replacement and never types a shell command into a live Agent. A timeout
+reports the remaining process rather than force-killing it. Provider payloads use
+tmux stdin and the existing scoped launch option. Failed CLI startup returns to a shell; a dead pane
+is retained if the replacement cannot be launched.
+
+An explicit restart suppresses automatic pane closing for the signalled process's
+SessionEnd, including an end delivered after a timeout or failed Resume startup.
+Session cleanup still runs. Suppression is consumed by that end or discarded when
+the pane closes. An empty kernel lookup for a cached PID preserves the session's
+last verified runtime; a confirmed successor replaces it, so its ordinary exit
+keeps the user's close-on-exit setting.
+
+Viewer actions require `supportsAgentRestart` from their own Host. Requests keep
+a UUID across transport retries; completed retries cannot terminate the successor
+process, and independent concurrent requests for one pane are rejected. The
+optional `AgentSession.processRuntimeID` snapshot field binds each new request to
+the displayed process incarnation. A delayed request for a previous process is
+rejected even when its successor resumed the same conversation. Slow
+restart work stays outside the keyboard receive loop. The operation does not
+change Viewer selection or send workflow tasks/approval responses.
+
+Regression entry points: `AgentRestartTests`, `AgentRestartAvailabilityTests`,
+`AgentRestartServiceTests`, `TmuxAgentRestartTests`, and
+`python3 scripts/verify-workspace-agent-resume.py --exit-and-resume --output <new-directory>`.
+The native CLI probe uses synthetic local replies, private configuration roots
+and a private tmux socket. Codex 0.167.0 and Claude Code 2.1.319 passed idle,
+interrupted and pending-approval cases with the same history and pane, no approval
+execution and no new model request on Resume. This is local evidence for these
+versions, not an automatic-resume compatibility claim for other CLI versions.
+
 ### Fork a native Agent conversation (Mac/iOS)
 
 Right-click a local or Viewer terminal-window tab → **Fork → In Current

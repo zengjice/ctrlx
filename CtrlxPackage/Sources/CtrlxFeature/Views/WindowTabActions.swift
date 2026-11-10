@@ -21,6 +21,8 @@
         let canForkOtherDirectory: Bool
         var includesWindowManagement = false
         var includesFork = true
+        var restartUnavailableReason: String?
+        var restartingAgentPaneIDs: Set<String> = []
         let choose: (WindowTabAction) -> Void
 
         var body: some View {
@@ -41,6 +43,11 @@
             newTabMenu(window)
             if includesFork, let window {
                 forkMenu(window)
+                if includesWindowManagement {
+                    AgentRestartMenu(panes: window.panes, unavailableReason: restartUnavailableReason, busyPaneIDs: restartingAgentPaneIDs) { source in
+                        choose(.restartAgent(source))
+                    }
+                }
             }
         }
 

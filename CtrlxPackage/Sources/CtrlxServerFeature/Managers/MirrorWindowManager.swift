@@ -654,6 +654,14 @@ final public class MirrorWindowManager {
                 !info.processIDs.isSubset(of: suppressedAgentProcessIDs[paneId] ?? [])
             else { continue }
 
+            let runtime = info.processIDs.count == 1 ? info.processIDs.first.flatMap(agentIdentities.runtimeID) : nil
+            // A cached PID can outlive its process. Keep the last verified owner
+            // until a successor is verified or SessionEnd clears the session.
+            if let runtime, paneStates[paneId]?.agentSession?.processRuntimeID != runtime {
+                paneStates[paneId]?.agentSession?.processRuntimeID = runtime
+                changed = true
+            }
+
             if processDetectedPaneIds.contains(paneId) {
                 guard var session = paneStates[paneId]?.agentSession else {
                     processDetectedPaneIds.remove(paneId)
@@ -677,6 +685,7 @@ final public class MirrorWindowManager {
                 updateSession(paneId: paneId) { session in
                     session.detectedProjectPath = info.path
                     session.pluginID = info.pluginID
+                    session.processRuntimeID = runtime
                 }
                 processDetectedPaneIds.insert(paneId)
                 changed = true

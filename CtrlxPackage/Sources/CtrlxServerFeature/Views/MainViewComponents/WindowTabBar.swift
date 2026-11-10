@@ -67,6 +67,8 @@ struct WindowTabBar: View {
     var onViewWorkflow: ((PaneState) -> Void)?
     var onTrustAgentHooks: ((PaneState) -> Void)?
     var onDetachWindow: ((LocalTmuxWindow, CGPoint?) -> Void)?
+    var onRestartAgent: ((RestartAgentSession) -> Void)?
+    var restartingAgentPaneIDs: Set<String> = []
 
     @Environment(MirrorWindowManager.self) private var windowManager
     @Environment(MarkdownOpenSuggestionStore.self) private var openSuggestionStore
@@ -571,7 +573,12 @@ struct WindowTabBar: View {
                 allowsOtherDirectory: true,
                 choose: { onForkWindow(window, $0) }
             ).contextMenuItem,
-        ] + AgentHookTrustMenu.items(panes: window.panes.compactMap { windowManager.paneStates[$0.paneId] }, isEnabled: true, approve: onTrustAgentHooks) + AgentWorkflowMenu.items(panes: window.panes.compactMap { windowManager.paneStates[$0.paneId] }, isEnabled: true, open: onViewWorkflow)
+        ] + restartMenuItems(for: window) + AgentHookTrustMenu.items(panes: window.panes.compactMap { windowManager.paneStates[$0.paneId] }, isEnabled: true, approve: onTrustAgentHooks) + AgentWorkflowMenu.items(panes: window.panes.compactMap { windowManager.paneStates[$0.paneId] }, isEnabled: true, open: onViewWorkflow)
+    }
+
+    private func restartMenuItems(for window: LocalTmuxWindow) -> [ContextMenuItem] {
+        guard let onRestartAgent else { return [] }
+        return AgentRestartMenu(panes: window.panes.compactMap { windowManager.paneStates[$0.paneId] }, busyPaneIDs: restartingAgentPaneIDs, choose: onRestartAgent).contextMenuItems
     }
 
     @ViewBuilder

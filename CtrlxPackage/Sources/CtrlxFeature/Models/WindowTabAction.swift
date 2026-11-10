@@ -25,6 +25,7 @@ enum WindowTabAction: Equatable, Sendable {
     case newResource(ResourceTabKind)
     case newTerminal
     case newAgent
+    case restartAgent(RestartAgentSession)
 
     func targetWindow(in windows: [TmuxWindow]) -> TmuxWindow? {
         guard case let .window(stableID, _) = self else { return nil }
