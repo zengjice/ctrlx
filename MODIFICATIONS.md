@@ -7,6 +7,26 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.156 — Agent restart and browser media playback
+
+- Add Exit and Resume to Mac Agent-tab menus for Codex and Claude Code. Resume
+  the same verified conversation in the same pane with its supported original
+  startup configuration, and preserve tabs during intentional exits. Delayed
+  requests and SessionEnd events cannot terminate or clean up a successor.
+  See [Agent restart](docs/services-reference.md). Sources: `e72d26f6`, `e57ef948`.
+- Preserve remote browser audio across grouped delivery, sequence gaps and busy
+  UI callbacks with bounded prebuffering and accurate rendered-frame accounting.
+  See [browser audio](docs/agent-browser.md). Source: `1ddf0178`.
+- Package the documented codec-enabled CEF SDK for H.264/AAC MP4 and fragmented
+  Media Source playback. Verify its framework hash/UUID and run isolated native
+  media acceptance before publication. This does not establish DRM or arbitrary
+  website compatibility. See [inline codecs](docs/agent-browser.md). Source: `a59fa8e2`.
+- Validation: 190 focused Swift tests, 57 OpenCode sidecar regressions and six
+  isolated real Codex/Claude exit-and-resume cases passed, including binding,
+  resource and workflow recovery checks. Lint for 48 changed Swift files and
+  both boundary checks passed. This release packages macOS only; physical-iPhone
+  UI and Apple Intelligence evaluations were not run.
+
 ## 3.0.155 — Retained file previews and quieter remote browsing
 
 - Keep each Files tab's preview across tab switches and restore text/Markdown
