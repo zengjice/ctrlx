@@ -19,6 +19,7 @@ final class WorkbenchTabStore {
     var unavailableRemoteFileIDs: Set<UUID> = []
     var recoverySelection: Selection?
     var restoredSelection: Selection?
+    var pendingPaneSelection: DetachedTerminalWindows.SourcePaneRequest?
     var restorationRevision = 0
     @ObservationIgnored private(set) var userSelectionRevision = 0
     @ObservationIgnored private var remoteTabSelectionRevisions: [RemoteSessionTabsKey: Int] = [:]
@@ -35,6 +36,24 @@ final class WorkbenchTabStore {
     func userDidSelectSession() {
         userSelectionRevision += 1
         restoredSelection = nil
+        pendingPaneSelection = nil
+    }
+
+    func requestPaneSelection(hostID: String?, pane: PaneState) {
+        userDidSelectTab(hostID: hostID, session: pane.sessionName)
+        pendingPaneSelection = .init(hostID: hostID, pane: pane)
+    }
+
+    func takePaneSelection(in session: SidebarSessionSelection?) -> DetachedTerminalWindows.SourcePaneRequest? {
+        guard let request = pendingPaneSelection else { return nil }
+        let target: SidebarSessionSelection = if let hostID = request.hostID {
+            .remote(hostID: hostID, sessionName: request.pane.sessionName)
+        } else {
+            .local(sessionName: request.pane.sessionName)
+        }
+        guard session == target else { return nil }
+        pendingPaneSelection = nil
+        return request
     }
 
     func userDidSelectTab(hostID: String?, session: String) {

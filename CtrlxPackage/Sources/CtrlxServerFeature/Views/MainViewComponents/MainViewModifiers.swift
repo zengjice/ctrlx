@@ -82,23 +82,35 @@ struct RemoteSessionStructureModifier: ViewModifier {
     }
 }
 
-/// Applies Host-owned terminal placement when a local or remote shared layout
-/// changes. Kept out of `MainView.body` to avoid growing its SwiftUI generic
-/// expression past the compiler's type-checking budget.
-struct SharedTerminalLayoutObserversModifier<Local: Equatable, Remote: Equatable>: ViewModifier {
-    let local: Local?
-    let remote: Remote?
-    let onLocalChanged: () -> Void
-    let onRemoteChanged: () -> Void
+/// Session changes and Host layouts must settle before consuming a notification
+/// target. Separate observers can otherwise restore the old tab after navigation.
+struct SharedTerminalLayoutObserversModifier: ViewModifier {
+    let session: SidebarSessionSelection?
+    let layout: SharedTerminalLayout?
+    let pendingPaneSelectionID: UUID?
+    var isPaneSelectionReady = true
+    let onLayoutChanged: (SidebarSessionSelection?) -> Void
+    let onSelectPane: (SidebarSessionSelection?, UUID) -> Void
     let onDisappear: () -> Void
+
+    private struct Snapshot: Equatable {
+        let session: SidebarSessionSelection?
+        let layout: SharedTerminalLayout?
+        let pendingPaneSelectionID: UUID?
+        let isPaneSelectionReady: Bool
+    }
 
     func body(content: Content) -> some View {
         content
-            .onChange(of: local, initial: true) { _, _ in
-                onLocalChanged()
-            }
-            .onChange(of: remote, initial: true) { _, _ in
-                onRemoteChanged()
+            .onChange(of: Snapshot(session: session, layout: layout, pendingPaneSelectionID: pendingPaneSelectionID, isPaneSelectionReady: isPaneSelectionReady), initial: true) { previous, current in
+                // Equal snapshots are the initial callback. Consuming a request
+                // changes only its ID and must not reapply the preceding layout.
+                if previous == current || previous.session != current.session || previous.layout != current.layout {
+                    onLayoutChanged(current.session)
+                }
+                if current.isPaneSelectionReady, let id = current.pendingPaneSelectionID {
+                    onSelectPane(current.session, id)
+                }
             }
             .onDisappear {
                 onDisappear()

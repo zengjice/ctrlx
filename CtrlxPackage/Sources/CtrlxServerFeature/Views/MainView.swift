@@ -114,6 +114,7 @@ public struct MainView: View {
     }
 
     private func recordUserTabSelection() {
+        tabStore.pendingPaneSelection = nil
         guard
             coordinator.workspaceRecoveryReady, coordinator.workspaceRecovery?.phase != .restoring,
             let session = selectedRemoteSession?.sessionName ?? currentLocalSession()?.sessionName else { return }
@@ -877,7 +878,6 @@ public struct MainView: View {
                     || previous?.sessionName != current?.sessionName
                 if previous?.sessionName != current?.sessionName {
                     showingNewTabMenu = false
-                    applySelectedLocalSharedTerminalLayout()
                 }
                 // Pane dimensions, titles and process state refresh inside the same
                 // selected window too. Treating those metadata updates as a user
@@ -889,11 +889,6 @@ public struct MainView: View {
             }
             .onChange(of: selectedRemoteSession) {
                 showingNewTabMenu = false
-                if selectedRemoteSession == nil {
-                    applySelectedLocalSharedTerminalLayout()
-                } else {
-                    applySelectedRemoteSharedTerminalLayout()
-                }
                 handleSelectionChanged()
             }
             .onChange(of: selectedRemoteWindowId) { handleSelectionChanged() }
@@ -956,10 +951,19 @@ public struct MainView: View {
                 }
             ))
             .modifier(SharedTerminalLayoutObserversModifier(
-                local: selectedLocalSharedTerminalLayout,
-                remote: selectedRemoteSharedTerminalLayout,
-                onLocalChanged: applySelectedLocalSharedTerminalLayout,
-                onRemoteChanged: applySelectedRemoteSharedTerminalLayout,
+                session: sidebarSessionSelection.wrappedValue,
+                layout: selectedRemoteSession == nil ? selectedLocalSharedTerminalLayout : selectedRemoteSharedTerminalLayout,
+                pendingPaneSelectionID: tabStore.pendingPaneSelection?.id,
+                isPaneSelectionReady: isPaneSelectionReady,
+                onLayoutChanged: { session in
+                    guard session == sidebarSessionSelection.wrappedValue else { return }
+                    if selectedRemoteSession == nil {
+                        applySelectedLocalSharedTerminalLayout()
+                    } else {
+                        applySelectedRemoteSharedTerminalLayout()
+                    }
+                },
+                onSelectPane: applyPendingPaneSelection,
                 onDisappear: {
                     sharedLayoutSyncTask?.cancel()
                 }
@@ -3283,37 +3287,39 @@ public struct MainView: View {
         guard detachedWorkspace == nil else { return }
         guard let selection = coordinator.pendingMenuBarSelection else { return }
         coordinator.pendingMenuBarSelection = nil
+        tabStore.pendingPaneSelection = nil
         switch selection {
         case let .local(paneId):
-            if let window = tmuxService.windows.first(where: { $0.panes.contains { $0.paneId == paneId } }) {
-                tabStore.userDidSelectSession()
-                selectedWindow = window
-                selectedRemoteSession = nil
-                selectedRemoteWindowId = nil
-                fileBrowserActiveWindowIds.remove(window.id)
-                sessionFileTabsStates[window.sessionName]?.isGitSelected = false
-                if
-                    let sessionName = tmuxService.sessions
-                        .first(where: { $0.windows.contains(where: { $0.id == window.id }) })?
-                        .sessionName {
-                    sessionFileTabsStates[sessionName]?.selectedFileTabId = nil
-                }
-                requestAutomaticTabFit(windowID: window.stableId)
+            guard
+                let pane = windowManager.paneStates[paneId],
+                let session = tmuxService.session(named: pane.sessionName) else { return }
+            if selectedRemoteSession != nil || currentLocalSession()?.sessionName != pane.sessionName {
+                selectLocalSession(session)
             }
+            tabStore.requestPaneSelection(hostID: nil, pane: pane)
         case let .remote(hostId, hostName, paneId):
-            // Find the session name for this pane from the session store
-            if let paneState = coordinator.remoteSessionStore?.paneState(for: paneId, hostId: hostId) {
-                selectRemoteSession(.init(
-                    hostId: hostId,
-                    hostName: hostName,
-                    sessionName: paneState.sessionName
-                ))
-                tabStore.userDidSelectTab(hostID: hostId, session: paneState.sessionName)
-                selectedRemoteWindowId = paneState.windowId
-                requestAutomaticTabFit(windowID: paneState.stableWindowId)
-            }
+            guard let pane = coordinator.remoteSessionStore?.paneState(for: paneId, hostId: hostId) else { return }
+            selectRemoteSession(.init(hostId: hostId, hostName: hostName, sessionName: pane.sessionName))
             selectedWindow = nil
+            tabStore.requestPaneSelection(hostID: hostId, pane: pane)
         }
+    }
+
+    private var isPaneSelectionReady: Bool {
+        guard isLayoutStoreReady, coordinator.workspaceRecoveryReady else { return false }
+        if let remote = selectedRemoteSession {
+            return !seedingRemoteSessions.contains(remoteTabsKey(hostId: remote.hostId, sessionName: remote.sessionName))
+        }
+        return currentLocalSession().map { !seedingSessions.contains($0.sessionName) } ?? false
+    }
+
+    private func applyPendingPaneSelection(in session: SidebarSessionSelection?, requestID: UUID) {
+        guard
+            detachedWorkspace == nil, isPaneSelectionReady,
+            session == sidebarSessionSelection.wrappedValue,
+            tabStore.pendingPaneSelection?.id == requestID,
+            let request = tabStore.takePaneSelection(in: session) else { return }
+        showSourcePane(request.pane, hostID: request.hostID)
     }
 
     // MARK: - Actions
@@ -4189,11 +4195,14 @@ public struct MainView: View {
             let session = currentLocalSession(),
             let target = session.windows.first(where: { $0.stableId == stableId })
         else { return }
-        let tabs = sessionFileTabsStates[session.sessionName]
-        guard tabs?.selectLeftTerminalWindow(target.stableId) != false else { return }
+        let tabs = tabStore.tabs(hostID: nil, session: session.sessionName)
+        guard
+            tabs.selectLeftTerminalWindow(
+                target.stableId, windowID: target.id, previousWindowID: selectedWindow?.id,
+                legacyExplorerWindows: &fileBrowserActiveWindowIds
+            ) else { return }
 
         recordUserTabSelection()
-        fileBrowserActiveWindowIds.remove(selectedWindow?.id ?? "")
         selectedWindow = target
         requestAutomaticTabFit(windowID: target.stableId)
         let identity = target.panes.first?.workspaceIdentity
@@ -7077,6 +7086,7 @@ public struct MainView: View {
 
     private func createAgentFork(_ request: ForkAgentSession, hostID: String?, inputState: ViewerWorkspaceInputState?) async throws {
         guard !isCreatingAgentTab else { throw AgentForkError("An Agent tab is already being created. Please wait.") }
+        recordUserTabSelection()
         isCreatingAgentTab = true
         defer { isCreatingAgentTab = false }
         let paneID: String
@@ -7134,6 +7144,7 @@ public struct MainView: View {
         guard let pluginID = request.pluginID else {
             throw NewAgentTabConfiguration.LaunchError("Choose an Agent before starting.")
         }
+        recordUserTabSelection()
         isCreatingAgentTab = true
         defer { isCreatingAgentTab = false }
 
@@ -7580,6 +7591,7 @@ public struct MainView: View {
     private func createNewSession(request: SessionLaunchRequest) {
         let project = request.project
         guard creatingSelection == nil else { return }
+        tabStore.userDidSelectSession()
         creatingSelection = project.map { .project($0.id) } ?? .newTerminal
 
         Task {
@@ -7756,6 +7768,7 @@ public struct MainView: View {
 
     private func createRemoteSession(on host: PairedHost, request: SessionLaunchRequest) async {
         guard creatingSelection == nil else { return }
+        tabStore.userDidSelectSession()
 
         let project = request.project
 

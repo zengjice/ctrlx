@@ -443,6 +443,19 @@ final class SessionFileTabsState {
         return true
     }
 
+    func selectLeftTerminalWindow(
+        _ stableID: String, windowID: String, previousWindowID: String?,
+        legacyExplorerWindows: inout Set<String>
+    ) -> Bool {
+        guard selectLeftTerminalWindow(stableID) else { return false }
+        if let previousWindowID {
+            legacyExplorerWindows.remove(previousWindowID)
+        }
+        // The legacy Files flag is keyed by session:index, not the stable tmux ID.
+        legacyExplorerWindows.remove(windowID)
+        return true
+    }
+
     /// A newly opened linked browser follows a source terminal already on the
     /// right. Reused tabs stay where the user put them; relocating one here
     /// would leave the same tab selected in both panes.

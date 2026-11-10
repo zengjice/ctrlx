@@ -4253,6 +4253,7 @@
         private func revealPane(_ selection: PendingMenuBarSelection) {
             paneActivationTask?.cancel()
             pendingMenuBarSelection = nil
+            detachedWindows.mainTabs.pendingPaneSelection = nil
             NSApp.setActivationPolicy(.regular)
             let workspaceID = detachedWindows.reveal(
                 selection, localPanes: tmuxService.panes, remoteSessions: remoteSessionStore

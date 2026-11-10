@@ -1732,6 +1732,14 @@ Sessions window. Moving a tab or closing its detached window before opening an
 older notification therefore follows the current owner. Activation retries target
 only that native window, do not reselect/refit the tab, and are cancelled by a newer
 notification navigation. The notification payload does not store window ownership.
+In the Sessions window, one observer applies the selected session's shared terminal
+layout before consuming the notification's pane selection, also waiting for any
+in-flight private-layout read. Navigation reuses the
+ordinary terminal selection/focus path, including right-side tabs and clearing a
+previous Files/Browser selection on the left. This request is consumed once;
+manual session/tab selection, starting a new terminal/Agent/Fork, or a newer
+notification cancels it. A vanished target is discarded without blocking manual
+navigation. Subsequent Host layout updates remain authoritative.
 
 See [push notifications](push-notifications-plan.md) for design/history and
 actionable replies, and [self-hosting](self-hosting.md) for current configuration.
