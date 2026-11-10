@@ -56,7 +56,7 @@ extension AgentWorkflowObservation {
 }
 
 struct AgentWorkflowArchive: Codable, Equatable, Sendable {
-    var schemaVersion = 5
+    var schemaVersion = 6
     let hostID: UUID
     var definitions: [AgentWorkflowDefinition] = []
     var instances: [AgentWorkflowInstance] = []
@@ -272,6 +272,16 @@ actor AgentWorkflowStore {
         return authorization
     }
 
+    func modelSelection(for invocation: AgentWorkflowInvocation) throws -> AgentModelSelection? {
+        guard
+            let run = try load().runs.first(where: { $0.id == invocation.delivery.runID }),
+            let stored = run.invocations.first(where: { $0.id == invocation.id }), stored.delivery == invocation.delivery,
+            let node = run.definition.nodes.first(where: { $0.id == stored.nodeID }) else {
+            throw AgentWorkflowError("The workflow step no longer exists.")
+        }
+        return node.modelSelection
+    }
+
     func isStagingInput(for instance: AgentWorkflowInstance) throws -> Bool {
         try load().runs.contains { run in
             guard run.status == .running else { return false }
@@ -325,7 +335,7 @@ actor AgentWorkflowStore {
         }
         var loaded = try JSONDecoder().decode(AgentWorkflowArchive.self, from: Data(contentsOf: fileURL))
         guard
-            [1, 2, 3, 4, 5].contains(loaded.schemaVersion), loaded.hostID == hostID,
+            (1...6).contains(loaded.schemaVersion), loaded.hostID == hostID,
             Set(loaded.definitions.map(\.id)).count == loaded.definitions.count,
             Set(loaded.runs.map(\.id)).count == loaded.runs.count,
             Set(loaded.instances.map(\.id)).count == loaded.instances.count else {
@@ -362,14 +372,14 @@ actor AgentWorkflowStore {
             }
             loaded.runs[index] = try AgentWorkflowExecution(restoring: loaded.runs[index]).run
         }
-        loaded.schemaVersion = 5
+        loaded.schemaVersion = 6
         try commit(loaded)
         return loaded
     }
 
     func commit(_ updated: AgentWorkflowArchive) throws {
         var updated = updated
-        updated.schemaVersion = 5
+        updated.schemaVersion = 6
         guard updated != archive else { return }
         let data = try JSONEncoder().encode(updated)
         try FileManager.default.createDirectory(

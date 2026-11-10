@@ -154,6 +154,10 @@ struct AgentWorkflowRunView: View {
             } else if node.kind == .content {
                 Text("Content node").font(.caption).foregroundStyle(.secondary)
             }
+            if let selection = node.modelSelection {
+                Text(selection.model + (selection.effort.map { " · \($0)" } ?? ""))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if !node.isSkipped, node.invocation == nil, !state.summary.status.isTerminal, !node.upstreamIDs.isEmpty {
                 let names = state.nodes.filter { node.upstreamIDs.contains($0.id) }.map(\.name)
                 Text("Waiting for: \(names.joined(separator: ", "))").font(.caption).foregroundStyle(.secondary)

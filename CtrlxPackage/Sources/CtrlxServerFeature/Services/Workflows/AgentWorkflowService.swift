@@ -9,6 +9,7 @@ actor AgentWorkflowService {
     private let schedule: @Sendable (UUID) async -> Void
     private let now: @Sendable () -> Date
     private let onFailure: @Sendable (String) -> Void
+    let models: @Sendable (AgentWorkflowInstance, Bool) async throws -> AgentModelSnapshot
     private var refreshing: Task<[AgentWorkflowInstance], Error>?
     private var monitoring: Task<Void, Never>?
     private var idleSince: [UUID: Date] = [:]
@@ -18,12 +19,14 @@ actor AgentWorkflowService {
         store: AgentWorkflowStore,
         scan: @escaping @Sendable ([AgentWorkflowInstance]) async throws -> [AgentWorkflowObservation],
         schedule: @escaping @Sendable (UUID) async -> Void,
+        models: @escaping @Sendable (AgentWorkflowInstance, Bool) async throws -> AgentModelSnapshot = { _, _ in throw AgentWorkflowError("This Agent does not support model selection.") },
         now: @escaping @Sendable () -> Date = { Date() },
         onFailure: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.store = store
         self.scan = scan
         self.schedule = schedule
+        self.models = models
         self.now = now
         self.onFailure = onFailure
     }

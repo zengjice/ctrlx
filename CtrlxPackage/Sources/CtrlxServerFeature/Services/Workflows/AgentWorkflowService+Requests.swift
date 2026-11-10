@@ -17,6 +17,11 @@ extension AgentWorkflowService {
         }
         var response = AgentWorkflowResponse(hostID: archive.hostID)
         switch request.operation {
+        case let .models(instanceID, refresh):
+            guard let instance = archive.instances.first(where: { $0.id == instanceID }) else {
+                throw AgentWorkflowError("This Agent is no longer available. Refresh the Agent list.")
+            }
+            response.modelSnapshot = try await models(instance, refresh)
         case let .terminal(pane):
             if
                 let instance = archive.instances.first(where: { $0.workspacePane.isSamePane(as: pane) }),

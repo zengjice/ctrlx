@@ -58,7 +58,7 @@ struct AgentWorkflowReviewLoopTests {
         let saved = try await store.saveDefinition(definition, expectedRevision: nil)
         let run = try await store.start(definitionID: saved.id, expectedRevision: saved.revision, requestID: UUID(), now: now, authorizationExpiresAt: now.addingTimeInterval(3_600))
         #expect(run.instances.count == 2)
-        #expect(try await store.snapshot().schemaVersion == 5)
+        #expect(try await store.snapshot().schemaVersion == 6)
         let probe = ReviewLoopDeliveryProbe()
         let runner = AgentWorkflowRunner(store: store, transport: .init(inspect: { $0 }, prepare: { _, _ in }, write: { invocation, _ in
             let snapshot = try await store.snapshot().runs[0]

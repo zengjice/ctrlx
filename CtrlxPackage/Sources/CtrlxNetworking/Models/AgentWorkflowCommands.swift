@@ -1,7 +1,7 @@
 import Foundation
 
 public enum AgentWorkflowWire {
-    public static let version = 5
+    public static let version = 6
     public static let maximumEncodedBytes = 256 * 1_024
     public static let imageEncodedBytes = 576 * 1_024
     public static let maximumDefinitionBytes = 128 * 1_024
@@ -34,6 +34,7 @@ public struct ManageAgentWorkflows: CommandSpec, Equatable {
 
     public enum Operation: Codable, Equatable, Sendable {
         case catalog(offset: Int)
+        case models(instanceID: UUID, refresh: Bool)
         case terminal(WorkspacePaneIdentity)
         case definitions(offset: Int)
         case definition(UUID)
@@ -181,6 +182,7 @@ public struct AgentWorkflowRunState: Codable, Equatable, Sendable {
         public let invocation: AgentWorkflowInvocationSummary?
         public let isSkipped: Bool
         public let participantName: String?
+        public let modelSelection: AgentModelSelection?
     }
 
     public let summary: AgentWorkflowRunSummary
@@ -198,7 +200,8 @@ public struct AgentWorkflowRunState: Codable, Equatable, Sendable {
                 upstreamIDs: node.id == run.definition.entryNodeID(round: run.round) ? [] : run.definition.upstream(of: node.id).map(\.id),
                 invocation: run.invocations.first { $0.nodeID == node.id && $0.round == run.round }.map(AgentWorkflowInvocationSummary.init),
                 isSkipped: !run.definition.activeNodeIDs(round: run.round).contains(node.id),
-                participantName: run.definition.agents.first { $0.id == node.agentInstanceID }?.name
+                participantName: run.definition.agents.first { $0.id == node.agentInstanceID }?.name,
+                modelSelection: node.modelSelection
             )
         }
     }
@@ -256,6 +259,7 @@ public struct AgentWorkflowResponse: Codable, Equatable, Sendable {
     public var text: AgentWorkflowTextPage?
     public var attachments: [AgentWorkflowAttachment]?
     public var uploadedOffset: Int?
+    public var modelSnapshot: AgentModelSnapshot?
 
     public init(hostID: UUID) {
         self.hostID = hostID

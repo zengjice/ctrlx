@@ -17,17 +17,17 @@ struct AgentModelRuntimeCache {
 }
 
 extension AppCoordinator {
-    func handleAgentModels(_ request: AgentModelControls, paneID: String) async throws -> AgentModelSnapshot {
+    func handleAgentModels(_ request: AgentModelControls, paneID: String, workflowInput: AgentWorkflowModelInput? = nil) async throws -> AgentModelSnapshot {
         let start = ContinuousClock.now
         do {
             let value: AgentModelSnapshot
             if request.selection == nil {
                 value = try await agentModelReads.read(paneID: paneID, identity: request.workspacePane, refresh: request.refresh) { [self] in
-                    try await performAgentModels(request, paneID: paneID)
+                    try await performAgentModels(request, paneID: paneID, workflowInput: workflowInput)
                 }
             } else {
                 try await agentModelReads.waitForRead(paneID: paneID, identity: request.workspacePane)
-                value = try await performAgentModels(request, paneID: paneID)
+                value = try await performAgentModels(request, paneID: paneID, workflowInput: workflowInput)
             }
             recordAgentModelDiagnostic(paneID: paneID, phase: request.selection == nil ? "read" : "switch", since: start)
             return value
@@ -45,7 +45,7 @@ extension AppCoordinator {
         ])
     }
 
-    private func performAgentModels(_ request: AgentModelControls, paneID: String) async throws -> AgentModelSnapshot {
+    private func performAgentModels(_ request: AgentModelControls, paneID: String, workflowInput: AgentWorkflowModelInput?) async throws -> AgentModelSnapshot {
         @Dependency(AgentSessionIdentityClient.self) var identities
         let identityClient = identities
         @Dependency(WorkspaceAgentProcessClient.self) var processes
@@ -119,8 +119,7 @@ extension AppCoordinator {
         if let selection = request.selection {
             guard reason == nil else { throw AgentModelError(reason ?? "The terminal is not ready.") }
             guard let gate = tmuxService.workflowInputGate else { throw AgentModelError("The terminal input queue is not ready.") }
-            cache.selection = try await gate.human(paneID: paneID) { [self] in
-                let claim = gate.claim(paneID: paneID)
+            let change: @MainActor @Sendable (AgentWorkflowInputGate.Claim) async throws -> AgentModelSelection = { [self] claim in
                 let current = try await tmuxService.captureAgentTerminal(paneID: paneID, identity: request.workspacePane)
                 if let issue = agentModelInputIssue(paneID: paneID, screen: current, provider: provider, models: models) {
                     throw AgentModelError(issue)
@@ -140,10 +139,10 @@ extension AppCoordinator {
                         return try await tmuxService.captureAgentTerminal(paneID: paneID, identity: request.workspacePane).plainLines
                     },
                     submit: { [self] command in
-                        try await submitAgentModelCommand(command, paneID: paneID, identity: request.workspacePane, processID: pid, runtimeID: runtime, provider: provider, models: models, gate: gate, claim: claim)
+                        try await submitAgentModelCommand(command, paneID: paneID, identity: request.workspacePane, processID: pid, runtimeID: runtime, provider: provider, models: models, gate: gate, claim: claim, workflowInput: workflowInput)
                     },
                     send: { [self] keys in
-                        try await sendAgentModelKeys(keys, paneID: paneID, identity: request.workspacePane, processID: pid, runtimeID: runtime, gate: gate, claim: claim)
+                        try await sendAgentModelKeys(keys, paneID: paneID, identity: request.workspacePane, processID: pid, runtimeID: runtime, gate: gate, claim: claim, workflowInput: workflowInput)
                     }
                 )
                 // Recheck the composer immediately before entering the sequence.
@@ -170,6 +169,14 @@ extension AppCoordinator {
                     throw error
                 }
             }
+            if let workflowInput {
+                try gate.validate(workflowInput.claim)
+                cache.selection = try await change(workflowInput.claim)
+            } else {
+                cache.selection = try await gate.human(paneID: paneID) {
+                    try await change(gate.claim(paneID: paneID))
+                }
+            }
         }
         cache.inputGeneration = tmuxService.workflowInputGate?.claim(paneID: paneID).generation
         agentModelCatalogs = agentModelCatalogs.filter { windowManager.paneStates[$0.key] != nil }
@@ -180,7 +187,7 @@ extension AppCoordinator {
     private func submitAgentModelCommand(
         _ command: String, paneID: String, identity: WorkspacePaneIdentity,
         processID: String, runtimeID: String, provider: any AgentModelProviding, models: [AgentModelOption],
-        gate: AgentWorkflowInputGate, claim: AgentWorkflowInputGate.Claim
+        gate: AgentWorkflowInputGate, claim: AgentWorkflowInputGate.Claim, workflowInput: AgentWorkflowModelInput?
     ) async throws {
         @Dependency(AgentSessionIdentityClient.self) var identities
         let identityClient = identities
@@ -192,7 +199,13 @@ extension AppCoordinator {
         let result = try await tmuxService.runWorkspaceCommand(commands, target: paneID, identity: identity) { launch in
             try gate.validate(claim)
             guard identityClient.runtimeID(processID) == runtimeID else { throw AgentModelError("The Agent process changed before input was sent.") }
-            try gate.perform(claim, write: launch)
+            try gate.perform(claim) {
+                if let workflowInput {
+                    try workflowInput.authorization.performConfiguration(launch)
+                } else {
+                    try launch()
+                }
+            }
         }
         guard !result.stdoutString.contains(AgentModelTmuxSubmission.rejection) else { throw AgentModelError("The terminal input changed. Nothing was sent.") }
     }
@@ -224,7 +237,7 @@ extension AppCoordinator {
 
     private func sendAgentModelKeys(
         _ keys: [TmuxKey], paneID: String, identity: WorkspacePaneIdentity,
-        processID: String, runtimeID: String, gate: AgentWorkflowInputGate, claim: AgentWorkflowInputGate.Claim
+        processID: String, runtimeID: String, gate: AgentWorkflowInputGate, claim: AgentWorkflowInputGate.Claim, workflowInput: AgentWorkflowModelInput?
     ) async throws {
         @Dependency(AgentSessionIdentityClient.self) var identities
         let identityClient = identities
@@ -245,7 +258,13 @@ extension AppCoordinator {
             _ = try await tmuxService.runWorkspaceCommand([arguments], target: paneID, identity: identity) { launch in
                 try gate.validate(claim)
                 guard identityClient.runtimeID(processID) == runtimeID else { throw AgentModelError("The Agent process changed before input was sent.") }
-                try gate.perform(claim, write: launch)
+                try gate.perform(claim) {
+                    if let workflowInput {
+                        try workflowInput.authorization.performConfiguration(launch)
+                    } else {
+                        try launch()
+                    }
+                }
             }
         }
     }

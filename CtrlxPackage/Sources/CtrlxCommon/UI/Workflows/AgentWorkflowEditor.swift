@@ -100,7 +100,11 @@ struct AgentWorkflowEditor: View {
                     Section {
                         TextField("Step name", text: $node.name)
                         if node.kind == .agent {
-                            Picker("Run as", selection: $node.agentInstanceID) {
+                            Picker("Run as", selection: Binding(get: { node.agentInstanceID }, set: { replacement in
+                                guard node.agentInstanceID != replacement else { return }
+                                node.agentInstanceID = replacement
+                                node.modelSelection = nil
+                            })) {
                                 ForEach(draft.agents) { participant in
                                     Text(participant.name).tag(Optional(participant.id))
                                 }
@@ -117,6 +121,8 @@ struct AgentWorkflowEditor: View {
                                     Text(instance.readiness.title).font(.caption).foregroundStyle(.orange)
                                 }
                             }
+                            AgentWorkflowModelSettings(endpoint: endpoint, hostID: draft.hostID, instance: instances.first { $0.id == node.agentInstanceID }, selection: $node.modelSelection)
+                                .accessibilityIdentifier("workflow-model-\(node.id)")
                         } else {
                             Label("Content step", symbol: .docTextFill).font(.caption).foregroundStyle(.secondary)
                             Text("Prepares text and attachments without calling an Agent. Connect an Agent step to send this material.")
@@ -226,6 +232,7 @@ struct AgentWorkflowEditor: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { save() }.disabled(saving || importing || validationIssue != nil || !endpoint.isConnected)
+                        .accessibilityIdentifier("workflow-editor-save")
                 }
             }
         }
@@ -322,10 +329,12 @@ struct AgentWorkflowEditor: View {
 
     private func participantBinding(_ id: UUID) -> Binding<UUID> {
         Binding(get: { id }, set: { replacement in
+            guard replacement != id else { return }
             guard let index = draft.participants?.firstIndex(where: { $0.id == id }) else { return }
             draft.participants?[index].agentInstanceID = replacement
             for step in draft.nodes.indices where draft.nodes[step].agentInstanceID == id {
                 draft.nodes[step].agentInstanceID = replacement
+                draft.nodes[step].modelSelection = nil
             }
         })
     }
