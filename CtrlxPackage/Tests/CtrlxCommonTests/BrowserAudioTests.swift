@@ -7,8 +7,80 @@ import Testing
 
 @Suite("Browser audio", .serialized)
 struct BrowserAudioTests {
+    @Test @MainActor
+    func drainBetweenQueueCheckAndScheduleDoesNotDiscardUnrenderedTail() async throws {
+        let player = InterleavedAudioPlayer()
+        let (output, engine, format, owner) = try outputFixture(makePlayer: { player })
+        defer { output.stop(owner) }
+        let encoder = BrowserAudioCodec()
+        var messages: [RemoteBrowserAudio] = []
+        for sequence in 1...5 {
+            try messages.append(await message(encoder, owner, sequence, frames: 8_192))
+        }
+        for packet in messages.prefix(3) {
+            output.receive(owner, message: packet)
+            try await wait { output.pendingFrames == 0 }
+        }
+        let rendered = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8_192))
+        #expect(try engine.renderOffline(8_192, to: rendered) == .success)
+        #expect(try engine.renderOffline(8_192, to: rendered) == .success)
+        #expect(try engine.renderOffline(7_168, to: rendered) == .success)
+        #expect(output.isPlaying)
+        #expect(output.queuedFrames > 0)
+
+        // Force the render thread's progress into the check-to-schedule gap:
+        // the last 1024 old frames play, followed by a silent interval.
+        player.beforeSchedule = {
+            do {
+                #expect(try engine.renderOffline(4_096, to: rendered) == .success)
+            } catch { Issue.record(error) }
+        }
+        output.receive(owner, message: messages[3])
+        try await wait { output.pendingFrames == 0 }
+        #expect(try engine.renderOffline(5_120, to: rendered) == .success)
+        // The node clock now equals total submitted PCM, but the newer buffer
+        // still has audible samples left. Another batch must not flush it.
+        output.receive(owner, message: messages[4])
+        try await wait { output.pendingFrames == 0 }
+        #expect(output.underruns == 0)
+        #expect(output.droppedFrames == 0)
+        #expect(output.isPlaying)
+        #expect(try engine.renderOffline(4_096, to: rendered) == .success)
+        let samples = try #require(rendered.floatChannelData)[0]
+        #expect((0..<Int(rendered.frameLength)).count { abs(samples[$0]) > 0.05 } > 4_000)
+    }
+
     @Test(arguments: [44_100.0, 48_000.0, 96_000.0]) @MainActor
-    func jitteredDeliveryPreservesContinuousStereoAtDeviceSampleRate(rate: Double) async throws {
+    func renderedFramesDoNotOverflowWhileMainActorCallbacksAreDelayed(rate: Double) async throws {
+        let (output, engine, format, owner) = try outputFixture(rate: rate)
+        defer { output.stop(owner) }
+        let encoder = BrowserAudioCodec()
+        var messages: [RemoteBrowserAudio] = []
+        for sequence in 1...(BrowserAudioBuffering.maximumPlaybackFrames / 8_192 + 1) {
+            try messages.append(await message(encoder, owner, sequence, frames: 8_192))
+        }
+        for packet in messages.dropLast() {
+            output.receive(owner, message: packet)
+            try await wait { output.pendingFrames == 0 }
+        }
+        #expect(output.queuedFrames == BrowserAudioBuffering.maximumPlaybackFrames)
+        let rendered = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8_192))
+        // Core Audio keeps rendering while the UI actor is occupied. Deliver
+        // the next network batch before any completion Task can run there.
+        #expect(try engine.renderOffline(8_192, to: rendered) == .success)
+        #expect(try engine.renderOffline(8_192, to: rendered) == .success)
+        #expect(try engine.renderOffline(4_096, to: rendered) == .success)
+        waitForRenderCallbacks { output.queuedFrames <= BrowserAudioBuffering.maximumPlaybackFrames - 8_192 }
+        #expect(output.queuedFrames <= BrowserAudioBuffering.maximumPlaybackFrames - 8_192)
+        try output.receive(owner, message: #require(messages.last))
+        #expect(output.resynchronizations == 0)
+        #expect(output.droppedFrames == 0)
+        try await wait { output.pendingFrames == 0 }
+        #expect(output.isPlaying)
+    }
+
+    @Test(arguments: [44_100.0, 48_000.0, 96_000.0], [5, 10]) @MainActor
+    func jitteredDeliveryPreservesContinuousStereoAtDeviceSampleRate(rate: Double, batchCount: Int) async throws {
         let (output, engine, format, owner) = try outputFixture(rate: rate)
         defer { output.stop(owner) }
         let encoder = BrowserAudioCodec()
@@ -25,9 +97,9 @@ struct BrowserAudioTests {
             }
             produced += frames
             let encoded = try await encoder.encode(samples.withUnsafeBytes { Data($0) })
-            let group = (block - 1) / 5
-            // Five messages arrive together, with up to 80 ms extra jitter.
-            events.append(((group + 1) * 20 + [0, 8, 0, 4][group % 4], .init(
+            let group = (block - 1) / batchCount
+            // 200/400 ms delivery bursts, with 80/160 ms additional jitter.
+            events.append(((group + 1) * batchCount * 4 + [0, 8, 0, 4][group % 4] * batchCount / 5, .init(
                 tabID: owner, surfaceID: owner, controlID: owner, streamID: owner,
                 sequence: UInt64(block), packets: encoded.packets, magicCookie: encoded.cookie
             )))
@@ -35,6 +107,8 @@ struct BrowserAudioTests {
         let rendered = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: UInt32(rate / 100)))
         var next = 0, renderedFrames = 0
         var crossings = [0, 0], previous: [Float] = [0, 0]
+        var longestSilence = 0, silence = 0
+        var largestStep: Float = 0
         for tick in 0..<1_000 {
             while next < events.count, events[next].tick <= tick {
                 output.receive(owner, message: events[next].message)
@@ -45,15 +119,24 @@ struct BrowserAudioTests {
             }
             guard engine.isRunning else { continue }
             #expect(try engine.renderOffline(rendered.frameCapacity, to: rendered) == .success)
-            if tick >= 100 {
+            // Exclude initial buffering plus AAC encoder/decoder priming.
+            if tick >= 150 {
                 for channel in 0..<2 {
                     let samples = try #require(rendered.floatChannelData)[channel]
                     for frame in 0..<Int(rendered.frameLength) {
+                        if renderedFrames > 0 || frame > 0 {
+                            largestStep = max(largestStep, abs(samples[frame] - previous[channel]))
+                        }
                         if samples[frame] > 0, previous[channel] <= 0 {
                             crossings[channel] += 1
                         }
                         previous[channel] = samples[frame]
                     }
+                }
+                let samples = try #require(rendered.floatChannelData)
+                for frame in 0..<Int(rendered.frameLength) {
+                    silence = abs(samples[0][frame]) + abs(samples[1][frame]) < 0.00_001 ? silence + 1 : 0
+                    longestSilence = max(longestSilence, silence)
                 }
                 renderedFrames += Int(rendered.frameLength)
             }
@@ -64,6 +147,8 @@ struct BrowserAudioTests {
         #expect(output.underruns == 0)
         #expect(output.droppedFrames == 0)
         #expect(output.resynchronizations == 0)
+        #expect(longestSilence < Int(rate / 1_000))
+        #expect(largestStep < 0.08)
         for (channel, expected) in [440.0, 880.0].enumerated() {
             let frequency = Double(crossings[channel]) * rate / Double(renderedFrames)
             #expect(abs(frequency - expected) < 2)
@@ -80,7 +165,7 @@ struct BrowserAudioTests {
             try output.receive(owner, message: await message(encoder, owner, sequence, frames: 6_144))
             try await wait { output.queuedFrames == 6_144 && output.isPlaying }
             #expect(try engine.renderOffline(7_168, to: rendered) == .success)
-            try await wait { output.queuedFrames == 0 }
+            try await wait { output.queuedFrames == 0 && !output.isPlaying }
             #expect(!output.isPlaying)
         }
         #expect(output.droppedFrames == 0)
@@ -97,14 +182,15 @@ struct BrowserAudioTests {
         for sequence in 1...120 {
             try messages.append(await message(encoder, owner, sequence))
         }
-        for start in stride(from: 0, to: 120, by: 6) {
-            for packet in messages[start..<start + 6] {
+        for start in stride(from: 0, to: 120, by: 12) {
+            for packet in messages[start..<start + 12] {
                 output.receive(owner, message: packet)
             }
-            try await wait { output.pendingFrames == 0 && output.queuedFrames == 12_288 }
+            try await wait { output.pendingFrames == 0 && output.queuedFrames == 24_576 }
             #expect(output.isPlaying)
-            #expect(try engine.renderOffline(8_192, to: rendered) == .success)
-            #expect(try engine.renderOffline(4_096, to: rendered) == .success)
+            for _ in 0..<3 {
+                #expect(try engine.renderOffline(8_192, to: rendered) == .success)
+            }
             try await wait { output.queuedFrames == 0 }
         }
         #expect(output.droppedFrames == 0)
@@ -116,14 +202,15 @@ struct BrowserAudioTests {
         let (output, _, _, owner) = try outputFixture()
         defer { output.stop(owner) }
         let encoder = BrowserAudioCodec()
-        for sequence in 1...3 {
+        let batchCount = BrowserAudioBuffering.maximumPlaybackFrames / 8_192
+        for sequence in 1...batchCount {
             try output.receive(owner, message: await message(encoder, owner, sequence, frames: 8_192))
             try await wait { output.pendingFrames == 0 }
         }
-        #expect(output.queuedFrames == BrowserAudioBuffering.maximumFrames)
-        try output.receive(owner, message: await message(encoder, owner, 4))
+        #expect(output.queuedFrames == BrowserAudioBuffering.maximumPlaybackFrames)
+        try output.receive(owner, message: await message(encoder, owner, batchCount + 1))
         try await wait { output.pendingFrames == 0 && output.queuedFrames == 2_048 }
-        #expect(output.droppedFrames == 24_576)
+        #expect(output.droppedFrames == BrowserAudioBuffering.maximumPlaybackFrames)
         #expect(output.resynchronizations == 1)
         #expect(!output.isPlaying)
     }
@@ -134,7 +221,7 @@ struct BrowserAudioTests {
         defer { output.stop(owner) }
         let encoder = BrowserAudioCodec()
         var messages: [RemoteBrowserAudio] = []
-        for sequence in 1...13 {
+        for sequence in 1...(BrowserAudioBuffering.maximumPlaybackFrames / 2_048 + 1) {
             try messages.append(await message(encoder, owner, sequence))
         }
         for packet in messages {
@@ -142,7 +229,7 @@ struct BrowserAudioTests {
         }
         #expect(output.pendingFrames == 2_048)
         try await wait { output.pendingFrames == 0 && output.queuedFrames == 2_048 }
-        #expect(output.droppedFrames == 24_576)
+        #expect(output.droppedFrames == BrowserAudioBuffering.maximumPlaybackFrames)
         #expect(output.resynchronizations == 1)
     }
 
@@ -158,7 +245,7 @@ struct BrowserAudioTests {
             #expect(!output.isPlaying)
             try await wait { output.isPlaying }
             #expect(try engine.renderOffline(3_072, to: rendered) == .success)
-            try await wait { output.queuedFrames == 0 }
+            try await wait { output.queuedFrames == 0 && !output.isPlaying }
             #expect(!output.isPlaying)
         }
         #expect(output.underruns == 2)
@@ -166,32 +253,82 @@ struct BrowserAudioTests {
     }
 
     @Test @MainActor
-    func sequenceGapResynchronizesAndStopCancelsDelayedPlayback() async throws {
+    func sequenceGapPreservesQueuedSoundAndStopCancelsDelayedPlayback() async throws {
         let (output, _, _, owner) = try outputFixture()
         let encoder = BrowserAudioCodec()
         try output.receive(owner, message: await message(encoder, owner, 1))
         try await wait { output.queuedFrames == 2_048 }
         try output.receive(owner, message: await message(encoder, owner, 3))
-        try await wait { output.pendingFrames == 0 && output.queuedFrames == 2_048 }
+        try await wait { output.pendingFrames == 0 && output.queuedFrames == 4_096 }
         #expect(output.resynchronizations == 1)
-        #expect(output.droppedFrames == 2_048)
+        #expect(output.droppedFrames == 0)
         output.stop(owner)
-        try await Task.sleep(for: .milliseconds(300))
+        try await Task.sleep(for: .milliseconds(550))
         #expect(!output.isPlaying && output.queuedFrames == 0 && output.pendingFrames == 0)
     }
 
+    @Test @MainActor
+    func sequenceGapDoesNotDiscardBatchesStillWaitingForDecode() async throws {
+        let (output, _, _, owner) = try outputFixture()
+        defer { output.stop(owner) }
+        let encoder = BrowserAudioCodec()
+        var messages: [RemoteBrowserAudio] = []
+        for sequence in [1, 2, 4] {
+            try messages.append(await message(encoder, owner, sequence, frames: 8_192))
+        }
+        for packet in messages {
+            output.receive(owner, message: packet)
+        }
+        #expect(output.pendingFrames == 24_576)
+        try await wait { output.pendingFrames == 0 }
+        #expect(output.queuedFrames == 24_576)
+        #expect(output.isPlaying)
+        #expect(output.resynchronizations == 1)
+        #expect(output.droppedFrames == 0)
+    }
+
     @MainActor
-    private func outputFixture(rate: Double = 48_000) throws -> (BrowserAudioOutput, AVAudioEngine, AVAudioFormat, UUID) {
+    private func outputFixture(
+        rate: Double = 48_000,
+        makePlayer: @escaping () -> AVAudioPlayerNode = { AVAudioPlayerNode() }
+    ) throws -> (BrowserAudioOutput, AVAudioEngine, AVAudioFormat, UUID) {
         let engine = AVAudioEngine()
         let format = try #require(AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2))
         try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 8_192)
-        let output = BrowserAudioOutput(makeEngine: { engine }), owner = UUID()
+        let output = BrowserAudioOutput(makeEngine: { engine }, makePlayer: makePlayer), owner = UUID()
         try output.start(owner) {
             if let error = $0 {
                 Issue.record("Playback failed: \(error)")
             }
         }
         return (output, engine, format, owner)
+    }
+
+    final private class InterleavedAudioPlayer: AVAudioPlayerNode, @unchecked Sendable {
+        @MainActor var beforeSchedule: (() -> Void)?
+
+        override func scheduleBuffer(
+            _ buffer: AVAudioPCMBuffer,
+            completionCallbackType: AVAudioPlayerNodeCompletionCallbackType,
+            completionHandler: (@Sendable (AVAudioPlayerNodeCompletionCallbackType) -> Void)? = nil
+        ) {
+            MainActor.assumeIsolated {
+                let action = beforeSchedule
+                beforeSchedule = nil
+                action?()
+            }
+            super.scheduleBuffer(buffer, completionCallbackType: completionCallbackType, completionHandler: completionHandler)
+        }
+    }
+
+    @MainActor
+    private func waitForRenderCallbacks(_ condition: () -> Bool) {
+        // Keep the UI actor occupied while native completion callbacks arrive.
+        // An async wait here would also let its queued Tasks run, hiding the bug.
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while !condition(), ContinuousClock.now < deadline {
+            Thread.sleep(forTimeInterval: 0.001)
+        }
     }
 
     private func message(_ encoder: BrowserAudioCodec, _ owner: UUID, _ sequence: Int, frames: Int = 2_048) async throws -> RemoteBrowserAudio {
@@ -227,7 +364,7 @@ struct BrowserAudioTests {
             defer { output.stop(owner) }
             let encoder = BrowserAudioCodec()
             let pcm = [Float](repeating: 0, count: 4_096 * 2).withUnsafeBytes { Data($0) }
-            for sequence in 1...4 {
+            for sequence in 1...8 {
                 let encoded = try await encoder.encode(pcm)
                 if !encoded.packets.isEmpty {
                     output.receive(owner, .init(
@@ -241,10 +378,11 @@ struct BrowserAudioTests {
                     ))
                 }
             }
-            try await RemoteBrowserSessionTests().wait { acquired > 0 || failure != nil }
+            try await RemoteBrowserSessionTests().wait { BrowserAudioOutput.shared.isPlaying || failure != nil }
             try await Task.sleep(for: .milliseconds(100))
             #expect(acquired == 1)
             #expect(failure == nil)
+            #expect(BrowserAudioOutput.shared.isPlaying)
             output.stop(owner)
             #expect(released == 1)
         }

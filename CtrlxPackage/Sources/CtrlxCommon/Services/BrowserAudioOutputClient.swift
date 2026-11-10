@@ -5,6 +5,7 @@
     import DependenciesMacros
     import Foundation
     import Logging
+    import os
 
     @DependencyClient
     struct BrowserAudioOutputClient: Sendable {
@@ -34,7 +35,12 @@
         private var task: Task<Void, Never>?
         private var observers: [NSObjectProtocol] = []
         private var audioSessionActive = false
-        private(set) var queuedFrames = 0
+        var queuedFrames: Int {
+            queuedFrameCount.withLock { $0 }
+        }
+
+        private var queuedFrameCount = OSAllocatedUnfairLock(initialState: 0)
+        private var playerEpoch = UUID()
         private(set) var pendingFrames = 0
         private(set) var droppedFrames = 0
         private(set) var underruns = 0
@@ -44,10 +50,15 @@
         private var prebufferTask: Task<Void, Never>?
         private var playbackEpoch = UUID()
         private let makeEngine: () -> AVAudioEngine
+        private let makePlayer: () -> AVAudioPlayerNode
         @Dependency(FileBrowserVideoAudioClient.self) private var audioSession
 
-        init(makeEngine: @escaping () -> AVAudioEngine = { AVAudioEngine() }) {
+        init(
+            makeEngine: @escaping () -> AVAudioEngine = { AVAudioEngine() },
+            makePlayer: @escaping () -> AVAudioPlayerNode = { AVAudioPlayerNode() }
+        ) {
             self.makeEngine = makeEngine
+            self.makePlayer = makePlayer
         }
 
         func start(_ id: UUID, onStop: @escaping @MainActor @Sendable (String?) -> Void) throws {
@@ -72,9 +83,16 @@
             let epoch = playbackEpoch
             self.continuation = continuation
             task = Task { [weak self] in
-                let decoder = BrowserAudioCodec()
+                var decoder = BrowserAudioCodec()
+                var sequence: UInt64?
                 for await message in stream {
                     do {
+                        // Reset AAC overlap only at the missing batch, after
+                        // decoding earlier batches. Already scheduled PCM is valid.
+                        if let previous = sequence, message.sequence != previous + 1 {
+                            decoder = BrowserAudioCodec()
+                        }
+                        sequence = message.sequence
                         let pcm = try await decoder.decode(message.packets, cookie: message.magicCookie)
                         guard !Task.isCancelled, let self, self.owner == id, self.playbackEpoch == epoch else { return }
                         self.pendingFrames -= BrowserAudioBuffering.frames(in: message)
@@ -92,7 +110,7 @@
             try audioSession.acquire(id)
             audioSessionActive = true
             let engine = makeEngine()
-            let player = AVAudioPlayerNode()
+            let player = makePlayer()
             engine.attach(player)
             engine.connect(player, to: engine.mainMixerNode, format: Self.format)
             do { try engine.start() } catch {
@@ -118,13 +136,13 @@
         func receive(_ id: UUID, message: RemoteBrowserAudio) {
             guard owner == id, message.isValid, !message.packets.isEmpty, message.sequence > lastSequence else { return }
             let frames = BrowserAudioBuffering.frames(in: message)
-            if
-                (lastSequence > 0 && message.sequence != lastSequence + 1)
-                || pendingFrames + queuedFrames + frames > BrowserAudioBuffering.maximumFrames {
+            if pendingFrames + queuedFrames + frames > BrowserAudioBuffering.maximumPlaybackFrames {
                 droppedFrames += pendingFrames + queuedFrames
                 resynchronizations += 1
                 resetPlayback()
                 startDecoder(id)
+            } else if lastSequence > 0, message.sequence != lastSequence + 1 {
+                resynchronizations += 1
             }
             lastSequence = message.sequence
             pendingFrames += frames
@@ -170,6 +188,7 @@
                 try prepareOutput(id)
             }
             guard let player else { return }
+            rebufferIfDrained()
             let frames = pcm.count / 8
             let buffer = AVAudioPCMBuffer(pcmFormat: Self.format, frameCapacity: UInt32(frames))!
             buffer.frameLength = buffer.frameCapacity
@@ -181,18 +200,17 @@
                     }
                 }
             }
-            queuedFrames += frames
+            let queuedFrameCount = queuedFrameCount
+            queuedFrameCount.withLock { $0 += frames }
             let epoch = playbackEpoch
-            // Bound unrendered audio, not Bluetooth/device output latency.
+            let playerEpoch = playerEpoch
+            // Account on the audio callback thread, before hopping to a busy UI
+            // actor. Player time can include silence between scheduled buffers.
             player.scheduleBuffer(buffer, completionCallbackType: .dataRendered) { [weak self] _ in
+                queuedFrameCount.withLock { $0 -= frames }
                 Task { @MainActor in
-                    guard let self, self.owner == id, self.playbackEpoch == epoch else { return }
-                    self.queuedFrames = max(0, self.queuedFrames - frames)
-                    if self.queuedFrames == 0, self.isPlaying {
-                        self.underruns += 1
-                        self.player?.pause()
-                        self.isPlaying = false
-                    }
+                    guard let self, self.owner == id, self.playbackEpoch == epoch, self.playerEpoch == playerEpoch else { return }
+                    self.rebufferIfDrained()
                 }
             }
             if !isPlaying {
@@ -204,7 +222,9 @@
                         do {
                             try await Task.sleep(for: .seconds(Double(BrowserAudioBuffering.prebufferFrames) / RemoteBrowserAudio.sampleRate))
                         } catch { return }
-                        guard let self, self.owner == id, self.playbackEpoch == epoch else { return }
+                        guard
+                            !Task.isCancelled, let self, self.owner == id,
+                            self.playbackEpoch == epoch, self.playerEpoch == playerEpoch else { return }
                         self.beginPlayback()
                     }
                 }
@@ -219,6 +239,21 @@
             isPlaying = true
         }
 
+        private func rebufferIfDrained() {
+            guard isPlaying, queuedFrames == 0 else { return }
+            underruns += 1
+            resetPlayer()
+        }
+
+        private func resetPlayer() {
+            // A retired player's callbacks keep their own counter, including
+            // callbacks invoked by stop() while cancelling scheduled buffers.
+            playerEpoch = UUID()
+            queuedFrameCount = OSAllocatedUnfairLock(initialState: 0)
+            player?.stop()
+            isPlaying = false
+        }
+
         private func resetPlayback() {
             playbackEpoch = UUID()
             task?.cancel()
@@ -227,10 +262,8 @@
             continuation = nil
             prebufferTask?.cancel()
             prebufferTask = nil
-            player?.stop()
-            isPlaying = false
+            resetPlayer()
             pendingFrames = 0
-            queuedFrames = 0
         }
     }
 #endif

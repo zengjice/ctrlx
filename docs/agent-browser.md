@@ -753,16 +753,23 @@ batches only when that budget is exceeded; ordinary terminal send-queue bursts
 no longer discard audio at the connection boundary. Stopping a stream cancels
 both capture and delivery and clears unsent batches.
 
-The Viewer budgets pending decode and unrendered playback together at 24,576
-frames (512 ms), rather than dropping by message count. It starts playback after
-12,288 frames (256 ms) accumulate, with the same 256 ms deadline so short sounds
+The Viewer budgets pending decode and unrendered playback together at 49,152
+frames (1024 ms), rather than dropping by message count. It starts playback after
+24,576 frames (512 ms) accumulate, with the same 512 ms deadline so short sounds
 also play. This absorbs grouped network delivery at the cost of a modest start
 delay; it does not change pitch or playback speed.
-An empty player pauses and prebuffers again. Overflow or a sequence gap resets
-the decoder and playback epoch before buffering the newest batch. Retired decode
-results, playback callbacks and timers cannot affect the replacement epoch.
-Only unrendered audio counts against the budget; device/Bluetooth latency does
-not. Playback uses the fixed sample rate without speed changes to catch up.
+An empty player resets its sample timeline and prebuffers again. Overflow resets
+the decoder and playback epoch before buffering the newest batch. A sequence gap
+resets only the AAC decoder when that batch reaches decode; earlier queued PCM
+and pending batches remain playable instead of being discarded as well.
+Retired decode results, playback callbacks and timers cannot affect a replacement
+stream or player run. Each run owns a synchronized frame counter; `dataRendered`
+callbacks decrement it before hopping to the UI actor. A busy UI actor therefore
+does not retain completed buffers as backlog. Partially rendered buffers remain
+charged at their full size until completion; device/Bluetooth latency does not
+count. Only confirmed completion permits an underrun reset: the player's sample
+clock also includes silent gaps and cannot establish that queued PCM is exhausted.
+Playback uses the fixed sample rate without speed changes to catch up.
 Host send drops and Viewer dropped-frame/underrun/resynchronization counts are
 logged at stream teardown; native capture status also includes dropped frames.
 These are local changes to Host and shared Mac/iOS playback; wire fields and
@@ -773,13 +780,16 @@ synchronized high-frame-rate video transport or audio tracks to recordings.
 `tests/browser_audio.py` exercises capture, playback takeover, mute, release,
 bounded buffering, page isolation and closing a playing page in the signed
 isolated probe App. Swift `BrowserAudio` tests cover AAC, wire/control identity
-and playback lifecycle. Offline-engine regressions verify six-batch bursts, the combined frame budget,
+and playback lifecycle. Offline-engine regressions verify concentrated batches, the combined frame budget,
 prebuffer deadlines, underrun recovery, sequence gaps and queue draining without
-device-playback callbacks. A slow-send Host test checks bounded capture progress
+waiting for main-actor completion callbacks. A forced drain between the queue
+check and the next buffer submission verifies that the remaining audio is retained.
+A slow-send Host test checks bounded capture progress
 and cancellation; the native ring regression checks 100 ms polling and recovery
 after a 280 ms polling stall without loss. Continuous offline playback checks
-200 ms delivery bursts with up to 80 ms additional jitter at 44.1, 48 and 96 kHz
-device rates. Codec tests also check stereo pitch and duration.
+200/400 ms delivery bursts with up to 80/160 ms additional jitter at 44.1, 48 and 96 kHz
+device rates, checking silence gaps and waveform discontinuities as well as
+stereo pitch. Codec tests also check duration.
 Unlike Files video playback (original media, about three seconds of forward
 buffering), Browser audio is recaptured and encoded live with a bounded
 low-latency queue. Its continuity depends on timely capture and delivery, not
