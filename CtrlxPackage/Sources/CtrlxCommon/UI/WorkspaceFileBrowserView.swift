@@ -214,9 +214,10 @@
             VStack(spacing: 8) {
                 HStack {
                     Button { tab.navigate(tab.path.map { ($0 as NSString).deletingLastPathComponent }) } label: {
-                        Label("Up", symbol: .arrowUpCircleFill).labelStyle(.iconOnly)
+                        Label("Parent Directory", symbol: .arrowTurnLeftUp).labelStyle(.iconOnly)
                     }
                     .disabled(tab.path == nil || tab.path == "/")
+                    .help("Go to Parent Directory")
                     Button { tab.navigate(tab.homeDirectory) } label: { Label("Home", symbol: .house).labelStyle(.iconOnly) }
                     TextField("Host directory", text: $tab.pathInput)
                         .textFieldStyle(.roundedBorder)
