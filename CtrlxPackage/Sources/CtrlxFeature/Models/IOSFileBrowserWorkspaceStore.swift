@@ -71,33 +71,39 @@ final class IOSFileBrowserWorkspaceStore {
         captureHost(state.pairId)
         let previousCatalog = catalogs[state.pairId]
         let catalog = ViewerWorkspaceCatalog(state: state)
+        let liveFiles = Dictionary((state.fileTabs ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var retained: [UUID: FileBrowserTab] = [:]
         // A rename retains its private presentation, but a new Host or tmux
         // incarnation gets fresh views and input endpoints.
         for key in workspaces.keys.filter({ $0.hostID == state.pairId }) {
             guard let workspace = workspaces[key] else { continue }
             let reference = workspace.recoveryReference
+            let sessionName = reference.flatMap { catalog?.sessionName(for: $0) }
+            let keepsSession = reference == catalog?.reference(sessionName: key.sessionName) || sessionName != nil
             let retainedResource = reference.map { ref in
                 catalog?.scope.hostID == ref.hostID && catalog?.resourceSessions.contains(where: { $0.id == ref.sessionID }) == true
             } ?? false
+            // Retain before removing a source session whose last window moved away.
+            if workspace.recoveryScope == catalog?.scope || retainedResource {
+                for tab in workspace.tabs where tab.hostTab != nil {
+                    guard let descriptor = liveFiles[tab.id], keepsSession || descriptor.sessionName != key.sessionName else { continue }
+                    retained[tab.id] = tab
+                }
+            }
             if workspace.recoveryScope != catalog?.scope && !retainedResource {
-                remove(key, save: false)
-            } else if let reference, let name = catalog?.sessionName(for: reference) {
+                remove(key, save: false, retaining: retained)
+            } else if let name = sessionName {
                 workspace.recoveryScope = catalog?.scope
                 if name != key.sessionName {
                     workspaces.removeValue(forKey: key)
                     workspaces[Key(hostID: key.hostID, sessionName: name)] = workspace
                 }
             } else if reference != catalog?.reference(sessionName: key.sessionName) {
-                remove(key, save: false)
+                remove(key, save: false, retaining: retained)
             }
         }
         catalogs[state.pairId] = catalog
         clients[state.pairId] = client
-        let retained = Dictionary(
-            workspaces.filter { $0.key.hostID == state.pairId }.values
-                .flatMap(\.tabs).filter { $0.hostTab != nil }.map { ($0.id, $0) },
-            uniquingKeysWith: { first, _ in first }
-        )
         var sessions = Dictionary(grouping: TmuxWindow.groupPanes(Array(state.paneStates.values)), by: \.sessionName)
         for session in state.independentResources?.sessions ?? [] where sessions[session.name] == nil {
             sessions[session.name] = []
@@ -109,7 +115,7 @@ final class IOSFileBrowserWorkspaceStore {
             if let existing = workspaces[key], existing.recoveryReference == reference {
                 workspace = existing
             } else {
-                remove(key, save: false)
+                remove(key, save: false, retaining: retained)
                 workspace = IOSFileBrowserWorkspace()
                 workspaces[key] = workspace
                 workspace.recoveryReference = reference
@@ -142,7 +148,7 @@ final class IOSFileBrowserWorkspaceStore {
             }
         }
         for key in workspaces.keys.filter({ $0.hostID == state.pairId && sessions[$0.sessionName] == nil }) {
-            remove(key, save: false)
+            remove(key, save: false, retaining: retained)
         }
         scheduleSave()
     }
@@ -152,10 +158,18 @@ final class IOSFileBrowserWorkspaceStore {
         for (key, workspace) in workspaces where key.hostID == hostID {
             workspace.isResourceOnlySession = false
             for tab in workspace.tabs {
-                tab.releasePreview()
+                tab.releaseResources()
             }
         }
         scheduleSave()
+    }
+
+    func cancelUploads() {
+        for workspace in workspaces.values {
+            for tab in workspace.tabs {
+                tab.cancelUploads()
+            }
+        }
     }
 
     func removeHost(_ hostID: String) {
@@ -183,7 +197,7 @@ final class IOSFileBrowserWorkspaceStore {
         recoveryError = nil
     }
 
-    private func remove(_ key: Key, save: Bool = true) {
+    private func remove(_ key: Key, save: Bool = true, retaining retained: [UUID: FileBrowserTab] = [:]) {
         guard let workspace = workspaces.removeValue(forKey: key) else { return }
         if save {
             workspace.save()
@@ -193,7 +207,9 @@ final class IOSFileBrowserWorkspaceStore {
             if tab.hostTab == nil {
                 tab.reconcileSource(windows: [])
             }
-            tab.releasePreview()
+            if retained[tab.id] !== tab {
+                tab.releaseResources()
+            }
         }
     }
 

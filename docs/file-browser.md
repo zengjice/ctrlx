@@ -568,10 +568,15 @@ Files transfer sequentially, at most 1 GiB each, with filename/byte progress and
 Cancel above the directory/preview. Successful files refresh the listing; there
 is no automatic preview or insertion into terminal input. Existing names (also
 directories or symlinks) are never replaced. Failed files are reported in the
-completion summary and remaining selections continue. Closing/hiding the tab,
-disconnecting, or backgrounding iOS cancels unfinished work; already completed
-files remain. Folder uploads, drag-and-drop, background transfers and resume
-are not supported.
+completion summary and remaining selections continue. Each Files tab owns its
+file/image upload task, progress and summary. Switching tabs, moving workbenches
+or rebuilding the Files view keeps uploading to the captured directory; returning
+shows the same progress without starting a second upload. Navigating to another
+directory cannot redirect an in-progress upload. Cancel, closing the tab,
+disconnecting or backgrounding iOS cancels unfinished work; already completed
+files remain. Cancellation keeps the upload slot occupied until reader/Host
+cleanup finishes. Folder uploads, drag-and-drop, OS background transfers and
+resuming interrupted uploads are not supported.
 
 `FileBrowserUploadReader` uses the system file-picker access grant to prepare an
 `NSFileCoordinator.forUploading` snapshot off the UI actor. It waits for coordinated

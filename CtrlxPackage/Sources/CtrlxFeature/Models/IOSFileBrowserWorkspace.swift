@@ -102,7 +102,9 @@ final class IOSFileBrowserWorkspace {
     func syncHostTabs(_ descriptors: [HostFileTab], retained: [UUID: FileBrowserTab] = [:]) {
         let ids = Set(descriptors.map(\.id))
         for tab in tabs where tab.hostTab != nil && !ids.contains(tab.id) {
-            tab.releasePreview()
+            if retained[tab.id] !== tab {
+                tab.releaseResources()
+            }
         }
         tabs.removeAll { $0.hostTab != nil && !ids.contains($0.id) }
         for descriptor in descriptors {
@@ -134,6 +136,7 @@ final class IOSFileBrowserWorkspace {
     }
 
     func close(_ id: UUID) {
+        tabs.first { $0.id == id }?.releaseResources()
         tabs.removeAll { $0.id == id }
         if selectedID == id {
             selectedID = nil

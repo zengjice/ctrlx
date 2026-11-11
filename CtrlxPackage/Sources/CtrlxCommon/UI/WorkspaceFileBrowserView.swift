@@ -16,9 +16,6 @@
         @FocusState private var searchFocused: Bool
         @Dependency(ClipboardClient.self) private var clipboard
         @Environment(\.scenePhase) private var scenePhase
-        @State private var upload = FileBrowserUpload()
-        @State private var uploadRequest: UploadRequest?
-        @State private var imageUploadRequest: ImageUploadRequest?
         @State private var destination: Destination?
         @State private var showsImporter = false
         @State private var showsFolderPrompt = false
@@ -30,18 +27,6 @@
         private struct Destination {
             let path: String
             let source: FileBrowserSource
-        }
-
-        private struct UploadRequest: Identifiable {
-            let id = UUID()
-            let destination: Destination
-            let urls: [URL]
-        }
-
-        private struct ImageUploadRequest {
-            let id = UUID()
-            let destination: Destination
-            let content: WorkspaceClipboardContent
         }
 
         private struct FolderRequest: Identifiable {
@@ -56,28 +41,28 @@
         }
 
         public var body: some View {
+            let upload = tab.uploadSession.upload
             VStack(spacing: 0) {
                 navigation.disabled(isAnnotating)
-                if upload.isRunning {
+                if tab.uploadSession.isRunning {
                     HStack {
                         VStack(alignment: .leading) {
                             Text(upload.filename).lineLimit(1)
-                            if let path = uploadRequest?.destination.path {
+                            if let path = tab.uploadSession.directory {
                                 Text("To: \(path)").font(.caption).foregroundStyle(.secondary).lineLimit(2)
                             }
                             ProgressView(value: Double(upload.sentBytes), total: Double(max(1, upload.totalBytes)))
                             Text("\(upload.sentBytes.formatted(.byteCount(style: .file))) / \(upload.totalBytes.formatted(.byteCount(style: .file)))")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
-                        Button("Cancel") {
-                            uploadRequest = nil
-                            imageUploadRequest = nil
-                        }
+                        Button("Cancel") { tab.cancelUploads() }
+                            .accessibilityIdentifier("file-upload-cancel")
                     }.padding(10)
                 } else if let summary = upload.summary {
                     ScrollView {
                         Text(summary).font(.caption).textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading).padding(10)
+                            .accessibilityIdentifier("file-upload-summary")
                     }.frame(maxHeight: 90)
                 }
                 if folderRequest != nil {
@@ -106,80 +91,60 @@
             .task(id: previewKey) {
                 await tab.loadPreview(source: source)
             }
-            .task(id: uploadRequest?.id) {
-                guard let request = uploadRequest else { return }
-                await upload.run(urls: request.urls, directory: request.destination.path, source: request.destination.source) {
-                    tab.refresh += 1
-                }
-                if uploadRequest?.id == request.id {
-                    uploadRequest = nil
-                }
-            }
             .task(id: folderRequest?.id) { await createFolder() }
-            .task(id: imageUploadRequest?.id) {
-                guard let request = imageUploadRequest else { return }
-                await upload.run(image: request.content, directory: request.destination.path, source: request.destination.source) {
-                    tab.refresh += 1
-                }
-                if imageUploadRequest?.id == request.id {
-                    imageUploadRequest = nil
-                }
-            }
             #if os(macOS)
-            .onPasteCommand(of: [.png, .jpeg, .tiff]) { _ in pasteImage() }
+                .onPasteCommand(of: [.png, .jpeg, .tiff]) { _ in pasteImage() }
             #endif
-            .onDisappear {
-                tab.suspendPreview()
-                // The iOS document picker can cover this view without closing its tab.
-                if !showsImporter {
-                    cancelWrites()
-                }
-            }
-            .onChange(of: source.unavailableReason) { _, reason in
-                if reason != nil {
-                    cancelWrites()
-                }
-            }
-            .onChange(of: source.id) { _, _ in cancelWrites() }
-            .onChange(of: source.connectionID) { _, _ in cancelWrites() }
-            .onChange(of: scenePhase) { _, phase in
-                #if os(iOS)
-                    if phase == .background {
-                        cancelWrites()
+                .onDisappear {
+                    tab.suspendPreview()
+                    // The iOS document picker can cover this view without closing its tab.
+                    if !showsImporter {
+                        cancelPendingActions()
                     }
-                #endif
-            }
-            .alert("New Folder", isPresented: $showsFolderPrompt) {
-                TextField("Folder name", text: $folderName)
-                #if os(iOS)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                #endif
-                Button("Cancel", role: .cancel) { destination = nil }
-                Button("Create") {
-                    if let destination {
-                        folderRequest = .init(destination: destination, name: folderName)
-                    }
-                }.disabled(!SessionDirectoryName.isValid(folderName))
-            } message: {
-                Text("Create in \(destination?.path ?? ""). Enter one folder name, without /.")
-            }
-            .fileImporter(isPresented: $showsImporter, allowedContentTypes: [.data], allowsMultipleSelection: true) { result in
-                guard let target = destination, target.source.id == source.id, source.unavailableReason == nil else { return }
-                destination = nil
-                switch result {
-                case let .success(urls):
-                    if !urls.isEmpty {
-                        uploadRequest = .init(destination: target, urls: urls)
-                    }
-                case let .failure(error): actionMessage = error.localizedDescription
                 }
-            }
-            .onChange(of: tab.searchFocusRequest, initial: true) { _, value in
-                if value > 0 {
-                    searchFocused = true
+                .onChange(of: source.unavailableReason) { _, _ in sourceChanged() }
+                .onChange(of: source.uploadUnavailableReason) { _, _ in sourceChanged() }
+                .onChange(of: source.id) { _, _ in sourceChanged() }
+                .onChange(of: source.connectionID) { _, _ in sourceChanged() }
+                .onChange(of: scenePhase) { _, phase in
+                    #if os(iOS)
+                        if phase == .background {
+                            tab.cancelUploads()
+                            cancelPendingActions()
+                        }
+                    #endif
                 }
-            }
+                .alert("New Folder", isPresented: $showsFolderPrompt) {
+                    TextField("Folder name", text: $folderName)
+                    #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    #endif
+                    Button("Cancel", role: .cancel) { destination = nil }
+                    Button("Create") {
+                        if let destination {
+                            folderRequest = .init(destination: destination, name: folderName)
+                        }
+                    }.disabled(!SessionDirectoryName.isValid(folderName))
+                } message: {
+                    Text("Create in \(destination?.path ?? ""). Enter one folder name, without /.")
+                }
+                .fileImporter(isPresented: $showsImporter, allowedContentTypes: [.data], allowsMultipleSelection: true) { result in
+                    guard let target = destination, target.source.id == source.id, source.unavailableReason == nil else { return }
+                    destination = nil
+                    switch result {
+                    case let .success(urls):
+                        if !urls.isEmpty {
+                            startUpload(.files(urls), destination: target)
+                        }
+                    case let .failure(error): actionMessage = error.localizedDescription
+                    }
+                }
+                .onChange(of: tab.searchFocusRequest, initial: true) { _, value in
+                    if value > 0 {
+                        searchFocused = true
+                    }
+                }
         }
 
         private struct PreviewKey: Hashable {
@@ -310,7 +275,7 @@
         }
 
         private var writesBusy: Bool {
-            uploadRequest != nil || imageUploadRequest != nil || upload.isRunning || folderRequest != nil
+            tab.uploadSession.isRunning || folderRequest != nil
         }
 
         private func pasteImage() {
@@ -318,7 +283,7 @@
             do {
                 let content = try clipboard.workspaceContent()
                 guard content.kind != .text else { throw FileBrowserError.message("Copy an image to save it in this directory.") }
-                imageUploadRequest = ImageUploadRequest(destination: destination, content: content)
+                startUpload(.image(content), destination: destination)
             } catch { actionMessage = error.localizedDescription }
             self.destination = nil
         }
@@ -330,9 +295,18 @@
             return true
         }
 
-        private func cancelWrites() {
-            uploadRequest = nil
-            imageUploadRequest = nil
+        private func startUpload(_ input: FileBrowserUploadSession.Input, destination: Destination) {
+            tab.uploadSession.start(input, directory: destination.path, source: destination.source) { [weak tab] in
+                tab?.refresh += 1
+            }
+        }
+
+        private func sourceChanged() {
+            tab.uploadSession.configure(source: source)
+            cancelPendingActions()
+        }
+
+        private func cancelPendingActions() {
             folderRequest = nil
             destination = nil
             showsImporter = false

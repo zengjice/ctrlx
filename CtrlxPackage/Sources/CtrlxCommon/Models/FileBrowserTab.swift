@@ -57,6 +57,7 @@ final public class FileBrowserTab: Identifiable {
     @ObservationIgnored private var previewID = UUID()
     @ObservationIgnored let previewSession = FileBrowserPreviewSession()
     let openSession = FileBrowserOpenSession()
+    let uploadSession = FileBrowserUploadSession()
 
     public init(id: UUID = UUID(), path: String? = nil, sourcePaneID: String? = nil) {
         self.id = id
@@ -71,6 +72,7 @@ final public class FileBrowserTab: Identifiable {
     }
 
     isolated deinit {
+        uploadSession.cancel()
         openSession.cancel()
         previewSession.close()
     }
@@ -137,6 +139,16 @@ final public class FileBrowserTab: Identifiable {
         previewData = nil
         previewURL = nil
         isPreviewLoading = false
+    }
+
+    public func cancelUploads() {
+        uploadSession.cancel()
+    }
+
+    /// Closing a tab or losing its Host also stops writes, including while hidden.
+    public func releaseResources() {
+        cancelUploads()
+        releasePreview()
     }
 
     func suspendPreview() {
@@ -242,6 +254,8 @@ final public class FileBrowserTab: Identifiable {
     }
 
     public func load(source: FileBrowserSource) async {
+        guard !Task.isCancelled else { return }
+        uploadSession.configure(source: source)
         let token = UUID()
         loadID = token
         error = nil
