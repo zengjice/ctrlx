@@ -5,7 +5,7 @@ import SwiftUI
 /// Visual indicator for an agent session's current state:
 /// - Needs attention: orange bell badge
 /// - Working: spinning progress indicator
-/// - Idle: gray moon
+/// - Idle: gray sparkles
 public struct SessionStatusIndicator: View {
     private enum DisplayState {
         case attention
@@ -45,7 +45,7 @@ public struct SessionStatusIndicator: View {
             case .working:
                 WorkingSpinner()
             case .idle:
-                Symbols.moonFill.image
+                Symbols.sparkles.image
                     .foregroundStyle(.secondary)
             }
         }

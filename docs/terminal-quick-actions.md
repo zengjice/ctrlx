@@ -413,6 +413,12 @@ height across the live terminal. The animation never wraps the terminal or keybo
 fade only, and Reduce Transparency uses an opaque, legible surface. The phrase
 editor hides its Form background so it does not obscure the shared material.
 
+## Session list status icons
+
+Mac Host, Mac Viewer and iOS use sparkles for idle sessions, a spinner while
+working, and an orange bell when attention is needed. Plain terminals without
+a CLI state override retain their terminal icon.
+
 ## iOS model controls
 
 Agent tabs have an independent **Model** button in the bottom input toolbar's
