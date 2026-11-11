@@ -270,6 +270,14 @@ public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendabl
         }
     }
 
+    /// The legacy participants field stores Agent names, not user-defined role aliases.
+    public mutating func updateAgentNames(from instances: [AgentWorkflowInstance]) {
+        guard let participants else { return }
+        self.participants = participants.map { agent in
+            .init(agentInstanceID: agent.id, name: AgentWorkflowWire.boundedName(instance(for: agent.id, in: instances)?.displayName ?? "Agent unavailable"))
+        }
+    }
+
     public var usesSteps: Bool {
         participants != nil || nodes.contains { $0.initialTask != nil }
             || edges.contains { !$0.includesResult } || loop?.entryNodeID != nil || loop?.includesResult == false
@@ -321,10 +329,10 @@ public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendabl
             Set(agents.map(\.id)).count == agents.count,
             agents.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
             agentInstanceIDs.isSubset(of: Set(agents.map(\.id))) else {
-            throw AgentWorkflowError("Choose distinct named Agent participants and bind every Agent step to one of them.")
+            throw AgentWorkflowError("Choose distinct Agents and bind every Agent step to one of them.")
         }
         guard nodes.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
-            throw AgentWorkflowError("Each node needs a role name.")
+            throw AgentWorkflowError("Each step needs a name.")
         }
         for node in nodes {
             if let selection = node.modelSelection {

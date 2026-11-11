@@ -354,7 +354,7 @@ final class SessionFileTabsState {
         let wasSelectedLeft = selectedFileTabId == id && !rightSide.contains(.file(id))
         let result = FileTabCloseResult(wasSelectedLeft: wasSelectedLeft, origin: wasSelectedLeft ? openFileTabs[index].origin : nil)
         openFileTabs.remove(at: index)
-        directoryTabs.removeValue(forKey: id)?.releasePreview()
+        directoryTabs.removeValue(forKey: id)?.releaseResources()
         scrollOffsets.removeValue(forKey: id)
         tabOrder.removeAll { $0 == .file(id) }
         rightSide.remove(.file(id))

@@ -65,9 +65,11 @@ struct TerminalContainerView: NSViewRepresentable {
     @Environment(\.terminalViewportInteraction) private var viewportInteraction
     @Environment(\.terminalContentMenu) private var contextMenu
 
-    private var openPathAction: (@MainActor (String) -> Void)? {
+    private var openPathAction: (@MainActor (String, NSEvent.ModifierFlags) -> Void)? {
         guard let openFileLink else { return nil }
-        return { path in openFileLink(.init(path: path, paneID: paneState.paneId, hostID: nil, prefersPreview: !NSEvent.modifierFlags.contains(.option), opensNewTab: NSEvent.modifierFlags.contains(.option))) }
+        return { path, modifiers in
+            openFileLink(.init(path: path, paneID: paneState.paneId, hostID: nil, prefersPreview: modifiers.intersection([.command, .option]).isEmpty, opensNewTab: modifiers.contains(.option)))
+        }
     }
 
     func makeCoordinator() -> Coordinator {

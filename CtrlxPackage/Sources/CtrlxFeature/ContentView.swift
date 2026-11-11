@@ -139,6 +139,9 @@
         }
 
         private func handleScenePhaseChange(_ phase: ScenePhase) {
+            if phase == .background {
+                fileWorkspaces.cancelUploads()
+            }
             if phase != .active {
                 foregroundBadgeHosts.removeAll()
                 Task { await fileWorkspaces.flushRecovery() }

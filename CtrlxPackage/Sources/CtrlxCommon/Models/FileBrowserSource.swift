@@ -98,10 +98,12 @@ public struct FileBrowserSource {
                 }
                 guard connection.relayClient.fileTransferEpoch == epoch else { throw FileBrowserError.message("Upload connection changed. Choose the files again.") }
             }
+            guard connection.relayClient.fileTransferEpoch == epoch else { throw FileBrowserError.message("Host connection changed. Try again.") }
             try Task.checkCancellation()
             let binding = operation.usesSourcePane ? inputBinding : nil
             let response = try await connection.relayClient.sendCommand(BrowseFiles(operation), paneId: paneID ?? "", timeout: 10, inputBinding: binding).get()
             try Task.checkCancellation()
+            guard connection.relayClient.fileTransferEpoch == epoch else { throw FileBrowserError.message("Host connection changed. Try again.") }
             if let binding, let paneID {
                 _ = try binding.expectedPane(current: connection.relayClient.workspaceInputState.binding(paneID: paneID))
             }

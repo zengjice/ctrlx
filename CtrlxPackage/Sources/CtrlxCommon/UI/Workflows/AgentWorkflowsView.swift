@@ -260,9 +260,10 @@ struct AgentWorkflowConfigurationView: View {
                 Section("Participating Agents") {
                     ForEach(definition.agents) { participant in
                         VStack(alignment: .leading) {
-                            Text(participant.name).font(.headline)
-                            Text(definition.instance(for: participant.id, in: instances)?.displayName ?? "Agent unavailable")
-                                .font(.caption).foregroundStyle(.secondary)
+                            Text(definition.instance(for: participant.id, in: instances)?.displayName ?? "Agent unavailable").font(.headline)
+                            if let instance = definition.instance(for: participant.id, in: instances) {
+                                Text(instance.workingDirectory).font(.caption).foregroundStyle(.secondary)
+                            }
                         }
                     }
                 }
@@ -300,7 +301,7 @@ struct AgentWorkflowConfigurationView: View {
                     Button("Start workflow…") { showingStart = true }
                         .disabled(busy || !endpoint.isConnected)
                 } footer: {
-                    Text("Starting authorizes these Agent instances to exchange task results and the listed roles to request completion. Other instances receive no access.")
+                    Text("Starting authorizes these Agents to exchange task results. Steps with finish permission can request completion. Other instances receive no access.")
                 }
                 Section {
                     Button("Delete configuration", role: .destructive) { confirmingDelete = true }
@@ -349,7 +350,7 @@ struct AgentWorkflowConfigurationView: View {
             if node.kind == .content {
                 Text("Content node").font(.caption).foregroundStyle(.secondary)
             } else if let instance = definition.instance(for: node.agentInstanceID, in: instances) {
-                Text("\(definition.agents.first { $0.id == instance.id }?.name ?? instance.displayName) · \(instance.displayName) · \(instance.readiness.title)")
+                Text("\(instance.displayName) · \(instance.readiness.title)")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
                 Text("Agent unavailable").font(.caption).foregroundStyle(.secondary)

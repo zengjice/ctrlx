@@ -314,6 +314,13 @@ final class WorkspaceViewerRecovery {
 
     func suspend(_ hostID: String, windows: DetachedTerminalWindows) {
         _ = capture(windows: windows)
+        for store in [windows.mainTabs] + windows.workspaces.values.map(\.tabs) {
+            for (key, tabs) in store.remote where key.hostId == hostID {
+                for tab in tabs.directoryTabs.values {
+                    tab.cancelUploads()
+                }
+            }
+        }
         // Keep the last catalog for offline presentation edits (including
         // returning a detached window to main). Only update() applies Host state.
     }

@@ -64,8 +64,8 @@ private struct AgentWorkflowModelSelectionView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
                     Button("Use current Agent settings") { choose(nil)
                         dismiss()
                     }
@@ -98,6 +98,8 @@ private struct AgentWorkflowModelSelectionView: View {
                     }
                     Button("Refresh models") { Task { await load(refresh: true) } }.disabled(loading)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
             }
             .navigationTitle("Step model")
             .toolbar {

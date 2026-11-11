@@ -9,6 +9,53 @@ import Testing
 
 @MainActor
 struct WorkspaceViewerRecoveryTests {
+    @Test("Disconnect cancels hidden Files uploads only for the affected Host")
+    func disconnectStopsOnlyTheHostsUploads() async throws {
+        let recovery = WorkspaceViewerRecovery(), windows = DetachedTerminalWindows()
+        recovery.restore(nil, windows: windows)
+        let png = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR4nGNQaPjQAMIMMAYARzIIQdQEEEMAAAAASUVORK5CYII="))
+        var started: Set<String> = [], cancelled: Set<String> = []
+        var tabs: [FileBrowserTab] = []
+        defer { tabs.forEach { $0.cancelUploads() } }
+        for host in ["pair", "other-pair"] {
+            recovery.update(state(pair: host), windows: windows)
+            let tab = FileBrowserTab(path: "/host")
+            tabs.append(tab)
+            windows.mainTabs.tabs(hostID: host, session: "project").directoryTabs[tab.id] = tab
+            let source = FileBrowserSource(id: host, paneID: nil) { operation in
+                guard case let .upload(request) = operation else { throw CancellationError() }
+                switch request {
+                case .begin: return .uploaded(offset: 0, path: nil)
+                case .append:
+                    started.insert(host)
+                    while true {
+                        try await Task.sleep(for: .seconds(1))
+                    }
+                case .cancel:
+                    cancelled.insert(host)
+                    return .uploaded(offset: 0, path: nil)
+                case .finish: throw FileBrowserError.message("A blocked upload must not finish")
+                }
+            }
+            tab.uploadSession.start(.image(.init(kind: .png, data: png)), directory: "/host", source: source) { }
+        }
+        for _ in 0..<200 where started.count < 2 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(started.count == 2)
+        recovery.suspend("pair", windows: windows)
+        for _ in 0..<200 where tabs[0].uploadSession.isRunning {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(cancelled == ["pair"])
+        #expect(!tabs[0].uploadSession.isRunning && tabs[1].uploadSession.isRunning)
+        tabs[1].cancelUploads()
+        for _ in 0..<200 where tabs[1].uploadSession.isRunning {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(cancelled == ["pair", "other-pair"])
+    }
+
     private let root = UUID()
     private let sessionID = UUID()
     private let windowIDs = [UUID(), UUID()]

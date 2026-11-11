@@ -362,7 +362,7 @@
                 interactive.isClickOnInterceptableURL(
                     at: interactive.convert(event.locationInWindow, from: nil),
                     allowedSchemes: TerminalURLDetector.defaultAllowedSchemes,
-                    includePaths: event.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty
+                    includePaths: event.modifierFlags.intersection([.shift, .control]).isEmpty
                 ) {
                 onMouseDown?()
                 return
@@ -434,9 +434,10 @@
             if shouldActivateLink, let interactive = interactiveView {
                 let point = interactive.convert(event.locationInWindow, from: nil)
                 if
-                    event.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty,
+                    event.modifierFlags.intersection([.shift, .control]).isEmpty,
                     let link = interactive.fileLink(at: point) {
-                    scheduleLinkActivation(in: interactive) { $0.onOpenPath?(link.path) }
+                    let modifiers = event.modifierFlags
+                    scheduleLinkActivation(in: interactive) { $0.onOpenPath?(link.path, modifiers) }
                     return
                 }
                 let allowed = TerminalURLDetector.defaultAllowedSchemes
@@ -720,7 +721,7 @@
         /// preferences for this click only. An explicit Host request never
         /// falls back to this device's browser.
         var onOpenURL: (@MainActor (URL, BrowserLinkBehavior?) -> Bool)?
-        var onOpenPath: (@MainActor (String) -> Void)?
+        var onOpenPath: (@MainActor (String, NSEvent.ModifierFlags) -> Void)?
 
         /// When false, the terminal won't auto-grab focus on window add or window-becomes-key.
         /// Used in multi-pane layouts where multiple terminals share one window.
@@ -2461,7 +2462,7 @@
         func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
             if link.hasPrefix("repo:") {
                 if let path = RepositoryFileLink.path(linkTarget: link) {
-                    onOpenPath?(path)
+                    onOpenPath?(path, [])
                 }
                 return
             }

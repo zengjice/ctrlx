@@ -1,12 +1,152 @@
-import CtrlxCommon
 import CtrlxNetworking
 import Dependencies
 import Foundation
 import Testing
+@testable import CtrlxCommon
 @testable import CtrlxFeature
 
 @MainActor @Suite("iOS Files workspace lifetime")
 struct IOSFileBrowserWorkspaceStoreTests {
+    @Test("Moving a live Files tab retains its upload; closing or replacing its Host/session cancels it", arguments: ["move", "close", "host", "server", "session"], [false, true])
+    func uploadCatalogLifetime(change: String, keepsSourceSession: Bool) async throws {
+        let store = IOSFileBrowserWorkspaceStore(), client = ViewerRelayClient()
+        let hostID = UUID(), replacementHostID = UUID(), sourceSessionID = UUID(), replacementSessionID = UUID(), destinationSessionID = UUID()
+        let windowIDs = [UUID(), UUID(), UUID()], paneIDs = [UUID(), UUID(), UUID()]
+        let descriptor = HostFileTab(sessionName: "source", windowID: "@1", sourcePaneID: "%1", initialDirectory: "/host/target")
+        func snapshot(updated: Bool) -> SessionStateMessage {
+            let server = updated && change == "server" ? "replacement-server" : "server"
+            let sessionID = updated && change == "session" ? replacementSessionID : sourceSessionID
+            var tab = descriptor
+            if updated, change == "move" {
+                tab.sessionName = "destination"
+            }
+            let indices = (0..<3).filter { index in
+                !updated || keepsSourceSession || (index != 1 && !(index == 0 && change == "close"))
+            }
+            let panes = indices.map { index in
+                let destination = index == 2 || (index == 0 && updated && change == "move")
+                return PaneState(
+                    paneId: "%\(index + 1)", sessionName: destination ? "destination" : "source", windowIndex: index,
+                    tmuxWindowId: "@\(index + 1)", currentPath: "/host/target", isActive: true,
+                    workspaceIdentity: .init(serverID: server, sessionID: destination ? destinationSessionID : sessionID, windowID: windowIDs[index], paneID: paneIDs[index])
+                )
+            }
+            return .init(
+                pairId: "office", paneStates: Dictionary(uniqueKeysWithValues: panes.map { ($0.paneId, $0) }),
+                supportsPaneFiles: true, fileTabs: updated && change == "close" ? [] : [tab],
+                workspaceIdentity: .init(hostID: updated && change == "host" ? replacementHostID : hostID, serverID: server)
+            )
+        }
+        let before = snapshot(updated: false), after = snapshot(updated: true)
+        try #require(ViewerWorkspaceCatalog(state: before) != nil && ViewerWorkspaceCatalog(state: after) != nil)
+        store.update(before, client: client)
+        let tab = try #require(store.workspace(hostID: "office", sessionName: "source")?.tabs.first)
+        defer { tab.cancelUploads() }
+        let png = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR4nGNQaPjQAMIMMAYARzIIQdQEEEMAAAAASUVORK5CYII="))
+        var blocked = false, allowFinish = false, cancelled = false, completed = false
+        var filename = "", begins = 0, saves = 0
+        let source = FileBrowserSource(id: "office", paneID: "%1") { operation in
+            guard case let .upload(request) = operation else { throw FileBrowserError.message("Unexpected request") }
+            switch request {
+            case let .begin(_, directory, name, _):
+                #expect(directory == "/host/target")
+                filename = name
+                begins += 1
+                return .uploaded(offset: 0, path: nil)
+            case let .append(_, offset, data):
+                blocked = true
+                while !allowFinish {
+                    try await Task.sleep(for: .milliseconds(10))
+                }
+                return .uploaded(offset: offset + data.count, path: nil)
+            case .finish:
+                completed = true
+                return .uploaded(offset: png.count, path: "/host/target/\(filename)")
+            case .cancel:
+                cancelled = true
+                return .uploaded(offset: 0, path: nil)
+            }
+        }
+        tab.uploadSession.start(.image(.init(kind: .png, data: png)), directory: "/host/target", source: source) { saves += 1 }
+        for _ in 0..<200 where !blocked {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(blocked)
+        let upload = tab.uploadSession.upload
+        store.update(after, client: client)
+        if change == "move" {
+            #expect(store.workspace(hostID: "office", sessionName: "destination")?.tabs.first === tab)
+            #expect(store.workspace(hostID: "office", sessionName: "source")?.tabs.isEmpty ?? true)
+            #expect((store.workspace(hostID: "office", sessionName: "source") != nil) == keepsSourceSession)
+            #expect(tab.uploadSession.upload === upload)
+            #expect(tab.uploadSession.directory == "/host/target")
+        } else {
+            #expect(store.workspace(hostID: "office", sessionName: "source")?.tabs.first !== tab)
+        }
+        allowFinish = true
+        for _ in 0..<200 where tab.uploadSession.isRunning {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(!tab.uploadSession.isRunning)
+        #expect(completed == (change == "move"))
+        #expect(cancelled == (change != "move"))
+        #expect(saves == (change == "move" ? 1 : 0))
+        #expect(begins == 1)
+        #expect(tab.uploadSession.upload.summary == (change == "move" ? "Image saved." : "Upload cancelled."))
+    }
+
+    @Test("Backgrounding cancels uploads in every hidden workspace; disconnect affects only its Host", arguments: [false, true])
+    func hiddenUploadsAreCancelled(background: Bool) async throws {
+        let store = IOSFileBrowserWorkspaceStore()
+        let png = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR4nGNQaPjQAMIMMAYARzIIQdQEEEMAAAAASUVORK5CYII="))
+        var started: Set<String> = [], cancelled: Set<String> = []
+        var tabs: [FileBrowserTab] = []
+        defer { tabs.forEach { $0.cancelUploads() } }
+        for host in ["office", "home"] {
+            let descriptor = descriptor()
+            store.update(state([descriptor], host: host), client: ViewerRelayClient())
+            let workspace = try #require(store.workspace(hostID: host, sessionName: "work"))
+            let tab = workspace.adopt(descriptor)
+            tabs.append(tab)
+            workspace.selectedID = nil
+            let source = FileBrowserSource(id: host, paneID: nil) { operation in
+                guard case let .upload(request) = operation else { throw CancellationError() }
+                switch request {
+                case .begin: return .uploaded(offset: 0, path: nil)
+                case .append:
+                    started.insert(host)
+                    while true {
+                        try await Task.sleep(for: .seconds(1))
+                    }
+                case .cancel:
+                    cancelled.insert(host)
+                    return .uploaded(offset: 0, path: nil)
+                case .finish: throw FileBrowserError.message("A blocked upload must not finish")
+                }
+            }
+            tab.uploadSession.start(.image(.init(kind: .png, data: png)), directory: "/host", source: source) { }
+        }
+        for _ in 0..<200 where started.count < 2 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(started.count == 2)
+        if background {
+            store.cancelUploads()
+        } else {
+            store.suspendHost("office")
+        }
+        for _ in 0..<200 where tabs[0].uploadSession.isRunning || (background && tabs[1].uploadSession.isRunning) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(cancelled == (background ? ["office", "home"] : ["office"]))
+        #expect(!tabs[0].uploadSession.isRunning)
+        #expect(tabs[1].uploadSession.isRunning == !background)
+        tabs[1].cancelUploads()
+        for _ in 0..<200 where tabs[1].uploadSession.isRunning {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
     @Test("Independent Files keeps live navigation when the last terminal server disappears")
     func independentSessionLifetime() throws {
         let store = IOSFileBrowserWorkspaceStore(), client = ViewerRelayClient()

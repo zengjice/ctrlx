@@ -38,8 +38,11 @@ also supports accessibility increment/decrement actions.
 File references resolve against the captured source terminal on the Host, then
 reuse the most recently selected human Files tab in this client window/session.
 They never rebind that tab to the source terminal. Explicit New and artifact
-preview **Open in New Files Tab** create another tab; Mac Option-click on a
-terminal file reference requests this directly; on iOS, long-press a file
+preview **Open in New Files Tab** create another tab; Mac Command-click on a
+terminal file reference opens it in Files instead of the artifact preview, and
+Option-click requests a new Files tab directly. The click's modifiers are retained
+through deferred activation, so releasing the key does not change the destination.
+On iOS, long-press a file
 reference and choose **Open in New Files Tab**. URL links create a new human
 Browser page. Files offers **Send Path to Agent…**, with an explicit live
 same-session recipient and no Return key.
@@ -568,10 +571,15 @@ Files transfer sequentially, at most 1 GiB each, with filename/byte progress and
 Cancel above the directory/preview. Successful files refresh the listing; there
 is no automatic preview or insertion into terminal input. Existing names (also
 directories or symlinks) are never replaced. Failed files are reported in the
-completion summary and remaining selections continue. Closing/hiding the tab,
-disconnecting, or backgrounding iOS cancels unfinished work; already completed
-files remain. Folder uploads, drag-and-drop, background transfers and resume
-are not supported.
+completion summary and remaining selections continue. Each Files tab owns its
+file/image upload task, progress and summary. Switching tabs, moving workbenches
+or rebuilding the Files view keeps uploading to the captured directory; returning
+shows the same progress without starting a second upload. Navigating to another
+directory cannot redirect an in-progress upload. Cancel, closing the tab,
+disconnecting or backgrounding iOS cancels unfinished work; already completed
+files remain. Cancellation keeps the upload slot occupied until reader/Host
+cleanup finishes. Folder uploads, drag-and-drop, OS background transfers and
+resuming interrupted uploads are not supported.
 
 `FileBrowserUploadReader` uses the system file-picker access grant to prepare an
 `NSFileCoordinator.forUploading` snapshot off the UI actor. It waits for coordinated
@@ -632,6 +640,13 @@ on Mac Viewer or iOS downloads a copy only after a click. Mac opens the copy in
 the default app; iOS uses Quick Look and offers **Share / Open in…** for other
 apps or Save to Files. System codec/app support still determines whether a file
 can be opened. Copies are not edited back onto the Host.
+Explicit downloads belong to the live Files tab: switching tabs or workbenches
+keeps the transfer running and restores its progress on return, even if the native
+preview cache was evicted. Mac opens or reveals the completed copy as requested;
+iOS presents the downloaded copy when the Files view is visible again. Cancel,
+closing the tab, selecting another file, refreshing or changing the source/
+connection cancels the request and removes unfinished copies. Automatic Office
+preview transfers still pause/cancel when leaving their preview.
 
 ### In-place preview annotation
 
