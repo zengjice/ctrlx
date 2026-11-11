@@ -6,6 +6,68 @@ import Testing
 struct AgentWorkflowStoreTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    @Test
+    func savingStoresSpecificAgentNamesInsteadOfRoleAliases() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        var definition = f.definition
+        definition.participants = f.instances.map { .init(agentInstanceID: $0.id, name: "Custom role") }
+        let saved = try await f.store.saveDefinition(definition, expectedRevision: definition.revision)
+        #expect(saved.agents.map(\.name) == f.instances.map(\.displayName))
+        #expect(saved.nodes == definition.nodes)
+        #expect(saved.edges == definition.edges)
+        #expect(saved.agentInstanceIDs == definition.agentInstanceIDs)
+    }
+
+    @Test(arguments: [String(repeating: "a", count: 256), String(repeating: "a", count: 262), String(repeating: "中", count: 86), String(repeating: "🙂", count: 65), String(repeating: "a", count: 255) + "🙂"])
+    func migratedAgentNamesRemainValidForSavingAndStarting(displayName: String) async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        var archive = try await f.store.snapshot()
+        archive.definitions[0].participants = f.instances.map { .init(agentInstanceID: $0.id, name: "Old role") }
+        archive.instances[0].displayName = displayName
+        let original = archive.definitions[0]
+        try JSONEncoder().encode(archive).write(to: f.file, options: .atomic)
+
+        let store = AgentWorkflowStore(fileURL: f.file, hostID: f.hostID)
+        let migrated = try #require(try await store.snapshot().definitions.first)
+        try AgentWorkflowWire.validate(migrated)
+        let storedName = try #require(migrated.agents.first?.name)
+        #expect(storedName.utf8.count <= 256)
+        #expect(!storedName.isEmpty && displayName.hasPrefix(storedName))
+        #expect(!storedName.contains("�"))
+        if displayName.utf8.count == 256 {
+            #expect(storedName == displayName)
+        }
+        #expect(migrated.nodes == original.nodes && migrated.edges == original.edges)
+        #expect(migrated.revision == original.revision + 1)
+        let reloaded = try await AgentWorkflowStore(fileURL: f.file, hostID: f.hostID).snapshot()
+        #expect(reloaded.definitions == [migrated])
+
+        var observations = f.observations
+        observations[0].displayName = displayName
+        _ = try await store.reconcile(observations)
+        let saved = try await store.saveDefinition(migrated, expectedRevision: migrated.revision)
+        try AgentWorkflowWire.validate(saved)
+        let run = try await store.start(definitionID: saved.id, expectedRevision: saved.revision, requestID: UUID(), now: now, authorizationExpiresAt: now.addingTimeInterval(3_600))
+        #expect(run.definition.agents.first?.name == storedName)
+        #expect(run.definition.agentInstanceIDs == original.agentInstanceIDs)
+        #expect(run.instances.first?.displayName == displayName)
+    }
+
+    @Test(arguments: [false, true])
+    func invalidFinalNamesAreRejectedBeforeSaving(existing: Bool) async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        var definition = existing ? f.definition : AgentWorkflowDefinition(name: "New", hostID: f.hostID, nodes: f.definition.nodes, edges: f.definition.edges, entryNodeID: f.definition.entryNodeID)
+        definition.nodes[0].name = String(repeating: "x", count: 257)
+        let before = try Data(contentsOf: f.file)
+        await #expect(throws: AgentWorkflowError.self) {
+            try await f.store.saveDefinition(definition, expectedRevision: existing ? definition.revision : nil)
+        }
+        #expect(try Data(contentsOf: f.file) == before)
+    }
+
     private struct Fixture: Sendable {
         let directory: URL
         let file: URL

@@ -5,6 +5,7 @@ import SwiftUI
 struct AgentWorkflowNewAgentView: View {
     let creation: AgentWorkflowAgentCreation
     let onCreated: (AgentWorkflowCreatedAgent) -> Void
+    @Environment(\.dismiss) private var dismiss
     @State private var selectedSession: AgentWorkflowSessionReference?
     @State private var newSessionName: String
     @State private var launching = false
@@ -18,6 +19,16 @@ struct AgentWorkflowNewAgentView: View {
 
     var body: some View {
         VStack(alignment: .leading) {
+            HStack {
+                Text("New Agent").font(.headline)
+                Spacer()
+                Button { dismiss() } label: { Label("Close", symbol: .xmark) }
+                    .labelStyle(.iconOnly)
+                    .help("Close")
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(launching)
+                    .accessibilityIdentifier("workflow-new-agent-close")
+            }.padding([.horizontal, .top])
             Picker("Session", selection: $selectedSession) {
                 Text("New session").tag(AgentWorkflowSessionReference?.none)
                 ForEach(creation.sessions) { Text($0.name).tag(Optional(AgentWorkflowSessionReference($0.identity))) }
@@ -32,7 +43,8 @@ struct AgentWorkflowNewAgentView: View {
             }
             NewAgentTabPanel(
                 configuration: configuration,
-                destinationDescription: selectedSession == nil ? "Create a session for this Agent" : nil
+                destinationDescription: selectedSession == nil ? "Create a session for this Agent" : nil,
+                showsHeader: false
             ).id(selectedSession)
         }
         .interactiveDismissDisabled(launching)

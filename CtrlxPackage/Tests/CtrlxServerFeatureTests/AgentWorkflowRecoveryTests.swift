@@ -9,6 +9,135 @@ import Testing
 struct AgentWorkflowRecoveryTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    @Test(arguments: ["over-limit", "exact-limit", "revision-growth"])
+    func nameMigrationKeepsTheArchiveAccessibleNearTheTotalLimit(scenario: String) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("workflow-name-budget-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("ledger.json")
+        let hostID = UUID()
+        let instance = AgentWorkflowInstance(
+            hostID: hostID,
+            pluginID: "codex",
+            processID: 42,
+            processRuntimeID: "runtime",
+            workspacePane: .init(serverID: "private", sessionID: UUID(), windowID: UUID(), paneID: UUID()),
+            paneID: "%1",
+            conversationID: "conversation",
+            displayName: String(repeating: "中", count: 88),
+            workingDirectory: "/fixture",
+            capabilities: .init(maximumInputBytes: 200_000),
+            readiness: .ready
+        )
+        let node = AgentWorkflowNode(name: "Task", agentInstanceID: instance.id, initialTask: .textAndAttachments)
+        var original = AgentWorkflowDefinition(
+            revision: scenario == "revision-growth" ? 9 : 1,
+            name: "Near the limit",
+            hostID: hostID,
+            nodes: [node],
+            edges: [],
+            entryNodeID: node.id,
+            participants: [.init(agentInstanceID: instance.id, name: "Reviewer")]
+        )
+        let encoder = JSONEncoder()
+        let originalBytes = try encoder.encode(original).count
+        var candidate = original
+        candidate.updateAgentNames(from: [instance])
+        candidate.revision += 1
+        let growth = try encoder.encode(candidate).count - originalBytes
+        let targetBytes = AgentWorkflowWire.maximumDefinitionBytes - (scenario == "over-limit" ? 64 : growth) + (scenario == "revision-growth" ? 1 : 0)
+        original.initialInput.text = String(repeating: "x", count: targetBytes - originalBytes)
+        try AgentWorkflowWire.validate(original)
+        candidate = original
+        candidate.updateAgentNames(from: [instance])
+        candidate.revision += 1
+        if scenario == "exact-limit" {
+            #expect(try encoder.encode(candidate).count == AgentWorkflowWire.maximumDefinitionBytes)
+        } else {
+            #expect(try encoder.encode(candidate).count > AgentWorkflowWire.maximumDefinitionBytes)
+            if scenario == "revision-growth" {
+                var beforeRevision = candidate
+                beforeRevision.revision = original.revision
+                #expect(try encoder.encode(beforeRevision).count == AgentWorkflowWire.maximumDefinitionBytes)
+            }
+        }
+        let other = AgentWorkflowNode(name: "Unrelated", content: .init(text: "Keep this configuration accessible"))
+        let unrelated = AgentWorkflowDefinition(name: "Unrelated", hostID: hostID, nodes: [other], edges: [], entryNodeID: other.id)
+        try encoder.encode(AgentWorkflowArchive(hostID: hostID, definitions: [original, unrelated], instances: [instance])).write(to: file)
+
+        let expected = scenario == "exact-limit" ? candidate : original
+        let store = AgentWorkflowStore(fileURL: file, hostID: hostID)
+        let restored = try await store.snapshot()
+        #expect(restored.definitions == [expected, unrelated])
+        for definition in restored.definitions {
+            try AgentWorkflowWire.validate(definition)
+        }
+        for _ in 0..<3 {
+            let reloaded = try await AgentWorkflowStore(fileURL: file, hostID: hostID).snapshot()
+            #expect(reloaded.definitions == restored.definitions)
+        }
+        try await store.deleteDefinition(id: unrelated.id, expectedRevision: unrelated.revision)
+        #expect(try await store.snapshot().definitions == [expected])
+        _ = try await store.reconcile([AgentWorkflowObservation(instance)])
+        let run = try await store.start(definitionID: expected.id, expectedRevision: expected.revision, requestID: UUID(), now: now, authorizationExpiresAt: now.addingTimeInterval(3_600))
+        #expect(run.definition == expected)
+        #expect(run.instances.first?.id == instance.id)
+    }
+
+    @Test
+    func anAlreadyOversizedDefinitionIsNotSilentlyKeptByNameMigration() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("workflow-invalid-name-budget-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("ledger.json")
+        var saved = try archive(completed: true)
+        saved.definitions[0].initialInput.text = String(repeating: "x", count: AgentWorkflowWire.maximumDefinitionBytes)
+        let bytes = try JSONEncoder().encode(saved)
+        try bytes.write(to: file)
+        await #expect(throws: AgentWorkflowError.self) {
+            try await AgentWorkflowStore(fileURL: file, hostID: saved.hostID).snapshot()
+        }
+        #expect(try Data(contentsOf: file) == bytes)
+    }
+
+    @Test(arguments: ["live", "historical", "missing"])
+    func roleAliasesMigrateToAgentNamesWithoutRebindingOrChangingHistory(source: String) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("workflow-agent-names-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("ledger.json")
+        let legacy = try archive(completed: true)
+        try JSONEncoder().encode(legacy).write(to: file)
+        var saved = try await AgentWorkflowStore(fileURL: file, hostID: legacy.hostID).snapshot()
+        let agent = try #require(saved.instances.first)
+        saved.definitions[0].participants = [.init(agentInstanceID: agent.id, name: "Old role alias")]
+        saved.definitions[0].revision = 4
+        var observation = AgentWorkflowObservation(agent)
+        observation.displayName = "workspace · dev"
+        saved.instances = source == "live" ? [observation.instance(hostID: saved.hostID, id: agent.id)] : []
+        if source == "missing" {
+            saved.runs = []
+        }
+        try JSONEncoder().encode(saved).write(to: file)
+
+        let store = AgentWorkflowStore(fileURL: file, hostID: saved.hostID)
+        let restored = try await store.snapshot()
+        let expectedName = source == "live" ? "workspace · dev" : source == "historical" ? agent.displayName : "Agent unavailable"
+        var expected = saved.definitions[0]
+        expected.participants = [.init(agentInstanceID: agent.id, name: expectedName)]
+        expected.revision += 1
+        #expect(restored.definitions == [expected])
+        #expect(restored.runs == saved.runs)
+        #expect(restored.schemaVersion == saved.schemaVersion)
+        #expect(restored.definitions[0].nodes == saved.definitions[0].nodes)
+        await #expect(throws: AgentWorkflowError.self) {
+            try await store.saveDefinition(saved.definitions[0], expectedRevision: 4)
+        }
+        let reloaded = try await AgentWorkflowStore(fileURL: file, hostID: saved.hostID).snapshot()
+        #expect(reloaded.definitions == restored.definitions)
+        #expect(reloaded.runs == restored.runs)
+    }
+
     private func archive(completed: Bool) throws -> AgentWorkflowArchive {
         let hostID = UUID()
         let agent = AgentWorkflowInstance(

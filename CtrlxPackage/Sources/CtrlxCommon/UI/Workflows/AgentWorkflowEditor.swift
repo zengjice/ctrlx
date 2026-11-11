@@ -54,7 +54,7 @@ struct AgentWorkflowEditor: View {
                     TextField("Workflow name", text: $draft.name)
                     DisclosureGroup(isExpanded: expansion($showingInitialTask)) {
                         taskInput("Initial task", input: $draft.initialInput)
-                        Text("Choose which steps receive the original task and attachments. You can also set the task when starting a run.")
+                        Text("Optional default task and attachments. You can also set the task when starting a run.")
                             .font(.caption).foregroundStyle(.secondary)
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
@@ -83,7 +83,6 @@ struct AgentWorkflowEditor: View {
                     DisclosureGroup(isExpanded: expansion($showingAgents)) {
                         ForEach(draft.agents) { participant in
                             VStack(alignment: .leading, spacing: 8) {
-                                TextField("Role name", text: participantName(participant.id))
                                 Picker("Agent", selection: participantBinding(participant.id)) {
                                     ForEach(instances.filter { instance in instance.id == participant.id || !draft.agents.contains(where: { $0.id == instance.id }) }) { instance in
                                         Text(instance.displayName).tag(instance.id)
@@ -105,12 +104,12 @@ struct AgentWorkflowEditor: View {
                         Button { Task { await refreshInstances() } } label: {
                             Label("Refresh Agents", symbol: .arrowClockwise)
                         }.disabled(refreshing)
-                        Text("Each participant keeps one Agent and conversation. Multiple steps can use that same Agent in sequence.")
+                        Text("Each selection binds a specific Agent and conversation. Multiple steps can use the same Agent.")
                             .font(.caption).foregroundStyle(.secondary)
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Participating Agents")
-                            Text(draft.agents.isEmpty ? "Choose an Agent when adding a step." : draft.agents.map(\.name).joined(separator: ", "))
+                            Text(draft.agents.isEmpty ? "Choose an Agent when adding a step." : draft.agents.map { agentName($0.id) }.joined(separator: ", "))
                                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                             if draft.agents.contains(where: { participant in !instances.contains { $0.id == participant.id } }), !refreshing {
                                 Text("Some Agents are unavailable. Choose a replacement.").font(.caption).foregroundStyle(.orange)
@@ -127,18 +126,18 @@ struct AgentWorkflowEditor: View {
                             TextField("Step name", text: $node.name)
                                 .accessibilityIdentifier("workflow-step-name-\(node.id)")
                             if node.kind == .agent {
-                                Picker("Run as", selection: Binding(get: { node.agentInstanceID }, set: { replacement in
+                                Picker("Agent", selection: Binding(get: { node.agentInstanceID }, set: { replacement in
                                     guard node.agentInstanceID != replacement else { return }
                                     node.agentInstanceID = replacement
                                     node.modelSelection = nil
                                 })) {
                                     ForEach(draft.agents) { participant in
-                                        Text(participant.name).tag(Optional(participant.id))
+                                        Text(agentName(participant.id)).tag(Optional(participant.id))
                                     }
                                     if !draft.agents.contains(where: { $0.id == node.agentInstanceID }) {
                                         Text("Choose a participating Agent").tag(node.agentInstanceID)
                                     }
-                                }
+                                }.accessibilityIdentifier("workflow-step-agent-\(node.id)")
                                 if let instance = instances.first(where: { $0.id == node.agentInstanceID }) {
                                     if let issue = instance.capabilityIssue {
                                         Text(issue).font(.caption).foregroundStyle(.orange)
@@ -160,9 +159,6 @@ struct AgentWorkflowEditor: View {
                                     }
                                     AgentWorkflowModelSettings(endpoint: endpoint, hostID: draft.hostID, instance: instances.first { $0.id == node.agentInstanceID }, selection: $node.modelSelection)
                                         .accessibilityIdentifier("workflow-model-\(node.id)")
-                                }
-                                Picker("Original task", selection: Binding(get: { draft.initialTask(for: node) }, set: { node.initialTask = $0 })) {
-                                    ForEach(AgentWorkflowNode.InitialTask.allCases, id: \.self) { Text($0.title).tag($0) }
                                 }
                                 NavigationLink(node.kind == .content ? "Preview output" : "Preview task input") {
                                     AgentWorkflowInputPreview(definition: draft, node: node, attachments: attachments)
@@ -197,12 +193,11 @@ struct AgentWorkflowEditor: View {
                                 }
                                 Text(targets.isEmpty ? "No downstream steps." : "Then: " + targets.map { stepTitle($0) }.joined(separator: ", "))
                                     .font(.caption).foregroundStyle(.secondary)
-                                Button("Remove step", role: .destructive) { remove(node.id) }.disabled(importing)
                             }.disclosureGroupStyle(AgentWorkflowEditorDisclosureStyle(id: "workflow-step-options-\(node.id)", disabled: importing))
                         } label: {
                             stepSummary(node)
                         }
-                        .disclosureGroupStyle(AgentWorkflowEditorDisclosureStyle(id: "workflow-step-toggle-\(node.id)", disabled: importing))
+                        .disclosureGroupStyle(AgentWorkflowEditorDisclosureStyle(id: "workflow-step-toggle-\(node.id)", disabled: importing, remove: { remove(node.id) }))
                     }
                 }
                 Section {
@@ -216,6 +211,7 @@ struct AgentWorkflowEditor: View {
                         .font(.caption).foregroundStyle(.secondary).lineLimit(2)
                     if createAgent != nil {
                         Button("New Agent tab") { showingCreation = true }.disabled(createdAgent != nil)
+                            .accessibilityIdentifier("workflow-new-agent-tab")
                     }
                     if createdAgent != nil {
                         Text("Agent created. Complete any setup in its terminal, then refresh Agents.")
@@ -232,12 +228,22 @@ struct AgentWorkflowEditor: View {
                             }
                             Toggle("Repeat rounds", isOn: Binding(get: { draft.loop != nil }, set: { enabled in
                                 draft.loop = enabled ? .init(finalNodeID: draft.nodes.last?.id ?? draft.entryNodeID) : nil
-                            }))
+                            })).accessibilityIdentifier("workflow-repeat-rounds")
+                            Picker("Repeat from", selection: Binding(get: { draft.loop?.entryNodeID ?? draft.entryNodeID }, set: { value in
+                                guard var loop = draft.loop else { return }
+                                loop.entryNodeID = value
+                                draft.loop = loop
+                            })) {
+                                ForEach(draft.nodes) { Text(stepTitle($0)).tag($0.id) }
+                            }
+                            .pickerStyle(.menu)
+                            .disabled(draft.loop == nil)
+                            .accessibilityIdentifier("workflow-repeat-from")
+                            if draft.loop == nil {
+                                Text("Enable Repeat rounds to choose where later rounds start.").font(.caption).foregroundStyle(.secondary)
+                            }
                             if draft.loop != nil {
                                 Picker("Final step", selection: Binding(get: { draft.loop?.finalNodeID ?? draft.entryNodeID }, set: { draft.loop?.finalNodeID = $0 })) {
-                                    ForEach(draft.nodes) { Text(stepTitle($0)).tag($0.id) }
-                                }
-                                Picker("Repeat from", selection: Binding(get: { draft.loop?.entryNodeID ?? draft.entryNodeID }, set: { draft.loop?.entryNodeID = $0 })) {
                                     ForEach(draft.nodes) { Text(stepTitle($0)).tag($0.id) }
                                 }
                                 Toggle("Include final output on repeat", isOn: Binding(get: { draft.loop?.includesResult ?? true }, set: { draft.loop?.includesResult = $0 }))
@@ -293,7 +299,10 @@ struct AgentWorkflowEditor: View {
         .sheet(isPresented: $showingCreation, onDismiss: { creation = nil }) {
             VStack {
                 if let creation {
-                    AgentWorkflowNewAgentView(creation: creation, preferredSession: draft.creationSession, workflowName: draft.name) { createdAgent = $0 }
+                    AgentWorkflowNewAgentView(creation: creation, preferredSession: draft.creationSession, workflowName: draft.name) {
+                        createdAgent = $0
+                        showingCreation = false
+                    }
                 } else if let error {
                     VStack {
                         Text(error).textSelection(.enabled)
@@ -302,7 +311,11 @@ struct AgentWorkflowEditor: View {
                 } else {
                     ProgressView("Loading Agent launch options…").padding()
                 }
-            }.task {
+            }
+            #if os(macOS)
+            .frame(minWidth: 480, idealWidth: 480, minHeight: 600, idealHeight: 620)
+            #endif
+            .task {
                 guard let createAgent, !loadingCreation else { return }
                 loadingCreation = true
                 error = nil
@@ -321,14 +334,14 @@ struct AgentWorkflowEditor: View {
         .sheet(isPresented: $showingReviewTemplate) {
             AgentWorkflowReviewTemplatePicker(instances: instances) { developer, reviewer in
                 AgentWorkflowReviewTemplate.apply(to: &draft, developerID: developer, reviewerID: reviewer)
+                draft.updateAgentNames(from: instances)
             }
         }
         .sheet(isPresented: $showingAgentPicker) {
             AgentWorkflowAgentPicker(instances: instances, participants: draft.agents, refreshing: refreshing, error: error, refresh: refreshInstances) { instance in
                 guard !importing else { return }
                 add(instance)
-                let name = draft.agents.first { $0.id == instance.id }?.name ?? instance.displayName
-                addNode(.init(name: "\(name) task", agentInstanceID: instance.id, initialTask: draft.nodes.isEmpty ? .textAndAttachments : .omit))
+                addNode(.init(name: AgentWorkflowWire.boundedName("\(instance.displayName) task"), agentInstanceID: instance.id, initialTask: draft.nodes.isEmpty ? .textAndAttachments : .omit))
             }
         }
         .task {
@@ -377,11 +390,11 @@ struct AgentWorkflowEditor: View {
     }
 
     private func stepSummary(_ node: AgentWorkflowNode) -> some View {
-        let role = draft.agents.first { $0.id == node.agentInstanceID }?.name ?? (node.kind == .content ? "Content" : "Choose an Agent")
+        let agent = node.agentInstanceID.map(agentName) ?? (node.kind == .content ? "Content" : "Choose an Agent")
         let upstream = draft.upstream(of: node.id).map { stepTitle($0) }
         return VStack(alignment: .leading, spacing: 4) {
             Text(stepTitle(node)).font(.headline)
-            Text(role + " · " + (node.id == draft.entryNodeID ? "Starts here" : upstream.isEmpty ? "No upstream steps" : "After " + upstream.joined(separator: ", ")))
+            Text(agent + " · " + (node.id == draft.entryNodeID ? "Starts here" : upstream.isEmpty ? "No upstream steps" : "After " + upstream.joined(separator: ", ")))
                 .font(.caption).foregroundStyle(.secondary).lineLimit(2)
             if let selection = node.modelSelection {
                 Text(selection.model + (selection.effort.map { " · \($0)" } ?? ""))
@@ -410,12 +423,8 @@ struct AgentWorkflowEditor: View {
         Binding(get: { draft.connectionMode(from: source, to: target) }, set: { draft.setConnectionMode($0, from: source, to: target) })
     }
 
-    private func participantName(_ id: UUID) -> Binding<String> {
-        Binding(get: { draft.agents.first { $0.id == id }?.name ?? "" }, set: { name in
-            if let index = draft.participants?.firstIndex(where: { $0.id == id }) {
-                draft.participants?[index].name = name
-            }
-        })
+    private func agentName(_ id: UUID) -> String {
+        instances.first { $0.id == id }?.displayName ?? "Agent unavailable · \(id.uuidString.prefix(8))"
     }
 
     private func participantBinding(_ id: UUID) -> Binding<UUID> {
@@ -423,6 +432,7 @@ struct AgentWorkflowEditor: View {
             guard replacement != id else { return }
             guard let index = draft.participants?.firstIndex(where: { $0.id == id }) else { return }
             draft.participants?[index].agentInstanceID = replacement
+            draft.participants?[index].name = AgentWorkflowWire.boundedName(agentName(replacement))
             for step in draft.nodes.indices where draft.nodes[step].agentInstanceID == id {
                 draft.nodes[step].agentInstanceID = replacement
                 draft.nodes[step].modelSelection = nil
@@ -432,7 +442,7 @@ struct AgentWorkflowEditor: View {
 
     private func add(_ instance: AgentWorkflowInstance) {
         guard !draft.agents.contains(where: { $0.id == instance.id }) else { return }
-        draft.participants = draft.agents + [.init(agentInstanceID: instance.id, name: instance.displayName)]
+        draft.participants = draft.agents + [.init(agentInstanceID: instance.id, name: AgentWorkflowWire.boundedName(instance.displayName))]
     }
 
     private func addNode(_ node: AgentWorkflowNode) {
@@ -442,10 +452,17 @@ struct AgentWorkflowEditor: View {
     }
 
     private func remove(_ nodeID: UUID) {
+        guard !importing else { return }
+        if expandedStepID == nodeID {
+            expandedStepID = nil
+        }
         draft.nodes.removeAll { $0.id == nodeID }
         draft.edges.removeAll { $0.source == nodeID || $0.target == nodeID }
         if draft.entryNodeID == nodeID {
             draft.entryNodeID = draft.nodes.first?.id ?? UUID()
+        }
+        if draft.nodes.isEmpty {
+            draft.loop = nil
         }
         if draft.loop?.entryNodeID == nodeID {
             draft.loop?.entryNodeID = draft.entryNodeID
@@ -463,6 +480,7 @@ struct AgentWorkflowEditor: View {
             let values = try await endpoint.instances(hostID: draft.hostID)
             try Task.checkCancellation()
             instances = values
+            draft.updateAgentNames(from: values)
             if let target = createdAgent, let instance = values.first(where: { target.matches($0) }) {
                 draft.creationSession = AgentWorkflowSessionReference(instance.workspacePane)
                 if !draft.agents.contains(where: { $0.id == instance.id }) {
@@ -549,26 +567,37 @@ struct AgentWorkflowEditor: View {
 private struct AgentWorkflowEditorDisclosureStyle: DisclosureGroupStyle {
     let id: String
     let disabled: Bool
+    var remove: (() -> Void)? = nil
 
     func makeBody(configuration: Configuration) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Button { configuration.isExpanded.toggle() } label: {
-                HStack(spacing: 8) {
-                    Symbols.chevronRight.image
-                        .font(.caption).foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(configuration.isExpanded ? 90 : 0))
-                        .accessibilityHidden(true)
-                    configuration.label
-                    Spacer(minLength: 0)
+            HStack {
+                Button { configuration.isExpanded.toggle() } label: {
+                    HStack(spacing: 8) {
+                        Symbols.chevronRight.image
+                            .font(.caption).foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(configuration.isExpanded ? 90 : 0))
+                            .accessibilityHidden(true)
+                        configuration.label
+                        Spacer(minLength: 0)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .multilineTextAlignment(.leading)
+                    .contentShape(Rectangle())
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .multilineTextAlignment(.leading)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .disabled(disabled)
+                .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
+                .accessibilityIdentifier(id)
+                if let remove {
+                    Button(role: .destructive, action: remove) { Label("Remove step", symbol: .trash) }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.borderless)
+                        .help("Remove step")
+                        .disabled(disabled)
+                        .accessibilityIdentifier("\(id)-remove")
+                }
             }
-            .buttonStyle(.plain)
-            .disabled(disabled)
-            .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
-            .accessibilityIdentifier(id)
             if configuration.isExpanded {
                 configuration.content.padding(.leading, 20)
             }

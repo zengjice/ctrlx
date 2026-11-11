@@ -79,6 +79,15 @@
                 try await Task.sleep(for: .milliseconds(20))
             }
             #expect(reads == 1 && selected == override)
+            for _ in 0..<100 where window.sheets.isEmpty {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            let sheet = try #require(window.sheets.first)
+            sheet.setContentSize(.init(width: 480, height: 650))
+            try await Task.sleep(for: .milliseconds(100))
+            let topControl = try await waitFor("workflow-model-inherit", window: window)
+            let topBounds = try frame(topControl)
+            #expect(sheet.frame.maxY - topBounds.maxY < 100)
             let target = mode == "apply" ? "workflow-model-apply" : mode == "inherit" ? "workflow-model-inherit" : "workflow-model-cancel"
             if mode == "stale" {
                 _ = try await waitFor("workflow-model-apply", window: window, enabled: false)
@@ -89,6 +98,12 @@
             }
             #expect(selected == (mode == "inherit" ? nil : override))
             #expect(window.sheets.isEmpty)
+        }
+
+        private func frame(_ object: NSObject) throws -> CGRect {
+            let selector = NSSelectorFromString("accessibilityFrame")
+            let method = try #require(object.method(for: selector))
+            return unsafeBitCast(method, to: (@convention(c) (AnyObject, Selector) -> CGRect).self)(object, selector)
         }
     }
 #endif

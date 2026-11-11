@@ -6,6 +6,7 @@ public enum AgentWorkflowWire {
     public static let imageEncodedBytes = 576 * 1_024
     public static let maximumDefinitionBytes = 128 * 1_024
     public static let maximumNodes = 32
+    public static let maximumNameBytes = 256
     public static let maximumPageItems = 40
     public static let textPageBytes = 32 * 1_024
     // Base64 plus JSON slash escaping still fits maximumEncodedBytes.
@@ -13,14 +14,24 @@ public enum AgentWorkflowWire {
     public static let maximumAttachments = 32
     public static let maximumContentBytes = 2 * 1_024 * 1_024
 
+    /// Automatic labels must fit the wire limit without splitting a UTF-8 scalar.
+    public static func boundedName(_ name: String) -> String {
+        var bytes = 0
+        let scalars = name.unicodeScalars.prefix { scalar in
+            bytes += scalar.utf8.count
+            return bytes <= maximumNameBytes
+        }
+        return String(String.UnicodeScalarView(scalars))
+    }
+
     public static func validate(_ definition: AgentWorkflowDefinition) throws {
         try definition.validate()
         guard
             definition.nodes.count <= maximumNodes,
             definition.agents.count <= maximumNodes,
-            definition.name.utf8.count <= 256,
-            definition.nodes.allSatisfy({ $0.name.utf8.count <= 256 }),
-            definition.agents.allSatisfy({ $0.name.utf8.count <= 256 }),
+            definition.name.utf8.count <= maximumNameBytes,
+            definition.nodes.allSatisfy({ $0.name.utf8.count <= maximumNameBytes }),
+            definition.agents.allSatisfy({ $0.name.utf8.count <= maximumNameBytes }),
             try JSONEncoder().encode(definition).count <= maximumDefinitionBytes else {
             throw AgentWorkflowError("Use at most 32 nodes, names up to 256 UTF-8 bytes, and a configuration up to 128 KiB. Import large content as attachments.")
         }
@@ -200,7 +211,7 @@ public struct AgentWorkflowRunState: Codable, Equatable, Sendable {
                 upstreamIDs: node.id == run.definition.entryNodeID(round: run.round) ? [] : run.definition.upstream(of: node.id).map(\.id),
                 invocation: run.invocations.first { $0.nodeID == node.id && $0.round == run.round }.map(AgentWorkflowInvocationSummary.init),
                 isSkipped: !run.definition.activeNodeIDs(round: run.round).contains(node.id),
-                participantName: run.definition.agents.first { $0.id == node.agentInstanceID }?.name,
+                participantName: (current ?? bound)?.displayName,
                 modelSelection: node.modelSelection
             )
         }

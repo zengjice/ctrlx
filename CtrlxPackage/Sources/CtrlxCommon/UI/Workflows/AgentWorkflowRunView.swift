@@ -150,7 +150,7 @@ struct AgentWorkflowRunView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             if let instance = node.instance {
-                Text("\(node.participantName ?? instance.displayName) · \(instance.displayName)").font(.caption).foregroundStyle(.secondary)
+                Text(instance.displayName).font(.caption).foregroundStyle(.secondary)
             } else if node.kind == .content {
                 Text("Content node").font(.caption).foregroundStyle(.secondary)
             }

@@ -63,6 +63,10 @@ struct AgentWorkflowArchive: Codable, Equatable, Sendable {
     var runs: [AgentWorkflowRun] = []
     var attachments: [AgentWorkflowAttachment]?
     var bridgeEvidence: [AgentWorkflowBridgeEvidence]?
+
+    var instancesForNames: [AgentWorkflowInstance] {
+        instances + runs.reversed().flatMap(\.instances)
+    }
 }
 
 struct AgentWorkflowCatalogChanged: LocalizedError, Sendable {
@@ -156,17 +160,18 @@ actor AgentWorkflowStore {
         try validateAttachments(definition.attachmentIDs, in: updated)
         let previousAttachments = updated.definitions.first { $0.id == definition.id }?.attachmentIDs ?? []
         var saved = definition
+        saved.updateAgentNames(from: updated.instancesForNames)
         if let index = updated.definitions.firstIndex(where: { $0.id == definition.id }) {
             guard expectedRevision == updated.definitions[index].revision else {
                 throw AgentWorkflowError("Another Viewer changed this workflow. Reload before saving.")
             }
             saved.revision = updated.definitions[index].revision + 1
-            try saved.validate()
+            try AgentWorkflowWire.validate(saved)
             updated.definitions[index] = saved
         } else {
             guard expectedRevision == nil else { throw AgentWorkflowError("The workflow was deleted. Reload before saving.") }
             saved.revision = 1
-            try saved.validate()
+            try AgentWorkflowWire.validate(saved)
             updated.definitions.append(saved)
         }
         try commit(updated)
@@ -371,6 +376,22 @@ actor AgentWorkflowStore {
                 }
             }
             loaded.runs[index] = try AgentWorkflowExecution(restoring: loaded.runs[index]).run
+        }
+        let namingInstances = loaded.instancesForNames
+        for index in loaded.definitions.indices {
+            let previous = loaded.definitions[index]
+            var candidate = previous
+            candidate.updateAgentNames(from: namingInstances)
+            if candidate != previous {
+                candidate.revision += 1
+            }
+            // Display metadata must not make an otherwise valid archive unreadable.
+            if try JSONEncoder().encode(candidate).count > AgentWorkflowWire.maximumDefinitionBytes {
+                try AgentWorkflowWire.validate(previous)
+                continue
+            }
+            try AgentWorkflowWire.validate(candidate)
+            loaded.definitions[index] = candidate
         }
         loaded.schemaVersion = 6
         try commit(loaded)

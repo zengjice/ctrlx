@@ -12,9 +12,15 @@ struct AgentWorkflowAgentPicker: View {
     @Environment(\.dismiss) private var dismiss
     @State private var search = ""
 
-    private var filtered: [AgentWorkflowInstance] {
+    private var available: [AgentWorkflowInstance] {
         instances.filter { instance in
-            search.isEmpty || [instance.displayName, instance.workingDirectory, role(for: instance)]
+            participants.isEmpty || participants.contains { $0.id == instance.id }
+        }
+    }
+
+    private var filtered: [AgentWorkflowInstance] {
+        available.filter { instance in
+            search.isEmpty || [instance.displayName, instance.workingDirectory]
                 .contains { $0.localizedCaseInsensitiveContains(search) }
         }
     }
@@ -28,10 +34,7 @@ struct AgentWorkflowAgentPicker: View {
                         dismiss()
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(role(for: instance))
-                            if role(for: instance) != instance.displayName {
-                                Text(instance.displayName).font(.caption).foregroundStyle(.secondary)
-                            }
+                            Text(instance.displayName)
                             Text(instance.workingDirectory).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -43,8 +46,13 @@ struct AgentWorkflowAgentPicker: View {
                 if filtered.isEmpty {
                     if refreshing {
                         ProgressView("Loading Agents…")
-                    } else if instances.isEmpty {
-                        ContentUnavailableView("No Agents available", symbol: .sparkles, description: "Start an Agent tab, then refresh this list.")
+                    } else if available.isEmpty {
+                        ContentUnavailableView(
+                            participants.isEmpty ? "No Agents available" : "No participating Agents available",
+                            symbol: .sparkles,
+                            description: participants.isEmpty ? "Start an Agent tab, then refresh this list." : "Refresh this list or choose a replacement in Participating Agents."
+                        )
+                        .accessibilityIdentifier("workflow-agent-picker-empty")
                     } else {
                         ContentUnavailableView.search(text: search)
                     }
@@ -68,9 +76,5 @@ struct AgentWorkflowAgentPicker: View {
         #if os(macOS)
         .frame(minWidth: 440, idealWidth: 560, minHeight: 360, idealHeight: 500)
         #endif
-    }
-
-    private func role(for instance: AgentWorkflowInstance) -> String {
-        participants.first { $0.id == instance.id }?.name ?? instance.displayName
     }
 }
