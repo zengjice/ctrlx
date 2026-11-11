@@ -11,15 +11,18 @@ import Testing
 /// by the translator / keystroke / scanner / installer suites).
 @Suite("ClaudeCodePluginCore")
 struct ClaudeCodePluginCoreTests {
-    @Test("Verified Claude recovery binds automatic support to the recorded CLI version")
-    func nativeResumeVerifiedVersion() async throws {
+    @Test("Claude recovery and workflow admit the same stable CLI range", arguments: 300...319)
+    func nativeResumeSupportedVersion(patch: Int) async throws {
+        let version = "2.1.\(patch) (Claude Code)"
         try await withDependencies {
             $0[AgentForkHistoryClient.self].root = { _, roots, _ in try #require(roots.first) }
         } operation: {
             let core = ClaudeCodePluginCore()
-            let descriptor = try await core.recoveryDescriptor(sessionID: UUID().uuidString, projectPath: "/project", invocation: .init(executable: "/tools/claude", arguments: [], version: "2.1.276 (Claude Code)"))
+            let descriptor = try await core.recoveryDescriptor(sessionID: UUID().uuidString, projectPath: "/project", invocation: .init(executable: "/tools/claude", arguments: [], version: version))
             #expect(descriptor.automaticResumeUnavailableReason == nil)
-            #expect(descriptor.cliVersion == "2.1.276 (Claude Code)")
+            #expect(descriptor.cliVersion == version)
+            #expect(await core.automaticResumeUnavailableReason(descriptor, currentVersion: version) == nil)
+            #expect(core.supportsWorkflowCLI(version))
             #expect(try await core.commandForResume(descriptor).command.args == ["--resume", descriptor.sessionID])
         }
     }

@@ -10,8 +10,9 @@ import Testing
 /// Lifecycle + auto-launch behavior of the core itself (the pieces not covered
 /// by the translator / keystroke / scanner / installer / correlation suites).
 struct CodexPluginCoreTests {
-    @Test("Verified Codex recovery disables the shared daemon", arguments: ["codex-cli 0.162.1", "codex-cli 0.166.0"])
-    func nativeResumeVerifiedVersion(version: String) async throws {
+    @Test("Codex recovery and workflow admit the same stable CLI range without the shared daemon", arguments: 160...169, [0, 1, 12])
+    func nativeResumeSupportedVersion(minor: Int, patch: Int) async throws {
+        let version = "codex-cli 0.\(minor).\(patch)"
         try await withDependencies {
             $0[AgentForkHistoryClient.self].root = { _, roots, _ in try #require(roots.first) }
         } operation: {
@@ -19,6 +20,8 @@ struct CodexPluginCoreTests {
             let descriptor = try await core.recoveryDescriptor(sessionID: UUID().uuidString, projectPath: "/project", invocation: .init(executable: "/tools/codex", arguments: [], version: version))
             #expect(descriptor.automaticResumeUnavailableReason == nil)
             #expect(descriptor.cliVersion == version)
+            #expect(await core.automaticResumeUnavailableReason(descriptor, currentVersion: version) == nil)
+            #expect(core.supportsWorkflowCLI(version))
             #expect(try await core.commandForResume(descriptor).command.args.last == "--no-daemon")
         }
     }

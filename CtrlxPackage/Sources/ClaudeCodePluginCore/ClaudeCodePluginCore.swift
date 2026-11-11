@@ -296,8 +296,23 @@ public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking,
         )
     }
 
-    /// Verified with scripts/verify-workspace-agent-resume.py (idle/interrupted/approval).
-    private static let verifiedResumeVersion = "2.1.276 (Claude Code)"
+    static let supportedAutomationCLIVersions = "Claude Code 2.1.300–2.1.319 (stable)"
+
+    static func supportsAutomationCLI(_ version: String) -> Bool {
+        version.wholeMatch(of: /2\.1\.3[01][0-9] \(Claude Code\)/) != nil
+    }
+
+    private static func automaticResumeVersionUnavailableReason(_ version: String?) -> String? {
+        guard let version, supportsAutomationCLI(version) else {
+            return "Automatic resume supports \(supportedAutomationCLIVersions); found \(version ?? "unknown version"). Choose Resume to reopen it explicitly."
+        }
+        return nil
+    }
+
+    public func automaticResumeUnavailableReason(_ descriptor: AgentResumeDescriptor, currentVersion: String?) async -> String? {
+        guard descriptor.executable != nil else { return "The original process invocation was not recorded. Choose Resume to reopen it explicitly." }
+        return Self.automaticResumeVersionUnavailableReason(currentVersion)
+    }
 
     public func recoveryDescriptor(sessionID: String, projectPath: String, invocation: AgentResumeInvocation? = nil) async throws -> AgentResumeDescriptor {
         guard UUID(uuidString: sessionID) != nil else { throw AgentForkError("Invalid Claude Code conversation ID.") }
@@ -316,8 +331,7 @@ public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking,
             executable: invocation?.executable,
             cliVersion: invocation?.version,
             arguments: arguments,
-            automaticResumeUnavailableReason: invocation?.version == Self.verifiedResumeVersion ? nil : (invocation.map { "Automatic resume has not been verified for Claude Code \($0.version ?? "unknown version")." })
-                ?? "The original process invocation was not recorded.",
+            automaticResumeUnavailableReason: invocation == nil ? "The original process invocation was not recorded." : Self.automaticResumeVersionUnavailableReason(invocation?.version),
             providerID: invocation?.providerID
         )
     }

@@ -53,7 +53,8 @@ def verify(agent, scenario, output, tmux_path, exit_and_resume=False):
     session_id = str(uuid.uuid4())
     if agent == "codex":
         env["CODEX_HOME"] = str(config)
-        (config / "config.toml").write_text(f'''model = "gpt-5.4"
+        (config / "config.toml").write_text(f'''check_for_update_on_startup = false
+model = "gpt-5.4"
 model_provider = "fixture"
 [model_providers.fixture]
 name = "Fixture"

@@ -491,15 +491,22 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         ))
     }
 
-    /// Verified with scripts/verify-workspace-agent-resume.py (idle/interrupted/approval).
-    private static let verifiedResumeVersions: Set = ["codex-cli 0.162.1", "codex-cli 0.166.0"]
+    static let supportedAutomationCLIVersions = "codex-cli 0.160.x–0.169.x (stable)"
+
+    static func supportsAutomationCLI(_ version: String) -> Bool {
+        version.wholeMatch(of: /codex-cli 0\.16[0-9]\.(0|[1-9][0-9]*)/) != nil
+    }
+
+    private static func automaticResumeVersionUnavailableReason(_ version: String?) -> String? {
+        guard let version, supportsAutomationCLI(version) else {
+            return "Automatic resume supports \(supportedAutomationCLIVersions); found \(version ?? "unknown version"). Choose Resume to reopen it explicitly."
+        }
+        return nil
+    }
 
     public func automaticResumeUnavailableReason(_ descriptor: AgentResumeDescriptor, currentVersion: String?) async -> String? {
         guard descriptor.executable != nil else { return "The original process invocation was not recorded. Choose Resume to reopen it explicitly." }
-        guard let currentVersion, Self.verifiedResumeVersions.contains(currentVersion) else {
-            return "Automatic resume has not been verified for Codex \(currentVersion ?? "unknown version"). Choose Resume to reopen it explicitly."
-        }
-        return nil
+        return Self.automaticResumeVersionUnavailableReason(currentVersion)
     }
 
     public func recoveryDescriptor(sessionID: String, projectPath: String, invocation: AgentResumeInvocation? = nil) async throws -> AgentResumeDescriptor {
@@ -525,8 +532,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
             executable: invocation?.executable,
             cliVersion: invocation?.version,
             arguments: arguments,
-            automaticResumeUnavailableReason: Self.verifiedResumeVersions.contains(invocation?.version ?? "") ? nil : (invocation.map { "Automatic resume has not been verified for Codex \($0.version ?? "unknown version")." })
-                ?? "The original process invocation was not recorded.",
+            automaticResumeUnavailableReason: invocation == nil ? "The original process invocation was not recorded." : Self.automaticResumeVersionUnavailableReason(invocation?.version),
             providerID: invocation?.providerID
         )
     }
