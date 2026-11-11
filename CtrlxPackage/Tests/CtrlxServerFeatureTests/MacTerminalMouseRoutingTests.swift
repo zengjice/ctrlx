@@ -610,6 +610,87 @@
         }
 
         @Test(
+            "File-reference clicks stay in the Files route with their captured modifiers",
+            arguments: [NSEvent.ModifierFlags(), .command, .option, [.command, .option]], [false, true]
+        )
+        func fileLinkClickDestination(modifiers: NSEvent.ModifierFlags, mouseReporting: Bool) async throws {
+            let path = "docs/readme.md"
+            for text in ["<repo:\(path)>", "(repo:\(path))", "\u{1b}]8;;repo:\(path)\u{7}Read guide\u{1b}]8;;\u{7}"] {
+                let (window, panes) = makeTerminalWindow()
+                defer { withExtendedLifetime(window) { } }
+                let view = panes[1]
+                view.feed(byteArray: Array("\u{1b}[H\u{1b}[2K\(text)\r\n".utf8)[...])
+                if mouseReporting {
+                    enableMouseMode(1_002, in: view)
+                }
+                var paths: [String] = [], urls: [URL] = []
+                var capturedModifiers: [NSEvent.ModifierFlags] = []
+                var rawInput: [Data] = []
+                view.onOpenPath = { path, flags in
+                    paths.append(path)
+                    capturedModifiers.append(flags)
+                }
+                view.onOpenURL = { url, _ in urls.append(url)
+                    return true
+                }
+                view.onRawInput = { rawInput.append($0) }
+
+                try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: modifiers)
+                #expect(paths.isEmpty)
+                try await Task.sleep(for: .seconds(NSEvent.doubleClickInterval + 0.1))
+
+                #expect(paths == [path])
+                #expect(capturedModifiers == [modifiers])
+                #expect(urls.isEmpty)
+                #expect(rawInput.isEmpty)
+            }
+        }
+
+        @Test(
+            "File-reference drag and multi-click selection never open a path or system URL",
+            arguments: [NSEvent.ModifierFlags(), .command, .option, .shift, .control], ["drag", "doubleClick", "tripleClick"]
+        )
+        func fileLinkSelection(modifiers: NSEvent.ModifierFlags, action: String) async throws {
+            let (window, panes) = makeTerminalWindow()
+            defer { withExtendedLifetime(window) { } }
+            let view = panes[1]
+            view.feed(byteArray: Array("\u{1b}[H\u{1b}[2K<repo:docs/readme.md>\r\n".utf8)[...])
+            var opened = 0
+            view.onOpenPath = { _, _ in opened += 1 }
+            view.onOpenURL = { _, _ in opened += 1
+                return true
+            }
+            if action == "drag" {
+                try drag(in: view, modifiers: modifiers)
+            } else {
+                try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: modifiers)
+                try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: modifiers, clickCount: 2)
+                if action == "tripleClick" {
+                    try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: modifiers, clickCount: 3)
+                }
+            }
+            try await Task.sleep(for: .seconds(NSEvent.doubleClickInterval + 0.1))
+            #expect(opened == 0)
+            #expect(view.getSelectedTextTrimmed() != nil)
+        }
+
+        @Test("Non-mouse repository link activation uses the default preview intent")
+        func repositoryLinkDelegate() {
+            let (window, panes) = makeTerminalWindow()
+            defer { withExtendedLifetime(window) { } }
+            let view = panes[0]
+            var paths: [String] = []
+            var modifiers: [NSEvent.ModifierFlags] = []
+            view.onOpenPath = { path, flags in
+                paths.append(path)
+                modifiers.append(flags)
+            }
+            view.requestOpenLink(source: view.terminalView, link: "repo:docs/readme.md", params: [:])
+            #expect(paths == ["docs/readme.md"])
+            #expect(modifiers == [[]])
+        }
+
+        @Test(
             "Web-link clicks retain their one-click destination through deferred activation",
             arguments: [NSEvent.ModifierFlags(), .command, .option, [.command, .option]], [false, true]
         )

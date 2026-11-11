@@ -38,8 +38,11 @@ also supports accessibility increment/decrement actions.
 File references resolve against the captured source terminal on the Host, then
 reuse the most recently selected human Files tab in this client window/session.
 They never rebind that tab to the source terminal. Explicit New and artifact
-preview **Open in New Files Tab** create another tab; Mac Option-click on a
-terminal file reference requests this directly; on iOS, long-press a file
+preview **Open in New Files Tab** create another tab; Mac Command-click on a
+terminal file reference opens it in Files instead of the artifact preview, and
+Option-click requests a new Files tab directly. The click's modifiers are retained
+through deferred activation, so releasing the key does not change the destination.
+On iOS, long-press a file
 reference and choose **Open in New Files Tab**. URL links create a new human
 Browser page. Files offers **Send Path to Agent…**, with an explicit live
 same-session recipient and no Return key.
