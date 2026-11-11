@@ -7,6 +7,42 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.159 — Persistent file transfers and simpler Agent workflows
+
+- Keep explicit file downloads and file/image uploads alive when switching Files
+  tabs or workbenches; restore progress without duplicating the transfer. Capture
+  the upload destination, retain cancellation cleanup and stop work when its tab
+  closes or its connection changes. Automatic Office previews retain their
+  existing cancellation behavior.
+  See [file transfers](docs/file-browser.md). Sources: `ea85575c`, `aa4ee1ec`.
+- Simplify workflow editing around actual Agent names, expose step deletion in
+  the overview and improve repeat-start and model/effort controls. Migrate old
+  role aliases using saved identities, preserve execution settings and reject
+  stale configuration edits.
+  See [workflow editing](docs/multi-agent-design.md). Source: `c8481e6c`.
+- Use the target Provider's model, effort and shortcut defaults for Forked Agent
+  tabs. Claude reads fresh-launch CLI settings with a bounded metadata-only
+  probe; failed resolution stops before creating a terminal. Source-tab overrides
+  are not copied, and recovery still restores its saved settings. Fork requests
+  run through the background queue so model probes cannot block Viewer input.
+  See [Fork defaults](docs/services-reference.md). Source: `77985aa7`.
+- Route Mac Command-click file references directly to Files and Option-click to
+  a new Files tab, retaining modifiers through deferred activation. Clarify the
+  parent-directory navigation icon.
+  Sources: `510f7c93`, `39a99fa7`.
+
+- Validation: focused Swift suites reported 556 tests and passed with serial
+  execution, covering retained file downloads/uploads, stale connection guards,
+  workflow editing/migration, Fork defaults/background routing and native Mac
+  terminal modifier clicks. Generated workflow UI screenshots were inspected.
+  Parallel execution first produced connection/UI/video timing failures; the
+  same selection passed serially without exclusions. Lint for 48 Swift files,
+  both boundary checks and diff checks passed.
+- Validation limits: opt-in real-Agent workflow and Files Home probes, paired
+  Viewer/iPhone interaction and Apple Intelligence evaluations were not run.
+  This release packages macOS only. Browser runtime and codec SDK are unchanged;
+  prior native media acceptance is reused after checking the SDK hash/UUID.
+
 ## 3.0.158 — Workflow continuity and remote workspace recovery
 
 - Bind workflows to persistent Host/window/pane identities so an Agent restart
