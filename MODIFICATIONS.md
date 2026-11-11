@@ -7,6 +7,37 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.158 — Workflow continuity and remote workspace recovery
+
+- Bind workflows to persistent Host/window/pane identities so an Agent restart
+  preserves configuration, navigation and active-run ownership. Keep an instance
+  snapshot per invocation; Continue retries only explicitly failed steps and
+  never replays an unconfirmed delivery. Migrate prior workflow ledgers and
+  require matching management protocol versions.
+  See [workflow identity](docs/multi-agent-design.md). Source: `4d93a8a9`.
+- Let Mac Viewers, including detached windows, request Resume, Use Shell or Retry
+  for a pending workspace pane. The Host validates its current identity and
+  recovery generation before executing the existing recovery transaction;
+  replaced targets and already-handled requests are rejected.
+  See [workspace recovery](docs/workspace-recovery-design.md). Source: `6f716ddd`.
+- Align automatic recovery with supported stable CLI ranges: Codex 0.160.x–0.169.x
+  and Claude Code 2.1.300–2.1.319. Other or unknown versions retain explicit
+  Resume. Use sparkles for idle session status across Apple clients.
+  Sources: `32983347`, `3874c592`.
+
+- Validation: focused Swift suites reported 486 tests and passed, including
+  workflow identity/retry migration, remote recovery stale-request guards,
+  CLI version ranges and native AppKit workflow editing. Six isolated native
+  Codex 0.167.0 / Claude Code 2.1.319 exit-and-resume cases passed using local
+  model fixtures. Lint for 55 Swift files and both boundary checks passed.
+- Validation limits: an expanded plugin-core run found 20 issues in unchanged
+  reinstall suites; the implementation and assertions are identical to 3.0.157,
+  including old single-plugin fixtures against the existing skills/hooks split.
+  These pre-existing failures remain unresolved. The opt-in real-Agent workflow
+  loop, paired-Viewer interaction, iPhone UI and Apple Intelligence evaluations
+  were not run. Browser runtime and codec SDK are unchanged; prior codec media
+  acceptance evidence is reused after checking the SDK hash/UUID.
+
 ## 3.0.157 — Workflow steps and notification navigation
 
 - Configure model and reasoning effort per workflow Agent step, using the
