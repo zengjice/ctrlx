@@ -81,15 +81,27 @@ struct AgentModelShortcutDefaultsTests {
             #expect(try await coordinator.setPluginSettings(id: pluginID, encoded()) == nil)
             #expect(coordinator.newAgentModelShortcuts(pluginID: pluginID, providerID: nil) == configured["team"])
             #expect(coordinator.newAgentModelShortcuts(pluginID: pluginID, providerID: official) == configured[official])
+            #expect(coordinator.forkAgentModelShortcuts(pluginID: pluginID, providerID: nil) == configured[""])
+            #expect(coordinator.forkAgentModelShortcuts(pluginID: pluginID, providerID: official) == configured[official])
+            #expect(coordinator.forkAgentModelShortcuts(pluginID: pluginID, providerID: "team") == configured["team"])
             let pane = WorkspacePaneIdentity(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID())
             let key = AgentModelPreferences.Key(hostID: "local", serverID: pane.serverID, windowID: pane.windowID)
             let original = coordinator.newAgentModelShortcuts(pluginID: pluginID, providerID: nil)
             coordinator.agentModelPreferences.initialize(.init(pane: pane, defaults: original), hostID: "local")
             coordinator.agentModelPreferences.tabs[key]?.models.insert("tab-hidden")
+            let forkPane = WorkspacePaneIdentity(serverID: pane.serverID, sessionID: pane.sessionID, windowID: UUID(), paneID: UUID())
+            let forkKey = AgentModelPreferences.Key(hostID: "local", serverID: forkPane.serverID, windowID: forkPane.windowID)
+            let forkDefaults = coordinator.forkAgentModelShortcuts(pluginID: pluginID, providerID: official)
+            coordinator.agentModelPreferences.initialize(.init(pane: forkPane, defaults: forkDefaults), hostID: "local")
+            #expect(coordinator.agentModelPreferences.tabs[forkKey] == configured[official])
+            #expect(coordinator.agentModelPreferences.defaults[forkKey] == configured[official])
             configured["team"] = .init(models: ["new-default"])
+            configured[official] = .init(models: ["new-official-default"])
             #expect(try await coordinator.setPluginSettings(id: pluginID, encoded()) == nil)
             #expect(coordinator.agentModelPreferences.tabs[key]?.models == ["team-hidden", "tab-hidden"])
             #expect(coordinator.agentModelPreferences.defaults[key] == original)
+            #expect(coordinator.agentModelPreferences.tabs[forkKey] == forkDefaults)
+            #expect(coordinator.agentModelPreferences.defaults[forkKey] == forkDefaults)
 
             let next = WorkspacePaneIdentity(serverID: pane.serverID, sessionID: pane.sessionID, windowID: UUID(), paneID: UUID())
             let nextDefaults = coordinator.newAgentModelShortcuts(pluginID: pluginID, providerID: nil)
@@ -108,6 +120,7 @@ struct AgentModelShortcutDefaultsTests {
             }
             #expect(await coordinator.setPluginSettings(id: pluginID, Data("{}".utf8)) == nil)
             #expect(coordinator.newAgentModelShortcuts(pluginID: pluginID, providerID: nil) == .init())
+            #expect(coordinator.forkAgentModelShortcuts(pluginID: pluginID, providerID: nil) == .init())
         }
     }
 

@@ -180,8 +180,9 @@
                     windowManager.updatePaneStates(from: await tmuxService.refreshPanes())
                     await refreshAgentCommandIdentity()
                 },
-                launch: { [weak self] source, windowName, prepared in
+                launch: { [weak self] source, windowName, prepared, providerID in
                     guard let self else { throw AgentForkError("Host is shutting down.") }
+                    let shortcutDefaults = forkAgentModelShortcuts(pluginID: source.pluginID, providerID: providerID)
                     let agentLaunch = try tmuxService.agentLaunch(prepared)
                     let paneID = try await tmuxService.newWindow(
                         sessionName: source.sessionName, workingDirectory: prepared.workingDirectory,
@@ -200,6 +201,9 @@
                         if attempt < PaneSurfaceRetry.attempts - 1 {
                             try await Task.sleep(for: PaneSurfaceRetry.delay)
                         }
+                    }
+                    if let captured = try? await tmuxService.captureWorkspacePane(target: paneID) {
+                        agentModelPreferences.initialize(.init(pane: captured.identity, defaults: shortcutDefaults), hostID: "local")
                     }
                     await connectedViewerManager?.pushSessionStateToAll()
                     return paneID

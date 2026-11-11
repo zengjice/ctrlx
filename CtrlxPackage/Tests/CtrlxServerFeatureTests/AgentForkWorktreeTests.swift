@@ -297,6 +297,11 @@ struct AgentForkWorktreeTests {
             let executable = fixture.container.appendingPathComponent("agent probe")
             try """
             #!/bin/sh
+            if [ "$1" = -p ]; then
+                cat >/dev/null
+                printf '%s\\n' '{"type":"control_response","response":{"subtype":"success","request_id":"ctrlx-fork-defaults","response":{"effective":{"model":"fixture-model"},"applied":{"model":"fixture-model"}}}}'
+                exit 0
+            fi
             prefix=FORK
             if [ "$1" = normal ]; then prefix=NORMAL; fi
             printf 'FORK_CWD[%s]\\n' "$PWD"
@@ -320,6 +325,11 @@ struct AgentForkWorktreeTests {
             }
             do {
                 try await withDependencies {
+                    $0[ProcessRunner.self].runWithExactEnvironment = { executable, arguments, _, timeout, limit, input in
+                        try await runner.runWithExactEnvironment(executable, arguments, [
+                            "HOME": fixture.container.path, "ZDOTDIR": fixture.container.path, "PATH": "/usr/bin:/bin",
+                        ], timeout, limit, input)
+                    }
                     $0[AgentForkHistoryClient.self].root = { _, _, _ in
                         pluginID == "claude-default"
                             ? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude").resolvingSymlinksInPath().path
@@ -352,7 +362,7 @@ struct AgentForkWorktreeTests {
                     let service = AgentForkService(
                         source: { $0 == source.paneID ? source : nil }, core: { _ in core },
                         refresh: { _ = await tmux.refreshPanes() },
-                        launch: { source, name, prepared in
+                        launch: { source, name, prepared, _ in
                             let agentLaunch = try tmux.agentLaunch(prepared)
                             return try await tmux.newWindow(
                                 sessionName: source.sessionName,

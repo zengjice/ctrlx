@@ -184,7 +184,10 @@ Provider's defaults once. An omitted Provider uses the Host's configured default
 when that also follows the CLI, it uses the current CLI configuration's defaults.
 Later Provider edits affect future tabs only. Each tab keeps its own creation
 snapshot for Restore Defaults (all buttons when no defaults were configured).
-Fork, resume and existing tabs keep their existing display behavior.
+Fork tabs also copy the target Provider's defaults once; Fork's omitted Provider
+means the current CLI configuration, independently of the configured New Agent
+default. Source-tab customizations are not copied. Resume and existing tabs keep
+their existing display behavior.
 Workspace recovery restores the saved tab settings rather than reading today's
 Provider defaults. Older snapshots without display settings retain the existing
 all-buttons behavior; recovery does not change the Agent's active model or effort.

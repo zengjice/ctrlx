@@ -9,7 +9,7 @@ final class AgentForkService {
     private let source: @MainActor (String) -> AgentForkSource?
     private let core: @MainActor (String) -> (any AgentSessionForking)?
     private let refresh: @MainActor () async -> Void
-    private let launch: @MainActor (AgentForkSource, String, SessionLaunchPreparation) async throws -> String
+    private let launch: @MainActor (AgentForkSource, String, SessionLaunchPreparation, String?) async throws -> String
     private var operations: [UUID: (request: ForkAgentSession, source: AgentForkSource, task: Task<String, Error>)] = [:]
     private var completed: [UUID] = []
 
@@ -17,7 +17,7 @@ final class AgentForkService {
         source: @escaping @MainActor (String) -> AgentForkSource?,
         core: @escaping @MainActor (String) -> (any AgentSessionForking)?,
         refresh: @escaping @MainActor () async -> Void,
-        launch: @escaping @MainActor (AgentForkSource, String, SessionLaunchPreparation) async throws -> String
+        launch: @escaping @MainActor (AgentForkSource, String, SessionLaunchPreparation, String?) async throws -> String
     ) {
         self.source = source
         self.core = core
@@ -115,7 +115,7 @@ final class AgentForkService {
             )
             _ = try validate(source)
             let windowName = request.windowName ?? request.worktree?.name ?? (forkCommand.command.command as NSString).lastPathComponent.appending(" fork")
-            return try await launch(source, windowName, SessionLaunchPreparation(workingDirectory: directory, fork: forkCommand))
+            return try await launch(source, windowName, SessionLaunchPreparation(workingDirectory: directory, fork: forkCommand), request.targetProviderID)
         } catch {
             throw AgentForkError(error.localizedDescription + (request.worktree == nil ? "" : "\nThe new worktree is kept at \(directory). Check it before retrying."))
         }

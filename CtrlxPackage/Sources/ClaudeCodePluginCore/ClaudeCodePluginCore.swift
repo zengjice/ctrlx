@@ -269,11 +269,11 @@ public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking,
         )
     }
 
-    public func commandForFork(sessionID: String, projectPath _: String) async throws -> AgentForkLaunch {
-        try await commandForFork(sessionID: sessionID, projectPath: "", targetProviderID: nil)
+    public func commandForFork(sessionID: String, projectPath: String) async throws -> AgentForkLaunch {
+        try await commandForFork(sessionID: sessionID, projectPath: projectPath, targetProviderID: nil)
     }
 
-    public func commandForFork(sessionID: String, projectPath _: String, targetProviderID: String?) async throws -> AgentForkLaunch {
+    public func commandForFork(sessionID: String, projectPath: String, targetProviderID: String?) async throws -> AgentForkLaunch {
         guard UUID(uuidString: sessionID) != nil else { throw AgentForkError("Invalid Claude Code conversation ID.") }
         @Dependency(AgentForkHistoryClient.self) var history
         let defaultRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude").path
@@ -285,14 +285,20 @@ public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking,
         if !usesDefaultRoot {
             environment["CLAUDE_CONFIG_DIR"] = root
         }
+        // Setting even the default root changes where Claude stores .claude.json.
+        let unsetEnvironment = Self.unique(provider.unsetEnvironment + (usesDefaultRoot ? ["CLAUDE_CONFIG_DIR"] : []))
+        if environment["ANTHROPIC_MODEL"] == nil {
+            // Override the resumed transcript's model, but keep an explicit
+            // --model from a shell wrapper ahead of this default.
+            environment["ANTHROPIC_MODEL"] = try await forkDefaultModel(command: settings.commandPath, projectPath: projectPath, environment: environment, unsetEnvironment: unsetEnvironment)
+        }
         return AgentForkLaunch(
             command: LaunchCommand(
                 command: settings.commandPath,
                 args: ["--resume", sessionID, "--fork-session"] + provider.arguments,
                 env: environment
             ),
-            // Setting even the default root changes where Claude stores .claude.json.
-            unsetEnvironment: Self.unique(provider.unsetEnvironment + (usesDefaultRoot ? ["CLAUDE_CONFIG_DIR"] : []))
+            unsetEnvironment: unsetEnvironment
         )
     }
 

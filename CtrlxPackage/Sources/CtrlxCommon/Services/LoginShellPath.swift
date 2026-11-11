@@ -21,15 +21,18 @@
         static let marker = "__CTRLX_PATH__:"
 
         /// The user's login shell: `$SHELL`, else the passwd entry, else `/bin/sh`.
-        /// Mirrors `TmuxService.userShellPath` (kept local to avoid a cross-module
-        /// refactor; the duplication is three lines).
-        static func resolveUserShell(
+        /// Shared by tmux terminal creation and native CLI launch probes.
+        public static func resolveUserShell(
             environment: [String: String] = ProcessInfo.processInfo.environment
         ) -> String {
-            if let shell = environment["SHELL"], !shell.isEmpty { return shell }
+            if let shell = environment["SHELL"], !shell.isEmpty {
+                return shell
+            }
             if let pw = getpwuid(geteuid())?.pointee, let cstr = pw.pw_shell {
                 let resolved = String(cString: cstr)
-                if !resolved.isEmpty { return resolved }
+                if !resolved.isEmpty {
+                    return resolved
+                }
             }
             return "/bin/sh"
         }
@@ -109,7 +112,11 @@
             // returns once the shell exits or is terminated by the timer.
             let timer = DispatchSource.makeTimerSource(queue: .global())
             timer.schedule(deadline: .now() + 8)
-            timer.setEventHandler { if process.isRunning { process.terminate() } }
+            timer.setEventHandler {
+                if process.isRunning {
+                    process.terminate()
+                }
+            }
             timer.resume()
 
             let data = out.fileHandleForReading.readDataToEndOfFile()

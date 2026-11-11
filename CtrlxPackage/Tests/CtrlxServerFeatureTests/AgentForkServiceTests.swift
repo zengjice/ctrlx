@@ -6,9 +6,13 @@ import Foundation
 import Testing
 @testable import CtrlxServerFeature
 
-private actor ForkTestCore: AgentSessionForking {
+private actor ForkTestCore: AgentProviderForking {
     func commandForFork(sessionID: String, projectPath: String) async throws -> AgentForkLaunch {
         AgentForkLaunch(command: LaunchCommand(command: "codex", args: ["fork", sessionID, "-C", projectPath], env: ["CODEX_HOME": "/config"]))
+    }
+
+    func commandForFork(sessionID: String, projectPath: String, targetProviderID _: String?) async throws -> AgentForkLaunch {
+        try await commandForFork(sessionID: sessionID, projectPath: projectPath)
     }
 
     func commandForLaunch(projectPath _: String) async -> LaunchCommand? {
@@ -45,6 +49,7 @@ final private class ForkFixture {
     var launches: [(session: String, name: String, preparation: SessionLaunchPreparation)] = []
     var refreshes = 0
     var launchSources: [AgentForkSource] = []
+    var launchProviders: [String?] = []
 
     init() throws {
         self.original = try #require(AgentForkSource(pane: PaneState(
@@ -71,12 +76,13 @@ final private class ForkFixture {
                 MainActor.preconditionIsolated()
                 self.refreshes += 1
             },
-            launch: { source, name, preparation in
+            launch: { source, name, preparation, providerID in
                 MainActor.preconditionIsolated()
                 await Task.detached { }.value
                 MainActor.preconditionIsolated()
                 self.launches.append((source.sessionName, name, preparation))
                 self.launchSources.append(source)
+                self.launchProviders.append(providerID)
                 if failsLaunch {
                     throw AgentForkError("Window created (%99), but Agent launch failed. Check that tab before retrying.")
                 }
@@ -95,6 +101,20 @@ private actor ForkBackgroundCaller {
 
 @MainActor
 struct AgentForkServiceTests {
+    @Test("Fork forwards the selected Provider to creation once, including cached retries", arguments: [nil, "openai", "custom"] as [String?])
+    func launchProvider(providerID: String?) async throws {
+        let fixture = try ForkFixture()
+        let service = fixture.service()
+        try await withDependencies {
+            $0[SessionDirectoryClient.self].resolve = { $0 }
+        } operation: {
+            let request = ForkAgentSession(source: fixture.original, targetProviderID: providerID)
+            _ = try await service.fork(request)
+            _ = try await service.fork(request)
+            #expect(fixture.launchProviders == [providerID])
+        }
+    }
+
     @Test(
         "Restored source numbers cannot revive a Fork, preparation, checkout continuation or cached reply",
         arguments: ["before", "prepare", "directory", "worktree", "retry"],

@@ -93,6 +93,11 @@ struct ClaudeCodePluginCoreTests {
     func nativeFork() async throws {
         let id = UUID().uuidString
         try await withDependencies {
+            $0[ProcessRunner.self].runWithExactEnvironment = { _, arguments, _, _, _, _ in
+                #expect(Array(arguments.prefix(2)) == ["-C", "/Host/new repo"])
+                #expect(arguments.last?.contains("'/tools/my claude' '-p'") == true)
+                return try ProcessResult(exitCode: 0, stdout: ClaudeForkDefaultModelTests.response(model: "claude-default-model"), stderr: Data())
+            }
             $0[AgentForkHistoryClient.self].root = { sessionID, roots, layout in
                 #expect(sessionID == id)
                 #expect(roots.contains("/Host/custom claude"))
@@ -106,13 +111,13 @@ struct ClaudeCodePluginCoreTests {
             let command = fork.command
             #expect(command.command == "/tools/my claude")
             #expect(command.args == ["--resume", id, "--fork-session"])
-            #expect(command.env == ["CLAUDE_CONFIG_DIR": "/Host/custom claude"])
+            #expect(command.env == ["CLAUDE_CONFIG_DIR": "/Host/custom claude", "ANTHROPIC_MODEL": "claude-default-model"])
             #expect(fork.unsetEnvironment.isEmpty)
             let defaultRoot = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude").resolvingSymlinksInPath().path
             let defaultCommand = try await withDependencies {
                 $0[AgentForkHistoryClient.self].root = { _, _, _ in defaultRoot }
             } operation: { try await core.commandForFork(sessionID: id, projectPath: "/Host/new repo") }
-            #expect(defaultCommand.command.env.isEmpty)
+            #expect(defaultCommand.command.env == ["ANTHROPIC_MODEL": "claude-default-model"])
             #expect(defaultCommand.unsetEnvironment == ["CLAUDE_CONFIG_DIR"])
             await #expect(throws: AgentForkError.self) { try await core.commandForFork(sessionID: "--continue", projectPath: "/repo") }
             await core.shutdown()

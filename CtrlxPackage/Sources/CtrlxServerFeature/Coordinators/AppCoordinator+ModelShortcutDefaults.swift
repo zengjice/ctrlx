@@ -28,6 +28,12 @@ extension AppCoordinator {
         }
     }
 
+    func forkAgentModelShortcuts(pluginID: String, providerID: String?) -> AgentModelShortcuts {
+        // Fork's omitted Provider means current CLI configuration, not the
+        // configured New Agent default. Its settings row uses the empty key.
+        newAgentModelShortcuts(pluginID: pluginID, providerID: providerID ?? "")
+    }
+
     /// Export only metadata through the same native catalog reader as the status bar.
     func agentProviderModels(pluginID: String, providerID: String?) async throws -> [AgentModelOption] {
         guard

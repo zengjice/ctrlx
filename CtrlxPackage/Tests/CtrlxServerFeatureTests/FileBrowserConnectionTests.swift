@@ -581,6 +581,106 @@ struct FileBrowserConnectionTests {
         try await app.asyncShutdown()
     }
 
+    @Test("Fork preparation and creation leave the same Viewer's keyboard responsive", arguments: [false, true])
+    func forkRequestsLeaveKeyboardCommandsResponsive(preparing: Bool) async throws {
+        let originalVersion = VersionCompatibility.appVersionOverride
+        VersionCompatibility.appVersionOverride = "3.0.75"
+        defer { VersionCompatibility.appVersionOverride = originalVersion }
+        let relay = PhraseTestRelay()
+        let app = try await Application.make(.testing)
+        app.webSocket("api", "ws", maxFrameSize: .init(integerLiteral: RelayPayloadLimits.maxWebSocketFrameBytes)) { _, ws in
+            ws.onBinary { ws, bytes in
+                let data = Data(bytes.readableBytesView)
+                Task { await relay.receive(data, from: ws) }
+            }
+        }
+        try await app.asyncBoot()
+        try await app.server.start(address: .hostname("127.0.0.1", port: 0))
+        do {
+            let port = try #require(app.http.server.shared.localAddress?.port)
+            let url = try #require(URL(string: "ws://127.0.0.1:\(port)"))
+            let hostEncryption = try await encryption(), viewerEncryption = try await encryption()
+            let host = ConnectedViewer(pairedViewer: .init(
+                id: "pair", deviceName: "Viewer", partnerPublicKey: viewerEncryption.publicKey.base64EncodedString(), partnerPublicKeyId: viewerEncryption.keyId
+            ), e2eeService: hostEncryption)
+            let viewer = ViewerRelayClient()
+            let pane = PaneState(
+                paneId: "%7", sessionName: "test", tmuxWindowId: "@1", currentPath: "/Host/repo",
+                agentSession: .init(paneId: "%7", pluginID: "claude-code"), claudeSessionID: UUID().uuidString
+            )
+            let source = try #require(AgentForkSource(pane: pane))
+            let (gate, release) = AsyncStream<Void>.makeStream()
+            defer { release.finish() }
+            var started = false
+            var replied = false
+            var keys: [[TmuxKey]] = []
+            var supportsFork = false
+            viewer.onSessionState = { supportsFork = $0.supportsAgentFork == true }
+            host.onSessionStateRequest = { .init(pairId: "", paneStates: [pane.paneId: pane], supportsAgentFork: true) }
+            host.onCommand = { command in
+                switch command.command {
+                case .prepareAgentFork,
+                     .forkAgentSession:
+                    started = true
+                    for await _ in gate {
+                        break
+                    }
+                    replied = true
+                    if preparing {
+                        return .init(commandId: command.id, success: true, forkPreparation: .init(source: source, worktree: nil))
+                    }
+                    return .success(for: command.id, paneId: "%99")
+                case let .sendKeystroke(spec):
+                    keys.append(spec.keystrokes)
+                    return .success(for: command.id)
+                default:
+                    Issue.record("Unexpected command")
+                    return .failure(for: command.id, error: "Unexpected command")
+                }
+            }
+            await host.connect(serverURL: url, deviceId: "host", deviceName: "Host", username: "test", publicKey: hostEncryption.publicKey.base64EncodedString(), publicKeyId: hostEncryption.keyId)
+            do {
+                await connect(viewer, url: url, encryption: viewerEncryption, hostEncryption: hostEncryption)
+                try await waitUntil { host.isViewerConnected && supportsFork }
+                let request = Task {
+                    if preparing {
+                        return try await viewer.sendCommand(PrepareAgentFork(source: source), paneId: source.paneID).get()
+                    }
+                    return try await viewer.sendCommand(ForkAgentSession(source: source), paneId: source.paneID).get()
+                }
+                defer { request.cancel() }
+                try await waitUntil { started }
+                _ = try await viewer.sendCommand(SendKeystroke([.text("first")]), paneId: source.paneID).get()
+                _ = try await viewer.sendCommand(SendKeystroke([.text("second")]), paneId: source.paneID).get()
+                try await waitUntil { keys.count == 2 }
+                #expect(keys == [[.text("first")], [.text("second")]])
+                #expect(!replied, "Keyboard input must arrive before Fork finishes")
+                release.yield()
+                let response = try await request.value
+                #expect(response.success)
+                if preparing {
+                    #expect(response.forkPreparation?.source == source)
+                } else {
+                    #expect(response.paneId == "%99")
+                }
+                #expect(await relay.errors.isEmpty)
+                #expect(await relay.unexpectedTypes.isEmpty)
+            } catch {
+                await viewer.disconnect()
+                await host.disconnect()
+                throw error
+            }
+            await viewer.disconnect()
+            await host.disconnect()
+        } catch {
+            await app.server.shutdown()
+            try await app.asyncShutdown()
+            throw error
+        }
+        await app.server.shutdown()
+        try await app.asyncShutdown()
+    }
+
     @Test
     func viewerDisconnectFreesSlotsBeforeOldIOFinishes() async throws {
         let uploadRoot = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-wire-upload-\(UUID())")

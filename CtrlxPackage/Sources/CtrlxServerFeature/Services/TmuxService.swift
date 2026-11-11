@@ -189,18 +189,7 @@ final public class TmuxService {
     /// Resolved once at first access and baked into `defaultCommandWrapper`
     /// rather than relying on `${SHELL}` indirection inside `/bin/sh -c`, so
     /// the spawned pane runs the exact shell we logged.
-    private static let userShellPath: String = {
-        if let shell = ProcessInfo.processInfo.environment["SHELL"], !shell.isEmpty {
-            return shell
-        }
-        if let pw = getpwuid(geteuid())?.pointee, let cstr = pw.pw_shell {
-            let resolved = String(cString: cstr)
-            if !resolved.isEmpty {
-                return resolved
-            }
-        }
-        return "/bin/sh"
-    }()
+    private static let userShellPath = LoginShellPath.resolveUserShell()
 
     /// Wrapper command installed as tmux's `default-command` so every spawned shell
     /// reports as iTerm. Required for OSC 9;4 progress sequences: Claude Code only

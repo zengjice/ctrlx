@@ -1042,6 +1042,25 @@ Ordinary Terminal windows keep their existing tmux startup behavior.
 Fork is an explicit action, independent of Auto-run. It does not send `/fork`,
 use the last session, send a continuation prompt, or copy source telemetry/approval
 state.
+Fork uses the target Provider's launch model/effort and shortcut defaults, not
+source-tab overrides. With no Provider override, it follows the current CLI
+configuration, independently of the configured New Agent Provider. Codex's native
+Fork already resolves the current launch configuration. Claude custom Providers
+pass their model and optional effort explicitly; otherwise the Host reads the
+fresh-launch model selector through a bounded, metadata-only `initialize`/`get_settings`
+exchange in the destination directory and sets `ANTHROPIC_MODEL`. An explicit
+`--model` supplied by a shell alias or function retains higher priority. The probe uses the
+same Host login shell, loads its startup files before applying Provider overrides,
+and retains selectors such as `opusplan` rather than freezing `applied.model`.
+Claude's merged `settings.env` takes precedence over the shell model variable,
+then `settings.model`. With no model configured, the Host uses the CLI's resolved
+`applied.model`; `ANTHROPIC_MODEL=default` would send a literal model name, not
+select the native default. A missing resolved model fails before launch. This
+prevents native resume from preferring the source transcript's model over current settings.
+The probe disables hooks and MCP, sends no prompt and saves no conversation;
+unsupported or failed responses stop Fork before creating a terminal. Unspecified
+effort follows the native CLI settings. Workspace recovery still resumes the
+original conversation and saved tab configuration.
 All UI-facing Fork callbacks retain explicit `@MainActor` function types,
 including the shared Mac/iOS panel and Host refresh/launch callbacks. Network
 callers and suspended I/O must hop back before accessing pane/UI state.
@@ -1065,7 +1084,10 @@ also require `supportsAgentForkDirectory == true`; without it the Viewer keeps
 the source directory because an older Host would ignore the new request field.
 The Viewer checks the directory capability again immediately before sending
 Fork, so a Host reconnect or downgrade while the panel is open cannot bypass it.
-Preparation is read-only; the Host creates Git/tmux state. A request UUID
+Preparation is read-only; the Host creates Git/tmux state. Both Fork preparation
+and creation use the existing bounded background request queue, so CLI model
+probes and filesystem work do not block the same Viewer's keyboard receive loop.
+A request UUID
 deduplicates concurrent/repeated delivery (including partial failures; last 128
 completed requests per Host process). The Host and Viewer (Mac/iOS) need the
 feature; the opaque Relay needs no update.
