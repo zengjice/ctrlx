@@ -25,9 +25,23 @@ final public class FileBrowserTab: Identifiable {
     public var query = ""
     public var searchMode = FileBrowserSearchMode.name
     public var expanded: Set<String> = []
-    public var selectedFile: String?
+    public var selectedFile: String? {
+        didSet {
+            if oldValue != selectedFile {
+                openSession.cancel()
+            }
+        }
+    }
+
     public var lastSelectedAt = Date.distantPast
-    public var refresh = 0
+    public var refresh = 0 {
+        didSet {
+            if oldValue != refresh {
+                openSession.cancel()
+            }
+        }
+    }
+
     public var searchFocusRequest = 0
     public private(set) var homeDirectory = "~/"
     public private(set) var listings: [String: FileBrowserListing] = [:]
@@ -42,6 +56,7 @@ final public class FileBrowserTab: Identifiable {
     @ObservationIgnored private var loadID = UUID()
     @ObservationIgnored private var previewID = UUID()
     @ObservationIgnored let previewSession = FileBrowserPreviewSession()
+    let openSession = FileBrowserOpenSession()
 
     public init(id: UUID = UUID(), path: String? = nil, sourcePaneID: String? = nil) {
         self.id = id
@@ -55,7 +70,10 @@ final public class FileBrowserTab: Identifiable {
         }
     }
 
-    isolated deinit { previewSession.close() }
+    isolated deinit {
+        openSession.cancel()
+        previewSession.close()
+    }
 
     public var title: String {
         "Files · \(path.map { ($0 as NSString).lastPathComponent }.flatMap { $0.isEmpty ? "/" : $0 } ?? "…")"
@@ -113,6 +131,7 @@ final public class FileBrowserTab: Identifiable {
     }
 
     public func releasePreview() {
+        openSession.cancel()
         previewID = UUID()
         previewSession.close()
         previewData = nil
@@ -294,6 +313,7 @@ final public class FileBrowserTab: Identifiable {
     }
 
     public func loadPreview(source: FileBrowserSource) async {
+        openSession.configure(source: source)
         previewSession.configure(.init(sourceID: source.id, connectionID: source.connectionID, path: selectedFile, refresh: refresh))
         let token = UUID()
         previewID = token

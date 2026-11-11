@@ -632,6 +632,13 @@ on Mac Viewer or iOS downloads a copy only after a click. Mac opens the copy in
 the default app; iOS uses Quick Look and offers **Share / Open in…** for other
 apps or Save to Files. System codec/app support still determines whether a file
 can be opened. Copies are not edited back onto the Host.
+Explicit downloads belong to the live Files tab: switching tabs or workbenches
+keeps the transfer running and restores its progress on return, even if the native
+preview cache was evicted. Mac opens or reveals the completed copy as requested;
+iOS presents the downloaded copy when the Files view is visible again. Cancel,
+closing the tab, selecting another file, refreshing or changing the source/
+connection cancels the request and removes unfinished copies. Automatic Office
+preview transfers still pause/cancel when leaving their preview.
 
 ### In-place preview annotation
 

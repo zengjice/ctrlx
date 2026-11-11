@@ -516,7 +516,7 @@
                         ProgressView("Opening link…").controlSize(.small).padding(10)
                     }
                     Divider()
-                    FileBrowserOpenActions(path: path, source: source)
+                    FileBrowserOpenActions(path: path, source: source, session: tab.openSession)
                         .id(key)
                         .disabled(isAnnotating)
                     BrowserAnnotationSurface(
