@@ -19,11 +19,13 @@
 
         static func make(
             windowManager: MirrorWindowManager,
-            editorManager: EditorSessionManager
+            editorManager: EditorSessionManager,
+            recovery: WorkspaceRecoveryController? = nil
         ) -> [String: PaneState] {
             var paneStates = windowManager.paneStates.filter { !$0.value.sessionName.isEmpty }
             for (paneId, var state) in paneStates {
                 state.editorSession = editorManager.editorSessionInfo(for: paneId)
+                state.workspaceRecovery = recovery?.recoveryState(for: state)
                 paneStates[paneId] = state
             }
             return paneStates

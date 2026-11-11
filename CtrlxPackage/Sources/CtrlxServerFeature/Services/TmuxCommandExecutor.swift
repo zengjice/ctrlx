@@ -137,6 +137,7 @@ public actor TmuxCommandExecutor {
                  .prepareAgentFork,
                  .forkAgentSession,
                  .restartAgentSession,
+                 .recoverWorkspacePane,
                  .setSharedTerminalLayout,
                  .setYoloMode,
                  .markHandled,

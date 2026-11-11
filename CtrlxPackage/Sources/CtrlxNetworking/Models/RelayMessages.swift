@@ -400,6 +400,7 @@ public struct PaneState: Codable, Sendable, Identifiable {
     /// Optional for wire compatibility with older hosts.
     public var tmuxWindowId: String?
     public var workspaceIdentity: WorkspacePaneIdentity?
+    public var workspaceRecovery: WorkspacePaneRecovery?
 
     /// The pane index within the window
     public var paneIndex: Int
@@ -589,7 +590,8 @@ public struct PaneState: Codable, Sendable, Identifiable {
         permissionModeTrigger: String? = nil,
         telemetry: SessionTelemetry? = nil,
         recap: SessionRecap? = nil,
-        workspaceIdentity: WorkspacePaneIdentity? = nil
+        workspaceIdentity: WorkspacePaneIdentity? = nil,
+        workspaceRecovery: WorkspacePaneRecovery? = nil
     ) {
         self.paneId = paneId
         self.target = target
@@ -597,6 +599,7 @@ public struct PaneState: Codable, Sendable, Identifiable {
         self.windowIndex = windowIndex
         self.tmuxWindowId = tmuxWindowId
         self.workspaceIdentity = workspaceIdentity
+        self.workspaceRecovery = workspaceRecovery
         self.paneIndex = paneIndex
         self.command = command
         self.currentPath = currentPath

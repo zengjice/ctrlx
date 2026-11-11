@@ -1225,6 +1225,7 @@ public enum CommandType: Codable, Sendable, Equatable {
     case prepareAgentFork(PrepareAgentFork)
     case forkAgentSession(ForkAgentSession)
     case restartAgentSession(RestartAgentSession)
+    case recoverWorkspacePane(RecoverWorkspacePane)
     /// Submit edited prompt content from a viewer
     case submitEditorContent(SubmitEditorContent)
     /// Cancel an active editor session from a viewer

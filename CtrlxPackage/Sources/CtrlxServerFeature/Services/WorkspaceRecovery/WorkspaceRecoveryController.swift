@@ -1,3 +1,4 @@
+import CtrlxNetworking
 import Foundation
 import Observation
 
@@ -37,6 +38,8 @@ final class WorkspaceRecoveryController {
     @ObservationIgnored private var operationInProgress = false
     @ObservationIgnored private var stopping = false
     @ObservationIgnored private var periodicTask: Task<Void, Never>?
+    @ObservationIgnored var onStateChange: (() -> Void)?
+    @ObservationIgnored private var publishedRecoveryStates: [String: WorkspacePaneRecovery] = [:]
     @ObservationIgnored private var closedPaneIDs: Set<String> = []
     @ObservationIgnored private var closedPaneIdentities: Set<UUID> = []
     @ObservationIgnored private var closedWindowIdentities: Set<UUID> = []
@@ -67,7 +70,10 @@ final class WorkspaceRecoveryController {
     func start(periodic: Bool = true) async {
         guard phase == .starting, !operationInProgress else { return }
         operationInProgress = true
-        defer { operationInProgress = false }
+        defer {
+            operationInProgress = false
+            publishRecoveryState()
+        }
         do {
             snapshot = try await store.load()
             hostID = try await resolveHostID(snapshot?.hostID)
@@ -114,7 +120,10 @@ final class WorkspaceRecoveryController {
             !stopping, phase == .ready || phase == .needsRecovery || phase == .failed,
             mode() != .disabled, !operationInProgress else { return }
         operationInProgress = true
-        defer { operationInProgress = false }
+        defer {
+            operationInProgress = false
+            publishRecoveryState()
+        }
         await checkpointWhileLocked()
     }
 
@@ -157,7 +166,10 @@ final class WorkspaceRecoveryController {
         try Task.checkCancellation()
         guard !stopping else { throw CancellationError() }
         operationInProgress = true
-        defer { operationInProgress = false }
+        defer {
+            operationInProgress = false
+            publishRecoveryState()
+        }
         let target = try await operation()
         guard mode() != .disabled else { return }
         if let target {
@@ -215,6 +227,84 @@ final class WorkspaceRecoveryController {
         return failures.first { $0.id == pane.id }
     }
 
+    func recoveryState(for pane: PaneState) -> WorkspacePaneRecovery? {
+        guard
+            let identity = pane.workspaceIdentity, let liveState,
+            Self.contains(pane.paneId, identity: identity, in: liveState) else { return nil }
+        return recoveryStates[pane.paneId]
+    }
+
+    /// Remote actions share the local recovery transaction. Revalidate after
+    /// waiting: another Viewer, a local action or a close may have won the race.
+    func recoverPane(_ request: RecoverWorkspacePane, expectedPane: WorkspacePaneIdentity?) async throws {
+        while operationInProgress, !stopping {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try Task.checkCancellation()
+        guard
+            !stopping, phase != .stopped, mode() != .disabled,
+            let expectedPane, let state = recoveryStates[request.paneID],
+            state.attemptID == request.attemptID, state.launchID == request.launchID,
+            state.allows(request.action) else {
+            throw WorkspaceRecoveryError("Recovery state changed. Refresh the terminal and try again.")
+        }
+        operationInProgress = true
+        defer {
+            operationInProgress = false
+            publishRecoveryState()
+        }
+        let live = try await tmux.capture()
+        guard
+            Self.contains(request.paneID, identity: expectedPane, in: live),
+            failure(for: request.paneID)?.id == expectedPane.paneID else {
+            throw WorkspaceRecoveryError("The recovery terminal changed. Refresh the terminal and try again.")
+        }
+        do {
+            let intent: WorkspaceAgentRecoveryIntent = request.action == .resume
+                ? .resume(expectedPane.paneID) : .useShell(expectedPane.paneID)
+            try await recover(intent: intent, live: live)
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+            phase = .failed
+            throw error
+        }
+        if let failure = failure(for: request.paneID), failure.blocksInput {
+            throw WorkspaceRecoveryError(failure.reason)
+        }
+    }
+
+    private static func contains(_ runtimeID: String, identity: WorkspacePaneIdentity, in live: WorkspaceTmuxState) -> Bool {
+        live.serverID == identity.serverID && live.sessions.contains { session in
+            session.id == identity.sessionID && session.windows.contains { window in
+                window.id == identity.windowID && window.panes.contains { $0.id == identity.paneID && $0.runtimeID == runtimeID }
+            }
+        }
+    }
+
+    private var recoveryStates: [String: WorkspacePaneRecovery] {
+        guard !stopping, mode() != .disabled, let attempt = snapshot?.recovery, let liveState else { return [:] }
+        var states: [String: WorkspacePaneRecovery] = [:]
+        for pane in liveState.sessions.flatMap(\.windows).flatMap(\.panes) {
+            guard let failure = failures.first(where: { $0.id == pane.id }) else { continue }
+            states[pane.runtimeID] = .init(
+                attemptID: attempt.id, launchID: attempt.agentLaunches[pane.id]?.id,
+                name: failure.name, reason: failure.reason,
+                canResume: failure.canResume, canUseShell: failure.canUseShell,
+                keepCurrentTerminal: failure.keepCurrentTerminal, canRetry: failure.canRetry,
+                blocksInput: failure.blocksInput, isReady: isReady
+            )
+        }
+        return states
+    }
+
+    private func publishRecoveryState() {
+        let states = recoveryStates
+        guard states != publishedRecoveryStates else { return }
+        publishedRecoveryStates = states
+        onStateChange?()
+    }
+
     private func retry(intent: WorkspaceAgentRecoveryIntent) async {
         // A periodic checkpoint must not consume an explicit user action.
         while operationInProgress, !stopping {
@@ -223,7 +313,10 @@ final class WorkspaceRecoveryController {
         }
         guard !stopping, phase != .stopped, mode() != .disabled else { return }
         operationInProgress = true
-        defer { operationInProgress = false }
+        defer {
+            operationInProgress = false
+            publishRecoveryState()
+        }
         do {
             // A failed initial read must be retried, never replaced by a new snapshot.
             if snapshot == nil {
@@ -294,6 +387,7 @@ final class WorkspaceRecoveryController {
     private func recover(intent: WorkspaceAgentRecoveryIntent = .automatic, live knownLive: WorkspaceTmuxState? = nil) async throws {
         guard var source = snapshot, let bootID else { return }
         phase = .restoring
+        publishRecoveryState()
         let live: WorkspaceTmuxState
         if let knownLive {
             live = knownLive

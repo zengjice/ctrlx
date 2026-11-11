@@ -52,6 +52,10 @@ extension AppCoordinator {
             }
         )
         workspaceRecovery = recovery
+        recovery.onStateChange = { [weak self] in
+            guard let manager = self?.connectedViewerManager else { return }
+            Task { await manager.pushSessionStateToAll() }
+        }
         remoteEditorContentStore.onClear = { [weak self, weak recovery] key, submittedText in
             guard let self else { return }
             recoveredWorkspaceDrafts.captureRemote(editors: remoteEditorContentStore)

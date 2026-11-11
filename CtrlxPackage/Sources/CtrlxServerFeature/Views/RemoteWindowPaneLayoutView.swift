@@ -121,17 +121,19 @@ struct RemoteWindowPaneLayoutView: View {
     // MARK: - Single Pane Fallback
 
     private func singlePaneView(pane: PaneState) -> some View {
-        RemoteTerminalContainerView(
-            paneId: pane.paneId,
-            hostName: connection.hostName,
-            connection: connection,
-            settings: settings,
-            scrollingAgentID: pane.agentSession?.pluginID,
-            codexQuestionID: pane.codexQuestionID,
-            showStatusBar: false,
-            isEditorActive: pane.editorSession != nil,
-            onOpenURL: onOpenURL
-        )
+        RemoteWorkspaceRecoveryView(pane: pane, client: connection.relayClient) {
+            RemoteTerminalContainerView(
+                paneId: pane.paneId,
+                hostName: connection.hostName,
+                connection: connection,
+                settings: settings,
+                scrollingAgentID: pane.agentSession?.pluginID,
+                codexQuestionID: pane.codexQuestionID,
+                showStatusBar: false,
+                isEditorActive: pane.editorSession != nil,
+                onOpenURL: onOpenURL
+            )
+        }
         .modifier(VisiblePaneAttentionModifier(paneId: pane.paneId, connection: connection))
         .overlay(alignment: .bottomLeading) { WorkspaceRecoveryDraftView(paneID: pane.paneId, hostID: connection.id) }
         .overlay {
@@ -167,31 +169,33 @@ struct RemoteWindowPaneLayoutView: View {
 
         var body: some View {
             let binding = connection.relayClient.workspaceInputState.binding(paneID: paneState.paneId)
-            RemoteTerminalContainerView(
-                paneId: paneState.paneId,
-                hostName: connection.hostName,
-                connection: connection,
-                settings: settings,
-                scrollingAgentID: paneState.agentSession?.pluginID,
-                codexQuestionID: paneState.codexQuestionID,
-                showStatusBar: false,
-                isEditorActive: paneState.editorSession != nil,
-                autoFocus: isSingle || isActiveInTmux,
-                showsFocusIndicator: !isSingle,
-                onFocus: {
-                    // Mirror focus back to the remote tmux so external clients
-                    // attached on the host see the same active pane. Idempotent
-                    // when the pane is already active.
-                    let target = paneState.paneId
-                    Task {
-                        _ = await connection.sendCommand(
-                            SelectTmuxPane(),
-                            paneId: target, inputBinding: binding
-                        )
-                    }
-                },
-                onOpenURL: onOpenURL
-            )
+            RemoteWorkspaceRecoveryView(pane: paneState, client: connection.relayClient) {
+                RemoteTerminalContainerView(
+                    paneId: paneState.paneId,
+                    hostName: connection.hostName,
+                    connection: connection,
+                    settings: settings,
+                    scrollingAgentID: paneState.agentSession?.pluginID,
+                    codexQuestionID: paneState.codexQuestionID,
+                    showStatusBar: false,
+                    isEditorActive: paneState.editorSession != nil,
+                    autoFocus: isSingle || isActiveInTmux,
+                    showsFocusIndicator: !isSingle,
+                    onFocus: {
+                        // Mirror focus back to the remote tmux so external clients
+                        // attached on the host see the same active pane. Idempotent
+                        // when the pane is already active.
+                        let target = paneState.paneId
+                        Task {
+                            _ = await connection.sendCommand(
+                                SelectTmuxPane(),
+                                paneId: target, inputBinding: binding
+                            )
+                        }
+                    },
+                    onOpenURL: onOpenURL
+                )
+            }
             .modifier(VisiblePaneAttentionModifier(paneId: paneState.paneId, connection: connection))
             .overlay {
                 if !isSingle {

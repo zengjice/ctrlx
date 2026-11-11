@@ -2045,96 +2045,98 @@
         private func paneTerminal(pane: PaneState, windowName: String, windowID: String) -> some View {
             let preparationID = annotationHandoff.request?.id
             let fitWindowID = window?.stableId
-            return LiveTerminalView(
-                paneId: pane.paneId,
-                hostId: hostId,
-                voiceInputPaneMetadata: VoiceInputPaneMetadata(pane: pane),
-                scrollingAgentID: pane.agentSession?.pluginID,
-                codexQuestionID: pane.codexQuestionID,
-                responseState: .constant(nil),
-                terminalTitle: Binding(
-                    get: { terminalTitles[pane.paneId] },
-                    set: { terminalTitles[pane.paneId] = $0 }
-                ),
-                clipboardContent: Binding(
-                    get: { clipboardContents[pane.paneId] },
-                    set: { clipboardContents[pane.paneId] = $0 }
-                ),
-                isConnected: relayClient.isHostConnected,
-                hideNavigationBar: false,
-                showsInputControls: false,
-                showCopyButton: false,
-                isActive: terminalIsVisible && pane.paneId == activePaneId,
-                isInputSuspended: terminalInputSuspension.external,
-                isQuickActionInputSuspended: terminalInputSuspension.quickActionEditor,
-                parentKeyboardRequested: isKeyboardActive,
-                mouseReportingEnabled: mouseReportingPaneIDs.contains(pane.paneId),
-                onKeyboardRequest: { requested in
-                    if requested {
-                        automaticTabFit.cancelKeyboardDismissal()
+            return RemoteWorkspaceRecoveryView(pane: pane, client: relayClient) {
+                LiveTerminalView(
+                    paneId: pane.paneId,
+                    hostId: hostId,
+                    voiceInputPaneMetadata: VoiceInputPaneMetadata(pane: pane),
+                    scrollingAgentID: pane.agentSession?.pluginID,
+                    codexQuestionID: pane.codexQuestionID,
+                    responseState: .constant(nil),
+                    terminalTitle: Binding(
+                        get: { terminalTitles[pane.paneId] },
+                        set: { terminalTitles[pane.paneId] = $0 }
+                    ),
+                    clipboardContent: Binding(
+                        get: { clipboardContents[pane.paneId] },
+                        set: { clipboardContents[pane.paneId] = $0 }
+                    ),
+                    isConnected: relayClient.isHostConnected,
+                    hideNavigationBar: false,
+                    showsInputControls: false,
+                    showCopyButton: false,
+                    isActive: terminalIsVisible && pane.paneId == activePaneId,
+                    isInputSuspended: terminalInputSuspension.external,
+                    isQuickActionInputSuspended: terminalInputSuspension.quickActionEditor,
+                    parentKeyboardRequested: isKeyboardActive,
+                    mouseReportingEnabled: mouseReportingPaneIDs.contains(pane.paneId),
+                    onKeyboardRequest: { requested in
+                        if requested {
+                            automaticTabFit.cancelKeyboardDismissal()
+                        }
+                        isKeyboardActive = requested
+                    },
+                    settings: settings,
+                    telemetry: pane.telemetry,
+                    // Tiled panes pass `responseState: .constant(nil)`, so no response
+                    // form is shown here and the submit closure is never invoked.
+                    submitResponse: { _ in false },
+                    onTerminalInputQueued: { terminalInputRevision &+= 1 },
+                    onCancelVoiceInput: {
+                        guard terminalIsVisible, pane.paneId == activePaneId else { return false }
+                        return voiceSession.cancelIfPresented()
+                    },
+                    onPasteImage: { image in
+                        guard terminalIsVisible, activePaneId == pane.paneId else { return }
+                        clipboardImagePaste = TerminalImagePasteRequest(paneId: pane.paneId, image: image)
+                    },
+                    onVoiceInputContextProviderChange: { provider in
+                        if let provider {
+                            voiceInputContextProviders[pane.paneId] = provider
+                        } else {
+                            voiceInputContextProviders.removeValue(forKey: pane.paneId)
+                        }
+                    },
+                    onCursorNavigationCancellationChange: { cancellation in
+                        cursorNavigationCancellations[pane.paneId] = cancellation
+                    },
+                    onExternalInputSenderChange: { sender in
+                        externalInputSenders[pane.paneId] = sender
+                    },
+                    onTerminalInputReadinessChange: { readiness in
+                        terminalInputReadiness[pane.paneId] = readiness
+                    },
+                    onInputPresentationChange: { input in
+                        keyboardDismissalInputs.update(
+                            input, paneID: pane.paneId, activePaneID: activePaneId,
+                            fit: &automaticTabFit
+                        )
+                    },
+                    onCopyActionChange: { action in
+                        terminalCopyActions[pane.paneId] = action
+                    },
+                    onViewportGridChange: { grid in
+                        if viewportGrids[pane.paneId] != grid {
+                            viewportGrids[pane.paneId] = grid
+                        }
+                    },
+                    onKeyboardDismissed: {
+                        guard
+                            canFitAfterKeyboardDismissal,
+                            activePaneId == pane.paneId, let fitWindowID,
+                            window?.stableId == fitWindowID else { return }
+                        requestAutomaticTabFit(windowID: fitWindowID, requiresHiddenKeyboard: true)
+                    },
+                    onSwitchWindow: { selectAdjacentWindow(from: windowID, direction: $0) },
+                    preparationID: preparationID,
+                    onPresentationChange: { status in
+                        if let preparationID {
+                            annotationHandoff.update(status, paneID: pane.paneId, requestID: preparationID)
+                        }
                     }
-                    isKeyboardActive = requested
-                },
-                settings: settings,
-                telemetry: pane.telemetry,
-                // Tiled panes pass `responseState: .constant(nil)`, so no response
-                // form is shown here and the submit closure is never invoked.
-                submitResponse: { _ in false },
-                onTerminalInputQueued: { terminalInputRevision &+= 1 },
-                onCancelVoiceInput: {
-                    guard terminalIsVisible, pane.paneId == activePaneId else { return false }
-                    return voiceSession.cancelIfPresented()
-                },
-                onPasteImage: { image in
-                    guard terminalIsVisible, activePaneId == pane.paneId else { return }
-                    clipboardImagePaste = TerminalImagePasteRequest(paneId: pane.paneId, image: image)
-                },
-                onVoiceInputContextProviderChange: { provider in
-                    if let provider {
-                        voiceInputContextProviders[pane.paneId] = provider
-                    } else {
-                        voiceInputContextProviders.removeValue(forKey: pane.paneId)
-                    }
-                },
-                onCursorNavigationCancellationChange: { cancellation in
-                    cursorNavigationCancellations[pane.paneId] = cancellation
-                },
-                onExternalInputSenderChange: { sender in
-                    externalInputSenders[pane.paneId] = sender
-                },
-                onTerminalInputReadinessChange: { readiness in
-                    terminalInputReadiness[pane.paneId] = readiness
-                },
-                onInputPresentationChange: { input in
-                    keyboardDismissalInputs.update(
-                        input, paneID: pane.paneId, activePaneID: activePaneId,
-                        fit: &automaticTabFit
-                    )
-                },
-                onCopyActionChange: { action in
-                    terminalCopyActions[pane.paneId] = action
-                },
-                onViewportGridChange: { grid in
-                    if viewportGrids[pane.paneId] != grid {
-                        viewportGrids[pane.paneId] = grid
-                    }
-                },
-                onKeyboardDismissed: {
-                    guard
-                        canFitAfterKeyboardDismissal,
-                        activePaneId == pane.paneId, let fitWindowID,
-                        window?.stableId == fitWindowID else { return }
-                    requestAutomaticTabFit(windowID: fitWindowID, requiresHiddenKeyboard: true)
-                },
-                onSwitchWindow: { selectAdjacentWindow(from: windowID, direction: $0) },
-                preparationID: preparationID,
-                onPresentationChange: { status in
-                    if let preparationID {
-                        annotationHandoff.update(status, paneID: pane.paneId, requestID: preparationID)
-                    }
-                }
-            )
-            .environment(relayClient)
+                )
+                .environment(relayClient)
+            }
         }
 
         // MARK: - Status Bar

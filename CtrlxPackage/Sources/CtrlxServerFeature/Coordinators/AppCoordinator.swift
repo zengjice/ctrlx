@@ -3889,6 +3889,15 @@
                         return .success(for: command.id, paneId: spec.source.paneID)
                     } catch { return .failure(for: command.id, error: error.localizedDescription) }
                 }
+                if case let .recoverWorkspacePane(spec) = command.command {
+                    guard let recovery = self?.workspaceRecovery else {
+                        return .failure(for: command.id, error: "Workspace recovery is unavailable on this Host.")
+                    }
+                    do {
+                        try await recovery.recoverPane(spec, expectedPane: command.expectedWorkspacePane)
+                        return .success(for: command.id, paneId: spec.paneID)
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                }
                 if case let .createTmuxWindow(spec) = command.command {
                     return await Self.handleCreateWindow(
                         command: command,
@@ -3978,7 +3987,8 @@
                 // them here made every remote read invalidate the Host UI.
                 let paneStates = await HostSessionStateSnapshot.make(
                     windowManager: windowManager,
-                    editorManager: editorManager
+                    editorManager: editorManager,
+                    recovery: self?.workspaceRecovery
                 )
 
                 // The merged per-plugin project list (the cores own scanning now).
