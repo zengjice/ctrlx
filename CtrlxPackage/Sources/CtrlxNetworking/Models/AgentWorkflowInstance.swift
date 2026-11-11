@@ -1,5 +1,18 @@
 import Foundation
 
+/// Durable destination; process and conversation authentication belongs to each invocation.
+public struct AgentWorkflowTarget: Codable, Equatable, Hashable, Sendable {
+    public let hostID: UUID
+    public let windowID: UUID
+    public let paneID: UUID
+
+    public init(hostID: UUID, windowID: UUID, paneID: UUID) {
+        self.hostID = hostID
+        self.windowID = windowID
+        self.paneID = paneID
+    }
+}
+
 public struct AgentWorkflowCapabilities: Codable, Equatable, Sendable {
     public var maximumInputBytes: Int
     public var mediaTypes: [String]
@@ -21,6 +34,10 @@ public enum AgentWorkflowReadiness: String, Codable, Sendable {
 /// Assigned by the Host after inspecting the live main process. Neither the
 /// display name nor a provider conversation ID authenticates an instance.
 public struct AgentWorkflowInstance: Codable, Equatable, Identifiable, Sendable {
+    public var target: AgentWorkflowTarget {
+        .init(hostID: hostID, windowID: workspacePane.windowID, paneID: workspacePane.paneID)
+    }
+
     public let id: UUID
     public let hostID: UUID
     public let pluginID: String

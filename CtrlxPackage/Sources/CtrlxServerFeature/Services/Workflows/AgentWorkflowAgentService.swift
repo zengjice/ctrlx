@@ -49,7 +49,7 @@ actor AgentWorkflowAgentService {
             guard
                 let run = archive.runs.first(where: { $0.invocations.contains { $0.id == invocationID } }),
                 let invocation = run.invocations.first(where: { $0.id == invocationID }),
-                let instance = run.instances.first(where: { $0.id == invocation.delivery.toAgentID }),
+                let instance = run.instance(for: invocation),
                 peer.contains(processID: instance.processID, runtimeID: instance.processRuntimeID) else {
                 return denied(request.id, "This caller does not own the workflow invocation.")
             }
@@ -105,7 +105,7 @@ actor AgentWorkflowAgentService {
             guard
                 let run = archive.runs.first(where: { $0.invocations.contains { $0.id == invocationID } }),
                 let invocation = run.invocations.first(where: { $0.id == invocationID }),
-                let instance = run.instances.first(where: { $0.id == invocation.delivery.toAgentID }),
+                let instance = run.instance(for: invocation),
                 peer.contains(processID: instance.processID, runtimeID: instance.processRuntimeID) else {
                 return denied(request.id, "This caller does not own the workflow invocation.")
             }

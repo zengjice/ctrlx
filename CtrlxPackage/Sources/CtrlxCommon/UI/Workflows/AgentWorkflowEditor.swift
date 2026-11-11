@@ -139,7 +139,7 @@ struct AgentWorkflowEditor: View {
                                         Text("Choose a participating Agent").tag(node.agentInstanceID)
                                     }
                                 }
-                                if let instance = instances.first(where: { $0.id == node.agentInstanceID }) {
+                                if let instance = draft.instance(for: node.agentInstanceID, in: instances) {
                                     if let issue = instance.capabilityIssue {
                                         Text(issue).font(.caption).foregroundStyle(.orange)
                                     } else if instance.readiness != .ready {
@@ -154,11 +154,11 @@ struct AgentWorkflowEditor: View {
                             taskInput("Instructions or skill for this step", input: $node.input)
                             DisclosureGroup("More options") {
                                 if node.kind == .agent {
-                                    if let instance = instances.first(where: { $0.id == node.agentInstanceID }) {
+                                    if let instance = draft.instance(for: node.agentInstanceID, in: instances) {
                                         Text(instance.displayName).font(.caption).foregroundStyle(.secondary)
                                         Text(instance.workingDirectory).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                                     }
-                                    AgentWorkflowModelSettings(endpoint: endpoint, hostID: draft.hostID, instance: instances.first { $0.id == node.agentInstanceID }, selection: $node.modelSelection)
+                                    AgentWorkflowModelSettings(endpoint: endpoint, hostID: draft.hostID, instance: draft.instance(for: node.agentInstanceID, in: instances), selection: $node.modelSelection)
                                         .accessibilityIdentifier("workflow-model-\(node.id)")
                                 }
                                 Picker("Original task", selection: Binding(get: { draft.initialTask(for: node) }, set: { node.initialTask = $0 })) {
@@ -420,9 +420,14 @@ struct AgentWorkflowEditor: View {
 
     private func participantBinding(_ id: UUID) -> Binding<UUID> {
         Binding(get: { id }, set: { replacement in
-            guard replacement != id else { return }
+            let target = instances.first { $0.id == replacement }?.target
+            guard replacement != id || draft.agentTargets?[id] != target else { return }
             guard let index = draft.participants?.firstIndex(where: { $0.id == id }) else { return }
             draft.participants?[index].agentInstanceID = replacement
+            if let target {
+                draft.agentTargets = draft.agentTargets ?? [:]
+                draft.agentTargets?[replacement] = target
+            }
             for step in draft.nodes.indices where draft.nodes[step].agentInstanceID == id {
                 draft.nodes[step].agentInstanceID = replacement
                 draft.nodes[step].modelSelection = nil
@@ -463,6 +468,7 @@ struct AgentWorkflowEditor: View {
             let values = try await endpoint.instances(hostID: draft.hostID)
             try Task.checkCancellation()
             instances = values
+            draft = draft.resolvingAgents(in: values)
             if let target = createdAgent, let instance = values.first(where: { target.matches($0) }) {
                 draft.creationSession = AgentWorkflowSessionReference(instance.workspacePane)
                 if !draft.agents.contains(where: { $0.id == instance.id }) {

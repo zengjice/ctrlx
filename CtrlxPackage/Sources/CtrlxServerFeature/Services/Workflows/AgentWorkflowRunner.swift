@@ -149,7 +149,7 @@ actor AgentWorkflowRunner {
                 !halted, !Task.isCancelled,
                 let run = try await store.snapshot().runs.first(where: { $0.id == runID }), run.status == .running,
                 let invocation = run.invocations.first(where: { $0.id == invocationID }), invocation.status == .pending,
-                let binding = run.instances.first(where: { $0.id == invocation.delivery.toAgentID }) else { return }
+                let binding = run.instance(for: invocation) else { return }
             let live: AgentWorkflowInstance
             do {
                 live = try await transport.inspect(binding)

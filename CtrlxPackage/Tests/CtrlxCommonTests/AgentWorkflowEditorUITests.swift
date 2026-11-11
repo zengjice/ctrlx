@@ -83,7 +83,7 @@
             try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent(name + ".png"))
         }
 
-        @Test(arguments: ["unchanged", "edit", "import"])
+        @Test(arguments: ["unchanged", "edit", "import", "restart"])
         func compactOverviewEditsOneStepAndPreservesCollapsedSettings(mode: String) async throws {
             _ = NSApplication.shared
             NSApp.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
@@ -92,12 +92,30 @@
             let instances = ["Developer", "Reviewer"].enumerated().map { index, name in
                 AgentWorkflowInstance(hostID: hostID, pluginID: "codex", processID: Int32(index + 42), processRuntimeID: "runtime-\(index)", workspacePane: .init(serverID: "1:1", sessionID: UUID(), windowID: UUID(), paneID: UUID()), paneID: "%\(index)", conversationID: "conversation-\(index)", displayName: name, workingDirectory: "/fixture", capabilities: .init(maximumInputBytes: 100_000), readiness: .ready)
             }
+            let catalog = mode == "restart" ? instances.map { old in
+                var pane = old.workspacePane
+                pane.serverID = "restarted-server"
+                return AgentWorkflowInstance(
+                    hostID: old.hostID,
+                    pluginID: old.pluginID,
+                    processID: old.processID + 100,
+                    processRuntimeID: "restarted-\(old.processRuntimeID)",
+                    workspacePane: pane,
+                    paneID: old.paneID,
+                    conversationID: old.conversationID,
+                    displayName: old.displayName,
+                    workingDirectory: old.workingDirectory,
+                    capabilities: old.capabilities,
+                    readiness: .ready
+                )
+            } : instances
             let image = AgentWorkflowAttachment(id: UUID(), name: "task.png", mediaType: "image/png", byteCount: 100, sha256: String(repeating: "a", count: 64))
             var definition = AgentWorkflowDefinition(name: "Develop, review and repair", hostID: hostID, nodes: [], edges: [], entryNodeID: UUID(), initialInput: .init(text: "Build the requested feature", attachmentIDs: [image.id]))
             AgentWorkflowReviewTemplate.apply(to: &definition, developerID: instances[0].id, reviewerID: instances[1].id)
             definition.nodes[0].input.text = "Initial development instructions"
             definition.nodes[0].modelSelection = .init(model: "configured-model", effort: "high")
             definition.nodes[3].input.attachmentIDs = [image.id]
+            definition.rememberTargets(from: instances)
             let original = definition
             try AgentWorkflowWire.validate(original)
             var saved: AgentWorkflowDefinition?
@@ -110,7 +128,7 @@
                 var response = AgentWorkflowResponse(hostID: hostID)
                 switch request.operation {
                 case .catalog:
-                    response.instances = .init(items: instances, nextOffset: nil)
+                    response.instances = .init(items: catalog, nextOffset: nil)
                     loaded = true
                 case .attachments: response.attachments = [image]
                 case let .uploadAttachment(.image(id, name, mediaType, bytes, sha256)):
@@ -195,6 +213,14 @@
             try await click("workflow-editor-save", in: window)
             try await wait { saved != nil }
             var expected = original
+            for index in [0, 2, 4] {
+                expected.nodes[index].agentInstanceID = catalog[0].id
+            }
+            expected.nodes[1].agentInstanceID = catalog[1].id
+            for index in catalog.indices {
+                expected.participants?[index].agentInstanceID = catalog[index].id
+            }
+            expected.agentTargets = Dictionary(uniqueKeysWithValues: catalog.map { ($0.id, $0.target) })
             if edit {
                 expected.nodes[0].input.text = "Updated instructions, kept after switching steps"
             }

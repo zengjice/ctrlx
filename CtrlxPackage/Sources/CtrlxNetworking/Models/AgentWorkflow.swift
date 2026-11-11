@@ -181,6 +181,7 @@ public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendabl
     /// Launch preference only; it grants no execution or terminal access.
     public var creationSession: AgentWorkflowSessionReference?
     public var participants: [AgentWorkflowParticipant]?
+    public var agentTargets: [UUID: AgentWorkflowTarget]?
 
     public init(
         id: UUID = UUID(),
@@ -216,6 +217,46 @@ public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendabl
 
     public var agentInstanceIDs: Set<UUID> {
         Set(nodes.compactMap(\.agentInstanceID))
+    }
+
+    public func instance(for agentID: UUID?, in instances: [AgentWorkflowInstance]) -> AgentWorkflowInstance? {
+        guard let agentID else { return nil }
+        if let target = agentTargets?[agentID] {
+            return instances.first { $0.target == target }
+        }
+        return instances.first { $0.id == agentID && $0.hostID == hostID }
+    }
+
+    public mutating func rememberTargets(from instances: [AgentWorkflowInstance]) {
+        var targets = (agentTargets ?? [:]).filter { agentInstanceIDs.contains($0.key) }
+        for id in agentInstanceIDs where targets[id] == nil {
+            targets[id] = instances.first { $0.id == id && $0.hostID == hostID }?.target
+        }
+        agentTargets = targets.isEmpty ? nil : targets
+    }
+
+    /// Refresh picker IDs without changing the configured destination or revision.
+    public func resolvingAgents(in instances: [AgentWorkflowInstance]) -> Self {
+        var resolved = self
+        resolved.rememberTargets(from: instances)
+        var replacements: [UUID: UUID] = [:]
+        for id in agentInstanceIDs {
+            replacements[id] = resolved.instance(for: id, in: instances)?.id ?? id
+        }
+        for index in resolved.nodes.indices {
+            if let id = resolved.nodes[index].agentInstanceID {
+                resolved.nodes[index].agentInstanceID = replacements[id]
+            }
+        }
+        if let participants {
+            resolved.participants = participants.map {
+                .init(agentInstanceID: replacements[$0.id] ?? $0.id, name: $0.name)
+            }
+        }
+        if let targets = resolved.agentTargets {
+            resolved.agentTargets = Dictionary(targets.map { (replacements[$0.key] ?? $0.key, $0.value) }, uniquingKeysWith: { first, _ in first })
+        }
+        return resolved
     }
 
     public var agents: [AgentWorkflowParticipant] {
@@ -260,6 +301,12 @@ public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendabl
     }
 
     public func validate() throws {
+        let targets = (agentTargets ?? [:]).filter { agentInstanceIDs.contains($0.key) }
+        guard
+            targets.values.allSatisfy({ $0.hostID == hostID }),
+            Set(targets.values).count == targets.count else {
+            throw AgentWorkflowError("Choose distinct Agent tabs on this Host.")
+        }
         guard revision > 0, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AgentWorkflowError("A workflow needs a name and a positive revision.")
         }

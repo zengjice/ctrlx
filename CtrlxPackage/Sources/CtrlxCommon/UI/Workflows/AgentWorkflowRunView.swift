@@ -65,7 +65,7 @@ struct AgentWorkflowRunView: View {
                         }
                         Button("End workflow", role: .destructive) { confirmingEnd = true }
                     } footer: {
-                        Text("You can use the Agent terminals at any time. Pausing stops new task deliveries; current tasks can still finish. Continue resumes deliveries. Ending keeps the Agent tabs and current tasks open.")
+                        Text("You can use the Agent terminals at any time. Pausing stops new task deliveries; current tasks can still finish. Continue resumes deliveries and retries failed steps, keeping completed results. Ending keeps the Agent tabs and current tasks open.")
                     }
                     .disabled(changing || !endpoint.isConnected)
                 } else {

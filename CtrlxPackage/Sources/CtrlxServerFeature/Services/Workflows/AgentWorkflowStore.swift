@@ -56,7 +56,7 @@ extension AgentWorkflowObservation {
 }
 
 struct AgentWorkflowArchive: Codable, Equatable, Sendable {
-    var schemaVersion = 6
+    var schemaVersion = 7
     let hostID: UUID
     var definitions: [AgentWorkflowDefinition] = []
     var instances: [AgentWorkflowInstance] = []
@@ -125,23 +125,11 @@ actor AgentWorkflowStore {
             }
             return observation.instance(hostID: hostID, id: existing?.id ?? UUID())
         }
-        for index in updated.runs.indices where !updated.runs[index].status.isTerminal {
-            let run = updated.runs[index]
-            let execution = try AgentWorkflowExecution(validating: run)
-            let changed = run.instances.contains { bound in
-                !updated.instances.contains {
-                    (bound.matchesBinding($0) || execution.canBindFirstConversation($0)) && $0.readiness != .unavailable
-                }
-            }
-            if changed {
-                var execution = try AgentWorkflowExecution(validating: run)
-                let unsupported = updated.instances.first { live in
-                    live.capabilityIssue != nil && run.instances.contains { $0.matchesBinding(live) }
-                }
-                execution.pause(reason: unsupported?.capabilityIssue
-                    ?? "An Agent's current identity is unavailable or changed. Verify it before continuing; bind replacements in a new run.")
-                updated.runs[index] = execution.run
-            }
+        for index in updated.runs.indices where !updated.runs[index].status.isTerminal && updated.runs[index].status != .paused {
+            var execution = try AgentWorkflowExecution(validating: updated.runs[index])
+            do { try execution.refreshBindings(instances: updated.instances) }
+            catch let error as AgentWorkflowError { execution.pause(reason: error.localizedDescription) }
+            updated.runs[index] = execution.run
         }
         if updated != previous {
             try commit(updated)
@@ -156,17 +144,18 @@ actor AgentWorkflowStore {
         try validateAttachments(definition.attachmentIDs, in: updated)
         let previousAttachments = updated.definitions.first { $0.id == definition.id }?.attachmentIDs ?? []
         var saved = definition
+        saved.rememberTargets(from: updated.instances)
         if let index = updated.definitions.firstIndex(where: { $0.id == definition.id }) {
             guard expectedRevision == updated.definitions[index].revision else {
                 throw AgentWorkflowError("Another Viewer changed this workflow. Reload before saving.")
             }
             saved.revision = updated.definitions[index].revision + 1
-            try saved.validate()
+            try AgentWorkflowWire.validate(saved)
             updated.definitions[index] = saved
         } else {
             guard expectedRevision == nil else { throw AgentWorkflowError("The workflow was deleted. Reload before saving.") }
             saved.revision = 1
-            try saved.validate()
+            try AgentWorkflowWire.validate(saved)
             updated.definitions.append(saved)
         }
         try commit(updated)
@@ -205,10 +194,12 @@ actor AgentWorkflowStore {
         }
         try AgentWorkflowWire.validate(definition)
         try validateAttachments(definition.attachmentIDs, in: updated)
+        definition = definition.resolvingAgents(in: updated.instances)
         let instanceIDs = definition.agentInstanceIDs
+        let targets = Set(definition.agentTargets?.values.map { $0 } ?? [])
         let conflicts = updated.runs.compactMap { run -> AgentWorkflowStartRejection.Conflict? in
             guard !run.status.isTerminal else { return nil }
-            let agents = run.instances.filter { instanceIDs.contains($0.id) }
+            let agents = run.instances.filter { targets.contains($0.target) || instanceIDs.contains($0.id) }
             guard !agents.isEmpty else { return nil }
             return .init(run: .init(run), agentNames: agents.map(\.displayName))
         }
@@ -216,7 +207,7 @@ actor AgentWorkflowStore {
             throw AgentWorkflowStartRejection("These Agents already belong to an unfinished workflow.", conflicts: conflicts)
         }
         let instances = definition.agents.compactMap { participant in
-            instanceIDs.contains(participant.id) ? updated.instances.first { $0.id == participant.id } : nil
+            instanceIDs.contains(participant.id) ? definition.instance(for: participant.id, in: updated.instances) : nil
         }
         let execution = try AgentWorkflowExecution(
             definition: definition,
@@ -335,7 +326,7 @@ actor AgentWorkflowStore {
         }
         var loaded = try JSONDecoder().decode(AgentWorkflowArchive.self, from: Data(contentsOf: fileURL))
         guard
-            (1...6).contains(loaded.schemaVersion), loaded.hostID == hostID,
+            (1...7).contains(loaded.schemaVersion), loaded.hostID == hostID,
             Set(loaded.definitions.map(\.id)).count == loaded.definitions.count,
             Set(loaded.runs.map(\.id)).count == loaded.runs.count,
             Set(loaded.instances.map(\.id)).count == loaded.instances.count else {
@@ -346,6 +337,12 @@ actor AgentWorkflowStore {
             throw AgentWorkflowError("The saved workflow attachments contain duplicate identities.")
         }
         try validateConversions(in: loaded)
+        if loaded.schemaVersion < 7 {
+            let known = loaded.instances + loaded.runs.flatMap(\.instances)
+            for index in loaded.definitions.indices {
+                loaded.definitions[index].rememberTargets(from: known)
+            }
+        }
         for definition in loaded.definitions {
             try definition.validate()
             guard definition.hostID == hostID else { throw AgentWorkflowError("A saved workflow belongs to another Host.") }
@@ -372,14 +369,14 @@ actor AgentWorkflowStore {
             }
             loaded.runs[index] = try AgentWorkflowExecution(restoring: loaded.runs[index]).run
         }
-        loaded.schemaVersion = 6
+        loaded.schemaVersion = 7
         try commit(loaded)
         return loaded
     }
 
     func commit(_ updated: AgentWorkflowArchive) throws {
         var updated = updated
-        updated.schemaVersion = 6
+        updated.schemaVersion = 7
         guard updated != archive else { return }
         let data = try JSONEncoder().encode(updated)
         try FileManager.default.createDirectory(

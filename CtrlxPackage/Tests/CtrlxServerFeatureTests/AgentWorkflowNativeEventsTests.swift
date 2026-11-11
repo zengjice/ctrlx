@@ -49,6 +49,39 @@ private actor NativeWorkflowTestProvider: AgentWorkflowProviding {
 }
 
 struct AgentWorkflowNativeEventsTests {
+    @Test
+    func failedAttemptReceiptCannotInterruptItsRetry() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        _ = try await f.router.receive(f.event(.failed, text: "Quota exceeded"), peer: f.peer)
+        let resumed = try await f.store.update(runID: f.run.id) {
+            try $0.resume(instances: [f.instance], now: Date())
+            let retry = try $0.prepareInvocation(nodeID: f.invocation.nodeID, now: Date())
+            try $0.beginWriting(invocationID: retry.id, instance: f.instance, now: Date())
+        }
+        let retry = try #require(resumed.invocations.last)
+        let unavailable = LockIsolated(true)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            if unavailable.value {
+                throw AgentWorkflowInspectionUnavailable()
+            }
+            return $0
+        })
+        #expect(try await router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer) == nil)
+        #expect(try await router.receive(f.event(.stopCandidate, text: "Old answer"), peer: f.peer) == nil)
+        #expect(try await f.store.snapshot().runs[0] == resumed)
+        unavailable.setValue(false)
+        _ = try await router.receive(f.event(.submitted, text: retry.delivery.input.text, turn: "retry"), peer: f.peer)
+        let current = try await f.store.snapshot().runs[0]
+        #expect(current.status == .running)
+        #expect(current.invocations[0].status == .failed)
+        #expect(current.invocations[1].nativeTurnID == "retry")
+        await router.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
     private struct Fixture: Sendable {
         let directory: URL
         let transcript: URL
@@ -472,6 +505,55 @@ struct AgentWorkflowNativeEventsTests {
         }
         await f.router.shutdown()
         await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true])
+    func firstReceiptAfterPaneMoveKeepsInvocationRecoverable(paused: Bool) async throws {
+        let f = try await fixture(conversation: "")
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try await f.store.update(runID: f.run.id) {
+            try $0.didWrite(invocationID: f.invocation.id)
+            if paused {
+                $0.pause(reason: "Operator paused")
+            }
+        }
+        let conversation = UUID().uuidString, windowID = UUID(), sessionID = UUID()
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            var live = $0
+            live.workspacePane.windowID = windowID
+            live.workspacePane.sessionID = sessionID
+            return live
+        })
+        let event = PluginEvent(pluginID: "codex", sessionID: conversation, tmuxPane: "%1", workflow: .init(
+            kind: .submitted, nativeTurnID: "first-turn", transcriptPath: f.transcript.path, text: f.invocation.delivery.input.text
+        ))
+        let context = try await router.receive(event, peer: f.peer)
+        await router.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+        #expect(context?.instance.workspacePane.windowID == windowID)
+        let saved = try await f.store.snapshot().runs[0]
+        var expected = f.instance
+        expected.conversationID = conversation
+        #expect(saved.status == (paused ? .paused : .running))
+        #expect(saved.instances == [expected])
+        #expect(saved.invocations[0].instance == expected)
+        #expect(saved.invocations[0].nativeTurnID == "first-turn")
+        #expect(saved.invocations[0].status == .running)
+        #expect(try AgentWorkflowExecution(validating: saved).run == saved)
+
+        let file = f.directory.appendingPathComponent("ledger.json")
+        let restoredStore = AgentWorkflowStore(fileURL: file, hostID: f.instance.hostID)
+        let restored = try await restoredStore.snapshot().runs[0]
+        #expect(restored.status == .paused)
+        #expect(restored.invocations[0].instance == expected)
+        #expect(restored.invocations[0].nativeTurnID == "first-turn")
+        #expect(restored.invocations[0].status == .uncertain)
+        #expect(restored.invocations[0].delivery == saved.invocations[0].delivery)
+        let ended = try await restoredStore.update(runID: restored.id) { $0.end() }
+        #expect(ended.status == .ended)
+        let reloaded = try await AgentWorkflowStore(fileURL: file, hostID: f.instance.hostID).snapshot()
+        #expect(reloaded.runs[0] == ended)
     }
 
     @Test

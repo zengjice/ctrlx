@@ -77,7 +77,7 @@ actor AgentWorkflowService {
                     continue
                 }
                 guard
-                    let bound = run.instances.first(where: { $0.id == invocation.delivery.toAgentID }),
+                    let bound = run.instance(for: invocation),
                     !run.hasAskedQuestion(for: bound),
                     instances.contains(where: { bound.matchesBinding($0) && $0.readiness == .ready }) else { continue }
                 observedIdle.insert(invocation.id)

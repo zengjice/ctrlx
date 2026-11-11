@@ -20,9 +20,9 @@ public extension AgentWorkflowEndpoint {
 
     func currentInstance(_ bound: AgentWorkflowInstance) async throws -> AgentWorkflowInstance {
         guard
-            let current = try await instances(hostID: bound.hostID).first(where: { bound.matchesBinding($0) }),
+            let current = try await instances(hostID: bound.hostID).first(where: { bound.target == $0.target }),
             current.readiness != .unavailable else {
-            throw AgentWorkflowError("This Agent instance is no longer available. Its old task will not be routed to a replacement.")
+            throw AgentWorkflowError("This Agent tab is unavailable. Restore its window and pane, or choose another tab.")
         }
         return current
     }

@@ -126,7 +126,7 @@ struct AgentWorkflowContentNodeTests {
         let run = try await service.start(definitionID: definition.id, expectedRevision: definition.revision, requestID: UUID(), authorizationExpiresAt: now.addingTimeInterval(60))
         let saved = try await store.update(runID: run.id) { _ = try $0.prepareInvocation(nodeID: a.id, now: now) }
         try await service.checkActiveRuns()
-        #expect(try await store.snapshot().schemaVersion == 6)
+        #expect(try await store.snapshot().schemaVersion == 7)
         let reopened = AgentWorkflowStore(fileURL: path, hostID: hostID)
         let recovered = try #require(try await reopened.snapshot().runs.first)
         #expect(recovered.status == .paused)

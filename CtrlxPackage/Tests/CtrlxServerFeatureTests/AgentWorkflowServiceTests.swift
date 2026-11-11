@@ -188,19 +188,18 @@ struct AgentWorkflowServiceTests {
     }
 
     @Test
-    func replacementCannotInheritPausedRun() async throws {
+    func pausedRunWithoutDeliveredTasksUsesTheRestartedAgent() async throws {
         let f = try await fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
         let run = try await start(f)
         let paused = try await f.service.pause(runID: run.id, expectedRevision: run.revision)
         f.backend.observations[0].processRuntimeID = "replacement-start"
-        await #expect(throws: AgentWorkflowError.self) {
-            try await f.service.resume(runID: run.id, expectedRevision: paused.revision)
-        }
+        let resumed = try await f.service.resume(runID: run.id, expectedRevision: paused.revision)
         let snapshot = try await f.service.snapshot()
-        #expect(snapshot.runs.first?.status == .paused)
+        #expect(resumed.status == .running)
         #expect(snapshot.instances.first?.id != run.instances.first?.id)
-        #expect(f.backend.scheduled.count == 1)
+        #expect(resumed.instances.first?.id == snapshot.instances.first?.id)
+        #expect(f.backend.scheduled == [run.id, run.id])
     }
 
     @Test(arguments: [
@@ -270,7 +269,7 @@ struct AgentWorkflowServiceTests {
         await f.service.shutdown()
         let saved = try await f.store.snapshot().runs[0]
         #expect(saved.id == run.id && saved.status == .paused)
-        #expect(saved.issue?.contains("identity") == true)
+        #expect(saved.issue?.contains("tab is unavailable") == true)
         #expect(f.backend.scheduled == [run.id])
         let scans = f.backend.scans
         try await Task.sleep(for: .milliseconds(30))

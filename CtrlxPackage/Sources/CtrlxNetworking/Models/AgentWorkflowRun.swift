@@ -65,7 +65,7 @@ public struct AgentWorkflowDelivery: Codable, Equatable, Identifiable, Sendable 
     public let runID: UUID
     public let round: Int
     public let invocationID: UUID
-    public let toAgentID: UUID?
+    public var toAgentID: UUID?
     public let sources: [AgentWorkflowSource]
     public let input: AgentWorkflowInput
 
@@ -108,7 +108,8 @@ public struct AgentWorkflowInvocation: Codable, Equatable, Identifiable, Sendabl
     public let id: UUID
     public let nodeID: UUID
     public let round: Int
-    public let delivery: AgentWorkflowDelivery
+    public var delivery: AgentWorkflowDelivery
+    public var instance: AgentWorkflowInstance?
     public let createdAt: Date
     public var status: AgentWorkflowInvocationStatus
     public var nativeTurnID: String?
@@ -165,7 +166,7 @@ public struct AgentWorkflowFinishRequest: Codable, Equatable, Sendable {
 /// instance reservations; ending releases them without terminating the Agents.
 public struct AgentWorkflowRun: Codable, Equatable, Identifiable, Sendable {
     public let id: UUID
-    public let definition: AgentWorkflowDefinition
+    public var definition: AgentWorkflowDefinition
     public var instances: [AgentWorkflowInstance]
     public let createdAt: Date
     public let authorizationExpiresAt: Date
@@ -176,6 +177,10 @@ public struct AgentWorkflowRun: Codable, Equatable, Identifiable, Sendable {
     public var issue: String?
     public var invocations: [AgentWorkflowInvocation]
     public var finishRequest: AgentWorkflowFinishRequest?
+
+    public func instance(for invocation: AgentWorkflowInvocation) -> AgentWorkflowInstance? {
+        invocation.instance ?? instances.first { $0.id == invocation.delivery.toAgentID }
+    }
 
     public init(
         id: UUID = UUID(),

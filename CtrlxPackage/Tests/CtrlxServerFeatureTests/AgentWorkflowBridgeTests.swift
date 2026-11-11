@@ -137,6 +137,11 @@ struct AgentWorkflowBridgeTests {
         )
         let now = Date()
         let run = try await f.store.start(definitionID: definition.id, expectedRevision: definition.revision, requestID: UUID(), now: now, authorizationExpiresAt: now.addingTimeInterval(60))
+        try await f.store.update(runID: run.id) {
+            let invocation = try $0.prepareInvocation(nodeID: node.id, now: now)
+            try $0.beginWriting(invocationID: invocation.id, instance: bound, now: now)
+            try $0.accept(invocationID: invocation.id, instance: bound, nativeTurnID: "accepted")
+        }
         var switched = original
         switched.conversationID = UUID().uuidString
         let current = try #require(await f.store.reconcile([switched]).first)

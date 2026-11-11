@@ -67,7 +67,7 @@ extension AgentWorkflowStore {
             run.authorizationExpiresAt > now,
             let saved = run.invocations.first(where: { $0.id == invocation.id }),
             saved.status == status, saved.round == run.round, saved.delivery == invocation.delivery,
-            let bound = run.instances.first(where: { $0.id == saved.delivery.toAgentID }),
+            let bound = run.instance(for: saved),
             bound.matchesBinding(instance) else {
             throw AgentWorkflowError("This invocation is no longer authorized to read workflow attachments.")
         }
@@ -95,7 +95,7 @@ extension AgentWorkflowStore {
 
     func validateStartAttachments(_ definition: AgentWorkflowDefinition, instances: [AgentWorkflowInstance]) throws {
         for node in definition.nodes {
-            guard let instance = instances.first(where: { $0.id == node.agentInstanceID }) else { continue }
+            guard let instance = definition.instance(for: node.agentInstanceID, in: instances) else { continue }
             let ids = node.input.attachmentIDs + (definition.initialTask(for: node) == .textAndAttachments ? definition.initialInput.attachmentIDs : [])
             _ = try attachmentFiles(Array(Set(ids)), instance: instance)
         }

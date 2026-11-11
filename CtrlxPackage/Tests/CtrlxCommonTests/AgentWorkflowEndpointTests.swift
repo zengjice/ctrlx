@@ -167,7 +167,7 @@ struct AgentWorkflowEndpointTests {
     }
 
     @Test
-    func openingAnAgentFollowsMovesButNeverAReplacementProcess() async throws {
+    func openingAnAgentResolvesTheStableTargetAcrossRestarts() async throws {
         let transport = Transport()
         let hostID = transport.response.hostID
         let instance = AgentWorkflowInstance(
@@ -177,7 +177,7 @@ struct AgentWorkflowEndpointTests {
             capabilities: .init(maximumInputBytes: 100_000), readiness: .ready
         )
         var moved = instance
-        moved.workspacePane.windowID = UUID()
+        moved.workspacePane.serverID = "restarted-server"
         moved.workspacePane.sessionID = UUID()
         transport.response.instances = .init(items: [moved], nextOffset: nil)
         #expect(try await transport.endpoint.currentInstance(instance) == moved)
@@ -187,6 +187,10 @@ struct AgentWorkflowEndpointTests {
             workingDirectory: "/work", capabilities: instance.capabilities, readiness: .ready
         )
         transport.response.instances = .init(items: [replacement], nextOffset: nil)
+        #expect(try await transport.endpoint.currentInstance(instance) == replacement)
+        var differentWindow = moved
+        differentWindow.workspacePane.windowID = UUID()
+        transport.response.instances = .init(items: [differentWindow], nextOffset: nil)
         await #expect(throws: AgentWorkflowError.self) { try await transport.endpoint.currentInstance(instance) }
         moved.readiness = .unavailable
         transport.response.instances = .init(items: [moved], nextOffset: nil)

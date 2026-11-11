@@ -261,7 +261,7 @@ struct AgentWorkflowConfigurationView: View {
                     ForEach(definition.agents) { participant in
                         VStack(alignment: .leading) {
                             Text(participant.name).font(.headline)
-                            Text(instances.first { $0.id == participant.id }?.displayName ?? "Agent unavailable")
+                            Text(definition.instance(for: participant.id, in: instances)?.displayName ?? "Agent unavailable")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }
@@ -274,7 +274,7 @@ struct AgentWorkflowConfigurationView: View {
                             } label: { nodeLabel(node, definition: definition) }
                         } else {
                             VStack(alignment: .leading, spacing: 6) {
-                                let instance = instances.first { $0.id == node.agentInstanceID }
+                                let instance = definition.instance(for: node.agentInstanceID, in: instances)
                                 Button {
                                     if let instance {
                                         openAgent(instance)
@@ -348,7 +348,7 @@ struct AgentWorkflowConfigurationView: View {
             Label(node.name, symbol: node.kind == .content ? .docTextFill : .terminal).font(.headline)
             if node.kind == .content {
                 Text("Content node").font(.caption).foregroundStyle(.secondary)
-            } else if let instance = instances.first(where: { $0.id == node.agentInstanceID }) {
+            } else if let instance = definition.instance(for: node.agentInstanceID, in: instances) {
                 Text("\(definition.agents.first { $0.id == instance.id }?.name ?? instance.displayName) · \(instance.displayName) · \(instance.readiness.title)")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
@@ -385,8 +385,8 @@ struct AgentWorkflowConfigurationView: View {
             let metadata = try await endpoint.attachments(Array(value.attachmentIDs), hostID: hostID)
             try Task.checkCancellation()
             attachments = Dictionary(uniqueKeysWithValues: metadata.map { ($0.id, $0) })
-            definition = value
             instances = value.agentInstanceIDs.isEmpty ? [] : try await endpoint.instances(hostID: hostID)
+            definition = value.resolvingAgents(in: instances)
             try Task.checkCancellation()
             error = nil
         } catch {

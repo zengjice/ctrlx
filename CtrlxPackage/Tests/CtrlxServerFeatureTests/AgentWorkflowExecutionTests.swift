@@ -251,7 +251,14 @@ struct AgentWorkflowExecutionTests {
         #expect(execution.run.status == .paused)
         #expect(execution.run.invocations.first { $0.id == a.id }?.result?.text == "Keep this result")
         #expect(execution.readyNodeIDs.isEmpty)
-        #expect(throws: AgentWorkflowError.self) { try execution.resume(instances: execution.run.instances, now: now) }
+        try execution.resume(instances: execution.run.instances, now: now)
+        #expect(execution.readyNodeIDs == [b.nodeID])
+        let retry = try start(2, in: &execution)
+        #expect(retry.id != b.id)
+        try finish(2, invocation: retry, text: "Retry succeeded", in: &execution)
+        #expect(execution.readyNodeIDs == [execution.run.definition.nodes[3].id])
+        #expect(execution.run.invocations.first { $0.id == b.id }?.status == .failed)
+        _ = try AgentWorkflowExecution(validating: execution.run)
     }
 
     @Test

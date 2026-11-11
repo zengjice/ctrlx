@@ -199,7 +199,7 @@ struct AgentWorkflowRequestTests {
     }
 
     @Test(arguments: [false, true])
-    func terminalControlFollowsTheReplacementAgentWithoutChangingItsOldRun(reusesPID: Bool) async throws {
+    func terminalControlKeepsTheTargetReservationUntilTheOldRunEnds(reusesPID: Bool) async throws {
         let f = try await fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
         let original = f.instances[0]
@@ -217,11 +217,14 @@ struct AgentWorkflowRequestTests {
         let service = AgentWorkflowService(store: f.store, scan: { _ in [replacement] }, schedule: { _ in }, now: { now })
         let live = try #require(await service.refreshInstancesCatalog().first)
         #expect(live.id != original.id && live.workspacePane == original.workspacePane)
+        let reserved = try #require(await service.handle(.init(.terminal(original.workspacePane))).run)
+        #expect(reserved.summary.id == oldRun.summary.id && reserved.summary.status == .paused)
+        _ = try await service.end(runID: oldRun.summary.id, expectedRevision: reserved.summary.revision)
         let node = AgentWorkflowNode(name: "Replacement", agentInstanceID: live.id)
         let definition = try await service.save(.init(name: "New workflow", hostID: f.hostID, nodes: [node], edges: [], entryNodeID: node.id), expectedRevision: nil)
         let newRun = try await service.start(definitionID: definition.id, expectedRevision: definition.revision, requestID: UUID(), authorizationExpiresAt: now.addingTimeInterval(3_600))
         let oldState = try #require(await f.store.snapshot().runs.first { $0.id == oldRun.summary.id })
-        #expect(oldState.status == .paused)
+        #expect(oldState.status == .ended)
 
         let current = try #require(await service.handle(.init(.terminal(original.workspacePane))).run)
         #expect(current.summary.id == newRun.id && current.summary.status == .running)

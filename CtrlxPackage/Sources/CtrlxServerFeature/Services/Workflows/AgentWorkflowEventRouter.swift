@@ -132,10 +132,13 @@ actor AgentWorkflowEventRouter {
         // authenticated evidence through temporary process-scan outages.
         let instance = observed
 
-        for run in archive.runs where run.instances.contains(where: {
+        for run in archive.runs where (run.instances + run.invocations.compactMap { run.instance(for: $0) }).contains(where: {
             native.kind == .submitted ? $0.matchesProcess(instance) : $0.matchesBinding(instance)
         }) {
-            let invocations = run.invocations.filter { $0.delivery.toAgentID == instance.id }
+            let invocations = run.invocations.filter {
+                guard let bound = run.instance(for: $0) else { return false }
+                return native.kind == .submitted ? bound.matchesProcess(instance) : bound.matchesBinding(instance)
+            }
             switch native.kind {
             case .submitted:
                 if
@@ -144,8 +147,9 @@ actor AgentWorkflowEventRouter {
                             && ($0.nativeTurnID == nil || $0.nativeTurnID == native.nativeTurnID)
                             && [.writing, .awaitingAcceptance, .uncertain, .running, .succeeded, .failed].contains($0.status)
                     }) {
-                    guard pending[invocation.id] == nil else { return nil }
-                    let bindsConversation = !run.instances.contains { $0.matchesBinding(instance) }
+                    // A failed attempt is immutable; its duplicate receipt must not interrupt a retry.
+                    guard invocation.status != .failed, pending[invocation.id] == nil else { return nil }
+                    let bindsConversation = run.instance(for: invocation)?.matchesBinding(instance) != true
                     if bindsConversation, try !AgentWorkflowExecution(validating: run).canBindFirstConversation(instance, invocationID: invocation.id) {
                         if !run.status.isTerminal {
                             try await store.update(runID: run.id) { $0.pause(reason: "The Agent's conversation changed after its first accepted task. Start a new run.") }

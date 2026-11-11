@@ -123,6 +123,11 @@ struct AgentWorkflowStoreTests {
         let fixture = try await fixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
         let run = try await start(fixture)
+        try await fixture.store.update(runID: run.id) {
+            let invocation = try $0.prepareInvocation(nodeID: run.definition.entryNodeID, now: now)
+            try $0.beginWriting(invocationID: invocation.id, instance: fixture.instances[0], now: now)
+            try $0.accept(invocationID: invocation.id, instance: fixture.instances[0], nativeTurnID: "accepted")
+        }
         var observations = fixture.observations
         switch scenario {
         case "process": observations[0].processRuntimeID = "reused-pid"
@@ -174,7 +179,7 @@ struct AgentWorkflowStoreTests {
         #expect(unsupported[1].readiness == .ready)
         let paused = try #require(await fixture.store.snapshot().runs.first)
         #expect(paused.status == .paused)
-        #expect(paused.issue == observations[0].capabilityIssue)
+        #expect(try paused.issue?.contains(#require(observations[0].capabilityIssue)) == true)
         await #expect(throws: AgentWorkflowError.self) {
             try await fixture.store.update(runID: run.id) { try $0.resume(instances: unsupported, now: now) }
         }
