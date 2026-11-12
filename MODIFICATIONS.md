@@ -7,6 +7,24 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.160 — Keep running Agents available after CLI upgrades
+
+- Let an existing workflow Agent remain eligible when its CLI version is missing
+  or empty, including after an upgrade removes the original executable. Keep
+  rejecting known unsupported, malformed and prerelease versions; do not replace
+  a running process's version with a different CLI from PATH. Process identity,
+  Hook protocol, task receipt and native-turn checks still apply. Automatic
+  session-resume version checks remain independent.
+  See [workflow admission](docs/multi-agent-design.md). Source: `520c9940`.
+
+- Validation: 80 focused Swift tests passed, covering both Agent CLI ranges,
+  missing/empty versions, automatic-resume separation, real fixture processes
+  whose executables are removed while running, and workflow identity/Hook events.
+  Lint for six Swift files, both boundary checks and diff checks passed. This
+  release packages macOS only; full E2E, real-model workflows, iPhone UI and
+  Apple Intelligence evaluations were not run. Browser runtime and codec SDK
+  are unchanged; prior media acceptance is reused after checking SDK hash/UUID.
+
 ## 3.0.159 — Persistent file transfers and simpler Agent workflows
 
 - Keep explicit file downloads and file/image uploads alive when switching Files
