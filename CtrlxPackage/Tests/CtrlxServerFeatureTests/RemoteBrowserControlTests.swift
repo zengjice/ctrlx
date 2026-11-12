@@ -16,6 +16,7 @@
             var requests: [[String: Any]] = []
             var onBrowserRequest: (([String: Any]) throws -> Data)?
             var closed: [String] = []
+            var navigations: [(String, String)] = []
             var extensionGrant: (tab: String, token: String)?
             var extensionRequests: [[String: Any]] = []
             var onExtensionRequest: (([String: Any]) throws -> Data)?
@@ -65,9 +66,18 @@
             }
 
             func navigateTab(_ identifier: String, url: String) { }
-            func goBack(_ identifier: String) { }
-            func goForward(_ identifier: String) { }
-            func reloadTab(_ identifier: String) { }
+            func goBack(_ identifier: String) {
+                navigations.append((identifier, "back"))
+            }
+
+            func goForward(_ identifier: String) {
+                navigations.append((identifier, "forward"))
+            }
+
+            func reloadTab(_ identifier: String) {
+                navigations.append((identifier, "reload"))
+            }
+
             func showDevTools(_ identifier: String) { }
             func closeTab(_ identifier: String) {
                 closed.append(identifier)

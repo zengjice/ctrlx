@@ -30,11 +30,13 @@ struct BrowserTab: Identifiable, Equatable {
     var parentTabId: UUID?
     /// Native Chromium tabs (agent-owned or human-only) are transient. Never
     /// restore them as WebKit pages or grant a new Codex control over old tabs.
-    var isAgentBrowser: Bool = false
-    var isViewerLocal: Bool = false
-    var isSimulator: Bool = false
+    var isAgentBrowser = false
+    var isViewerLocal = false
+    var isSimulator = false
     var canClose = true
-    var isTransient: Bool { isAgentBrowser || isSimulator }
+    var isTransient: Bool {
+        isAgentBrowser || isSimulator
+    }
 
     init(
         id: UUID = UUID(),
@@ -371,21 +373,23 @@ struct BrowserTabContentView: View {
                 return data
             }, onEditingChanged: { editing in
                 isAnnotating = editing
-                if editing { state.webView.window?.makeFirstResponder(nil) }
-            }, captureRequest: captureRequest) {
-              ZStack {
-                BrowserWebViewRepresentable(webView: state.webView)
-                if let error = state.navigationError {
-                    BrowserNavigationErrorView(
-                        error: error,
-                        onRetry: { state.retryAfterNavigationError() },
-                        // Close the tab rather than just hiding the overlay —
-                        // the page underneath is usually blank (failed first
-                        // load), which would leave a dead-looking browser.
-                        onClose: { onRequestClose() }
-                    )
+                if editing {
+                    state.webView.window?.makeFirstResponder(nil)
                 }
-              }
+            }, captureRequest: captureRequest) {
+                ZStack {
+                    BrowserWebViewRepresentable(webView: state.webView)
+                    if let error = state.navigationError {
+                        BrowserNavigationErrorView(
+                            error: error,
+                            onRetry: { state.retryAfterNavigationError() },
+                            // Close the tab rather than just hiding the overlay —
+                            // the page underneath is usually blank (failed first
+                            // load), which would leave a dead-looking browser.
+                            onClose: { onRequestClose() }
+                        )
+                    }
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             if !state.downloads.isEmpty {
@@ -397,6 +401,15 @@ struct BrowserTabContentView: View {
         }
         .onChange(of: state.pageTitle) { _, newValue in
             onTitleChange(newValue)
+        }
+        .browserKeyboardShortcuts(isEnabled: !isAnnotating) { shortcut in
+            guard !isAnnotating else { return }
+            switch shortcut {
+            case .reload: state.webView.reload()
+            case .back: state.webView.goBack()
+            case .forward: state.webView.goForward()
+            case .focusAddress: state.urlFieldFocusRequest += 1
+            }
         }
         .onChange(of: state.currentURL) { _, newValue in
             if let newValue {
@@ -422,8 +435,7 @@ struct BrowserTabContentView: View {
             }
             .buttonStyle(.borderless)
             .disabled(!state.canGoBack)
-            .keyboardShortcut("[", modifiers: .command)
-            .help("Back")
+            .help("Back (⌘[)")
             .accessibilityLabel("Back")
 
             Button {
@@ -433,8 +445,7 @@ struct BrowserTabContentView: View {
             }
             .buttonStyle(.borderless)
             .disabled(!state.canGoForward)
-            .keyboardShortcut("]", modifiers: .command)
-            .help("Forward")
+            .help("Forward (⌘])")
             .accessibilityLabel("Forward")
 
             Button {
@@ -453,8 +464,7 @@ struct BrowserTabContentView: View {
                 }
             }
             .buttonStyle(.borderless)
-            .keyboardShortcut("r", modifiers: .command)
-            .help(state.isLoading ? "Stop" : "Reload")
+            .help(state.isLoading ? "Stop" : "Reload (⌘R)")
             .accessibilityLabel(state.isLoading ? "Stop" : "Reload")
 
             Button {
@@ -1072,7 +1082,9 @@ struct BrowserURLConfirmationView: View {
     private func isRememberDomain(_ host: String) -> Binding<Bool> {
         Binding(
             get: {
-                if case let .domain(scoped) = rememberScope { return scoped == host }
+                if case let .domain(scoped) = rememberScope {
+                    return scoped == host
+                }
                 return false
             },
             set: { isOn in
