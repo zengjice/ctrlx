@@ -106,6 +106,29 @@ class IOSProfilesTests(unittest.TestCase):
         profiles, _ = self.select(older + self.profiles)
         self.assertEqual(profiles['app'][2]['ExpirationDate'], datetime.datetime(2027, 11, 3))
 
+    def add_share_profile(self):
+        self.bundles['share'] = 'com.example.ctrlx.share'
+        self.requested['share'] = copy.deepcopy(self.requested['extension'])
+        profile = copy.deepcopy(self.profiles[1][1])
+        profile['Name'] = profile['UUID'] = 'share'
+        profile['Entitlements']['application-identifier'] = self.team + '.' + self.bundles['share']
+        self.profiles.append((Path('share.mobileprovision'), profile))
+
+    def test_share_extension_joins_the_same_identity_groups_and_devices(self):
+        self.add_share_profile()
+        profiles, identity = self.select()
+        self.assertEqual(set(profiles), {'app', 'extension', 'share'})
+        self.assertEqual(identity, self.digest)
+        self.assertNotIn('aps-environment', profiles['share'][3])
+
+    def test_missing_share_profile_or_disjoint_device_cannot_create_partial_package(self):
+        self.add_share_profile()
+        with self.assertRaises(ValueError):
+            self.select(self.profiles[:2])
+        self.profiles[2][1]['ProvisionedDevices'] = ['OTHER']
+        with self.assertRaises(ValueError):
+            self.select()
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -63,6 +63,31 @@ markers left by closing the last terminal.
 Older Viewers see only the legacy pane catalog; older Host entry points retain
 their former pane behavior. The pane rules below describe that compatibility path.
 
+## iOS system sharing into CtrlX
+
+CtrlX appears in the iOS share sheet for up to five photos/files per share.
+The Share Extension streams temporary provider representations into the private
+App Group inbox and publishes only complete batches. It does not connect to a
+Host or send terminal input. The source app's originals remain unchanged.
+Photos are limited to 20 MiB each; ordinary files and the whole batch are capped
+at 1 GiB. Folders and symbolic links are rejected.
+
+After saving, open CtrlX. Shared photos appear as **Add Shared Photos to This
+Agent** above the selected Agent's input controls, reusing image preparation,
+preview and the guarded encrypted attachment command. They do not press Return.
+Ordinary files appear as **Upload Shared Files Here** in the selected Files tab,
+using its current Host directory and existing chunked upload/cancellation flow.
+There is no Agent-versus-Files picker. The Sessions screen reminds the user when
+items are waiting; switching Hosts or panes does not retarget an accepted photo
+request. Only individually confirmed transfers remove inbox copies. Failed or
+cancelled items remain available for retry; Discard removes only local copies.
+
+The extension does not launch the containing app: Apple exposes URL opening for
+Today/iMessage extensions, not Share Extensions. See
+[the extension-context API](https://developer.apple.com/documentation/foundation/nsextensioncontext/open(_:completionhandler:)).
+The extension uses the existing App Group and a separate `.share` bundle ID;
+local device packaging requires the matching profile described in [Release](../RELEASE.md#gravtice-identity-transition).
+
 ## Mac 本机 IPA 安装
 
 Mac Host 和 Mac Viewer 均可从菜单「File → Install IPA on iPhone…」选择当前 Mac 的

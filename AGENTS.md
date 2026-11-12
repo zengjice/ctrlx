@@ -128,7 +128,8 @@ the `.xcodeproj`, so local packages and shared schemes resolve consistently.
 
 Keep personal signing data out of Git. Copy `Config/Local.xcconfig.example` to
 the ignored `Config/Local.xcconfig`, then set the development team and unique app
-and notification-extension bundle identifiers there. Never hard-code a personal
+and notification-extension bundle identifiers there. The share extension defaults
+to the app bundle ID plus `.share` and can be overridden in the same local file. Never hard-code a personal
 team or provisioning profile in `project.pbxproj`.
 
 Only for explicitly requested Simulator compile validation, use the managed
@@ -159,7 +160,7 @@ reimplementing its signing steps:
 
 The script can run in any Git worktree. Configure that worktree's ignored
 `Config/Local.xcconfig`; caches and artifacts remain worktree-local. It builds
-both the app and its notification extension, selects installed provisioning
+the app, notification extension and share extension, selects installed provisioning
 profiles matching the bundle ID and configured team, signs and verifies the result,
 and defaults to an optimized Release build:
 
@@ -189,10 +190,10 @@ configuration printed by the script; do not reuse the other configuration's app.
 These are locally distributed device IPAs. TestFlight/App Store upload remains deliberately
 blocked by `scripts/testflight.sh` pending the review documented in `RELEASE.md`.
 
-Both provisioning profiles must belong to the same team. The app bundle ID must
+All three provisioning profiles must belong to the same team. The app bundle ID must
 also match the Relay's APNs configuration for background notifications to work.
 Current iOS IDs use `com.gravtice.ctrlx` and
-`com.gravtice.ctrlx.notification-service`, with App Group
+`com.gravtice.ctrlx.notification-service` and `com.gravtice.ctrlx.share`, with App Group
 `group.com.gravtice.ctrlx`. Mac uses `com.gravtice.ctrlx.macos` and migrates the
 previous Keychain service/preferences at startup. See the
 [identity transition](RELEASE.md#gravtice-identity-transition) before changing
@@ -277,7 +278,7 @@ install/launch succeeds. See [installation and rollback](RELEASE.md#local-overwr
 Prefer the CoreDevice UUID from `devicectl list devices` over a device name.
 When discovery or installation fails, first verify that the phone is unlocked,
 trusted, in Developer Mode, and shown as available. For signing errors, verify
-`Config/Local.xcconfig`, the selected Apple Development/Distribution certificate, and both installed
+`Config/Local.xcconfig`, the selected Apple Development/Distribution certificate, and all three installed
 provisioning profiles before changing build settings.
 
 **Killing Mac app:** Use `osascript -e 'quit app "CtrlX"'` — `pkill`/`killall` don't work reliably.

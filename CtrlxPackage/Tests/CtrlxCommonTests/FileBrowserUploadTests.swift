@@ -13,24 +13,32 @@ struct FileBrowserUploadTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         return root
     }
+
     private func client(_ reader: UploadFileReader) -> FileBrowserUploadReader {
-        .init(open: { try await reader.open($0) }, read: { try await reader.read($0) },
-              finish: { try await reader.finish($0) }, close: { await reader.close($0) })
+        .init(
+            open: { try await reader.open($0) },
+            read: { try await reader.read($0) },
+            finish: { try await reader.finish($0) },
+            close: { await reader.close($0) }
+        )
     }
 
-    @Test func sequentialFilesHaveBoundedChunksFixedDestinationAndChecksums() async throws {
+    @Test
+    func sequentialFilesHaveBoundedChunksFixedDestinationAndChecksums() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let urls = [root.appendingPathComponent("中文 file.bin"), root.appendingPathComponent("empty")]
         let data = Data(repeating: 15, count: FileBrowserLimits.chunkBytes + 7)
-        try data.write(to: urls[0]); try Data().write(to: urls[1])
+        try data.write(to: urls[0])
+        try Data().write(to: urls[1])
         var content = Data(), completed = 0, currentName = ""
         let source = FileBrowserSource(id: "remote", paneID: nil) { operation in
             guard case let .upload(request) = operation else { throw FileBrowserError.message("Expected upload") }
             switch request {
             case let .begin(_, directory, name, _):
                 #expect(directory == "/Host/target")
-                content = Data(); currentName = name
+                content = Data()
+                currentName = name
                 return .uploaded(offset: 0, path: nil)
             case let .append(_, offset, bytes):
                 #expect(bytes.count <= FileBrowserLimits.chunkBytes)
@@ -40,7 +48,8 @@ struct FileBrowserUploadTests {
             case let .finish(_, hash):
                 #expect(hash == SHA256.hash(data: content).map { String(format: "%02x", $0) }.joined())
                 return .uploaded(offset: content.count, path: "/Host/target/\(currentName)")
-            case .cancel: Issue.record("Successful uploads should not cancel"); return .uploaded(offset: 0, path: nil)
+            case .cancel: Issue.record("Successful uploads should not cancel")
+                return .uploaded(offset: 0, path: nil)
             }
         }
         await withDependencies { $0[FileBrowserUploadReader.self] = client(UploadFileReader()) } operation: {
@@ -53,35 +62,45 @@ struct FileBrowserUploadTests {
         #expect(try Data(contentsOf: urls[0]) == data, "Import copies, never moves")
     }
 
-    @Test func failedFileIsCancelledAndNextFileContinues() async throws {
+    @Test
+    func failedFileIsCancelledAndNextFileContinues() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let urls = [root.appendingPathComponent("duplicate"), root.appendingPathComponent("good")]
-        for url in urls { try Data().write(to: url) }
+        for url in urls {
+            try Data().write(to: url)
+        }
         var cancelled = 0, saved = 0
+        var acknowledged: [URL] = []
         let source = FileBrowserSource(id: "remote", paneID: nil) { operation in
             guard case let .upload(request) = operation else { throw FileBrowserError.message("Expected upload") }
             switch request {
             case let .begin(_, _, name, _):
-                if name == "duplicate" { throw FileBrowserError.message("Already exists") }
+                if name == "duplicate" {
+                    throw FileBrowserError.message("Already exists")
+                }
                 return .uploaded(offset: 0, path: nil)
             case .finish: return .uploaded(offset: 0, path: "/Host/good")
-            case .cancel: cancelled += 1; return .uploaded(offset: 0, path: nil)
+            case .cancel: cancelled += 1
+                return .uploaded(offset: 0, path: nil)
             case .append: throw FileBrowserError.message("Unexpected chunk")
             }
         }
         await withDependencies { $0[FileBrowserUploadReader.self] = client(UploadFileReader()) } operation: {
             let upload = FileBrowserUpload()
-            await upload.run(urls: urls, directory: "/Host", source: source) { saved += 1 }
+            await upload.run(urls: urls, directory: "/Host", source: source, onSaved: { saved += 1 }, onFileSaved: { acknowledged.append($0) })
             #expect(cancelled == 1 && saved == 1)
+            #expect(acknowledged == [urls[1]], "Only Host-confirmed files may be removed from the shared inbox")
             #expect(upload.summary?.contains("duplicate: Already exists") == true)
         }
     }
 
-    @Test func oldHostIsRejectedBeforeReadingOrSending() async {
+    @Test
+    func oldHostIsRejectedBeforeReadingOrSending() async {
         var calls = 0
         let source = FileBrowserSource(id: "legacy", paneID: nil, uploadUnavailableReason: "Update Host") { _ in
-            calls += 1; return .uploaded(offset: 0, path: nil)
+            calls += 1
+            return .uploaded(offset: 0, path: nil)
         }
         let upload = FileBrowserUpload()
         await upload.run(urls: [URL(fileURLWithPath: "/unreadable")], directory: "/Host", source: source) { Issue.record("Unexpected save") }
@@ -89,7 +108,8 @@ struct FileBrowserUploadTests {
         #expect(upload.summary?.contains("Update Host") == true)
     }
 
-    @Test func readerRejectsFoldersAndLinks() async throws {
+    @Test
+    func readerRejectsFoldersAndLinks() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let reader = UploadFileReader()
@@ -100,7 +120,8 @@ struct FileBrowserUploadTests {
         await #expect(throws: (any Error).self) { try await reader.open(link) }
     }
 
-    @Test func snapshotSurvivesLaterSavesAndCloses() async throws {
+    @Test
+    func snapshotSurvivesLaterSavesAndCloses() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let reader = UploadFileReader()
@@ -115,7 +136,9 @@ struct FileBrowserUploadTests {
             NSFileCoordinator().coordinate(writingItemAt: file, options: [], error: &coordinationError) { url in
                 result = Result { try Data([1]).write(to: url) }
             }
-            if let coordinationError { throw coordinationError }
+            if let coordinationError {
+                throw coordinationError
+            }
             try #require(result).get()
         }.value
         var content = Data()
@@ -153,19 +176,26 @@ struct FileBrowserUploadTests {
                     try Data("complete saved contents".utf8).write(to: url)
                 }
             }
-            if let coordinationError { throw coordinationError }
+            if let coordinationError {
+                throw coordinationError
+            }
             try #require(result).get()
         }
-        for await _ in started { break }
+        for await _ in started {
+            break
+        }
         let reader = UploadFileReader()
         let finished = OSAllocatedUnfairLock(initialState: false)
         let (reading, readingSignal) = AsyncStream<Void>.makeStream()
         let pending = Task.detached {
-            readingSignal.yield(); readingSignal.finish()
+            readingSignal.yield()
+            readingSignal.finish()
             defer { finished.withLock { $0 = true } }
             return try await reader.open(file)
         }
-        for await _ in reading { break }
+        for await _ in reading {
+            break
+        }
         try await Task.sleep(for: .milliseconds(200))
         #expect(!finished.withLock { $0 }, "Reader must not accept stable partial bytes while a save holds coordination")
         if cancel {
@@ -177,17 +207,22 @@ struct FileBrowserUploadTests {
         try await writer.value
         do {
             let opened = try await pending.value
-            if cancel { Issue.record("Cancelled open returned a snapshot") }
+            if cancel {
+                Issue.record("Cancelled open returned a snapshot")
+            }
             #expect(try await reader.read(opened.id) == Data("complete saved contents".utf8))
             _ = try await reader.finish(opened.id)
             await reader.close(opened.id)
         } catch {
-            if !cancel { throw error }
+            if !cancel {
+                throw error
+            }
             #expect(error is CancellationError)
         }
     }
 
-    @Test func cancellingWhileHostAcknowledgesStopsBatchAndSendsCleanup() async throws {
+    @Test
+    func cancellingWhileHostAcknowledgesStopsBatchAndSendsCleanup() async throws {
         let root = try directory()
         defer { try? FileManager.default.removeItem(at: root) }
         let url = root.appendingPathComponent("file")
@@ -199,20 +234,24 @@ struct FileBrowserUploadTests {
             switch request {
             case .begin:
                 begins += 1
-                signal.yield(); signal.finish()
+                signal.yield()
+                signal.finish()
                 try await Task.sleep(for: .seconds(30))
                 return .uploaded(offset: 0, path: nil)
             case .cancel:
                 #expect(!Task.isCancelled, "Cleanup needs an uncancelled task")
                 cancelled += 1
                 return .uploaded(offset: 0, path: nil)
-            default: Issue.record("Cancelled upload continued"); throw CancellationError()
+            default: Issue.record("Cancelled upload continued")
+                throw CancellationError()
             }
         }
         await withDependencies { $0[FileBrowserUploadReader.self] = client(UploadFileReader()) } operation: {
             let upload = FileBrowserUpload()
             let task = Task { await upload.run(urls: [url, url], directory: "/Host", source: source) { Issue.record("Unexpected save") } }
-            for await _ in began { break }
+            for await _ in began {
+                break
+            }
             task.cancel()
             await task.value
             #expect(begins == 1 && cancelled == 1)
@@ -223,7 +262,7 @@ struct FileBrowserUploadTests {
 }
 
 /// The synchronous accessor deliberately holds a coordinated save between writes.
-private final class UploadSaveGate: @unchecked Sendable {
+final private class UploadSaveGate: @unchecked Sendable {
     private let condition = NSCondition()
     private var released = false
 

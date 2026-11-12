@@ -79,6 +79,7 @@ SOURCE_PACKAGES="$LOCAL_BUILD_ROOT/SourcePackages"
 DIST_DIR="$PROJECT_ROOT/dist"
 APP_PATH="$DERIVED_DATA/Build/Products/$CONFIGURATION-iphoneos/CtrlX.app"
 EXTENSION_PATH="$APP_PATH/PlugIns/CtrlxNotificationExtension.appex"
+SHARE_EXTENSION_PATH="$APP_PATH/PlugIns/CtrlxShareExtension.appex"
 IPA_PATH="$DIST_DIR/CtrlX-$VERSION.ipa"
 if [ "$CONFIGURATION" = Debug ]; then
     IPA_PATH="$DIST_DIR/CtrlX-$VERSION-Debug.ipa"
@@ -111,9 +112,14 @@ APP_BUNDLE_ID="${APP_BUNDLE_ID:-$(read_xcconfig_value "$PROJECT_ROOT/Config/Shar
 EXTENSION_BUNDLE_ID="${EXTENSION_BUNDLE_ID:-$(read_xcconfig_value "$PROJECT_ROOT/Config/Shared.xcconfig" CTRLX_IOS_NOTIFICATION_EXTENSION_BUNDLE_IDENTIFIER)}"
 APP_ENTITLEMENTS_SOURCE="${APP_ENTITLEMENTS_SOURCE:-$(read_xcconfig_value "$PROJECT_ROOT/Config/Shared.xcconfig" CTRLX_IOS_APP_ENTITLEMENTS)}"
 EXTENSION_ENTITLEMENTS_SOURCE="${EXTENSION_ENTITLEMENTS_SOURCE:-$(read_xcconfig_value "$PROJECT_ROOT/Config/Shared.xcconfig" CTRLX_IOS_NOTIFICATION_EXTENSION_ENTITLEMENTS)}"
+SHARE_EXTENSION_BUNDLE_ID="$(read_xcconfig_value "$LOCAL_CONFIG" CTRLX_IOS_SHARE_EXTENSION_BUNDLE_IDENTIFIER)"
+SHARE_EXTENSION_BUNDLE_ID="${SHARE_EXTENSION_BUNDLE_ID:-$APP_BUNDLE_ID.share}"
+SHARE_ENTITLEMENTS_SOURCE="$(read_xcconfig_value "$LOCAL_CONFIG" CTRLX_IOS_SHARE_EXTENSION_ENTITLEMENTS)"
+SHARE_ENTITLEMENTS_SOURCE="${SHARE_ENTITLEMENTS_SOURCE:-$(read_xcconfig_value "$PROJECT_ROOT/Config/Shared.xcconfig" CTRLX_IOS_SHARE_EXTENSION_ENTITLEMENTS)}"
 PROFILE_ROOT="$(/usr/bin/mktemp -d "$LOCAL_BUILD_ROOT/profiles.XXXXXX")"
 python3 "$SCRIPT_DIR/ios_profiles.py" prepare --team "$EXPECTED_TEAM_ID" --signing-mode "$SIGNING_MODE" \
     --app-bundle-id "$APP_BUNDLE_ID" --extension-bundle-id "$EXTENSION_BUNDLE_ID" \
+    --share-bundle-id "$SHARE_EXTENSION_BUNDLE_ID" --share-entitlements "$PROJECT_ROOT/$SHARE_ENTITLEMENTS_SOURCE" \
     --app-entitlements "$PROJECT_ROOT/$APP_ENTITLEMENTS_SOURCE" \
     --extension-entitlements "$PROJECT_ROOT/$EXTENSION_ENTITLEMENTS_SOURCE" --output-directory "$PROFILE_ROOT"
 SIGNING_IDENTITY="$(/usr/bin/plutil -extract identity raw -o - "$PROFILE_ROOT/signing.json")"
@@ -142,11 +148,15 @@ log_info "Building CtrlX $VERSION ($CONFIGURATION) from $PROJECT_ROOT"
 
 [ -d "$APP_PATH" ] || log_error "Build did not produce $APP_PATH"
 [ -d "$EXTENSION_PATH" ] || log_error "Build did not produce $EXTENSION_PATH"
+[ -d "$SHARE_EXTENSION_PATH" ] || log_error "Build did not produce $SHARE_EXTENSION_PATH"
 
 [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")" = "$APP_BUNDLE_ID" ] \
     || log_error 'Built App bundle ID differs from prepared signing inputs.'
 [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$EXTENSION_PATH/Info.plist")" = "$EXTENSION_BUNDLE_ID" ] \
     || log_error 'Built extension bundle ID differs from prepared signing inputs.'
+[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$SHARE_EXTENSION_PATH/Info.plist")" = "$SHARE_EXTENSION_BUNDLE_ID" ] \
+    || log_error 'Built share extension bundle ID differs from prepared signing inputs.'
+/bin/cp "$PROFILE_ROOT/share.mobileprovision" "$SHARE_EXTENSION_PATH/embedded.mobileprovision"
 /bin/cp "$PROFILE_ROOT/app.mobileprovision" "$APP_PATH/embedded.mobileprovision"
 /bin/cp "$PROFILE_ROOT/extension.mobileprovision" "$EXTENSION_PATH/embedded.mobileprovision"
 
@@ -158,6 +168,8 @@ while IFS= read -r framework; do
 done < <(/usr/bin/find "$APP_PATH" -type d -name '*.framework' -print)
 /usr/bin/codesign --force --sign "$SIGNING_IDENTITY" \
     --entitlements "$EXTENSION_ENTITLEMENTS" --timestamp=none "$EXTENSION_PATH"
+/usr/bin/codesign --force --sign "$SIGNING_IDENTITY" \
+    --entitlements "$PROFILE_ROOT/share-entitlements.plist" --timestamp=none "$SHARE_EXTENSION_PATH"
 /usr/bin/codesign --force --sign "$SIGNING_IDENTITY" \
     --entitlements "$APP_ENTITLEMENTS" --timestamp=none "$APP_PATH"
 python3 "$SCRIPT_DIR/ios_profiles.py" verify --app "$APP_PATH" --output-directory "$PROFILE_ROOT"

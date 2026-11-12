@@ -78,8 +78,13 @@ final class FileBrowserUpload {
         }
     }
 
-    func run(urls: [URL], directory: String, source: FileBrowserSource,
-             onSaved: @MainActor () -> Void) async {
+    func run(
+        urls: [URL],
+        directory: String,
+        source: FileBrowserSource,
+        onSaved: @MainActor () -> Void,
+        onFileSaved: @MainActor (URL) -> Void = { _ in }
+    ) async {
         let token = UUID()
         generation = token
         isRunning = true
@@ -98,7 +103,9 @@ final class FileBrowserUpload {
             return
         }
         for url in urls {
-            if Task.isCancelled || generation != token { return }
+            if Task.isCancelled || generation != token {
+                return
+            }
             filename = url.lastPathComponent
             sentBytes = 0
             totalBytes = 0
@@ -119,16 +126,23 @@ final class FileBrowserUpload {
                     }
                     try await acknowledge(.append(id: file.id, offset: offset, data: data), offset: offset + data.count, source: source)
                     offset += data.count
-                    if generation == token { sentBytes = offset }
+                    if generation == token {
+                        sentBytes = offset
+                    }
                 }
                 let checksum = try await reader.finish(file.id)
                 let path = (directory as NSString).appendingPathComponent(file.name)
                 try await acknowledge(.finish(id: file.id, sha256: checksum), offset: file.size, path: path, source: source)
                 committed = true
                 completed += 1
-                if generation == token { onSaved() }
+                if generation == token {
+                    onSaved()
+                    onFileSaved(url)
+                }
             } catch {
-                if !Task.isCancelled { errors.append("\(url.lastPathComponent): \(error.localizedDescription)") }
+                if !Task.isCancelled {
+                    errors.append("\(url.lastPathComponent): \(error.localizedDescription)")
+                }
             }
             if let fileID {
                 await reader.close(fileID)
@@ -144,11 +158,16 @@ final class FileBrowserUpload {
         }
     }
 
-    private func acknowledge(_ operation: FileBrowserUploadOperation, offset: Int, path: String? = nil,
-                             source: FileBrowserSource) async throws {
+    private func acknowledge(
+        _ operation: FileBrowserUploadOperation,
+        offset: Int,
+        path: String? = nil,
+        source: FileBrowserSource
+    ) async throws {
         try Task.checkCancellation()
-        guard case let .uploaded(actualOffset, actualPath) = try await source.request(.upload(operation)),
-              actualOffset == offset, actualPath == path else {
+        guard
+            case let .uploaded(actualOffset, actualPath) = try await source.request(.upload(operation)),
+            actualOffset == offset, actualPath == path else {
             throw FileBrowserError.message("Host returned an invalid upload acknowledgement. Refresh before retrying.")
         }
     }

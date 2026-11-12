@@ -104,6 +104,9 @@ def verify_app(app, platform, expected=None):
         extension = app / "PlugIns/CtrlxNotificationExtension.appex"
         if not (app / "embedded.mobileprovision").is_file() or not (extension / "embedded.mobileprovision").is_file():
             raise ValueError("Missing signed app/notification extension profiles; build the device App first.")
+        for extension in (app / "PlugIns").glob("*.appex"):
+            if extension.is_symlink() or not (extension / "embedded.mobileprovision").is_file():
+                raise ValueError(f"Missing signed extension profile: {extension.name}")
     subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)], check=True)
     return info
 

@@ -19,6 +19,8 @@
 		8E90F1AF303D271400E38928 /* CtrlxServerFeature in Frameworks */ = {isa = PBXBuildFile; productRef = 819180932F467B82001A43BE /* CtrlxServerFeature */; };
 		AABBCC112F2A00000063PLGN /* plugin in Resources */ = {isa = PBXBuildFile; fileRef = AABBCC102F2A00000063PLGN /* plugin */; };
 		DCF13F6A89DA4860A5776FD7 /* FlyingFox in Frameworks */ = {isa = PBXBuildFile; productRef = 0FF9E03F3BF7435B8FDA207D /* FlyingFox */; };
+		5677A29F24A84CA8B45120CE /* CtrlxShare in Frameworks */ = {isa = PBXBuildFile; productRef = 71085330BA914B0F8EF537F2 /* CtrlxShare */; };
+		B48E88A04EE3401FB9ABECDF /* CtrlxShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 837D1700A2944111A8B9C681 /* CtrlxShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -57,6 +59,13 @@
 			remoteGlobalIDString = 11661051F1244B379044AF6F;
 			remoteInfo = CtrlxE2EHost;
 		};
+		CE66FC3A4C9944C29C583488 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 8B41F63D2DEDD0D5001A66F9 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 23D9DC4306A24094854A7FA0;
+			remoteInfo = CtrlxShareExtension;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -67,6 +76,7 @@
 			dstSubfolderSpec = 13;
 			files = (
 				81581B512F11B9BF005EA7FD /* CtrlxNotificationExtension.appex in Embed Foundation Extensions */,
+				B48E88A04EE3401FB9ABECDF /* CtrlxShareExtension.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -83,6 +93,7 @@
 		9EE526E9177246FAB164195B /* CtrlxE2ERunner.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CtrlxE2ERunner.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A45795AAFABA49589FBB2F35 /* CtrlxE2EHost.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CtrlxE2EHost.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AABBCC102F2A00000063PLGN /* plugin */ = {isa = PBXFileReference; lastKnownFileType = folder; path = plugin; sourceTree = "<group>"; };
+		837D1700A2944111A8B9C681 /* CtrlxShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = CtrlxShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -127,6 +138,13 @@
 				Tests.xcconfig,
 			);
 			target = 8B41F6442DEDD0D5001A66F9 /* Ctrlx */;
+		};
+		61988C4165F745D2A164957E /* Exceptions for "CtrlxShareExtension" folder in "CtrlxShareExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 23D9DC4306A24094854A7FA0 /* CtrlxShareExtension */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -189,6 +207,14 @@
 				8BD71C0A2DEE41E000CEDD92 /* Exceptions for "Config" folder in "Ctrlx" target */,
 			);
 			path = Config;
+			sourceTree = "<group>";
+		};
+		6CD3EF006E6C451F854CFF6A /* CtrlxShareExtension */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				61988C4165F745D2A164957E /* Exceptions for "CtrlxShareExtension" folder in "CtrlxShareExtension" target */,
+			);
+			path = CtrlxShareExtension;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -260,6 +286,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		85C10D2DB63C40B0AE5C68C6 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5677A29F24A84CA8B45120CE /* CtrlxShare in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -273,6 +307,7 @@
 				815F9E6C2F09BFF9003791F7 /* CtrlxServerTests */,
 				815F9E762F09BFF9003791F7 /* CtrlxServerUITests */,
 				81581B4B2F11B9BF005EA7FD /* CtrlxNotificationExtension */,
+				6CD3EF006E6C451F854CFF6A /* CtrlxShareExtension */,
 				5F8636777B20418884930E87 /* CtrlxE2EHost */,
 				6CAE4E3F41BA40068B04C82E /* CtrlxE2ERunner */,
 				AABBCC102F2A00000063PLGN /* plugin */,
@@ -290,6 +325,7 @@
 				815F9E692F09BFF9003791F7 /* CtrlxServerTests.xctest */,
 				815F9E732F09BFF9003791F7 /* CtrlxServerUITests.xctest */,
 				81581B4A2F11B9BF005EA7FD /* CtrlxNotificationExtension.appex */,
+				837D1700A2944111A8B9C681 /* CtrlxShareExtension.appex */,
 				A45795AAFABA49589FBB2F35 /* CtrlxE2EHost.app */,
 				9EE526E9177246FAB164195B /* CtrlxE2ERunner.xctest */,
 			);
@@ -445,6 +481,7 @@
 			);
 			dependencies = (
 				81581B502F11B9BF005EA7FD /* PBXTargetDependency */,
+				2BFA5480684C473B8473163C /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				8B41F6472DEDD0D5001A66F9 /* Ctrlx */,
@@ -506,6 +543,29 @@
 			productName = CtrlxE2ERunner;
 			productReference = 9EE526E9177246FAB164195B /* CtrlxE2ERunner.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		23D9DC4306A24094854A7FA0 /* CtrlxShareExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 011506D4EE8949FD91B2C90E /* Build configuration list for PBXNativeTarget "CtrlxShareExtension" */;
+			buildPhases = (
+				1C71F76528D5428BA8DBCBAB /* Sources */,
+				85C10D2DB63C40B0AE5C68C6 /* Frameworks */,
+				CA5309113DAB44319F3EDD7A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				6CD3EF006E6C451F854CFF6A /* CtrlxShareExtension */,
+			);
+			name = CtrlxShareExtension;
+			packageProductDependencies = (
+				71085330BA914B0F8EF537F2 /* CtrlxShare */,
+			);
+			productName = CtrlxShareExtension;
+			productReference = 837D1700A2944111A8B9C681 /* CtrlxShareExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -571,6 +631,7 @@
 				815F9E682F09BFF9003791F7 /* CtrlxServerTests */,
 				815F9E722F09BFF9003791F7 /* CtrlxServerUITests */,
 				81581B492F11B9BF005EA7FD /* CtrlxNotificationExtension */,
+				23D9DC4306A24094854A7FA0 /* CtrlxShareExtension */,
 				11661051F1244B379044AF6F /* CtrlxE2EHost */,
 				E3BC9293B2B7447CB28061F1 /* CtrlxE2ERunner */,
 			);
@@ -629,6 +690,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		8B41F65A2DEDD0D6001A66F9 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CA5309113DAB44319F3EDD7A /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -812,6 +880,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		1C71F76528D5428BA8DBCBAB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -843,6 +918,11 @@
 			isa = PBXTargetDependency;
 			target = 11661051F1244B379044AF6F /* CtrlxE2EHost */;
 			targetProxy = FCB2ACD285174C4B80DE1973 /* PBXContainerItemProxy */;
+		};
+		2BFA5480684C473B8473163C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 23D9DC4306A24094854A7FA0 /* CtrlxShareExtension */;
+			targetProxy = CE66FC3A4C9944C29C583488 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -1406,6 +1486,66 @@
 			};
 			name = Release;
 		};
+		1E12C2E3B0D74C188A301E04 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReferenceAnchor = 8BD71C052DEE41D800CEDD92 /* Config */;
+			baseConfigurationReferenceRelativePath = Debug.xcconfig;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = "$(CTRLX_IOS_SHARE_EXTENSION_ENTITLEMENTS)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "$(CTRLX_IOS_DEVELOPMENT_TEAM)";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = CtrlxShareExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "CtrlX";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CTRLX_IOS_SHARE_EXTENSION_BUNDLE_IDENTIFIER)";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		C99CA9DF42CA4C9EBCA5A2A2 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReferenceAnchor = 8BD71C052DEE41D800CEDD92 /* Config */;
+			baseConfigurationReferenceRelativePath = Release.xcconfig;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = "$(CTRLX_IOS_SHARE_EXTENSION_ENTITLEMENTS)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = "$(CTRLX_IOS_DEVELOPMENT_TEAM)";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = CtrlxShareExtension/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "CtrlX";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(CTRLX_IOS_SHARE_EXTENSION_BUNDLE_IDENTIFIER)";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1490,6 +1630,15 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		011506D4EE8949FD91B2C90E /* Build configuration list for PBXNativeTarget "CtrlxShareExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1E12C2E3B0D74C188A301E04 /* Debug */,
+				C99CA9DF42CA4C9EBCA5A2A2 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
@@ -1558,6 +1707,10 @@
 		8B41F6842DEDD25C001A66F9 /* CtrlxFeature */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = CtrlxFeature;
+		};
+		71085330BA914B0F8EF537F2 /* CtrlxShare */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = CtrlxShare;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

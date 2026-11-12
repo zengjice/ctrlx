@@ -420,6 +420,12 @@
                         paneID: tab.sourcePaneID,
                         connection: connectionManager.connection(for: hostId)
                     ))
+                    .safeAreaInset(edge: .top, spacing: 0) {
+                        SharedFilesImportBar(tab: tab, source: .remote(
+                            hostID: hostId, paneID: tab.sourcePaneID,
+                            connection: connectionManager.connection(for: hostId)
+                        ))
+                    }
                     .environment(\.browserAnnotationContext, BrowserAnnotationContext.remote(
                         targets: sessionWindows.flatMap(\.panes).compactMap(AgentImageTarget.init(pane:)), client: relayClient,
                         didSend: { target in try await revealAnnotationTarget(target, source: .file(tab.id)) }
@@ -480,6 +486,12 @@
                 } else if let tab = selectedLinkedTab {
                     resourceNavigationBar(tab)
                 }
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                SharedItemsNotice(
+                    showsPhotosHint: !terminalIsVisible || activeAgentPluginID == nil,
+                    showsFilesHint: fileWorkspace.selected == nil
+                )
             }
             .onPreferenceChange(BrowserAnnotationEditingPreference.self) { isResourceAnnotating = $0 }
             .sensoryFeedback(.selection, trigger: resourceNavigationFeedback)

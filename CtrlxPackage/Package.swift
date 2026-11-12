@@ -219,6 +219,7 @@ extension Target.Dependency {
 /// heuristic and fails the relay's Docker build with "the compiler is unable to
 /// type-check this expression in reasonable time."
 var products: [Product] = [
+    .library(name: "CtrlxShare", targets: ["CtrlxShare"]),
     // Products define the executables and libraries a package produces, making them visible to other packages.
     .library(
         name: "CtrlxNetworking",
@@ -304,6 +305,8 @@ let packageDependencies: [Package.Dependency] = [
 ] + macOnlyDependencies()
 
 var targets: [Target] = [
+    .target(name: "CtrlxShare", dependencies: [.ctrlxEncryption]),
+    .testTarget(name: "CtrlxShareTests", dependencies: ["CtrlxShare"]),
     .systemLibrary(name: "CSQLite", providers: [.apt(["libsqlite3-dev"])]),
     // Targets are the basic building blocks of a package, defining a module or a test suite.
     // Targets can depend on other targets in this package and products from dependencies.
@@ -382,6 +385,7 @@ var targets: [Target] = [
     .target(
         name: "CtrlxFeature",
         dependencies: [
+            "CtrlxShare",
             .ctrlxNetworking,
             .ctrlxCommon,
             .ctrlxEncryption,
