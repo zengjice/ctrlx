@@ -13,7 +13,7 @@ struct TmuxAgentRestartTests {
         let description: String
     }
 
-    @Test("Restart and SessionEnd preserve the pane; ordinary and successor exits still close it", arguments: ["direct", "shell", "changed", "busy", "busy-late", "busy-cached", "busy-cached-late", "cli-error", "normal-exit", "terminate-error", "successor-exit", "successor-cached-exit"])
+    @Test("Restart and SessionEnd preserve the pane; ordinary and successor exits still close it", arguments: ["direct", "shell", "environment", "changed", "busy", "busy-late", "busy-cached", "busy-cached-late", "cli-error", "normal-exit", "terminate-error", "successor-exit", "successor-cached-exit"])
     func terminalLifecycle(mode: String) async throws {
         let directory = URL(fileURLWithPath: "/tmp/ctrlx-restart-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -107,7 +107,13 @@ struct TmuxAgentRestartTests {
                     #expect(!coordinator.windowManager.isYoloModeEnabled(for: source.paneID))
                 }
                 let marker = directory.appendingPathComponent("resumed.txt")
-                let launch = AgentForkLaunch(command: .init(command: mode == "cli-error" ? "/usr/bin/false" : "/bin/sh", args: mode == "cli-error" ? [] : ["-c", "printf resumed > \(marker.path.posixSingleQuoted); exec /bin/cat"], env: ["CTRLX_RESTART_FIXTURE": "private-provider-value"]))
+                if mode == "environment" {
+                    for file in [".bash_profile", ".zshrc"] {
+                        try Data("export CTRLX_RESTART_UPDATED_ENV=fresh\n".utf8).write(to: directory.appendingPathComponent(file))
+                    }
+                }
+                let output = mode == "environment" ? #"printf 'resumed[%s]' "$CTRLX_RESTART_UPDATED_ENV""# : "printf resumed"
+                let launch = AgentForkLaunch(command: .init(command: mode == "cli-error" ? "/usr/bin/false" : "/bin/sh", args: mode == "cli-error" ? [] : ["-c", "\(output) > \(marker.path.posixSingleQuoted); exec /bin/cat"], env: ["CTRLX_RESTART_FIXTURE": "private-provider-value"]))
                 let restart = {
                     try await tmux.restartAgent(.init(source: source, processID: pid, runtimeID: runtime), command: launch) {
                         if mode == "changed" {
@@ -162,7 +168,7 @@ struct TmuxAgentRestartTests {
                         for _ in 0..<80 where !FileManager.default.fileExists(atPath: marker.path) {
                             try await Task.sleep(for: .milliseconds(25))
                         }
-                        #expect(try String(contentsOf: marker, encoding: .utf8) == "resumed")
+                        #expect(try String(contentsOf: marker, encoding: .utf8) == (mode == "environment" ? "resumed[fresh]" : "resumed"))
                     } else {
                         try await Task.sleep(for: .milliseconds(200))
                     }

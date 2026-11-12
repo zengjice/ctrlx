@@ -410,9 +410,7 @@ final public class TmuxService {
         let preparation = SessionLaunchPreparation(workingDirectory: source.workingDirectory, fork: command)
         guard let launch = try agentLaunch(preparation) else { throw AgentRestartError("The Agent returned no Resume command.") }
         let shell = await recoveryShell()
-        // Return to a shell even if Resume reports a CLI error, preserving this tab.
-        let invocation = overrideCommandPrefix().map { "\($0); \(launch.command)" } ?? launch.command
-        let process = [loginShellPath, "-l", "-i", "-c", invocation + "; exec /bin/sh -c " + shell.command.posixSingleQuoted]
+        let process = AgentRestartTerminal.process(loginShell: loginShellPath, invocation: launch.command, prefix: overrideCommandPrefix(), shellCommand: shell.command)
         let original = try await restartTerminal(source)
         let retain = AgentRestartTerminal.guardedCommands(paneID: source.paneID, snapshot: original, commands: [["set-option", "-p", "-t", source.paneID, "remain-on-exit", "on"]])
         let retained = try await runWorkspaceCommand(retain, target: source.paneID, identity: workspace)
