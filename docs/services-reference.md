@@ -933,8 +933,8 @@ Before Resume, a fresh interactive login shell rereads the Host user's startup
 files. Zsh uses its normal startup sequence (including `.zshrc` and `ZDOTDIR`);
 Bash honors the first readable `.bash_profile`, `.bash_login` or `.profile`,
 including that profile's decision to source `.bashrc` and any later overrides.
-Only when none of those login files is readable does CtrlX additionally source
-a readable `~/.bashrc`. Updated exports and PATH therefore reach the resumed
+Resume adds no extra startup-file reads; Bash reads `.bashrc` only if its startup
+configuration sources it. Updated exports and PATH therefore reach the resumed
 Agent without restarting CtrlX. Explicit Provider settings,
 configuration roots and an enabled VISUAL override are applied after shell
 configuration. No user dotfiles are modified.

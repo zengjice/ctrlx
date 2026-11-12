@@ -9,20 +9,9 @@ enum AgentRestartTerminal {
     static let format = "#{pane_pid}\u{1f}#{pane_tty}\u{1f}#{pane_dead}\u{1f}#{pane_current_command}"
 
     static func process(loginShell: String, invocation: String, prefix: String?, shellCommand: String) -> [String] {
-        // Let Bash's selected login profile own startup order and overrides.
-        // Only fall back to .bashrc when no readable login profile exists.
-        let startup = (loginShell as NSString).lastPathComponent == "bash"
-            ? #"""
-            if [ ! -r "$HOME/.bash_profile" ] &&
-                [ ! -r "$HOME/.bash_login" ] &&
-                [ ! -r "$HOME/.profile" ] && [ -r "$HOME/.bashrc" ]; then
-                . "$HOME/.bashrc"
-            fi
-
-            """# : ""
         let line = prefix.map { "\($0); \(invocation)" } ?? invocation
         // Return to a shell even if Resume reports a CLI error, preserving this tab.
-        return [loginShell, "-l", "-i", "-c", startup + line + "; exec /bin/sh -c " + shellCommand.posixSingleQuoted]
+        return [loginShell, "-l", "-i", "-c", line + "; exec /bin/sh -c " + shellCommand.posixSingleQuoted]
     }
 
     struct Snapshot: Sendable {

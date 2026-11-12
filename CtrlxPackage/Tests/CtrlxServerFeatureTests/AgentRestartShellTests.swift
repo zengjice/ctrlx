@@ -7,20 +7,17 @@ import Testing
 
 @MainActor
 struct AgentRestartShellTests {
-    @Test("Resume reloads edited shell files before applying scoped Provider settings", arguments: ["bash-profile", "bash-rc", "zsh"], [false, true])
-    func reloadEnvironment(startup: String, provider: Bool) async throws {
+    @Test("Resume reloads edited shell files before applying scoped Provider settings", arguments: ["/bin/bash", "/bin/zsh"], [false, true])
+    func reloadEnvironment(shell: String, provider: Bool) async throws {
         let tmux = try FakeTmuxLaunchEnvironment()
         defer { tmux.cleanup() }
         let home = tmux.root.appendingPathComponent("home with 'quotes'")
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
-        let bash = startup.hasPrefix("bash")
-        let shell = bash ? "/bin/bash" : "/bin/zsh"
+        let bash = shell == "/bin/bash"
         let profile = home.appendingPathComponent(bash ? ".bash_profile" : ".zprofile")
         let rc = home.appendingPathComponent(bash ? ".bashrc" : ".zshrc")
-        if startup != "bash-rc" {
-            let configuration = (bash ? ". \"$HOME/.bashrc\"\n" : "") + "export CTRLX_RESTART_LOGIN=loaded\n"
-            try Data(configuration.utf8).write(to: profile)
-        }
+        let profileConfiguration = (bash ? ". \"$HOME/.bashrc\"\n" : "") + "export CTRLX_RESTART_LOGIN=loaded\n"
+        try Data(profileConfiguration.utf8).write(to: profile)
         let preparation = SessionLaunchPreparation(workingDirectory: home.path, fork: AgentForkLaunch(command: .init(
             command: "restart_probe",
             env: provider ? ["CTRLX_RESTART_PROVIDER": "settings"] : [:],
@@ -47,10 +44,26 @@ struct AgentRestartShellTests {
             try tmux.install(launch)
             let result = try await run(process, home: home)
             #expect(result.isSuccess)
-            #expect(result.stdoutString.contains("VALUE[\(value)]LOGIN[\(startup == "bash-rc" ? "" : "loaded")]PROVIDER[\(provider ? "settings" : "rc")]CLEARED[\(provider ? "" : "x")]VISUAL[ctrlx-editor]PATH[\(home.path)/fixture-bin]"))
+            #expect(result.stdoutString.contains("VALUE[\(value)]LOGIN[loaded]PROVIDER[\(provider ? "settings" : "rc")]CLEARED[\(provider ? "" : "x")]VISUAL[ctrlx-editor]PATH[\(home.path)/fixture-bin]"))
             #expect(result.stdoutString.contains("FALLBACK[\(value)]"))
             #expect(!tmux.containsPayload())
         }
+    }
+
+    @Test("Bash does not source .bashrc when no login profile selects it")
+    func bashRCIsNotImplicit() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-restart-bash-rc-\(UUID())")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        try Data("export CTRLX_RESTART_VALUE=from-rc\nprintf loaded > \"$HOME/rc-loaded\"\n".utf8).write(to: home.appendingPathComponent(".bashrc"))
+        let process = AgentRestartTerminal.process(
+            loginShell: "/bin/bash", invocation: #"/bin/sh -c 'printf "VALUE[%s]\n" "$CTRLX_RESTART_VALUE"'"#,
+            prefix: nil, shellCommand: "true"
+        )
+        let result = try await run(process, home: home)
+        #expect(result.isSuccess)
+        #expect(result.stdoutString.contains("VALUE[stale]"))
+        #expect(!FileManager.default.fileExists(atPath: home.appendingPathComponent("rc-loaded").path))
     }
 
     @Test("Bash preserves the selected login profile's final environment and never reloads its rc", arguments: [".bash_profile", ".bash_login", ".profile"], [false, true])

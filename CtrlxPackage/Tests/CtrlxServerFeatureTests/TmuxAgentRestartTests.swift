@@ -108,7 +108,7 @@ struct TmuxAgentRestartTests {
                 }
                 let marker = directory.appendingPathComponent("resumed.txt")
                 if mode == "environment" {
-                    for file in [".bashrc", ".zshrc"] {
+                    for file in [".bash_profile", ".zshrc"] {
                         try Data("export CTRLX_RESTART_UPDATED_ENV=fresh\n".utf8).write(to: directory.appendingPathComponent(file))
                     }
                 }
