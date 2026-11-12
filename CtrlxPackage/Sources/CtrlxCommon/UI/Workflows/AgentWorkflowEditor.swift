@@ -29,6 +29,7 @@ struct AgentWorkflowEditor: View {
     @State private var activeImport: AgentWorkflowImageImport?
     @State private var showingReviewTemplate = false
     @State private var showingAgentPicker = false
+    @State private var choosingAgentFor: UUID?
     @State private var showingInitialTask = false
     @State private var showingAgents = false
     @State private var showingExecution = false
@@ -109,7 +110,7 @@ struct AgentWorkflowEditor: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Participating Agents")
-                            Text(draft.agents.isEmpty ? "Choose an Agent when adding a step." : draft.agents.map { agentName($0.id) }.joined(separator: ", "))
+                            Text(draft.agents.isEmpty ? "Choose an Agent in each step, or add an Agent step." : draft.agents.map { agentName($0.id) }.joined(separator: ", "))
                                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                             if draft.agents.contains(where: { participant in !instances.contains { $0.id == participant.id } }), !refreshing {
                                 Text("Some Agents are unavailable. Choose a replacement.").font(.caption).foregroundStyle(.orange)
@@ -126,18 +127,26 @@ struct AgentWorkflowEditor: View {
                             TextField("Step name", text: $node.name)
                                 .accessibilityIdentifier("workflow-step-name-\(node.id)")
                             if node.kind == .agent {
-                                Picker("Agent", selection: Binding(get: { node.agentInstanceID }, set: { replacement in
-                                    guard node.agentInstanceID != replacement else { return }
-                                    node.agentInstanceID = replacement
-                                    node.modelSelection = nil
-                                })) {
-                                    ForEach(draft.agents) { participant in
-                                        Text(agentName(participant.id)).tag(Optional(participant.id))
+                                if node.agentInstanceID == nil {
+                                    Button("Choose Agent…") {
+                                        choosingAgentFor = node.id
+                                        showingAgentPicker = true
                                     }
-                                    if !draft.agents.contains(where: { $0.id == node.agentInstanceID }) {
-                                        Text("Choose a participating Agent").tag(node.agentInstanceID)
-                                    }
-                                }.accessibilityIdentifier("workflow-step-agent-\(node.id)")
+                                    .accessibilityIdentifier("workflow-step-agent-\(node.id)")
+                                } else {
+                                    Picker("Agent", selection: Binding(get: { node.agentInstanceID }, set: { replacement in
+                                        guard node.agentInstanceID != replacement else { return }
+                                        node.agentInstanceID = replacement
+                                        node.modelSelection = nil
+                                    })) {
+                                        ForEach(draft.agents) { participant in
+                                            Text(agentName(participant.id)).tag(Optional(participant.id))
+                                        }
+                                        if !draft.agents.contains(where: { $0.id == node.agentInstanceID }) {
+                                            Text("Choose a participating Agent").tag(node.agentInstanceID)
+                                        }
+                                    }.accessibilityIdentifier("workflow-step-agent-\(node.id)")
+                                }
                                 if let instance = draft.instance(for: node.agentInstanceID, in: instances) {
                                     if let issue = instance.capabilityIssue {
                                         Text(issue).font(.caption).foregroundStyle(.orange)
@@ -337,11 +346,16 @@ struct AgentWorkflowEditor: View {
                 draft.updateAgentNames(from: instances)
             }
         }
-        .sheet(isPresented: $showingAgentPicker) {
-            AgentWorkflowAgentPicker(instances: instances, participants: draft.agents, refreshing: refreshing, error: error, refresh: refreshInstances) { instance in
+        .sheet(isPresented: $showingAgentPicker, onDismiss: { choosingAgentFor = nil }) {
+            AgentWorkflowAgentPicker(instances: instances, participants: choosingAgentFor == nil ? draft.agents : [], refreshing: refreshing, error: error, refresh: refreshInstances) { instance in
                 guard !importing else { return }
                 add(instance)
-                addNode(.init(name: AgentWorkflowWire.boundedName("\(instance.displayName) task"), agentInstanceID: instance.id, initialTask: draft.nodes.isEmpty ? .textAndAttachments : .omit))
+                if let choosingAgentFor {
+                    guard let index = draft.nodes.firstIndex(where: { $0.id == choosingAgentFor }) else { return }
+                    draft.nodes[index].agentInstanceID = instance.id
+                } else {
+                    addNode(.init(name: AgentWorkflowWire.boundedName("\(instance.displayName) task"), agentInstanceID: instance.id, initialTask: draft.nodes.isEmpty ? .textAndAttachments : .omit))
+                }
             }
         }
         .task {
@@ -364,6 +378,9 @@ struct AgentWorkflowEditor: View {
     }
 
     private var validationIssue: String? {
+        if draft.nodes.contains(where: { $0.kind == .agent && $0.agentInstanceID == nil }) {
+            return "Choose an Agent for each Agent step before saving."
+        }
         do { try AgentWorkflowWire.validate(draft)
             return nil
         } catch { return error.localizedDescription }

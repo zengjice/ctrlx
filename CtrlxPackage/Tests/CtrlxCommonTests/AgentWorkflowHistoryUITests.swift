@@ -54,6 +54,132 @@
 
         private enum UIError: Error { case missing(String) }
 
+        private func waitUntil(_ condition: () -> Bool) async throws {
+            for _ in 0..<100 {
+                if condition() {
+                    return
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            throw UIError.missing("Workflow state")
+        }
+
+        @Test(arguments: [false, true])
+        func configurationDuplicationOpensAFreshDraftBeforeSaving(failsFirstRead: Bool) async throws {
+            _ = NSApplication.shared
+            NSApp.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
+            let hostID = UUID()
+            let node = AgentWorkflowNode(name: "Brief", content: .init(text: "Saved preset", attachmentIDs: [UUID()]))
+            let original = AgentWorkflowDefinition(revision: 4, name: "Original", hostID: hostID, nodes: [node], edges: [], entryNodeID: node.id, initialInput: .init(text: "Old task", attachmentIDs: [UUID()]))
+            var definitions = [original], saves = 0, reads = 0
+            let endpoint = AgentWorkflowEndpoint(id: "duplicate-fixture", name: "Private Host", connected: { true }, supported: { true }) { request in
+                var response = AgentWorkflowResponse(hostID: hostID)
+                switch request.operation {
+                case .definitions: response.definitions = .init(items: definitions.map(AgentWorkflowDefinitionSummary.init), nextOffset: nil)
+                case .runs: response.runs = .init(items: [], nextOffset: nil)
+                case let .definition(id):
+                    #expect(id == original.id && request.expectedHostID == hostID)
+                    reads += 1
+                    if failsFirstRead && reads == 1 {
+                        throw AgentWorkflowError("Fixture read failed")
+                    }
+                    response.definition = original
+                case .catalog: response.instances = .init(items: [], nextOffset: nil)
+                case let .save(copy, revision):
+                    saves += 1
+                    #expect(revision == nil && request.expectedHostID == hostID)
+                    #expect(copy.id != original.id && copy.revision == 1)
+                    #expect(copy.name == "Copy of Original" && copy.nodes.first?.input.text == "Saved preset")
+                    #expect(copy.initialInput == .init() && copy.attachmentIDs.isEmpty && copy.agents.isEmpty)
+                    definitions.append(copy)
+                    response.definition = copy
+                default: Issue.record("Duplicating must only read and save configurations")
+                }
+                return response
+            }
+            let navigation = AgentWorkflowNavigation()
+            navigation.path = [.host(endpoint.id)]
+            let hosting = NSHostingView(rootView: AgentWorkflowsView(endpoints: { [endpoint] }, openAgent: { _, _ in }, navigation: navigation)
+                .environment(\.scenePhase, .active))
+            let window = NSWindow(contentRect: CGRect(x: -10_000, y: -10_000, width: 700, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = hosting
+            window.orderBack(nil)
+            defer { window.close() }
+            let entryID = "workflow-duplicate-\(original.id)"
+            try await waitUntil { element(entryID, in: window) != nil }
+            _ = try press(#require(element(entryID, in: window)))
+            if failsFirstRead {
+                try await waitUntil { reads == 1 && element("Fixture read failed", in: window, attributeName: "accessibilityValue") != nil }
+                #expect(definitions == [original])
+                _ = try press(#require(element(entryID, in: window)))
+            }
+            func saveButton() -> NSObject? {
+                window.sheets.lazy.compactMap { element("workflow-editor-save", in: $0) }.first
+            }
+            try await waitUntil { saveButton() != nil }
+            let save = try #require(saveButton())
+            #expect(saves == 0 && definitions == [original])
+            _ = press(save)
+            try await waitUntil { definitions.count == 2 }
+            let copy = try #require(definitions.last)
+            try await waitUntil { element("workflow-duplicate-\(copy.id)", in: window) != nil }
+            #expect(definitions.first == original)
+            #expect(saves == 1 && reads == (failsFirstRead ? 2 : 1))
+            #expect(navigation.path == [.host(endpoint.id)])
+        }
+
+        @Test(arguments: [AgentWorkflowRunStatus.running, .paused, .finishing])
+        func toolbarStopRequiresConfirmationAndEndsTheSelectedRun(status: AgentWorkflowRunStatus) async throws {
+            _ = NSApplication.shared
+            NSApp.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
+            let hostID = UUID()
+            let node = AgentWorkflowNode(name: "Brief", content: .init(text: "Task"))
+            let definition = AgentWorkflowDefinition(name: "Stop fixture", hostID: hostID, nodes: [node], edges: [], entryNodeID: node.id)
+            var run = AgentWorkflowRun(definition: definition, instances: [], createdAt: Date(), authorizationExpiresAt: Date().addingTimeInterval(3_600))
+            run.status = status
+            run.revision = 7
+            var endings = 0
+            let endpoint = AgentWorkflowEndpoint(id: "stop-fixture", name: "Private Host", connected: { true }, supported: { true }) { request in
+                var response = AgentWorkflowResponse(hostID: hostID)
+                switch request.operation {
+                case .definitions: response.definitions = .init(items: [.init(definition)], nextOffset: nil)
+                case .runs: response.runs = .init(items: [.init(run)], nextOffset: nil)
+                case .run: response.run = .init(run, currentInstances: [])
+                case .invocations: response.invocations = .init(items: [], nextOffset: nil)
+                case let .end(id, revision):
+                    #expect(request.expectedHostID == hostID && id == run.id && revision == 7)
+                    endings += 1
+                    run.status = .ended
+                    run.revision += 1
+                    response.run = .init(run, currentInstances: [])
+                default: Issue.record("Unexpected operation while stopping")
+                }
+                return response
+            }
+            let navigation = AgentWorkflowNavigation()
+            navigation.path = [.host(endpoint.id), .run(route: endpoint.id, hostID: hostID, id: run.id)]
+            let path = navigation.path
+            var closes = 0
+            let hosting = NSHostingView(rootView: AgentWorkflowsView(endpoints: { [endpoint] }, openAgent: { _, _ in }, close: { closes += 1 }, navigation: navigation)
+                .environment(\.scenePhase, .active))
+            let window = NSWindow(contentRect: CGRect(x: -10_000, y: -10_000, width: 700, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = hosting
+            window.orderBack(nil)
+            defer { window.close() }
+            try await waitUntil { element("workflow-run-stop", in: window) != nil }
+            _ = try press(#require(element("workflow-run-stop", in: window)))
+            let confirmation = try await waitForElement("workflow-confirm-end")
+            #expect(endings == 0 && run.status == status)
+            _ = press(confirmation)
+            try await waitUntil { endings == 1 && element("workflow-run-stop", in: window) == nil }
+            #expect(run.status == .ended && run.definition == definition)
+            #expect(navigation.path == path && closes == 0)
+            #expect(element("workflow-run-control", in: window) == nil)
+            #expect(element("workflow-close", in: window) != nil)
+        }
+
         @Test
         func terminalButtonPausesAndContinuesWithoutControlOwnership() async throws {
             _ = NSApplication.shared

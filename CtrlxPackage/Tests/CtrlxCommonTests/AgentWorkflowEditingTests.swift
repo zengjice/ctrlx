@@ -4,6 +4,41 @@ import Testing
 @testable import CtrlxCommon
 
 struct AgentWorkflowEditingTests {
+    @Test(arguments: ["Develop and review", String(repeating: "图", count: 85)])
+    func duplicateKeepsPresetsAndStructureWithoutTaskImagesOrAgents(name: String) throws {
+        let developer = UUID(), reviewer = UUID(), hostID = UUID()
+        var original = AgentWorkflowDefinition(revision: 8, name: name, hostID: hostID, nodes: [], edges: [], entryNodeID: UUID())
+        AgentWorkflowReviewTemplate.apply(to: &original, developerID: developer, reviewerID: reviewer)
+        original.initialInput = .init(text: "Initial task", attachmentIDs: [UUID()])
+        original.nodes[1].input = .init(text: "$review-changes", attachmentIDs: [UUID()])
+        original.nodes[3].input.attachmentIDs = [UUID()]
+        original.nodes[1].modelSelection = .init(model: "review-model", effort: "high")
+        original.creationSession = .init(.init(serverID: "private", sessionID: UUID(), windowID: UUID(), paneID: UUID()))
+        original.agentTargets = [
+            developer: .init(hostID: hostID, windowID: UUID(), paneID: UUID()),
+            reviewer: .init(hostID: hostID, windowID: UUID(), paneID: UUID()),
+        ]
+        var copy = original.duplicated()
+        #expect(throws: AgentWorkflowError.self) { try AgentWorkflowWire.validate(copy) }
+        #expect(copy.id != original.id && copy.id != original.duplicated().id)
+        #expect(copy.revision == 1 && original.revision == 8)
+        #expect(copy.name.hasPrefix("Copy of "))
+        #expect(copy.hostID == original.hostID)
+        #expect(copy.initialInput == .init() && copy.attachmentIDs.isEmpty)
+        #expect(copy.agents.isEmpty && copy.agentTargets == nil && copy.creationSession == nil)
+        #expect(copy.agentInstanceIDs.isEmpty && copy.nodes.allSatisfy { $0.modelSelection == nil })
+        #expect(copy.edges == original.edges && copy.entryNodeID == original.entryNodeID && copy.loop == original.loop)
+        #expect(copy.nodes.map(\.id) == original.nodes.map(\.id))
+        for (step, source) in zip(copy.nodes, original.nodes) {
+            #expect(step.name == source.name && step.kind == source.kind)
+            #expect(step.input.text == source.input.text && step.input.attachmentIDs.isEmpty)
+            #expect(step.initialTask == source.initialTask && step.completion == source.completion && step.allowsFinish == source.allowsFinish)
+        }
+        #expect(!original.agentInstanceIDs.isEmpty && original.attachmentIDs.count == 3)
+        copy.nodes[0].input.text = "Changed in the copy"
+        #expect(original.nodes[0].input.text != copy.nodes[0].input.text)
+    }
+
     @Test
     func appendingStepsMakesAValidSequenceUsingTheSameAgent() throws {
         let agent = UUID()

@@ -113,6 +113,12 @@ struct AgentWorkflowRunView: View {
                     .help(title)
                     .accessibilityValue(state.summary.status.title)
                     .accessibilityIdentifier("workflow-run-control")
+                    Button(role: .destructive) { confirmingEnd = true } label: {
+                        Label("Stop workflow", symbol: .stopFill).labelStyle(.iconOnly)
+                    }
+                    .disabled(changing || !endpoint.isConnected)
+                    .help("End workflow")
+                    .accessibilityIdentifier("workflow-run-stop")
                 }
                 Button { Task { await refresh() } } label: { Label("Refresh", symbol: .arrowClockwise) }
                     .disabled(changing || !endpoint.isConnected)
@@ -120,8 +126,10 @@ struct AgentWorkflowRunView: View {
         }
         .refreshable { await refresh() }
         .confirmationDialog("End this workflow?", isPresented: $confirmingEnd) {
-            if let state {
+            if let state, !state.summary.status.isTerminal {
                 Button("End workflow", role: .destructive) { change(.end(runID, expectedRevision: state.summary.revision)) }
+                    .disabled(changing || !endpoint.isConnected)
+                    .accessibilityIdentifier("workflow-confirm-end")
             }
         } message: {
             Text("No more tasks will be sent. Agent tabs and saved results will remain.")

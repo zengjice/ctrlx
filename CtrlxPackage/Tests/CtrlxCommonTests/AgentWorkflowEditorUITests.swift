@@ -83,6 +83,67 @@
             try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent(name + ".png"))
         }
 
+        @Test
+        func copiedStepsRequireNewAgentsAndKeepTheirInstructions() async throws {
+            _ = NSApplication.shared
+            NSApp.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
+            let hostID = UUID()
+            let instances = ["New Developer", "New Reviewer"].enumerated().map { index, name in
+                AgentWorkflowInstance(hostID: hostID, pluginID: "codex", processID: Int32(index + 42), processRuntimeID: "runtime-\(index)", workspacePane: .init(serverID: "private", sessionID: UUID(), windowID: UUID(), paneID: UUID()), paneID: "%\(index)", conversationID: "conversation-\(index)", displayName: name, workingDirectory: "/fixture", capabilities: .init(maximumInputBytes: 100_000), readiness: .ready)
+            }
+            var original = AgentWorkflowDefinition(name: "Review loop", hostID: hostID, nodes: [], edges: [], entryNodeID: UUID(), initialInput: .init(text: "Old task", attachmentIDs: [UUID()]))
+            AgentWorkflowReviewTemplate.apply(to: &original, developerID: UUID(), reviewerID: UUID())
+            original.nodes[1].input.attachmentIDs = [UUID()]
+            let copy = original.duplicated()
+            var saved: AgentWorkflowDefinition?
+            let endpoint = AgentWorkflowEndpoint(id: "copy-editor-fixture", name: "Host", connected: { true }, supported: { true }) { request in
+                var response = AgentWorkflowResponse(hostID: hostID)
+                switch request.operation {
+                case .catalog: response.instances = .init(items: instances, nextOffset: nil)
+                case let .save(value, revision):
+                    #expect(revision == nil)
+                    try AgentWorkflowWire.validate(value)
+                    saved = value
+                    response.definition = value
+                default: Issue.record("A copied draft must not load old images or start a workflow")
+                }
+                return response
+            }
+            let hosting = NSHostingView(rootView: AgentWorkflowEditor(endpoint: endpoint, definition: copy, isNew: true, createAgent: nil))
+            let window = NSWindow(contentRect: .init(x: -10_000, y: -10_000, width: 700, height: 1_100), styleMask: .titled, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = hosting
+            window.orderBack(nil)
+            defer { window.close() }
+            try await click("workflow-editor-save", in: window)
+            #expect(saved == nil)
+            for index in [0, 1, 2, 4] {
+                let node = copy.nodes[index]
+                try await click("workflow-step-toggle-\(node.id)", in: window)
+                try await click("workflow-step-agent-\(node.id)", in: window)
+                // Each unbound step can select a new participant, or reuse one already chosen.
+                try await wait { element("workflow-choose-agent-\(instances[1].id)", in: window) != nil }
+                let instance = instances[index == 1 ? 1 : 0]
+                try await click("workflow-choose-agent-\(instance.id)", in: window)
+                try await wait { window.sheets.isEmpty }
+                #expect(inputs(in: hosting).first?.string == node.input.text)
+                if index != 4 {
+                    try await click("workflow-editor-save", in: window)
+                    #expect(saved == nil)
+                }
+            }
+            try await click("workflow-editor-save", in: window)
+            try await wait { saved != nil }
+            let value = try #require(saved)
+            #expect(value.id == copy.id && value.id != original.id)
+            #expect(value.agentInstanceIDs == Set(instances.map(\.id)))
+            #expect(value.nodes[0].agentInstanceID == value.nodes[2].agentInstanceID && value.nodes[0].agentInstanceID == value.nodes[4].agentInstanceID)
+            #expect(value.initialInput == .init() && value.attachmentIDs.isEmpty)
+            #expect(value.nodes.map(\.input.text) == original.nodes.map(\.input.text))
+            #expect(value.edges == original.edges && value.loop == original.loop)
+            #expect(value.nodes.map(\.completion) == original.nodes.map(\.completion))
+        }
+
         @Test(arguments: ["unchanged", "edit", "import", "restart"])
         func compactOverviewEditsOneStepAndPreservesCollapsedSettings(mode: String) async throws {
             _ = NSApplication.shared

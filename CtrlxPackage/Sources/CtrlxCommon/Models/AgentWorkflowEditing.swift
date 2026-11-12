@@ -8,6 +8,21 @@ enum AgentWorkflowConnectionMode: String, CaseIterable, Sendable {
 }
 
 extension AgentWorkflowDefinition {
+    func duplicated() -> Self {
+        let steps = nodes.map { node in
+            var step = node
+            step.agentInstanceID = nil
+            step.modelSelection = nil
+            step.input.attachmentIDs = []
+            return step
+        }
+        return Self(
+            name: AgentWorkflowWire.boundedName("Copy of \(name)"), hostID: hostID,
+            nodes: steps, edges: edges, entryNodeID: entryNodeID,
+            loop: loop, participants: []
+        )
+    }
+
     var terminalSteps: [AgentWorkflowNode] {
         let sources = Set(edges.map(\.source))
         return nodes.filter { !sources.contains($0.id) }

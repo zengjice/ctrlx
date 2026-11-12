@@ -95,6 +95,7 @@ private struct AgentWorkflowHostView: View {
     @State private var pendingDeletion: AgentWorkflowRunSummary?
     @State private var confirmingDelete = false
     @State private var deleting = false
+    @State private var duplicating = false
 
     var body: some View {
         List {
@@ -110,8 +111,13 @@ private struct AgentWorkflowHostView: View {
                             }
                             Button { starting = definition } label: { Label("Start workflow", symbol: .playFill).labelStyle(.iconOnly) }
                                 .buttonStyle(.borderless)
-                                .disabled(!endpoint.isConnected)
+                                .disabled(duplicating || !endpoint.isConnected)
                                 .accessibilityIdentifier("workflow-quick-start-\(definition.id)")
+                            Button { duplicate(definition) } label: { Label("Duplicate configuration", symbol: .docOnDoc).labelStyle(.iconOnly) }
+                                .buttonStyle(.borderless)
+                                .disabled(loading || deleting || duplicating || !endpoint.isConnected)
+                                .help("Duplicate configuration")
+                                .accessibilityIdentifier("workflow-duplicate-\(definition.id)")
                         }
                     }
                     if overview.definitions.isEmpty {
@@ -165,7 +171,7 @@ private struct AgentWorkflowHostView: View {
                     guard let hostID = overview?.hostID else { return }
                     editing = .init(name: "", hostID: hostID, nodes: [], edges: [], entryNodeID: UUID())
                 } label: { Label("New workflow", symbol: .plus) }
-                    .disabled(overview == nil || !endpoint.isConnected || !endpoint.isSupported)
+                    .disabled(overview == nil || duplicating || !endpoint.isConnected || !endpoint.isSupported)
             }
         }
         .sheet(item: $editing, onDismiss: { Task { await refresh() } }) { draft in
@@ -194,7 +200,7 @@ private struct AgentWorkflowHostView: View {
     }
 
     private func refresh() async {
-        guard !loading, !deleting else { return }
+        guard !loading, !deleting, !duplicating else { return }
         loading = true
         defer { loading = false }
         do {
@@ -213,11 +219,27 @@ private struct AgentWorkflowHostView: View {
             pendingDeletion = run
             confirmingDelete = true
         } label: { Label("Delete run", symbol: .trash) }
-            .disabled(loading || deleting || !endpoint.isConnected)
+            .disabled(loading || deleting || duplicating || !endpoint.isConnected)
+    }
+
+    private func duplicate(_ definition: AgentWorkflowDefinitionSummary) {
+        guard !loading, !deleting, !duplicating, let hostID = overview?.hostID else { return }
+        let path = navigation.path
+        duplicating = true
+        Task {
+            defer { duplicating = false }
+            do {
+                let source = try await endpoint.request(.definition(definition.id), hostID: hostID)
+                guard navigation.path == path else { return }
+                guard let original = source.definition else { throw AgentWorkflowError("The configuration is unavailable.") }
+                editing = original.duplicated()
+                error = nil
+            } catch { self.error = error.localizedDescription }
+        }
     }
 
     private func delete(_ run: AgentWorkflowRunSummary) {
-        guard !loading, !deleting, let hostID = overview?.hostID else { return }
+        guard !loading, !deleting, !duplicating, let hostID = overview?.hostID else { return }
         deleting = true
         Task {
             defer { deleting = false }
