@@ -83,6 +83,13 @@
 
     @Suite("Simulator pane reuse and remote viewing", .serialized) @MainActor
     struct SimulatorPaneViewingTests {
+        final class PresentationWindow: NSWindow {
+            var foreground = true
+            override var isKeyWindow: Bool {
+                foreground
+            }
+        }
+
         @MainActor
         final class Fixture {
             let service: AgentSimulatorService
@@ -713,6 +720,81 @@
             #expect(clipboardReads.first?["revisionOnly"]?.boolValue == true)
             #expect(clipboardReads.dropFirst().allSatisfy { $0["afterRevision"]?.stringValue == "old" })
             #expect(sent.contains { $0["command"]?.stringValue == "key" && $0["usage"]?.intValue == 6 && $0["down"]?.boolValue == true })
+            await fixture.service.shutdown()
+        }
+
+        @Test("Agent presentation only changes the foreground local session", arguments: ["open", "reuse", "show", "split"], ["same", "other", "remote", "inactive", "missing"])
+        func agentPresentationScope(command: String, context: String) async throws {
+            let fixture = try Fixture()
+            if command != "open" {
+                #expect((await fixture.action("open")).ok)
+                fixture.sessionTabs["work"]?.selectedBrowserTabId = nil
+            }
+            let window = PresentationWindow(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: true)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            window.foreground = context != "inactive"
+            fixture.workspace.window = context == "missing" ? nil : window
+            fixture.workspace.selectedLocalSession = {
+                context == "remote" ? nil : context == "other" ? "other" : "work"
+            }
+            let select = fixture.workspace.onSelect
+            var selections: [Bool] = []
+            fixture.workspace.onSelect = { state, split in
+                selections.append(split)
+                select(state, split)
+            }
+            let response: JSONRPCResponse
+            if command == "open" || command == "reuse" {
+                response = await fixture.action("open")
+            } else {
+                let state = try #require(fixture.created.first)
+                response = await fixture.action("show", ["device": .string(state.id.uuidString), "split": .bool(command == "split")])
+            }
+            #expect(response.ok)
+            let state = try #require(fixture.created.first)
+            let tabs = try #require(fixture.sessionTabs["work"])
+            #expect(selections == (context == "same" ? [command == "split"] : []))
+            #expect(tabs.selectedBrowserTabId == (context == "same" ? state.id : nil))
+            #expect(fixture.boots == 1 && !state.isClosed)
+            #expect((await fixture.action("status", ["device": .string(state.id.uuidString)])).ok)
+            await fixture.service.shutdown()
+        }
+
+        @Test("Opening a simulator does not restore focus after the user leaves during boot", arguments: ["session", "remote", "window"])
+        func delayedOpenKeepsCurrentSelection(change: String) async throws {
+            let fixture = try Fixture()
+            let window = PresentationWindow(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: true)
+            window.isReleasedWhenClosed = false
+            defer { window.close() }
+            fixture.workspace.window = window
+            var selectedSession: String? = "work"
+            fixture.workspace.selectedLocalSession = { selectedSession }
+            var selections = 0
+            let select = fixture.workspace.onSelect
+            fixture.workspace.onSelect = { state, split in
+                selections += 1
+                select(state, split)
+            }
+            fixture.probe.holdBoot.withLock { $0 = true }
+            defer { fixture.probe.holdBoot.withLock { $0 = false } }
+            let opening = Task { await fixture.action("open") }
+            try await wait { fixture.boots == 1 }
+            if change == "window" {
+                window.foreground = false
+            } else {
+                selectedSession = change == "remote" ? nil : "other"
+            }
+            fixture.probe.holdBoot.withLock { $0 = false }
+            #expect((await opening.value).ok)
+            let state = try #require(fixture.created.first)
+            #expect(selections == 0 && fixture.sessionTabs["work"]?.selectedBrowserTabId == nil)
+            #expect(!state.isClosed && fixture.boots == 1)
+
+            selectedSession = "work"
+            window.foreground = true
+            #expect((await fixture.action("show", ["device": .string(state.id.uuidString)])).ok)
+            #expect(selections == 1 && fixture.sessionTabs["work"]?.selectedBrowserTabId == state.id)
             await fixture.service.shutdown()
         }
 

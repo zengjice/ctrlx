@@ -1113,7 +1113,7 @@
             }
             if command == "open" {
                 let state = try await openDevice(parameters: parameters, owner: owner, conversation: conversation, coordinator: coordinator)
-                workspaces[state.workspaceID]?.onSelect(state, false)
+                workspaces[state.workspaceID]?.select(state, split: false)
                 return try describe(state)
             }
             guard
@@ -1131,7 +1131,7 @@
                 return try describe(state)
             }
             if command == "show" {
-                workspaces[state.workspaceID]?.onSelect(state, parameters["split"]?.boolValue == true)
+                workspaces[state.workspaceID]?.select(state, split: parameters["split"]?.boolValue == true)
                 return try describe(state)
             }
             if command == "close" {
@@ -2261,6 +2261,7 @@
     final class SimulatorWorkspace {
         let id = UUID()
         weak var window: NSWindow?
+        var selectedLocalSession: () -> String? = { nil }
         var acceptsPane: (PaneInfo) -> Bool = { _ in false }
         var acceptsSession: (String) -> Bool = { _ in false }
         var acceptsTab: ((SimulatorTabState) -> Bool)?
@@ -2268,6 +2269,12 @@
         var onSelect: (SimulatorTabState, Bool) -> Void = { _, _ in }
         var onClose: (SimulatorTabState) -> Void = { _ in }
         var onDetach: (SimulatorTabState) -> Void = { _ in }
+
+        func select(_ state: SimulatorTabState, split: Bool) {
+            // Read the current presentation after asynchronous device startup.
+            guard window?.isKeyWindow == true, selectedLocalSession() == state.sessionName else { return }
+            onSelect(state, split)
+        }
 
         func accepts(_ state: SimulatorTabState) -> Bool {
             acceptsTab?(state) ?? state.sourcePane.map(acceptsPane) ?? acceptsSession(state.sessionName)

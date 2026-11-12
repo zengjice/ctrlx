@@ -68,7 +68,10 @@ the shared device after recording cleanup. Leaving the tab only releases control
 Read operations for cleanup, `pinch` and `record-start` / `record-stop`.
 
 `show --device <id>` selects an owned tab; add `--split` to place it in the right
-pane. Repeating `--split` preserves that placement.
+pane. Repeating `--split` preserves that placement. `open` and `show` only select
+tabs when the Host workbench has keyboard focus and the user is viewing the same
+local session. Otherwise the device remains available in the background; these
+commands do not switch sessions or bring a window forward.
 
 `open --profile balanced` applies a fixed service profile before connecting the
 worker. The default is `standard`. Declare required features with `--requires

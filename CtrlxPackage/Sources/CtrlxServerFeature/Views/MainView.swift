@@ -5989,6 +5989,7 @@ public struct MainView: View {
     }
 
     private func registerSimulatorWorkspace() {
+        simulatorWorkspace.selectedLocalSession = { currentLocalSessionName }
         simulatorWorkspace.acceptsSession = { session in detachedWorkspace == nil && tmuxService.sessions.contains { $0.sessionName == session } }
         simulatorWorkspace.acceptsPane = { pane in
             tmuxService.windows.contains { $0.stableId == pane.stableWindowId && ownsTerminal(hostID: nil, windowID: $0.stableId) }
@@ -6005,18 +6006,10 @@ public struct MainView: View {
         }
         simulatorWorkspace.onSelect = { state, split in
             guard let (session, tabs) = sessionFileTabsStates.first(where: { $0.value.simulatorStates[state.id] != nil }) else { return }
-            selectedRemoteSession = nil
-            selectedRemoteWindowId = nil
-            if
-                selectedWindow?.sessionName != session,
-                let window = tmuxService.windows.first(where: { $0.sessionName == session && $0.panes.contains { $0.paneId == state.paneID } }) {
-                selectedWindow = tmuxService.windows.first { $0.sessionName == session && !tabs.rightSide.contains(.window($0.id)) } ?? window
-            }
             if split, !tabs.rightSide.contains(.browser(state.id)) {
                 toggleSplit(.browser(state.id), sessionName: session, windowId: state.sourcePane?.windowId)
             }
             selectBrowserTab(state.id, sessionName: session, windowId: state.sourcePane?.windowId)
-            simulatorWorkspace.window?.makeKeyAndOrderFront(nil)
         }
         simulatorWorkspace.onClose = { state in
             guard let (session, _) = sessionFileTabsStates.first(where: { $0.value.simulatorStates[state.id] != nil }) else { return }

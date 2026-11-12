@@ -42,6 +42,12 @@ Host 和 Mac Viewer 的 Simulator 标签可单独拖出为独立窗口，或通�
 不覆盖显式位置。迁移复用同一设备及原生画面，不重启设备，不更改来源 pane、
 Agent 归属或人工控制权限。关闭独立窗口只归还标签；直接 Close Tab 才关闭设备。
 
+Agent 的 `open`（包括复用已有设备）与 `show` 仅在所属 Mac 工作台是当前键盘焦点窗口、
+且用户正在查看同一个本地会话时选中标签；`show --split` 同样遵守此限制。
+后台会话仍可创建和操作设备，但不切换用户会话、不置前窗口，也不积压稍后的展示请求。
+设备启动完成时重新读取当前会话和窗口状态，避免用户等待启动期间切走后被拉回。
+人工打开标签的入口保持不变。
+
 ## Viewer 剪贴板与接管
 
 更新后的 Host 用 `supportsWorkspaceClipboard` 为配对 Mac / iOS Viewer 开启 Take Control、
