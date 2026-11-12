@@ -7,6 +7,32 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.162 — Consolidated Relay settings and quieter Simulator actions
+
+- Collect the Relay server URL, startup/reconnection preferences, authorization
+  and traffic controls in one Mac Settings page. Keep connection status and
+  pairing on Remote Access / Remote Hosts, with links to Relay. Group Agent CLI
+  and CtrlX plugin versions, checks and setup together under Status.
+  See [settings](docs/services-reference.md). Source: `dd763ed6`.
+- Select an Agent-owned Simulator tab after open/show only when its Mac workbench
+  is the key window and the same local session is still selected. Recheck after
+  asynchronous device startup; background actions keep working without switching
+  sessions or raising windows, including show --split.
+  See [Simulator focus](docs/agent-simulator-design.md). Source: `e25b81f1`.
+- Include iOS source support for receiving photos/files from system sharing,
+  with an App Group inbox and separate Share extension. This Mac-only release
+  does not package or install the iOS App or its new extension.
+  See [system sharing](docs/file-browser.md). Source: `844780f4`.
+
+- Validation: 65 focused Swift tests and 69 signing/package/install script
+  regressions passed, including native AppKit Settings layout, Simulator focus
+  protection with asynchronous startup, pairing, upload and shared-inbox storage.
+  Lint for 36 Swift files, both boundary checks and diff checks passed. This
+  release builds macOS only; the new iOS Share extension, physical-iPhone sharing,
+  live Simulator UI, full E2E and Apple Intelligence evaluations were not run.
+  Native browser code and codec SDK are unchanged; prior media acceptance is
+  reused after checking the SDK hash/UUID.
+
 ## 3.0.161 — Browser shortcuts and reusable workflow presets
 
 - Add Command-R/L/[ / ] for reload, address selection and history navigation in
