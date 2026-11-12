@@ -185,6 +185,8 @@ class IOSIdentityConfigTests(unittest.TestCase):
             ("Ctrlx", "CTRLX_IOS_APP_BUNDLE_IDENTIFIER", "application", "app"),
             ("CtrlxNotificationExtension", "CTRLX_IOS_NOTIFICATION_EXTENSION_BUNDLE_IDENTIFIER",
              "app-extension", "appex"),
+            ("CtrlxShareExtension", "CTRLX_IOS_SHARE_EXTENSION_BUNDLE_IDENTIFIER",
+             "app-extension", "appex"),
         ):
             build_configs = [add("XCBuildConfiguration", name=configuration,
                                  baseConfigurationReference=reference,
@@ -254,6 +256,7 @@ CTRLX_IOS_NOTIFICATION_EXTENSION_BUNDLE_IDENTIFIER = com.example.ctrlx.local.not
                 for target, expected_id in (
                     ("Ctrlx", "com.example.ctrlx.local"),
                     ("CtrlxNotificationExtension", "com.example.ctrlx.local.notification-service"),
+                    ("CtrlxShareExtension", "com.example.ctrlx.local.share"),
                 ):
                     self.assertEqual(settings[target]["PRODUCT_BUNDLE_IDENTIFIER"], expected_id)
                     self.assertEqual(settings[target]["DEVELOPMENT_TEAM"], "TESTTEAM01")
@@ -265,6 +268,8 @@ CTRLX_IOS_NOTIFICATION_EXTENSION_BUNDLE_IDENTIFIER = com.example.ctrlx.local.not
                 self.assertEqual(settings["Ctrlx"]["PRODUCT_BUNDLE_IDENTIFIER"], "com.gravtice.ctrlx")
                 self.assertEqual(settings["CtrlxNotificationExtension"]["PRODUCT_BUNDLE_IDENTIFIER"],
                                  "com.gravtice.ctrlx.notification-service")
+                self.assertEqual(settings["CtrlxShareExtension"]["PRODUCT_BUNDLE_IDENTIFIER"],
+                                 "com.gravtice.ctrlx.share")
                 for target in settings.values():
                     self.assertEqual(target.get("DEVELOPMENT_TEAM", ""), "")
 

@@ -11,6 +11,8 @@
 
     /// A dedicated terminal-input control that stays outside terminal content.
     struct TerminalKeyboardBar: View {
+        @Environment(IOSShareInbox.self) private var shareInbox
+        @State private var shareReceiverID = UUID()
         let voiceSession: TerminalVoiceInputSession
         let relayClient: ViewerRelayClient
         @Binding var clipboardPaste: TerminalImagePasteRequest?
@@ -31,26 +33,37 @@
         }
 
         var body: some View {
-            HStack(spacing: 4) {
-                // Keep Send visible even on narrow screens or large text sizes.
-                ScrollView(.horizontal) {
-                    inputControls
+            VStack(spacing: 4) {
+                if agentPluginID != nil, !shareInbox.photos.isEmpty {
+                    Button("Add \(min(5, shareInbox.photos.count)) Shared Photo(s) to This Agent") {
+                        shareInbox.requestPhotos(for: phraseContext, receiverID: shareReceiverID)
+                    }
+                    .font(.callout)
+                    .disabled(!terminalInputEnabled || !phraseContext.canSend || quickActionPresentation.isPresented
+                        || shareInbox.isDiscarding || shareInbox.photosBusy || shareInbox.photoRequest != nil)
+                    .accessibilityIdentifier("attach-shared-photos")
                 }
-                .scrollIndicators(.hidden)
-                .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 4) {
+                    // Keep Send visible even on narrow screens or large text sizes.
+                    ScrollView(.horizontal) {
+                        inputControls
+                    }
+                    .scrollIndicators(.hidden)
+                    .fixedSize(horizontal: false, vertical: true)
 
-                Button(action: sendReturn) {
-                    Text("Send")
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                        .terminalInputControlStyle()
-                        .contentShape(Capsule())
+                    Button(action: sendReturn) {
+                        Text("Send")
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                            .terminalInputControlStyle()
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!terminalInputEnabled)
+                    .opacity(terminalInputEnabled ? 1 : 0.4)
+                    .accessibilityLabel("Send Return")
+                    .accessibilityIdentifier("terminal-return-control")
                 }
-                .buttonStyle(.plain)
-                .disabled(!terminalInputEnabled)
-                .opacity(terminalInputEnabled ? 1 : 0.4)
-                .accessibilityLabel("Send Return")
-                .accessibilityIdentifier("terminal-return-control")
             }
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 8)
@@ -59,6 +72,9 @@
             .overlay(alignment: .top) {
                 Divider()
             }
+            .onChange(of: phraseContext.target) { previous, _ in shareInbox.cancelPhotoRequest(for: previous, receiverID: shareReceiverID) }
+            .onChange(of: phraseContext.inputRevision) { shareInbox.cancelPhotoRequest(for: phraseContext.target, receiverID: shareReceiverID) }
+            .onDisappear { shareInbox.cancelPhotoRequest(for: phraseContext.target, receiverID: shareReceiverID) }
         }
 
         private var inputControls: some View {
@@ -66,7 +82,9 @@
                 ImageUploadToolbarButton(
                     paneId: terminalInputEnabled && !quickActionPresentation.isPresented ? phraseContext.target.paneID : nil,
                     relayClient: relayClient,
-                    clipboardPaste: $clipboardPaste
+                    clipboardPaste: $clipboardPaste,
+                    sharedContext: agentPluginID == nil ? nil : phraseContext,
+                    shareReceiverID: shareReceiverID
                 )
 
                 TerminalVoiceInputButton(

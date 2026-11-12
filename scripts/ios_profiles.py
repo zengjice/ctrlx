@@ -3,6 +3,7 @@ import argparse
 import datetime
 import hashlib
 import json
+import itertools
 from pathlib import Path
 import plistlib
 import re
@@ -38,15 +39,21 @@ def select_profiles(profiles, identities, team, bundles, requested, mode, now=No
             except ValueError:
                 continue
             candidates[role].append((expiry, str(path), profile, claims, certificates))
-    for app in sorted(candidates['app'], key=lambda x: (x[0], x[1]), reverse=True):
-        for extension in sorted(candidates['extension'], key=lambda x: (x[0], x[1]), reverse=True):
-            common = app[4] & extension[4]
-            if (common and app[3]['keychain-access-groups'] == extension[3]['keychain-access-groups']
-                    and app[3]['com.apple.security.application-groups'] == extension[3]['com.apple.security.application-groups']
-                    and set(app[2]['ProvisionedDevices']) & set(extension[2]['ProvisionedDevices'])):
-                return {'app': app, 'extension': extension}, sorted(common)[0]
-    raise ValueError('No matching ' + mode + ' app/extension profiles with an installed shared signing identity, '
-                     'valid expiry, registered devices, push and sharing capabilities for team ' + team + '.')
+    roles = list(bundles)
+    options = [sorted(candidates[role], key=lambda x: (x[0], x[1]), reverse=True) for role in roles]
+    for selection in itertools.product(*options):
+        selected = dict(zip(roles, selection))
+        app = selected['app']
+        common = set.intersection(*(item[4] for item in selection))
+        devices = set.intersection(*(set(item[2]['ProvisionedDevices']) for item in selection))
+        if (common and devices and all(
+                app[3]['keychain-access-groups'] == item[3]['keychain-access-groups']
+                and app[3]['com.apple.security.application-groups'] == item[3]['com.apple.security.application-groups']
+                for item in selection)):
+            return selected, sorted(common)[0]
+    raise ValueError('No matching ' + mode + ' profiles for ' + ', '.join(roles)
+                     + ' with a shared installed signing identity, valid expiry, registered devices '
+                     + 'and required sharing/push capabilities for team ' + team + '.')
 
 
 def installed_profiles(directories):
@@ -65,6 +72,11 @@ def prepare(args):
     bundles = {'app': args.app_bundle_id, 'extension': args.extension_bundle_id}
     requested = {role: plistlib.loads(path.read_bytes()) for role, path in (
         ('app', args.app_entitlements), ('extension', args.extension_entitlements))}
+    if bool(args.share_bundle_id) != bool(args.share_entitlements):
+        raise ValueError('Share extension bundle ID and entitlements must be supplied together.')
+    if args.share_bundle_id:
+        bundles['share'] = args.share_bundle_id
+        requested['share'] = plistlib.loads(args.share_entitlements.read_bytes())
     profiles, identity = select_profiles(installed_profiles(directories), identities, args.team, bundles,
                                         requested, args.signing_mode)
     metadata = {'mode': args.signing_mode, 'team': args.team, 'identity': identity, 'profiles': {}}
@@ -81,7 +93,10 @@ def prepare(args):
 
 
 def verify(args):
-    for role, app in (('app', args.app), ('extension', args.app / 'PlugIns/CtrlxNotificationExtension.appex')):
+    bundles = [('app', args.app), ('extension', args.app / 'PlugIns/CtrlxNotificationExtension.appex')]
+    if 'share' in json.loads((args.output_directory / 'signing.json').read_text())['profiles']:
+        bundles.append(('share', args.app / 'PlugIns/CtrlxShareExtension.appex'))
+    for role, app in bundles:
         expected = plistlib.loads((args.output_directory / (role + '-entitlements.plist')).read_bytes())
         result = subprocess.run(['/usr/bin/codesign', '-d', '--entitlements', ':-', str(app)],
                                 check=True, capture_output=True)
@@ -100,6 +115,8 @@ def main():
     command.add_argument('--extension-bundle-id', required=True)
     command.add_argument('--app-entitlements', type=Path, required=True)
     command.add_argument('--extension-entitlements', type=Path, required=True)
+    command.add_argument('--share-bundle-id')
+    command.add_argument('--share-entitlements', type=Path)
     command = commands.add_parser('verify')
     command.add_argument('--app', type=Path, required=True)
     for command in commands.choices.values():

@@ -1,6 +1,7 @@
 #if os(iOS)
     import CtrlxCommon
     import CtrlxNetworking
+    import CtrlxShare
     import Dependencies
     import PhotosUI
     import SwiftUI
@@ -14,7 +15,10 @@
         let paneId: String?
         let relayClient: ViewerRelayClient
         @Binding var clipboardPaste: TerminalImagePasteRequest?
+        var sharedContext: TerminalPhraseContext? = nil
+        var shareReceiverID: UUID? = nil
         @Environment(IOSSettings.self) private var settings
+        @Environment(IOSShareInbox.self) private var shareInbox
 
         @Dependency(ClipboardClient.self) private var clipboard
 
@@ -30,6 +34,7 @@
         @State private var operationID: UUID?
         @State private var sourceErrorMessage: String?
         @State private var uploadErrorMessage: String?
+        @State private var sharedImport: SharedPhotoImport?
 
         var body: some View {
             Menu {
@@ -117,6 +122,17 @@
                 prepareClipboardImage(request.image)
             }
             .onDisappear(perform: handleDisappear)
+            .onChange(of: shareInbox.photoRequest?.id) { receiveSharedPhotos() }
+            .onChange(of: isPreviewPresented) {
+                if !isPreviewPresented {
+                    receiveSharedPhotos()
+                }
+            }
+            .onChange(of: canStartInput) {
+                if canStartInput {
+                    receiveSharedPhotos()
+                }
+            }
             .onChange(of: paneId) { _, paneID in
                 if let paneID, let targetPaneId, targetPaneId != paneID {
                     cancelOperation()
@@ -141,6 +157,32 @@
 
         private var canStartInput: Bool {
             relayClient.isHostConnected && paneId != nil && operationID == nil
+        }
+
+        private func receiveSharedPhotos() {
+            guard
+                canStartInput, !isPreviewPresented, let sharedContext, let shareReceiverID,
+                shareInbox.photoRequest?.target == sharedContext.target,
+                shareInbox.photoRequest?.receiverID == shareReceiverID, captureTargetPane(),
+                let items = shareInbox.takePhotos(for: sharedContext, receiverID: shareReceiverID), let id = beginOperation() else { return }
+            sharedImport = SharedPhotoImport(inbox: shareInbox)
+            operationTask = Task {
+                do {
+                    let sources = try await Task.detached(priority: .userInitiated) {
+                        try items.map { item in
+                            let data = try Data(contentsOf: item.url, options: .mappedIfSafe)
+                            guard data.count <= ShareInboxStore.maximumPhotoBytes else { throw ImageUploadError.unreadable(item.name) }
+                            return ImageUploadSource(displayName: item.name, data: data, sharedItemID: item.id)
+                        }
+                    }.value
+                    try await prepareAndPresent(sources, operationID: id)
+                } catch is CancellationError {
+                    if operationID == id {
+                        finishSharedImport()
+                    }
+                } catch { presentSourceError(error, operationID: id) }
+                finishOperation(id)
+            }
         }
 
         private func choosePhotos() {
@@ -305,7 +347,8 @@
             draftImages = zip(sources, prepared).map { source, image in
                 ImageUploadDraftItem(
                     displayName: source.displayName,
-                    image: image
+                    image: image,
+                    sharedItemID: source.sharedItemID
                 )
             }
             if settings.confirmImageUploads {
@@ -374,12 +417,16 @@
                     presentUploadError(error)
                     return
                 }
+                if let id = item.sharedItemID {
+                    shareInbox.acknowledge(id)
+                }
             }
 
             draftImages = []
             self.targetPaneId = nil
             targetBinding = .unavailable
             isPreviewPresented = false
+            finishSharedImport()
         }
 
         private func presentUploadError(_ error: Error) {
@@ -404,6 +451,7 @@
             guard self.operationID == operationID else { return }
             sourceErrorMessage = error.localizedDescription
             targetPaneId = nil
+            finishSharedImport()
         }
 
         private func clearDraft() {
@@ -412,6 +460,7 @@
             targetPaneId = nil
             targetBinding = .unavailable
             uploadErrorMessage = nil
+            finishSharedImport()
         }
 
         private func handleDisappear() {
@@ -432,7 +481,24 @@
             draftImages = []
             targetPaneId = nil
             targetBinding = .unavailable
+            finishSharedImport()
         }
+
+        private func finishSharedImport() {
+            sharedImport = nil
+        }
+    }
+
+    /// A discarded view/preview must release the inbox reservation even when
+    /// no upload task remains to call its completion path.
+    @MainActor
+    final private class SharedPhotoImport {
+        let inbox: IOSShareInbox
+        init(inbox: IOSShareInbox) {
+            self.inbox = inbox
+        }
+
+        isolated deinit { inbox.finishPhotos() }
     }
 
     /// Captures the clipboard at the explicit paste action, before presenting UI.
@@ -446,12 +512,14 @@
     private struct ImageUploadSource: Sendable {
         let displayName: String
         let data: Data
+        var sharedItemID: UUID? = nil
     }
 
     struct ImageUploadDraftItem: Identifiable, Sendable {
         let id = UUID()
         let displayName: String
         let image: ClipboardImage
+        var sharedItemID: UUID? = nil
     }
 
     private enum ImageUploadError: LocalizedError {

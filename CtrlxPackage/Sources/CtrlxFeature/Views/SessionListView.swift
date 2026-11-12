@@ -37,6 +37,7 @@
                 }
             }
             .navigationTitle("Sessions")
+            .safeAreaInset(edge: .top, spacing: 0) { SharedItemsNotice() }
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: SessionNavigation.self) { destination in
                 SessionWorkspaceDestination(

@@ -19,6 +19,7 @@
         @State private var fileWorkspaces = IOSFileBrowserWorkspaceStore()
         @State private var initializationError: String?
         @State private var foregroundBadgeHosts: Set<String> = []
+        @State private var shareInbox = IOSShareInbox.shared
 
         @Environment(\.scenePhase) private var scenePhase
         @State private var pushService = PushNotificationService.shared
@@ -63,8 +64,23 @@
             .environment(sessionStore)
             .environment(dashboardStore)
             .environment(fileWorkspaces)
+            .environment(shareInbox)
             .preferredColorScheme(settings.appearanceMode.colorScheme)
             .fileBrowserCacheMaintenance()
+            .task(id: scenePhase) {
+                guard scenePhase == .active else { return }
+                // An iPad scene can stay active while another app shares.
+                while !Task.isCancelled {
+                    await shareInbox.refresh()
+                    do { try await Task.sleep(for: .seconds(3)) }
+                    catch { return }
+                }
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if !settings.isPaired {
+                    SharedItemsNotice()
+                }
+            }
             .task {
                 #if DEBUG
                     await VoiceCorrectionBenchmarkRunner.shared.runIfRequested(

@@ -21,7 +21,9 @@ final public class PairingManager {
         case error(String)
 
         public var isWaiting: Bool {
-            if case .waitingForPairing = self { return true }
+            if case .waitingForPairing = self {
+                return true
+            }
             return false
         }
     }
@@ -47,7 +49,7 @@ final public class PairingManager {
 
     /// Error shown when the relay rejects a registration with
     /// `SUBSCRIPTION_REQUIRED`; `retryAfterSubscriptionRestored()` keys off it.
-    static let subscriptionRequiredErrorMessage = "Subscription required — see the License section below"
+    static let subscriptionRequiredErrorMessage = "Subscription required — open Settings → Relay → Relay Authorization"
 
     /// Callback when a new viewer is successfully paired
     public var onViewerPaired: ((PairedViewer) -> Void)?

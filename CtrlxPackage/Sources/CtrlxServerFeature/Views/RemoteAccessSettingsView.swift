@@ -9,17 +9,13 @@ public struct RemoteAccessSettingsView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(PairingManager.self) private var pairingManager
     @Environment(AppCoordinator.self) private var coordinator
-    @Environment(LicenseManager.self) private var licenseManager
     @Environment(\.e2eeService) private var e2eeService: E2EEService?
 
     @State private var showCopiedFeedback = false
-    @State private var meteredRelay = false
 
     public init() { }
 
     public var body: some View {
-        @Bindable var settings = settings
-
         Form {
             // Connection Status Section
             Section {
@@ -28,6 +24,7 @@ public struct RemoteAccessSettingsView: View {
                 Text("Connection Status")
             } footer: {
                 Text("Allow paired devices to view sessions running on this Mac.")
+                Button("Relay Settings…") { settings.selectedSettingsTab = .relay }
             }
 
             .settingsAnchor(.connection)
@@ -40,48 +37,10 @@ public struct RemoteAccessSettingsView: View {
             }
 
             .settingsAnchor(.pairing)
-
-            RemoteReconnectSettingsSection()
-
-            // Server Configuration
-            Section {
-                TextField("Server URL", text: $settings.externalServerURL)
-                    .textFieldStyle(.roundedBorder)
-
-                Toggle("Auto-connect on launch", isOn: $settings.autoConnectToServer)
-            } header: {
-                Text("Server")
-            } footer: {
-                Text("Shared relay address for pairing on this Mac. Changes also appear in Remote Hosts. Use WSS for a secure connection.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            .settingsAnchor(.relay)
-
-            RelayAccessSettingsSection(server: settings.externalServerURL, onMeteredChange: { meteredRelay = $0 }) {
-                await coordinator.connectedViewerManager?.enableReconnectAndRetryAll()
-            }
-            if !meteredRelay {
-                // Relay authorization
-                Section {
-                    licenseSection
-                } header: {
-                    Text("Relay Authorization")
-                } footer: {
-                    Text("Self-hosted relays do not require a key. If a custom relay requires one, obtain it from that relay's operator.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
         }
         .formStyle(.grouped)
         .frame(minWidth: 400, minHeight: 300)
         .navigationTitle("Remote Access")
-        .task {
-            await licenseManager.loadStoredKey()
-            await licenseManager.refreshStatus()
-        }
         .onReceive(
             NotificationCenter.default.publisher(
                 for: .init("com.jicezeng.ctrlx.e2e.unpairViewer")
@@ -311,62 +270,6 @@ public struct RemoteAccessSettingsView: View {
                 }
             }
             .buttonStyle(.bordered)
-        }
-    }
-
-    // MARK: - License Section
-
-    @ViewBuilder
-    private var licenseSection: some View {
-        @Bindable var licenseManager = licenseManager
-
-        switch licenseManager.status?.state {
-        case .notRequired:
-            Label("Not required on this relay", symbol: .checkmarkCircleFill)
-                .foregroundStyle(.secondary)
-        case .active:
-            LabeledContent("Status") {
-                Text("Active")
-                    .foregroundStyle(.green)
-            }
-            if
-                let limit = licenseManager.status?.activationLimit,
-                let usage = licenseManager.status?.activationUsage {
-                LabeledContent("Activations", value: "\(usage) of \(limit) Macs")
-            }
-            Button("Deactivate This Mac", role: .destructive) {
-                Task { await licenseManager.deactivate() }
-            }
-            .buttonStyle(.borderless)
-        default:
-            if let daysLeft = licenseManager.trialDaysLeft {
-                LabeledContent("Status") {
-                    Text("Trial — \(daysLeft) day\(daysLeft == 1 ? "" : "s") left")
-                        .foregroundStyle(daysLeft <= 2 ? .orange : .secondary)
-                }
-            } else if licenseManager.status?.state == .expired {
-                Label("Relay authorization required", symbol: .exclamationmarkTriangle)
-                    .foregroundStyle(.orange)
-            }
-            TextField("License Key", text: $licenseManager.licenseKeyField)
-                .textFieldStyle(.roundedBorder)
-                // Unique AX label so E2E can focus the field itself — a bare
-                // "License Key" query matches the row's static label first.
-                .accessibilityLabel("License key field")
-                .onSubmit {
-                    Task { await licenseManager.activate() }
-                }
-            HStack {
-                Button("Activate") {
-                    Task { await licenseManager.activate() }
-                }
-                .disabled(licenseManager.actionState == .working)
-            }
-            if case let .error(message) = licenseManager.actionState {
-                Label(message, symbol: .exclamationmarkTriangle)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            }
         }
     }
 

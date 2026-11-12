@@ -9,7 +9,14 @@ struct SettingsSearchTests {
         ("provider", .agents, .agentProviders),
         ("telemetry", .agents, .agentAdvanced),
         ("  LOG   level  ", .agents, .agentAdvanced),
-        ("reconnect", .remoteAccess, .reconnection),
+        ("reconnect", .relay, .reconnection),
+        ("Server URL", .relay, .relay),
+        ("Relay Authorization", .relay, .relayAuthorization),
+        ("access key", .relay, .relayAccess),
+        ("Remote Hosts Relay Traffic", .relay, .relayTraffic),
+        ("CLI update", .agents, .agentCLI),
+        ("CtrlX Plugin", .agents, .agentStatus),
+        ("Plugin Updates", .agents, .agentUpdates),
     ])
     func destinations(query: String, tab: SettingsTab, section: SettingsSection) throws {
         let result = try #require(SettingsSearchItem.matching(query).first)
@@ -28,7 +35,7 @@ struct SettingsSearchTests {
     func catalogCoverage() {
         let items = SettingsSearchItem.all
         #expect(Set(items.map(\.id)).count == items.count)
-        let tabs: [SettingsTab] = [.general, .appearance, .browser, .sidebarLayout, .editors, .remoteAccess, .remoteHosts, .quickPhraseSync, .voiceInput, .agents, .about]
+        let tabs: [SettingsTab] = [.general, .appearance, .browser, .sidebarLayout, .editors, .relay, .remoteAccess, .remoteHosts, .quickPhraseSync, .voiceInput, .agents, .about]
         for tab in tabs {
             #expect(items.contains { $0.tab == tab })
         }

@@ -145,6 +145,24 @@ final public class FileBrowserTab: Identifiable {
         uploadSession.cancel()
     }
 
+    /// External imports use the same tab-owned lifetime and guarded upload path
+    /// as the document picker. Each acknowledged source can be removed separately.
+    @discardableResult
+    public func importFiles(
+        _ urls: [URL],
+        source: FileBrowserSource,
+        onSaved: @escaping @MainActor (URL) -> Void,
+        onFinished: @escaping @MainActor () -> Void
+    ) -> Bool {
+        guard
+            let path, !urls.isEmpty, !uploadSession.isRunning,
+            source.unavailableReason == nil, source.uploadUnavailableReason == nil else { return false }
+        uploadSession.start(.files(urls), directory: path, source: source, onSaved: { [weak self] in
+            self?.refresh += 1
+        }, onFileSaved: onSaved, onFinished: onFinished)
+        return true
+    }
+
     /// Closing a tab or losing its Host also stops writes, including while hidden.
     public func releaseResources() {
         cancelUploads()

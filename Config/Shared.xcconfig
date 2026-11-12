@@ -12,6 +12,7 @@ PRODUCT_DISPLAY_NAME = CtrlX
 CTRLX_IOS_DEVELOPMENT_TEAM =
 CTRLX_IOS_APP_BUNDLE_IDENTIFIER = com.gravtice.ctrlx
 CTRLX_IOS_NOTIFICATION_EXTENSION_BUNDLE_IDENTIFIER = com.gravtice.ctrlx.notification-service
+CTRLX_IOS_SHARE_EXTENSION_BUNDLE_IDENTIFIER = $(CTRLX_IOS_APP_BUNDLE_IDENTIFIER).share
 PRODUCT_BUNDLE_IDENTIFIER = $(CTRLX_IOS_APP_BUNDLE_IDENTIFIER)
 
 // ==========================================
@@ -34,6 +35,7 @@ INFOPLIST_KEY_NSCameraUsageDescription = CtrlX uses the camera only to send a ph
 // AI agents can modify Config/Ctrlx.entitlements to add capabilities
 CTRLX_IOS_APP_ENTITLEMENTS = Config/Ctrlx.entitlements
 CTRLX_IOS_NOTIFICATION_EXTENSION_ENTITLEMENTS = CtrlxNotificationExtension/CtrlxNotificationExtension.entitlements
+CTRLX_IOS_SHARE_EXTENSION_ENTITLEMENTS = CtrlxShareExtension/CtrlxShareExtension.entitlements
 CODE_SIGN_ENTITLEMENTS = $(CTRLX_IOS_APP_ENTITLEMENTS)
 
 // ==========================================

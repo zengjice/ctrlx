@@ -55,14 +55,14 @@
         }
     }
 
-    struct AgentCLIUpdateSection: View {
+    struct AgentCLIUpdateRows: View {
         let agent: InstallableAgentCLI
         @Environment(AppCoordinator.self) private var coordinator
 
         var body: some View {
             if let installations = coordinator.agentCLIInstallations {
                 let entry = installations.entries[agent] ?? .init()
-                Section("CLI Update") {
+                Group {
                     LabeledContent("Installed", value: installedVersion(entry))
                     LabeledContent("Latest", value: entry.latestVersion ?? "Not checked")
 

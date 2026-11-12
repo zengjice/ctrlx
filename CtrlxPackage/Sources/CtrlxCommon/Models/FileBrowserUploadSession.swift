@@ -39,7 +39,14 @@ final class FileBrowserUploadSession {
         sourceKey = key
     }
 
-    func start(_ input: Input, directory: String, source: FileBrowserSource, onSaved: @escaping @MainActor () -> Void) {
+    func start(
+        _ input: Input,
+        directory: String,
+        source: FileBrowserSource,
+        onSaved: @escaping @MainActor () -> Void,
+        onFileSaved: @escaping @MainActor (URL) -> Void = { _ in },
+        onFinished: @escaping @MainActor () -> Void = { }
+    ) {
         configure(source: source)
         guard !isRunning else { return }
         let upload = FileBrowserUpload()
@@ -52,10 +59,11 @@ final class FileBrowserUploadSession {
                 }
             }
             switch input {
-            case let .files(urls): await upload.run(urls: urls, directory: directory, source: source, onSaved: saved)
+            case let .files(urls): await upload.run(urls: urls, directory: directory, source: source, onSaved: saved, onFileSaved: onFileSaved)
             case let .image(content): await upload.run(image: content, directory: directory, source: source, onSaved: saved)
             }
             self?.task = nil
+            onFinished()
         }
     }
 

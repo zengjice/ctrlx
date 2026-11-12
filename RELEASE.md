@@ -255,12 +255,16 @@ reconfigure the Relay. TestFlight/App Store upload remains blocked separately.
 ### Gravtice identity transition
 
 Current identifiers are `com.gravtice.ctrlx` (iOS),
-`com.gravtice.ctrlx.notification-service` (notification extension), and
+`com.gravtice.ctrlx.notification-service` (notification extension),
+`com.gravtice.ctrlx.share` (share extension), and
 `com.gravtice.ctrlx.macos` (Mac). The iOS App Group is
-`group.com.gravtice.ctrlx`; both targets claim the concrete
-`$(AppIdentifierPrefix)com.gravtice.ctrlx.shared` Keychain group. Register the two
-new iOS App IDs, enable Push Notifications on the main App, associate the App
-Group with both, and generate matching Ad Hoc profiles. The production Relay
+`group.com.gravtice.ctrlx`; all three iOS targets claim the concrete
+`$(AppIdentifierPrefix)com.gravtice.ctrlx.shared` Keychain group. Register all three
+iOS App IDs, enable Push Notifications on the main App, associate the App
+Group with all three, and generate matching provisioning profiles. The share
+extension has no push entitlement. Existing installations need a profile for the
+new `.share` child ID before packaging; signing preflight requires it before
+compilation and verifies it alongside the App and notification extension. The production Relay
 topic must be `APNS_BUNDLE_ID=com.gravtice.ctrlx`. A team-scoped APNs key already
 authorized for both environments can be reused.
 

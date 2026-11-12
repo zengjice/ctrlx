@@ -136,6 +136,15 @@ class LocalInstallTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Not a CtrlX"):
             installer.verify_app(app, "ios")
 
+    def test_present_share_extension_requires_its_own_profile(self):
+        app, _ = self.package("ios")
+        extension = app / "PlugIns/CtrlxShareExtension.appex"
+        extension.mkdir()
+        with self.assertRaisesRegex(ValueError, "CtrlxShareExtension"):
+            installer.verify_app(app, "ios")
+        (extension / "embedded.mobileprovision").touch()
+        installer.verify_app(app, "ios")
+
     def test_mac_success_replaces_bundle_and_marks_backup(self):
         app, _ = self.package()
         self.app(self.target, stamp="old")

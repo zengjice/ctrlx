@@ -96,7 +96,7 @@ public struct SettingsView: View {
 
     private static let tabs: [SettingsTab] = [
         .general, .appearance, .browser, .sidebarLayout, .editors,
-        .remoteAccess, .remoteHosts, .quickPhraseSync, .voiceInput, .agents, .about,
+        .relay, .remoteAccess, .remoteHosts, .quickPhraseSync, .voiceInput, .agents, .about,
     ]
 
     @ViewBuilder private var selectedPage: some View {
@@ -106,6 +106,7 @@ public struct SettingsView: View {
         case .browser: BrowserSettingsView()
         case .sidebarLayout: SidebarLayoutSettingsView()
         case .editors: EditorsSettingsView()
+        case .relay: RelaySettingsView()
         case .remoteAccess: RemoteAccessSettingsView()
         case .remoteHosts: RemoteHostsSettingsView()
         case .quickPhraseSync: QuickPhraseSyncSettingsView(store: settings.quickPhrases)

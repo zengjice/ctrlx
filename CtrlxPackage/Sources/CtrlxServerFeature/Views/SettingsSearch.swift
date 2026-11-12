@@ -24,7 +24,11 @@ enum SettingsSection: String {
     case pairing
     case reconnection
     case relay
+    case relayAccess
+    case relayAuthorization
+    case relayTraffic
     case agentStatus
+    case agentCLI
     case agentCommand
     case agentProviders
     case agentBehavior
@@ -85,17 +89,19 @@ struct SettingsSearchItem: Identifiable {
         .init(title: "Prompt editor (Ctrl-G)", tab: .editors, section: .promptEditor, keywords: "VISUAL shell override 提示词"),
         .init(title: "Paired Viewers", tab: .remoteAccess, section: .pairing, keywords: "unpair devices iPhone 配对"),
         .init(title: "Paired Hosts", tab: .remoteHosts, section: .pairing, keywords: "pair Mac connect 配对"),
-        .init(title: "Reconnection", tab: .remoteAccess, section: .reconnection, keywords: "auto reconnect delay 重连"),
-        .init(title: "Reconnection", tab: .remoteHosts, section: .reconnection, keywords: "auto reconnect delay 重连"),
-        .init(title: "Server URL", tab: .remoteHosts, section: .relay, keywords: "relay 中继"),
-        .init(title: "Server URL", tab: .remoteAccess, section: .relay, keywords: "relay auto-connect 中继"),
+        .init(title: "Reconnection", tab: .relay, section: .reconnection, keywords: "auto reconnect delay 重连"),
+        .init(title: "Server URL", tab: .relay, section: .relay, keywords: "relay auto-connect 中继"),
+        .init(title: "Relay Access Key & Traffic", tab: .relay, section: .relayAccess, keywords: "account quota allowance 流量 配额"),
+        .init(title: "Relay Authorization", tab: .relay, section: .relayAuthorization, keywords: "license activation key 授权 激活"),
+        .init(title: "Remote Hosts Relay Traffic", tab: .relay, section: .relayTraffic, keywords: "account quota allowance 流量 配额"),
         .init(title: "Quick Phrase Sync", tab: .quickPhraseSync, section: nil, keywords: "devices sharing 快捷短语 同步"),
         .init(title: "Voice Input", tab: .voiceInput, section: nil, keywords: "microphone dictation language correction provider API key model 语音 语言"),
-        .init(title: "CLI & Plugin Status", tab: .agents, section: .agentStatus, keywords: "install setup repair Agent 状态 安装"),
+        .init(title: "CtrlX Plugin Status", tab: .agents, section: .agentStatus, keywords: "install setup Agent 状态 安装"),
         .init(title: "Agent Command Path", tab: .agents, section: .agentCommand, keywords: "apply browse CLI executable 命令 路径"),
         .init(title: "Launch Default Provider", tab: .agents, section: .agentProviders, keywords: "subscription OpenAI Anthropic API key model shortcuts 订阅"),
         .init(title: "Agent Startup Behavior", tab: .agents, section: .agentBehavior, keywords: "auto-run close session completion verify Apple Intelligence"),
-        .init(title: "Agent Updates", tab: .agents, section: .agentUpdates, keywords: "CLI plugin version check 自动更新"),
+        .init(title: "Agent CLI", tab: .agents, section: .agentCLI, keywords: "update version check installed repair 更新 安装"),
+        .init(title: "Agent Plugin Updates", tab: .agents, section: .agentUpdates, keywords: "version check 自动更新"),
         .init(title: "Agent Advanced", tab: .agents, section: .agentAdvanced, keywords: "log level telemetry config folders 日志 遥测 配置目录"),
         .init(title: "CtrlX Updates", tab: .about, section: .updates, keywords: "version check download 更新"),
         .init(title: "Update Reminders", tab: .about, section: .updateReminders, keywords: "interval remind 提醒"),
@@ -128,6 +134,7 @@ extension SettingsTab {
         case .browser: .globe
         case .sidebarLayout: .listBulletClipboard
         case .editors: .pencil
+        case .relay: .wifi
         case .remoteAccess: .iphone
         case .remoteHosts: .laptopcomputer
         case .quickPhraseSync: .textBubbleFill
@@ -144,6 +151,7 @@ extension SettingsTab {
         case .browser: "Browser"
         case .sidebarLayout: "Sidebar"
         case .editors: "Files & Editors"
+        case .relay: "Relay"
         case .remoteAccess: "Remote Access"
         case .remoteHosts: "Remote Hosts"
         case .quickPhraseSync: "Quick Phrase Sync"

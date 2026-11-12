@@ -764,8 +764,10 @@ native Claude Code uses `claude update`, preserving its configured release chann
 Startup and manual checks also compare the installed CLI with the current stable
 release published in the official npm package metadata. The check is also repeated
 on the existing 24-hour plugin-update maintenance loop instead of adding a second
-timer. A newer version produces a workbench banner and a **CLI Update** section on
-that agent's Settings page. Plugin, CLI, and CtrlX app version banners use the
+timer. A newer version produces a workbench banner. On each agent's Settings page,
+**Status** contains peer **CtrlX Plugin** and **CLI** groups; CLI installed/latest
+versions, update checks and Agent Setup sit beside the plugin installation controls.
+Plugin, CLI, and CtrlX app version banners use the
 same reusable reminder implementation, but keep independent dismissal state and
 persistence. Dismissal is keyed by target and offered version; the app channel
 also includes the build number. Settings → Agents controls how long a dismissed
@@ -1608,7 +1610,10 @@ command, currentPath, width, height, isActive
 
 Mac Settings keeps font, size, terminal colors and selection highlighting in
 **Appearance**, file-opening preferences in **Files & Editors**, and web-link
-placement in **Browser**. Reconnection preferences appear on both remote pages;
+placement in **Browser**. **Relay** owns the shared server URL, launch connection
+and reconnection preferences, this Mac's access key/authorization and account traffic,
+and paired Hosts' traffic and retry actions. **Remote Access** and **Remote Hosts**
+keep their connection status and pairing controls, with links to **Relay**.
 **About** owns application updates and update-reminder intervals. **General →
 Advanced** contains tmux configuration and diagnostics. Display-name changes do
 not change existing settings keys or Agent identifiers.
