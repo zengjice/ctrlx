@@ -12,6 +12,7 @@ struct AgentBrowserTabContentView: View {
     @Environment(\.resourceTabActions) private var resourceActions
     @Environment(\.browserAnnotationContext) private var annotationContext
     @State private var address = ""
+    @State private var addressSelection: TextSelection?
     @State private var captureRequest: UUID?
     @State private var isAnnotating = false
     @State private var actionError: String?
@@ -31,11 +32,14 @@ struct AgentBrowserTabContentView: View {
                 }
                 Button { state.service.back(state) } label: { Label("Back", symbol: .chevronLeft) }
                     .disabled(state.isRemotelyControlled)
+                    .help("Back (⌘[)")
                 Button { state.service.forward(state) } label: { Label("Forward", symbol: .chevronRight) }
                     .disabled(state.isRemotelyControlled)
+                    .help("Forward (⌘])")
                 Button { state.service.reload(state) } label: { Label("Reload", symbol: .arrowClockwise) }
                     .disabled(state.isRemotelyControlled)
-                TextField("Search Google or enter address", text: $address)
+                    .help("Reload (⌘R)")
+                TextField("Search Google or enter address", text: $address, selection: $addressSelection)
                     .focused($editingAddress)
                     .onSubmit(navigate)
                     .accessibilityIdentifier("agent-browser-address")
@@ -180,6 +184,17 @@ struct AgentBrowserTabContentView: View {
             }
         }
         .accessibilityIdentifier("agent-browser-tab-content")
+        .browserKeyboardShortcuts(isEnabled: keyboardShortcutsEnabled) { shortcut in
+            guard keyboardShortcutsEnabled else { return }
+            switch shortcut {
+            case .reload: state.service.reload(state)
+            case .back: state.service.back(state)
+            case .forward: state.service.forward(state)
+            case .focusAddress:
+                editingAddress = true
+                addressSelection = TextSelection(range: address.startIndex..<address.endIndex)
+            }
+        }
         .sheet(item: $extensionRequest) { request in BrowserExtensionsView(tab: state, initialStoreID: request.storeID) }
         .alert("Browser Error", isPresented: Binding(
             get: { actionError != nil }, set: {
@@ -192,6 +207,10 @@ struct AgentBrowserTabContentView: View {
         } message: {
             Text(actionError ?? "")
         }
+    }
+
+    private var keyboardShortcutsEnabled: Bool {
+        !state.isClosed && !state.isRemotelyControlled && !isAnnotating && extensionRequest == nil
     }
 
     private func openExtensionWindow() {

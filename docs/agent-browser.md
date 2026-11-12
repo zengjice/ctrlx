@@ -1,5 +1,19 @@
 # Agent Browser
 
+## Mac Browser keyboard shortcuts
+
+Mac Host and Viewer Browser tabs support Command-R (reload), Command-L (focus
+and select the address), Command-[ (back) and Command-] (forward). Chromium,
+remote Host pages and retained local WebKit tabs use the same window/focused-split
+routing. Only the active Browser in the key workbench handles these combinations;
+hidden tabs, other windows and the other split do not receive them. Standard
+editing and workbench tab shortcuts retain their existing routing.
+
+Reload and history navigation use the same control checks as the toolbar: a Host
+page controlled by a Viewer, or a Viewer without page control, cannot navigate
+through a shortcut. Annotation and modal UI do not navigate the page. Outside
+Browser content, Command-R retains its Refresh Sessions behavior.
+
 ## Human downloads
 
 Clicks in the embedded Chromium page can save downloads to the source Host's

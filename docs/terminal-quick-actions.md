@@ -67,6 +67,9 @@ Git directory, then the home directory, without taking the other side's Files pa
 | Command-N | Open the local New Session picker |
 | Command-T | Create a terminal in the current session and focused split |
 | Command-P | Search local and paired-Host sessions, then switch with Return |
+| Command-R | Reload the Browser in the focused split; otherwise refresh sessions |
+| Command-L | Focus and select the active Browser's address |
+| Command-[ / ] | Go back / forward in the active Browser |
 | Command-1…9 | Select any tab by its visible order within the focused split |
 | Command-Option-Left / Right | Select the previous / next tab within that split |
 | Command-Option-Up / Down | Select the previous / next session in sidebar order |

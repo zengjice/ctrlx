@@ -1,4 +1,5 @@
 import AppKit
+import CtrlxCommon
 import SwiftUI
 
 /// Layout constants shared by `SplitDetailContent` and `WindowTabBar` so the
@@ -26,10 +27,12 @@ struct SplitDetailContent<Left: View, Right: View>: View {
             let leftWidth = max(0, totalWidth * sessionTabs.splitRatio - SplitLayout.dividerWidth / 2)
             HStack(spacing: 0) {
                 left()
+                    .environment(\.browserKeyboardActive, !sessionTabs.isRightPaneFocused)
                     .frame(width: leftWidth)
                     .frame(maxHeight: .infinity)
                 divider(totalWidth: totalWidth)
                 right()
+                    .environment(\.browserKeyboardActive, sessionTabs.isRightPaneFocused)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }

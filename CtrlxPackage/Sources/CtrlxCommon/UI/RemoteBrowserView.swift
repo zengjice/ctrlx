@@ -8,6 +8,9 @@
     public struct RemoteBrowserView: View {
         @State private var session: RemoteBrowserSession
         @State private var address = ""
+        #if os(macOS)
+            @State private var addressSelection: TextSelection?
+        #endif
         @State private var image: CGImage?
         @State private var displayedFrame: RemoteBrowserFrame?
         @State private var viewport = CGSize.zero
@@ -43,16 +46,33 @@
                 HStack(spacing: 12) {
                     HStack(spacing: 12) {
                         Button { session.submit(.back) } label: { Label("Back", symbol: .chevronLeft) }
+                        #if os(macOS)
+                            .help("Back (⌘[)")
+                        #endif
                         Button { session.submit(.forward) } label: { Label("Forward", symbol: .chevronRight) }
+                        #if os(macOS)
+                            .help("Forward (⌘])")
+                        #endif
                         Button { session.submit(.reload) } label: { Label("Reload", symbol: .arrowClockwise) }
-                        TextField("Search Google or enter address", text: $address)
-                            .focused($editingAddress)
-                            .onSubmit(navigate)
-                            .textFieldStyle(.roundedBorder)
-                        #if os(iOS)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .keyboardType(.URL)
+                        #if os(macOS)
+                            .help("Reload (⌘R)")
+                        #endif
+                        #if os(macOS)
+                            TextField("Search Google or enter address", text: $address, selection: $addressSelection)
+                                .focused($editingAddress)
+                                .onSubmit(navigate)
+                                .textFieldStyle(.roundedBorder)
+                                .accessibilityIdentifier("remote-browser-address")
+                        #else
+                            TextField("Search Google or enter address", text: $address)
+                                .focused($editingAddress)
+                                .onSubmit(navigate)
+                                .textFieldStyle(.roundedBorder)
+                            #if os(iOS)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .keyboardType(.URL)
+                            #endif
                         #endif
                         Button {
                             session.submit(.fit(
@@ -282,35 +302,55 @@
                 }
             }
             .accessibilityIdentifier("remote-browser-page")
-            .sheet(item: Binding(get: { session.selectMenu }, set: { value in
-                if value == nil {
-                    session.dismissSelectMenu()
+            #if os(macOS)
+                .browserKeyboardShortcuts(isEnabled: keyboardShortcutsEnabled) { shortcut in
+                    guard keyboardShortcutsEnabled else { return }
+                    switch shortcut {
+                    case .reload: session.submit(.reload)
+                    case .back: session.submit(.back)
+                    case .forward: session.submit(.forward)
+                    case .focusAddress:
+                        editingAddress = true
+                        addressSelection = TextSelection(range: address.startIndex..<address.endIndex)
+                    }
                 }
-            })) { menu in
-                RemoteBrowserSelectMenuView(
-                    menu: menu,
-                    choose: { session.chooseSelectOption(menuID: menu.id, index: $0) },
-                    cancel: session.dismissSelectMenu
-                )
-            }
-            .sheet(item: $extensionRequest) { request in
-                RemoteBrowserExtensionsView(
-                    tab: session.tab,
-                    client: client,
-                    initialStoreID: request.storeID,
-                    initialView: request.initialView,
-                    onOpenBrowser: onOpenBrowser
-                )
-            }
+            #endif
+                .sheet(item: Binding(get: { session.selectMenu }, set: { value in
+                    if value == nil {
+                        session.dismissSelectMenu()
+                    }
+                })) { menu in
+                    RemoteBrowserSelectMenuView(
+                        menu: menu,
+                        choose: { session.chooseSelectOption(menuID: menu.id, index: $0) },
+                        cancel: session.dismissSelectMenu
+                    )
+                }
+                .sheet(item: $extensionRequest) { request in
+                    RemoteBrowserExtensionsView(
+                        tab: session.tab,
+                        client: client,
+                        initialStoreID: request.storeID,
+                        initialView: request.initialView,
+                        onOpenBrowser: onOpenBrowser
+                    )
+                }
             #if os(iOS)
-            .onChange(of: client.browserTabs) { previous, current in
-                guard
-                    scenePhase == .active, client.isHostConnected, extensionRequest == nil,
-                    let child = session.newlyOpenedChild(from: previous, in: current) else { return }
-                onOpenBrowser(child)
-            }
+                .onChange(of: client.browserTabs) { previous, current in
+                    guard
+                        scenePhase == .active, client.isHostConnected, extensionRequest == nil,
+                        let child = session.newlyOpenedChild(from: previous, in: current) else { return }
+                    onOpenBrowser(child)
+                }
             #endif
         }
+
+        #if os(macOS)
+            private var keyboardShortcutsEnabled: Bool {
+                client.isHostConnected && session.controlID != nil && session.frame != nil
+                    && !isAnnotating && session.selectMenu == nil && extensionRequest == nil
+            }
+        #endif
 
         private func bookmarkRequest(_ operation: BrowserBookmarkOperation) async throws -> [BrowserBookmark] {
             let request = BrowseBrowser(
