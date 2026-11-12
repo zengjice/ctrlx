@@ -7,6 +7,33 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.161 — Browser shortcuts and reusable workflow presets
+
+- Add Command-R/L/[ / ] for reload, address selection and history navigation in
+  the active Mac Browser window and focused split. Host, Viewer and retained
+  WebKit tabs share routing, while page control, annotation and modal guards
+  remain authoritative. Outside Browser content, Command-R refreshes sessions.
+  See [Browser shortcuts](docs/agent-browser.md). Source: `c305a7cf`.
+- Duplicate a workflow into a new draft containing preset instructions and flow
+  rules, clearing tasks, images, Agent bindings and their model settings. Add a
+  toolbar Stop action using the existing end-workflow confirmation; retain Agent
+  tabs, their current tasks and saved results.
+  See [workflow presets](docs/multi-agent-design.md). Source: `7abbab58`.
+- Resume Agents through a fresh interactive login shell, rereading the Host's
+  current startup configuration before applying scoped Provider settings. Follow
+  native Zsh/Bash startup rules and Bash profile precedence without modifying
+  dotfiles or sourcing .bashrc a second time.
+  See [Agent resume](docs/services-reference.md). Sources: `4312534c`, `49fef5b1`.
+
+- Validation: 45 focused Swift tests passed serially, including native AppKit
+  Browser shortcut/address selection and split routing, workflow duplication
+  and toolbar end confirmation, and isolated Bash/Zsh startup/Agent-restart
+  regressions. Lint for 19 Swift files, both boundary checks and diff checks
+  passed. This release packages macOS only; full E2E, live website/paired-Viewer
+  and iPhone interaction, real-model workflows and Apple Intelligence evaluations
+  were not run. The native browser engine and codec SDK are unchanged; previous
+  media acceptance is reused after checking the SDK hash/UUID.
+
 ## 3.0.160 — Keep running Agents available after CLI upgrades
 
 - Let an existing workflow Agent remain eligible when its CLI version is missing
