@@ -69,13 +69,8 @@ public enum LicensingFlowScenario {
         TestStep.waitForViewerConnected(timeout: 15)
         TestStep.macWaitForElement(titled: "Viewer connected", timeout: 15)
 
-        // 4. Pairing triggers a license refresh on the Mac
-        //    (connectToNewlyPairedViewer → refreshStatus) and the open
-        //    Settings view observes it live, so the countdown appears without
-        //    a reopen. The Settings window is not AX-resizable and the
-        //    License section is the last form section (clipped at the default
-        //    height) — over-scroll the form to the bottom instead, which
-        //    clamps deterministically.
+        // 4. Relay authorization lives on the shared Relay page.
+        TestStep.macSelectSettingsTab("Relay")
         TestStep.macWaitForElement(titled: "7 days left", timeout: 10)
         TestStep.macScrollWheel(deltaY: -10, count: 10)
         TestStep.wait(seconds: 0.5)
@@ -120,17 +115,16 @@ public enum LicensingFlowScenario {
         TestStep.verifyServerHasPairings(count: 1)
         TestStep.waitForViewerConnected(timeout: 15)
 
-        // 7. The expired trial surfaces on both platforms: the Mac's pairing
-        //    refresh (plus the rejected connect's onSubscriptionRequired
-        //    backstop) flips the License section to "Subscription required",
-        //    and the relay's hostSubscriptionInactive notice reaches iOS.
-        TestStep.macWaitForElement(titled: "Subscription required", timeout: 15)
+        // 7. The expired trial surfaces on the Relay page and on iOS.
+        TestStep.macSelectSettingsTab("Relay")
+        TestStep.macWaitForElement(titled: "Relay authorization required", timeout: 15)
         TestStep.iosWaitForElement(.labelContains("subscription expired"), timeout: 15)
 
-        // 8. A new registration is blocked too, pointing at the License
-        //    section.
+        // 8. A new registration is blocked too, pointing at Relay settings.
+        TestStep.macSelectSettingsTab("Remote Access")
         TestStep.macClickButton(titled: "Add Viewer")
-        TestStep.macWaitForElement(titled: "see the License section below", timeout: 10)
+        TestStep.macWaitForElement(titled: "open Settings → Relay → Relay Authorization", timeout: 10)
+        TestStep.macSelectSettingsTab("Relay")
         TestStep.macScrollWheel(deltaY: -10, count: 10)
         TestStep.wait(seconds: 0.5)
         // tolerance: 5 — recording (ScreenCaptureKit) shifts rendering ~3.3%
@@ -162,6 +156,7 @@ public enum LicensingFlowScenario {
         //     the pairing section flips from the sticky "Subscription
         //     required" error straight to a fresh code, no Try Again click.
         //     iOS's connection goes fully green once the host is back.
+        TestStep.macSelectSettingsTab("Remote Access")
         TestStep.macWaitForElement(titled: "Enter this code on your iPhone:", timeout: 10)
         TestStep.waitForHostConnected(timeout: 15)
         TestStep.waitForViewerConnected(timeout: 15)

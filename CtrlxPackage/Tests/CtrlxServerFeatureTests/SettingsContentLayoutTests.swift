@@ -10,21 +10,32 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct SettingsContentLayoutTests {
-    @Test("Switching to Sidebar and Editors keeps the navigation and detail inside the Settings window")
+    @Test("Switching Settings pages keeps navigation and detail inside the window")
     func switchingPagesKeepsLayoutBounded() async throws {
         try await withDependencies {
             $0[PreferencesService.self] = .inMemory()
             $0[SecretsService.self] = .inMemory()
             $0[SimulatorSystemClient.self] = SimulatorSystemClient()
             $0[LoginItemService.self] = .previewValue
+            $0[RelayCredentials.self] = .inMemory()
+            $0[RelayAccessClient.self].status = { _, _, _ in .init(metered: false) }
+            $0[LicensingClient.self].status = { _, _ in .init(state: .notRequired) }
         } operation: {
+            @Dependency(\.self) var dependencies
             _ = NSApplication.shared
             let coordinator = AppCoordinator()
             coordinator.pluginRegistry = PluginRegistry()
+            coordinator.settings.externalServerURL = "wss://settings-test.invalid"
             coordinator.settings.selectedSettingsTab = .appearance
+            let encryption = E2EEService(keyPair: .generateNew())
+            let pairing = PairingManager(settings: coordinator.settings, e2eeService: encryption)
             let host = NSHostingView(rootView: SettingsView()
                 .environment(coordinator)
-                .environment(coordinator.settings))
+                .environment(coordinator.settings)
+                .environment(coordinator.licenseManager)
+                .environment(pairing)
+                .environment(\.dependencies, dependencies)
+                .e2eeService(encryption))
             let window = NSWindow(
                 contentRect: CGRect(x: 100, y: 100, width: 900, height: 600),
                 styleMask: [.titled, .resizable], backing: .buffered, defer: false
@@ -36,7 +47,7 @@ struct SettingsContentLayoutTests {
 
             for size in [CGSize(width: 760, height: 520), CGSize(width: 900, height: 600), CGSize(width: 1_100, height: 700)] {
                 window.setContentSize(size)
-                for tab in [SettingsTab.appearance, .browser, .sidebarLayout, .editors, .agents, .about, .appearance, .sidebarLayout] {
+                for tab in [SettingsTab.appearance, .browser, .sidebarLayout, .editors, .agents, .relay, .remoteAccess, .remoteHosts, .about, .appearance, .sidebarLayout] {
                     coordinator.settings.selectedSettingsTab = tab
                     try await Task.sleep(for: .milliseconds(100))
                     host.layoutSubtreeIfNeeded()

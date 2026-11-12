@@ -1,8 +1,8 @@
 #if os(macOS)
+    import ConcurrencyExtras
     import CtrlxCommon
     import CtrlxEncryption
     import CtrlxNetworking
-    import ConcurrencyExtras
     import Dependencies
     import Foundation
     import Testing
@@ -48,7 +48,7 @@
             let (manager, settings) = try await makeManager(register: { _, _ in response.value })
 
             await manager.generatePairingCode()
-            #expect(manager.state == .error("Subscription required — see the License section below"))
+            #expect(manager.state == .error("Subscription required — open Settings → Relay → Relay Authorization"))
 
             // License activated: the relay accepts the registration now.
             response.setValue(.registered(pairId: "pair-1"))

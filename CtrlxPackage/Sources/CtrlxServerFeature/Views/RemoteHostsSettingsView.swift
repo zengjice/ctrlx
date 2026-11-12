@@ -29,6 +29,8 @@ public struct RemoteHostsSettingsView: View {
                 connectionStatusRow
             } header: {
                 Text("Connection Status")
+            } footer: {
+                Button("Relay Settings…") { settings.selectedSettingsTab = .relay }
             }
 
             .settingsAnchor(.connection)
@@ -45,30 +47,6 @@ public struct RemoteHostsSettingsView: View {
             }
 
             .settingsAnchor(.pairing)
-
-            ViewerRelayAccessSettingsSections(
-                server: settings.externalServerURL,
-                hosts: settings.pairedHosts,
-                restriction: { coordinator.viewerConnectionManager?.connection(for: $0)?.relayClient.relayAccessRestriction }
-            ) { id in
-                await coordinator.viewerConnectionManager?.connection(for: id)?.enableReconnectAndRetry()
-            }
-
-            RemoteReconnectSettingsSection()
-
-            // Server Configuration
-            Section {
-                @Bindable var settings = settings
-                TextField("Server URL", text: $settings.externalServerURL)
-                    .textFieldStyle(.roundedBorder)
-            } header: {
-                Text("Server")
-            } footer: {
-                Text("Shared relay address for pairing on this Mac. Changes also appear in Remote Access.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .settingsAnchor(.relay)
         }
         .formStyle(.grouped)
         .frame(minWidth: 400, minHeight: 300)

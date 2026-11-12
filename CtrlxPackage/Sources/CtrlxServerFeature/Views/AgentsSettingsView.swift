@@ -306,24 +306,35 @@
         var body: some View {
             Form {
                 Section("Status") {
-                    LabeledContent("CLI") {
-                        if !isLoaded {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Label(availabilityError != nil ? "Could not check" : agentUnavailable ? "Not found" : "Available", symbol: agentUnavailable || availabilityError != nil ? .exclamationmarkTriangle : .checkmarkCircle)
-                                .foregroundStyle(agentUnavailable || availabilityError != nil ? .orange : .secondary)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("CtrlX Plugin").font(.headline)
+                        configFolderRow(path: defaultConfigRoot, removable: false)
+                    }
+                    .accessibilityIdentifier("agentPluginStatus-\(pluginID)")
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("CLI").font(.headline)
+                        LabeledContent("Status") {
+                            if !isLoaded {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Label(availabilityError != nil ? "Could not check" : agentUnavailable ? "Not found" : "Available", symbol: agentUnavailable || availabilityError != nil ? .exclamationmarkTriangle : .checkmarkCircle)
+                                    .foregroundStyle(agentUnavailable || availabilityError != nil ? .orange : .secondary)
+                            }
+                        }
+                        if let agent = InstallableAgentCLI(rawValue: pluginID) {
+                            AgentCLIUpdateRows(agent: agent)
+                            Button("Agent Setup…") {
+                                coordinator.agentCLIInstallations?.dismissStartupPrompt()
+                                coordinator.agentCLIInstallations?.refresh()
+                                openWindow(id: "agent-cli-setup")
+                            }
+                            .disabled(coordinator.agentCLIInstallations == nil)
+                            .accessibilityIdentifier("agentCLISetupButton")
                         }
                     }
-                    configFolderRow(path: defaultConfigRoot, removable: false)
-                    if InstallableAgentCLI(rawValue: pluginID) != nil {
-                        Button("Agent Setup…") {
-                            coordinator.agentCLIInstallations?.dismissStartupPrompt()
-                            coordinator.agentCLIInstallations?.refresh()
-                            openWindow(id: "agent-cli-setup")
-                        }
-                        .disabled(coordinator.agentCLIInstallations == nil)
-                        .accessibilityIdentifier("agentCLISetupButton")
-                    }
+                    .accessibilityIdentifier("agentCLIStatus-\(pluginID)")
+                    .settingsAnchor(.agentCLI)
                 }
                 .settingsAnchor(.agentStatus)
 
@@ -444,11 +455,6 @@
                 }
 
                 .settingsAnchor(.agentBehavior)
-
-                if let agent = InstallableAgentCLI(rawValue: pluginID) {
-                    AgentCLIUpdateSection(agent: agent)
-                        .settingsAnchor(.agentUpdates)
-                }
 
                 // Updates (URL-installed plugins only — bundled and
                 // folder-dropped plugins have no update source)

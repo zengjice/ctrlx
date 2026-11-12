@@ -4202,11 +4202,10 @@
                 }
             }
 
-            // Trial-expiry alert tap (Task 14): jump Settings to Remote Access,
-            // the same way MenuBarExtraView's "Settings…" button does.
+            // Trial-expiry alerts open the shared Relay authorization settings.
             ForegroundNotificationDelegate.shared.onLicenseAlertTapped = { [weak self] in
                 guard let self else { return }
-                self.settings.selectedSettingsTab = .remoteAccess
+                self.settings.selectedSettingsTab = .relay
                 NSApp.setActivationPolicy(.regular)
                 self.openSettingsAction?()
                 MenuBarExtraView.bringAppToFront()

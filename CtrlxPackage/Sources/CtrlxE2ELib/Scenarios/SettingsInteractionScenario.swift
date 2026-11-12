@@ -89,7 +89,14 @@ public enum SettingsInteractionScenario {
         TestStep.macCGClickElement(query: .identifier("agentConfirmDeleteProvider-codex"))
         TestStep.macWaitForElementQueryToDisappear(.anyTextMatches("Settings Test Provider"))
 
+        search("Server URL")
+        TestStep.macWaitForWindow(titled: "Relay", timeout: 5)
+        TestStep.macWaitForElementQuery(.identifier("relay-server-url"))
+        TestStep.macWaitForElement(titled: "Auto-connect on launch")
+        TestStep.macWaitForElement(titled: "Auto-reconnect on connection loss")
+
         TestStep.macSelectSettingsTab("Remote Access")
+        TestStep.macWaitForElementQueryToDisappear(.identifier("relay-server-url"))
         TestStep.macWaitForElement(titled: "Settings Test iPhone")
         TestStep.macClickMenuItem(menuButtonTitle: "Manage Viewer", itemTitle: "Unpair…")
         TestStep.macWaitForElement(titled: "Unpair Settings Test iPhone?")

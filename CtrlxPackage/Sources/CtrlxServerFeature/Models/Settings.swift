@@ -54,6 +54,7 @@ public enum SettingsTab: String, Sendable {
     case general
     case appearance
     case browser
+    case relay
     case remoteAccess
     case remoteHosts
     case quickPhraseSync
