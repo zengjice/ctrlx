@@ -39,7 +39,6 @@ struct ClaudeResumeUpgradeTests {
                 let reason = await core.automaticResumeUnavailableReason(descriptor, currentVersion: version)
                 #expect(reason?.contains("2.1.300–2.1.319") == true)
                 #expect(descriptor.automaticResumeUnavailableReason == reason)
-                #expect(core.workflowRuntimeIssue(cliVersion: version) != nil)
                 #expect(try await core.commandForResume(descriptor).command.args == ["--resume", descriptor.sessionID])
                 #expect(await core.automaticResumeUnavailableReason(descriptor, currentVersion: "2.1.319 (Claude Code)") == nil)
             }

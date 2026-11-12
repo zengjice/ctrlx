@@ -39,7 +39,6 @@ struct CodexResumeUpgradeTests {
                 let reason = await core.automaticResumeUnavailableReason(descriptor, currentVersion: version)
                 #expect(reason?.contains("0.160.x–0.169.x") == true)
                 #expect(descriptor.automaticResumeUnavailableReason == reason)
-                #expect(core.workflowRuntimeIssue(cliVersion: version) != nil)
                 let command = try await core.commandForResume(descriptor).command
                 #expect(Array(command.args.prefix(2)) == ["resume", descriptor.sessionID])
                 #expect(await core.automaticResumeUnavailableReason(descriptor, currentVersion: "codex-cli 0.167.0") == nil)

@@ -60,7 +60,8 @@ public extension AgentWorkflowProviding {
     /// Version admission is separate from native hook and instance validation.
     nonisolated func workflowRuntimeIssue(cliVersion: String?) -> String? {
         guard let cliVersion, !cliVersion.isEmpty else {
-            return "Cannot verify this running Agent's CLI version. Check its executable before starting a workflow."
+            // CLI upgrades can remove the executable while its Agent is still running.
+            return nil
         }
         guard supportsWorkflowCLI(cliVersion) else {
             return "Workflows do not support \(cliVersion)."

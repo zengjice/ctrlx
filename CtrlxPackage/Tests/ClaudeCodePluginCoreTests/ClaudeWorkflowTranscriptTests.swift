@@ -11,16 +11,23 @@ struct ClaudeWorkflowTranscriptTests {
     }
 
     @Test
+    func unavailableCLIVersionDoesNotBlockAnExistingAgent() {
+        let provider: any AgentWorkflowProviding = ClaudeCodePluginCore()
+        #expect(provider.workflowRuntimeIssue(cliVersion: nil) == nil)
+        #expect(provider.workflowRuntimeIssue(cliVersion: "") == nil)
+    }
+
+    @Test
     func automaticHandoffRejectsOutsideRangeAndUnknownCLIFormats() {
         let provider: any AgentWorkflowProviding = ClaudeCodePluginCore()
-        for version: String? in [
-            nil, "", "2.1.299 (Claude Code)", "2.1.320 (Claude Code)", "2.1.3000 (Claude Code)",
+        for version in [
+            "2.1.299 (Claude Code)", "2.1.320 (Claude Code)", "2.1.3000 (Claude Code)",
             "2.0.308 (Claude Code)", "2.2.308 (Claude Code)", "3.1.308 (Claude Code)",
             "2.1.0308 (Claude Code)", "2.1.-308 (Claude Code)", "2.1 (Claude Code)",
             "2.1.308-beta (Claude Code)", "2.1.308+build (Claude Code)", "2.1.308 (Claude Code)\n",
             "2.1.308", "codex-cli 0.163.0",
         ] {
-            #expect(provider.workflowRuntimeIssue(cliVersion: version) != nil, "Unexpectedly accepted: \(version ?? "nil")")
+            #expect(provider.workflowRuntimeIssue(cliVersion: version) != nil, "Unexpectedly accepted: \(version)")
         }
         let issue = provider.workflowRuntimeIssue(cliVersion: "2.1.320 (Claude Code)")
         #expect(issue?.contains("2.1.300–2.1.319") == true)

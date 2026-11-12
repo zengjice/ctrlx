@@ -1,3 +1,5 @@
+import ClaudeCodePluginCore
+import CodexPluginCore
 import CtrlxCommon
 import CtrlxPluginProtocol
 import Dependencies
@@ -6,8 +8,8 @@ import Testing
 @testable import CtrlxServerFeature
 
 struct WorkspaceAgentProcessTests {
-    @Test("Removing the running executable preserves verified startup identity and configuration")
-    func removedExecutable() async throws {
+    @Test("Removing the running executable preserves identity and workflow version admission", arguments: ["codex", "claude-code"])
+    func removedExecutable(pluginID: String) async throws {
         try await withDependencies {
             $0[ProcessRunner.self] = .liveValue
             $0.continuousClock = ContinuousClock()
@@ -15,9 +17,11 @@ struct WorkspaceAgentProcessTests {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: directory) }
+            let provider: any AgentWorkflowProviding = pluginID == "codex" ? CodexPluginCore() : ClaudeCodePluginCore()
+            let version = pluginID == "codex" ? "codex-cli 0.167.0" : "2.1.308 (Claude Code)"
             let source = directory.appendingPathComponent("agent.c")
             let executable = directory.appendingPathComponent("agent")
-            try "#include <unistd.h>\n#include <stdio.h>\nint main(int argc, char **argv) { if (argc > 1) { puts(\"fixture-cli 1\"); return 0; } sleep(30); return 0; }\n".write(to: source, atomically: true, encoding: .utf8)
+            try "#include <unistd.h>\n#include <stdio.h>\nint main(int argc, char **argv) { if (argc > 1) { puts(\"\(version)\"); return 0; } sleep(30); return 0; }\n".write(to: source, atomically: true, encoding: .utf8)
             let result = try await ProcessRunner.liveValue.run("/usr/bin/clang", [source.path, "-o", executable.path], nil, 15)
             try #require(result.isSuccess, "\(result.stderrString)")
             let process = Process()
@@ -42,7 +46,8 @@ struct WorkspaceAgentProcessTests {
                 let runtime = try #require(AgentSessionIdentityClient.processRuntimeID(pid))
                 let client = WorkspaceAgentProcessClient.liveValue
                 let invocation = try await client.invocation(pid, runtime)
-                #expect(invocation.version == "fixture-cli 1")
+                #expect(invocation.version == version)
+                #expect(provider.workflowRuntimeIssue(cliVersion: invocation.version) == nil)
                 try FileManager.default.removeItem(at: executable)
                 let removed = try await client.invocation(pid, runtime)
                 // Kernel argv retains the launch path; proc_pidpath can canonicalize /var.
@@ -50,6 +55,7 @@ struct WorkspaceAgentProcessTests {
                 #expect(removed.arguments == invocation.arguments)
                 #expect(removed.configurationRoots == invocation.configurationRoots)
                 #expect(removed.version == nil)
+                #expect(provider.workflowRuntimeIssue(cliVersion: removed.version) == nil)
                 await #expect(throws: WorkspaceRecoveryError.self) { try await client.invocation(pid, "replacement-process") }
                 await #expect(throws: AgentModelError.self) { try await client.modelContext(pid, runtime, directory.path, "agent") }
                 #expect(process.isRunning)
