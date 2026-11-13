@@ -53,12 +53,13 @@ their tabs. Both reuse tmux Agent lifecycles; Orbiters use New Agent or native F
 as needed. Live state, task records and scoped file memory stay separate, while
 explicit navigation bypasses the model. Vocabulary is a separate small experiment;
 automatic Dreaming and autonomous delegation follow evidence from real use.
-Designated-Host topology remains an assumption to confirm. This is an unimplemented
-design with dated research references, not runtime acceptance or session transfer.
+Stage 1 implements explicit local-Host creation, pinned delivery and verified replies;
+its checklist records isolated runtime evidence and limits. Later stages remain
+designs with dated research references, not runtime acceptance or session transfer.
 The [Orbie implementation plan](v3.1.0/orbie/IMPLEMENTATION_PLAN.md) sequences
 Host binding and delivery, task continuity, global entry, selection delegation,
 file memory and acceptance. Its initial stage checklist and decision register
-separate proposed defaults from confirmed requirements; implementation has not started.
+separate implemented behavior, proposed later-stage defaults and actual acceptance evidence.
 
 The [multi-agent collaboration design](multi-agent-design.md) separates fixed Agent
 participants from execution steps. Ordered steps can reuse one Agent, dependencies

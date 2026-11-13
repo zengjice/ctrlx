@@ -181,7 +181,7 @@ actor AgentWorkflowStore {
     }
 
     @discardableResult
-    func start(definitionID: UUID, expectedRevision: Int, requestID: UUID, now: Date, authorizationExpiresAt: Date, initialInput: AgentWorkflowInput? = nil) throws -> AgentWorkflowRun {
+    func start(definitionID: UUID, expectedRevision: Int, requestID: UUID, now: Date, authorizationExpiresAt: Date, initialInput: AgentWorkflowInput? = nil, expectedInstances: [AgentWorkflowInstance]? = nil) throws -> AgentWorkflowRun {
         var updated = try load()
         if let existing = updated.runs.first(where: { $0.id == requestID }) {
             guard
@@ -213,6 +213,13 @@ actor AgentWorkflowStore {
         }
         let instances = definition.agents.compactMap { participant in
             instanceIDs.contains(participant.id) ? definition.instance(for: participant.id, in: updated.instances) : nil
+        }
+        if let expectedInstances {
+            guard
+                instances.count == expectedInstances.count,
+                instances.allSatisfy({ live in expectedInstances.contains { $0.matchesBinding(live) } }) else {
+                throw AgentWorkflowStartRejection("The Agent process or conversation changed before submission. Nothing was sent.")
+            }
         }
         let execution = try AgentWorkflowExecution(
             definition: definition,

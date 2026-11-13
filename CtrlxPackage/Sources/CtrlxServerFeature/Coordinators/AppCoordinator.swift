@@ -160,6 +160,8 @@
 
         var agentWorkflowStartupError: String?
 
+        var orbie: OrbieService?
+
         @ObservationIgnored var agentWorkflowAgentService: AgentWorkflowAgentService?
 
         @ObservationIgnored var agentWorkflowRunner: AgentWorkflowRunner?

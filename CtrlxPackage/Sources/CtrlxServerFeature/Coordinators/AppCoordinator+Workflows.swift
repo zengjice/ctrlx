@@ -103,6 +103,9 @@ extension AppCoordinator {
             }, onFailure: { workflowLogger.error("\($0)") })
             tmuxService.workflowInputGate = gate
             controlClientManager.workflowInputGate = gate
+            if let agentWorkflowService {
+                setupOrbie(hostID: hostID, paths: paths, workflows: agentWorkflowService)
+            }
         } catch {
             agentWorkflowStartupError = "Could not load workflows on this Mac: \(error.localizedDescription)"
             workflowLogger.error("Could not load workflow storage: \(error)")
@@ -110,6 +113,7 @@ extension AppCoordinator {
     }
 
     func stopAgentWorkflows() async {
+        orbie = nil
         await agentWorkflowService?.shutdown()
         await agentWorkflowEvents?.shutdown()
         await agentWorkflowRunner?.shutdown()

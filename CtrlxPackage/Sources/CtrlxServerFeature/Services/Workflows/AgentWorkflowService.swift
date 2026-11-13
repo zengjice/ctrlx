@@ -143,7 +143,7 @@ actor AgentWorkflowService {
         try await store.deleteDefinition(id: id, expectedRevision: expectedRevision)
     }
 
-    func start(definitionID: UUID, expectedRevision: Int, requestID: UUID, authorizationExpiresAt: Date, initialInput: AgentWorkflowInput? = nil) async throws -> AgentWorkflowRun {
+    func start(definitionID: UUID, expectedRevision: Int, requestID: UUID, authorizationExpiresAt: Date, initialInput: AgentWorkflowInput? = nil, expectedInstances: [AgentWorkflowInstance]? = nil) async throws -> AgentWorkflowRun {
         // A retry after a lost reply must return the original run even when the
         // Agent is now busy, the template changed, or a new scan is unavailable.
         if let existing = try await store.snapshot().runs.first(where: { $0.id == requestID }) {
@@ -161,7 +161,8 @@ actor AgentWorkflowService {
         try await attachmentReader.validate(attachments)
         let run = try await store.start(
             definitionID: definitionID, expectedRevision: expectedRevision,
-            requestID: requestID, now: now(), authorizationExpiresAt: authorizationExpiresAt, initialInput: initialInput
+            requestID: requestID, now: now(), authorizationExpiresAt: authorizationExpiresAt, initialInput: initialInput,
+            expectedInstances: expectedInstances
         )
         await schedule(run.id)
         return run

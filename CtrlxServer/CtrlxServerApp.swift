@@ -527,6 +527,13 @@ struct TmuxPaneMirrorApp: App {
         .defaultSize(width: 720, height: 760)
         .defaultLaunchBehavior(.suppressed)
 
+        Window("Orbie", id: "orbie") {
+            MacOrbieView().environment(coordinator)
+        }
+        .defaultSize(width: 640, height: 680)
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+
         Window("Workflows", id: "workflows") {
             MacWorkflowsView().environment(coordinator)
         }

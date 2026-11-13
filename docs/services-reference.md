@@ -1826,3 +1826,41 @@ inside the peer-encrypted envelope. Registration/presence/heartbeat and routing
 metadata remain Relay-visible. Push content is encrypted separately; the Relay
 can route it without decrypting it. Consult the current wire enum when adding a
 message rather than treating a historical list of cases as exhaustive.
+
+## Orbie on the local Mac (stage 1)
+
+The toolbar and menu-bar Orbie actions open one app-owned window. Creating Orbie
+is explicit and reuses `NewAgentTabPanel`, `workflowAgentCreation` and
+`SessionLaunchPreparation`, including normal Provider defaults, shell integration
+and Codex `--no-daemon`. Stage 1 offers Codex and Claude Code. It does not change
+Agent-wide settings or create a dedicated Viewer protocol.
+
+`OrbieStore` saves version-1 associations at `<stateRoot>/orbie/binding.json`;
+`CtrlxPaths` derives the working directory `<ctrlxRoot>/agents/main/`. Missing
+`AGENTS.md` / `CLAUDE.md` files receive a minimal role description; existing files
+are kept. Read/write failures remain visible and do not authorize a fresh launch.
+The creation intent is durable before tmux changes, and `new-session` attaches
+`@ctrlx-creation-id` before launching the Agent. A lost reply is reconciled using
+that token and persistent workspace identity, never the title or current focus.
+
+Each Send creates a one-Agent, one-step, one-round workflow. Orbie stores its run
+reference before starting it, while the workflow ledger owns writing intent,
+acceptance, invocation identity and verified native results. The optional
+`expectedInstances` start guard prevents the catalog refresh from rebinding this
+explicitly pinned conversation to a replacement process in the same tab. Normal
+workflow input-generation and composer checks still run immediately before the
+terminal write; Orbie never clears terminal input or answers prompts on its own.
+
+While its window is open, Orbie rechecks startup or blocked input until ready;
+in-flight answers read the existing ledger. Closing the window keeps its draft
+and stops this UI refresh without stopping the Agent. Disabling Orbie
+stops new panel submissions and preserves the binding, files and ordinary tab.
+Stop Further Delivery ends only the workflow's future handoffs. A restart reads
+existing runs without starting/resuming them. If an unconfirmed request has no
+run, the operator can keep its draft and clear that request; a recorded run must
+be reviewed instead. A moved pane is located by its verified process binding and updates its window
+route without accepting a changed conversation. Open Agent Tab refreshes the
+ordinary pane layout and binding before navigating. Replaced processes require
+an explicit Reconnect after ordinary terminal/recovery checks. Set Up Again detaches the old binding without
+closing the old Agent or deleting messages/files. Global shortcuts, Orbiters,
+task search and persistent shared memory belong to later stages.

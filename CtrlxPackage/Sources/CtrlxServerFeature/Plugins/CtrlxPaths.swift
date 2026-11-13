@@ -59,6 +59,18 @@
             stateRoot.appendingPathComponent("ingress.sock")
         }
 
+        var orbieStateRoot: URL {
+            stateRoot.appendingPathComponent("orbie", isDirectory: true)
+        }
+
+        var orbieBinding: URL {
+            orbieStateRoot.appendingPathComponent("binding.json")
+        }
+
+        var orbieDirectory: URL {
+            ctrlxRoot.appendingPathComponent("agents/main", isDirectory: true)
+        }
+
         /// `<stateRoot>/plugins` — parent of all per-plugin state directories.
         public var pluginsStateRoot: URL {
             stateRoot.appendingPathComponent("plugins", isDirectory: true)
@@ -156,7 +168,9 @@
         @discardableResult
         private func createDirectory(_ url: URL) -> Bool {
             let fm = FileManager.default
-            if fm.fileExists(atPath: url.path) { return true }
+            if fm.fileExists(atPath: url.path) {
+                return true
+            }
             do {
                 try fm.createDirectory(at: url, withIntermediateDirectories: true)
                 return true
