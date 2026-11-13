@@ -55,6 +55,9 @@ struct AgentRestartAvailabilityTests {
             action()
             #expect(chosen?.source.paneID == "%1" && chosen?.source.sessionID == pane.claudeSessionID)
             #expect(chosen?.logoutBeforeResume == logout)
+            let firstRequestID = try #require(chosen?.requestID)
+            action()
+            #expect(chosen?.requestID != firstRequestID)
             let busy = AgentRestartMenu(panes: [pane], busyPaneIDs: ["%1"], logoutBeforeResume: logout, choose: { _ in }).contextMenuItems
             guard case let .button(_, _, busyEnabled, _, _) = try #require(busy.first) else {
                 Issue.record("Expected a disabled restart action")

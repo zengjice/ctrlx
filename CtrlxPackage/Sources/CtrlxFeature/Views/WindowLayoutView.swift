@@ -1181,93 +1181,56 @@
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        if
-                            relayClient.hostSupportsAgentHookTrust,
-                            let pane = window.panes.first(where: { $0.paneId == activePaneId }) ?? window.activePane,
-                            pane.agentSession?.pluginID == "codex" {
-                            Button { trustAgentHooks(pane) } label: {
-                                Label(AgentHookTrustMenu.title, symbol: .shield)
-                            }
-                            .disabled(isApprovingHooks || !relayClient.isHostConnected || !AgentHookTrustMenu.isReady(pane))
-                            .accessibilityHint(AgentHookTrustMenu.explanation)
-                            .accessibilityIdentifier("trust-all-pending-hooks")
-                            Divider()
+                    windowActionsMenu(window)
+                        .popover(isPresented: $showSessionInfo) {
+                            sessionInfoPopover
                         }
-                        if
-                            workflowNavigation != nil, relayClient.hostAgentWorkflowVersion == AgentWorkflowWire.version,
-                            let pane = window.panes.first(where: { $0.paneId == activePaneId }) ?? window.activePane,
-                            pane.agentSession != nil {
-                            Button { openWorkflow(for: pane) } label: {
-                                Label("View Workflow", symbol: .flowchart)
-                            }.disabled(!relayClient.isHostConnected)
-                            Divider()
-                        }
-                        Button {
-                            activeCopyAction?()
-                        } label: {
-                            Label("Copy Terminal Text", symbol: .docOnClipboard)
-                        }
-                        .disabled(activeCopyAction == nil)
-
-                        if let paneID = activePaneId {
-                            Menu {
-                                Picker("Touch Mode", selection: Binding(
-                                    get: { mouseReportingPaneIDs.contains(paneID) },
-                                    set: { enabled in
-                                        if enabled {
-                                            mouseReportingPaneIDs.insert(paneID)
-                                        } else {
-                                            mouseReportingPaneIDs.remove(paneID)
-                                        }
-                                    }
-                                )) {
-                                    Text("Select Text").tag(false)
-                                    Text("Send Mouse Events").tag(true)
-                                }
-                                .pickerStyle(.inline)
-                            } label: {
-                                Label("Touch Mode", symbol: .handDraw)
-                            }
-                            .accessibilityHint("Controls whether double and triple taps select text or send mouse events.")
-                            .accessibilityIdentifier("terminal-touch-mode")
-                        }
-
-                        if let activeService, activeService.session != nil {
-                            Divider()
-
-                            Button {
-                                let newValue = !activeService.isYoloModeEnabled
-                                Task {
-                                    await activeService.sendCommand(.setYoloMode(enabled: newValue))
-                                }
-                            } label: {
-                                Label(
-                                    activeService.isYoloModeEnabled ? "Disable Yolo Mode" : "Enable Yolo Mode",
-                                    symbol: .bolt
-                                )
-                            }
-
-                            Button {
-                                showSessionInfo = true
-                            } label: {
-                                Label("Session Info", symbol: .infoCircle)
-                            }
-                            .tint(nil)
-                        }
-                        Divider()
-                        windowActions(window, includesWindowManagement: true)
-                    } label: {
-                        Label("More", symbol: .ellipsisCircle)
-                    }
-                    .menuOrder(.fixed)
-                    .accessibilityIdentifier("window-actions-\(window.stableId)")
-                    .tint(activeService?.isYoloModeEnabled == true ? .red : nil)
-                    .popover(isPresented: $showSessionInfo) {
-                        sessionInfoPopover
-                    }
                 }
             }
+        }
+
+        private func windowActionsMenu(_ window: TmuxWindow) -> some View {
+            let actions = windowActions(window, includesWindowManagement: true)
+            let pane = window.panes.first(where: { $0.paneId == activePaneId }) ?? window.activePane
+            let service = activeService
+            var state = actions.menuState(hostID: hostId)
+            state.showsHookTrust = relayClient.hostSupportsAgentHookTrust && pane?.agentSession?.pluginID == "codex"
+            state.canTrustHooks = !isApprovingHooks && relayClient.isHostConnected && pane.map(AgentHookTrustMenu.isReady) == true
+            state.showsWorkflow = workflowNavigation != nil && relayClient.hostAgentWorkflowVersion == AgentWorkflowWire.version && pane?.agentSession != nil
+            state.canCopy = activeCopyAction != nil
+            state.sendsMouseEvents = activePaneId.map(mouseReportingPaneIDs.contains) == true
+            state.hasActiveSession = service?.session != nil
+            state.isYoloModeEnabled = service?.isYoloModeEnabled == true
+            return WindowActionsMenu(
+                state: state,
+                windowActions: actions,
+                trustHooks: {
+                    if let pane {
+                        trustAgentHooks(pane)
+                    }
+                },
+                openWorkflow: {
+                    if let pane {
+                        openWorkflow(for: pane)
+                    }
+                },
+                copyText: { activeCopyAction?() },
+                setMouseReporting: { enabled in
+                    guard let paneID = state.focusedPaneID else { return }
+                    if enabled {
+                        mouseReportingPaneIDs.insert(paneID)
+                    } else {
+                        mouseReportingPaneIDs.remove(paneID)
+                    }
+                },
+                toggleYolo: {
+                    guard let service = activeService else { return }
+                    let newValue = !service.isYoloModeEnabled
+                    Task { await service.sendCommand(.setYoloMode(enabled: newValue)) }
+                },
+                showSessionInfo: { showSessionInfo = true }
+            )
+            .equatable()
         }
 
         private func closeLinkedTabButton(_ tab: PaneLinkedTabID) -> some View {
@@ -1345,7 +1308,7 @@
             _ window: TmuxWindow?,
             includesWindowManagement: Bool = false,
             scope: WindowShortcutScope = .terminal
-        ) -> some View {
+        ) -> WindowTabActions {
             WindowTabActions(
                 window: window,
                 focusedPaneID: scope.sourcePaneID ?? activePaneId,
@@ -1365,6 +1328,7 @@
                 includesWindowManagement: includesWindowManagement,
                 includesFork: scope.includesFork,
                 restartUnavailableReason: sessionStore.agentRestartUnavailableReason(hostID: hostId, isConnected: relayClient.isHostConnected),
+                logoutUnavailableReason: sessionStore.agentRestartUnavailableReason(hostID: hostId, isConnected: relayClient.isHostConnected, logoutBeforeResume: true),
                 restartingAgentPaneIDs: restartingAgentPaneIDs,
                 choose: { action in
                     performWindowTabAction(action, preferredPaneID: scope.sourcePaneID)
@@ -1728,7 +1692,7 @@
             Task {
                 defer { restartingAgentPaneIDs.remove(source.paneID) }
                 do {
-                    if let reason = sessionStore.agentRestartUnavailableReason(hostID: hostId, isConnected: relayClient.isHostConnected) {
+                    if let reason = sessionStore.agentRestartUnavailableReason(hostID: hostId, isConnected: relayClient.isHostConnected, logoutBeforeResume: request.logoutBeforeResume) {
                         throw AgentRestartError(reason)
                     }
                     _ = try await connectionManager.sendCommand(request, paneId: "", hostId: hostId, timeout: 45, inputBinding: binding).get()

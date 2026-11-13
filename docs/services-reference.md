@@ -941,9 +941,9 @@ Agent without restarting CtrlX. Explicit Provider settings,
 configuration roots and an enabled VISUAL override are applied after shell
 configuration. No user dotfiles are modified.
 
-Mac Host and Viewer tab menus also offer **Log Out and Log In** for Codex and
-Claude Code. This uses the same verified Exit and Resume flow: after the old
-process exits, run `codex logout` or `claude auth logout`, then reopen the exact
+Mac Host and Viewer tab menus and the iOS **More** menu also offer **Log Out and
+Log In** for Codex and Claude Code. This uses the same verified Exit and Resume
+flow: after the old process exits, run `codex logout` or `claude auth logout`, then reopen the exact
 conversation in that pane. The user completes the CLI's login flow manually;
 CtrlX does not run a login command or provide credentials. Logout and Resume use
 the same executable and scoped configuration environment. Logout failure prints

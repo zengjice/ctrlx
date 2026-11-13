@@ -33,6 +33,20 @@ Host; an older Viewer still disables the action locally from cached Working stat
 See [Codex hook approval](plugins/codex.md#approving-changed-hooks-without-leaving-the-conversation)
 for input checks and compatibility limits.
 
+## iOS terminal More menu
+
+Agent actions appear first in this order: **Trust and Refresh Hooks** (Codex),
+**Exit and Resume**, then **Log Out and Log In**. Logout uses the Host's existing
+logout-and-resume flow and requires its advertised support; custom API Providers
+show the Host's "Do not log out" message and keep the Agent running.
+
+The terminal toolbar's **More** menu compares only its action targets, labels,
+availability and selection state. Terminal activity, layout refreshes and Browser
+loading updates are excluded so they do not request a native menu rebuild during scrolling. Host,
+pane, conversation and process identity changes still refresh the actions, as do
+connection/capability changes and resource-tab changes. Restart request IDs are
+created when an action is chosen, not when the menu renders.
+
 ## Mac terminal content menu
 
 Right-click the content of an Agent or Terminal tab to open **New Agent…**,

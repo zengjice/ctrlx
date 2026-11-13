@@ -22,8 +22,29 @@
         var includesWindowManagement = false
         var includesFork = true
         var restartUnavailableReason: String?
+        var logoutUnavailableReason: String?
         var restartingAgentPaneIDs: Set<String> = []
         let choose: (WindowTabAction) -> Void
+
+        func menuState(hostID: String) -> WindowTabMenuState {
+            var state = WindowTabMenuState(hostID: hostID, window: window, focusedPaneID: focusedPaneID, files: files, browsers: browsers, simulators: simulators)
+            state.isConnected = isConnected
+            state.canOpenFiles = canOpenFiles
+            state.canOpenBrowser = canOpenBrowser
+            state.canOpenSimulator = canOpenSimulator
+            state.canCreateSimulator = canCreateSimulator
+            state.canCreateNewSimulator = canCreateNewSimulator
+            state.canCreateIndependentResources = canCreateIndependentResources
+            state.isCreatingWindow = isCreatingWindow
+            state.forkUnavailableReason = forkUnavailableReason
+            state.canForkOtherDirectory = canForkOtherDirectory
+            state.includesWindowManagement = includesWindowManagement
+            state.includesFork = includesFork
+            state.restartUnavailableReason = restartUnavailableReason
+            state.logoutUnavailableReason = logoutUnavailableReason
+            state.restartingAgentPaneIDs = restartingAgentPaneIDs
+            return state
+        }
 
         var body: some View {
             if includesWindowManagement, let window {
@@ -43,10 +64,17 @@
             newTabMenu(window)
             if includesFork, let window {
                 forkMenu(window)
-                if includesWindowManagement {
-                    AgentRestartMenu(panes: window.panes, unavailableReason: restartUnavailableReason, busyPaneIDs: restartingAgentPaneIDs) { source in
-                        choose(.restartAgent(source))
-                    }
+            }
+        }
+
+        @ViewBuilder
+        var agentSessionActions: some View {
+            if includesWindowManagement, includesFork, let window {
+                AgentRestartMenu(panes: window.panes, unavailableReason: restartUnavailableReason, busyPaneIDs: restartingAgentPaneIDs) { source in
+                    choose(.restartAgent(source))
+                }
+                AgentRestartMenu(panes: window.panes, unavailableReason: logoutUnavailableReason, busyPaneIDs: restartingAgentPaneIDs, logoutBeforeResume: true) { source in
+                    choose(.restartAgent(source))
                 }
             }
         }

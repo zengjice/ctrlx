@@ -17,17 +17,29 @@ public struct AgentRestartMenu: View {
         self.choose = choose
     }
 
-    private var requests: [RestartAgentSession] {
+    private struct Source: Identifiable {
+        let agent: AgentForkSource
+        let runtimeID: String
+        var id: String {
+            agent.paneID
+        }
+    }
+
+    private var sources: [Source] {
         panes.compactMap { pane in
             guard
                 let source = AgentForkSource(pane: pane), source.workspaceIdentity != nil,
                 let runtime = pane.agentSession?.processRuntimeID else { return nil }
-            return RestartAgentSession(source: source, runtimeID: runtime, logoutBeforeResume: logoutBeforeResume)
+            return Source(agent: source, runtimeID: runtime)
         }
     }
 
+    private func choose(_ source: Source) {
+        choose(RestartAgentSession(source: source.agent, runtimeID: source.runtimeID, logoutBeforeResume: logoutBeforeResume))
+    }
+
     private var reason: String? {
-        unavailableReason ?? (requests.isEmpty ? "Resume requires a verified Codex or Claude Code conversation and process identity." : nil)
+        unavailableReason ?? (sources.isEmpty ? "Resume requires a verified Codex or Claude Code conversation and process identity." : nil)
     }
 
     private var actionTitle: String {
@@ -38,21 +50,21 @@ public struct AgentRestartMenu: View {
         logoutBeforeResume ? "agentLogout" : "agentRestart"
     }
 
-    private func title(_ request: RestartAgentSession) -> String {
-        let pane = panes.first { $0.paneId == request.source.paneID }
+    private func title(_ source: Source) -> String {
+        let pane = panes.first { $0.paneId == source.id }
         return "Pane \((pane?.paneIndex ?? 0) + 1) · \(pane?.agentSession?.displayName ?? "Agent")"
     }
 
     public var body: some View {
         if panes.contains(where: { $0.agentSession != nil }) {
-            if requests.count == 1, let request = requests.first, reason == nil {
-                Button { choose(request) } label: { Label(actionTitle, symbol: .arrowClockwise) }
-                    .disabled(busyPaneIDs.contains(request.source.paneID))
-                    .accessibilityIdentifier("\(accessibilityPrefix).\(request.source.paneID)")
+            if sources.count == 1, let source = sources.first, reason == nil {
+                Button { choose(source) } label: { Label(actionTitle, symbol: .arrowClockwise) }
+                    .disabled(busyPaneIDs.contains(source.id))
+                    .accessibilityIdentifier("\(accessibilityPrefix).\(source.id)")
             } else {
                 Menu {
-                    ForEach(requests) { request in
-                        Button(title(request)) { choose(request) }.disabled(reason != nil || busyPaneIDs.contains(request.source.paneID))
+                    ForEach(sources) { source in
+                        Button(title(source)) { choose(source) }.disabled(reason != nil || busyPaneIDs.contains(source.id))
                     }
                     if let reason {
                         Text(reason)
@@ -66,11 +78,11 @@ public struct AgentRestartMenu: View {
     #if os(macOS)
         public var contextMenuItems: [ContextMenuItem] {
             guard panes.contains(where: { $0.agentSession != nil }) else { return [] }
-            if requests.count == 1, let request = requests.first, reason == nil {
-                return [.button(title: actionTitle, symbol: .arrowClockwise, isEnabled: !busyPaneIDs.contains(request.source.paneID)) { choose(request) }]
+            if sources.count == 1, let source = sources.first, reason == nil {
+                return [.button(title: actionTitle, symbol: .arrowClockwise, isEnabled: !busyPaneIDs.contains(source.id)) { choose(source) }]
             }
-            var items = requests.map { request in
-                ContextMenuItem.button(title: title(request), isEnabled: reason == nil && !busyPaneIDs.contains(request.source.paneID)) { choose(request) }
+            var items = sources.map { source in
+                ContextMenuItem.button(title: title(source), isEnabled: reason == nil && !busyPaneIDs.contains(source.id)) { choose(source) }
             }
             if let reason {
                 items.append(.button(title: reason, isEnabled: false) { })
