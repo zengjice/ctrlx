@@ -180,8 +180,9 @@ struct AgentWorkflowRunnerTests {
             onFailure: { Issue.record(Comment(rawValue: $0)) }
         )
         await runner.schedule(runID: fixture.run.id)
-        try await waitUntil { try await fixture.store.snapshot().runs[0].status == .paused }
+        try await waitUntil { try await fixture.store.snapshot().runs[0].issue != nil }
         #expect(try await fixture.store.snapshot().runs[0].invocations[0].status == .pending)
+        #expect(try await fixture.store.snapshot().runs[0].status == .running)
         await runner.shutdown()
     }
 
@@ -199,14 +200,14 @@ struct AgentWorkflowRunnerTests {
             now: { now }, onFailure: { Issue.record(Comment(rawValue: $0)) }
         )
         await runner.schedule(runID: fixture.run.id)
-        try await waitUntil { try await fixture.store.snapshot().runs[0].status == .paused }
+        try await waitUntil { try await fixture.store.snapshot().runs[0].issue != nil }
         let run = try await fixture.store.snapshot().runs[0]
         #expect(run.issue?.contains(fixture.run.instances[0].displayName) == true)
         let cause = switch readiness {
         case .busy: "still working"
         case .draft: "unsent draft"
         case .awaitingHuman: "needs a response"
-        default: "could not be verified after refresh"
+        default: "not available yet"
         }
         #expect(run.issue?.contains(cause) == true)
         #expect(run.invocations[0].status == .pending)

@@ -320,6 +320,20 @@ actor AgentWorkflowStore {
         try commit(updated)
     }
 
+    func observeStepTurn(runID: UUID, invocationID: UUID, instance: AgentWorkflowInstance, turn: AgentWorkflowStepTurn) throws {
+        var updated = try load()
+        guard
+            let index = updated.runs.firstIndex(where: { $0.id == runID }),
+            let catalog = updated.instances.firstIndex(where: { $0.matchesProcess(instance) }) else {
+            throw AgentWorkflowError("The Agent changed before its continuation could be recorded.")
+        }
+        var execution = try AgentWorkflowExecution(validating: updated.runs[index])
+        try execution.observeStepTurn(invocationID: invocationID, instance: instance, turn: turn)
+        updated.runs[index] = execution.run
+        updated.instances[catalog].conversationID = instance.conversationID
+        try commit(updated)
+    }
+
     func load() throws -> AgentWorkflowArchive {
         if let archive {
             return archive

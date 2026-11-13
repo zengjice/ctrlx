@@ -123,6 +123,9 @@ actor AgentWorkflowRunner {
                     requestedPumps.insert(runID)
                 }
                 for invocation in prepared.invocations where invocation.status == .pending {
+                    guard
+                        let binding = prepared.instance(for: invocation),
+                        prepared.instances.contains(where: { $0.target == binding.target && $0.readiness != .unavailable }) else { continue }
                     guard deliveries[invocation.id] == nil else { continue }
                     deliveries[invocation.id] = Task { await self.deliver(runID: runID, invocationID: invocation.id) }
                 }
@@ -156,6 +159,15 @@ actor AgentWorkflowRunner {
                 guard binding.matchesBinding(live) else {
                     throw AgentWorkflowError("\(binding.displayName): the Agent identity changed. Nothing was sent.")
                 }
+            } catch {
+                try await store.update(runID: runID) { $0.waitForAgent(binding, reason: error.localizedDescription) }
+                return
+            }
+            if live.readiness == .unavailable {
+                try await store.update(runID: runID) { $0.waitForAgent(binding, reason: live.capabilityIssue ?? "Its input is not available yet.") }
+                return
+            }
+            do {
                 guard live.readiness == .ready else {
                     let reason = switch live.readiness {
                     case .busy: "The Agent is still working."

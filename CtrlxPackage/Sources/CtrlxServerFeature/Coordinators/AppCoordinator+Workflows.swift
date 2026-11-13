@@ -43,6 +43,9 @@ extension AppCoordinator {
             }, synchronizeEvents: { [weak self] invocationID in
                 guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
                 try await synchronizeWorkflowEvents(invocationID)
+            }, refreshInstances: { [weak self] in
+                guard let service = await self?.agentWorkflowService else { throw AgentWorkflowError("The Host's workflow service is unavailable.") }
+                _ = try await service.refreshInstancesCatalog()
             })
             let gate = AgentWorkflowInputGate()
             let delivery = AgentWorkflowTerminalTransport(
@@ -127,6 +130,14 @@ extension AppCoordinator {
     func handleAgentWorkflowEvent(_ event: PluginEvent, peer: PluginIngressPeer) async {
         do {
             try await recordWorkflowBridge(event, peer: peer)
+            if
+                event.workflow != nil, let store = agentWorkflowStore,
+                try await !store.snapshot().instances.contains(where: {
+                    $0.pluginID == event.pluginID && $0.paneID == event.tmuxPane
+                        && peer.contains(processID: $0.processID, runtimeID: $0.processRuntimeID)
+                }) {
+                _ = try await agentWorkflowService?.refreshInstancesCatalog()
+            }
             guard
                 let context = try await agentWorkflowEvents?.receive(event, peer: peer) else { return }
             await verifyAgentWorkflowContext(context)
@@ -206,7 +217,7 @@ extension AppCoordinator {
             throw AgentWorkflowError("The Agent's workflow plugin is no longer available.")
         }
         guard identities.runtimeID(String(instance.processID)) == instance.processRuntimeID else {
-            throw AgentWorkflowError("The Agent process changed.")
+            throw AgentWorkflowInspectionUnavailable()
         }
         guard let detected = await tmuxService.detectAgentPanesIfAvailable(processNamesByPlugin: registry.processNamesByPlugin, refreshSnapshot: true) else {
             try Task.checkCancellation()
@@ -214,11 +225,11 @@ extension AppCoordinator {
         }
         guard
             let current = detected[instance.paneID] else {
-            throw AgentWorkflowError("Cannot verify the Agent's current process.")
+            throw AgentWorkflowInspectionUnavailable()
         }
         let pane = try await captureAgentBinding(paneID: instance.paneID, detected: current)
         guard pane.binding.matches(instance) else {
-            throw AgentWorkflowError("The Agent process or terminal changed.")
+            throw AgentWorkflowInspectionUnavailable()
         }
         if verifyNativeWriter, instance.pluginID == "codex" {
             // The first submission can precede SessionStart. Its actual CLI
@@ -235,7 +246,7 @@ extension AppCoordinator {
                 throw AgentWorkflowError("Cannot verify the Agent's current process and conversation.")
             }
         }
-        guard identities.runtimeID(String(instance.processID)) == instance.processRuntimeID else { throw AgentWorkflowError("The Agent process changed.") }
+        guard identities.runtimeID(String(instance.processID)) == instance.processRuntimeID else { throw AgentWorkflowInspectionUnavailable() }
         var live = instance
         live.workspacePane = pane.binding.workspacePane
         live.workingDirectory = pane.info.currentPath

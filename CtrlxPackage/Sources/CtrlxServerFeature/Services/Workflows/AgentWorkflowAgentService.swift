@@ -8,6 +8,7 @@ actor AgentWorkflowAgentService {
     private let store: AgentWorkflowStore
     private let inspect: @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance
     private let synchronizeEvents: @Sendable (UUID) async throws -> Void
+    private let refreshInstances: @Sendable () async throws -> Void
     private let now: @Sendable () -> Date
     private let attachmentReader = AgentWorkflowAttachmentReader()
 
@@ -15,11 +16,13 @@ actor AgentWorkflowAgentService {
         store: AgentWorkflowStore,
         inspect: @escaping @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance,
         synchronizeEvents: @escaping @Sendable (UUID) async throws -> Void,
+        refreshInstances: @escaping @Sendable () async throws -> Void = { },
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.store = store
         self.inspect = inspect
         self.synchronizeEvents = synchronizeEvents
+        self.refreshInstances = refreshInstances
         self.now = now
     }
 
@@ -44,14 +47,21 @@ actor AgentWorkflowAgentService {
             return denied(request.id, "Cannot verify the workflow command's caller.")
         }
         do {
+            try await refreshInstances()
             try await synchronizeEvents(invocationID)
             let archive = try await store.snapshot()
             guard
                 let run = archive.runs.first(where: { $0.invocations.contains { $0.id == invocationID } }),
                 let invocation = run.invocations.first(where: { $0.id == invocationID }),
-                let instance = run.instance(for: invocation),
+                let bound = run.instance(for: invocation),
+                var instance = archive.instances.first(where: {
+                    $0.matchesProcess(bound) || ($0.target == bound.target && $0.pluginID == bound.pluginID)
+                }),
                 peer.contains(processID: instance.processID, runtimeID: instance.processRuntimeID) else {
                 return denied(request.id, "This caller does not own the workflow invocation.")
+            }
+            if instance.conversationID.isEmpty {
+                instance.conversationID = bound.conversationID
             }
             let live = try await inspect(instance)
             guard live.matchesBinding(instance) else {
@@ -101,13 +111,20 @@ actor AgentWorkflowAgentService {
         }
         guard let peer else { return denied(request.id, "Cannot verify the workflow command's caller.") }
         do {
+            try await refreshInstances()
             let archive = try await store.snapshot()
             guard
                 let run = archive.runs.first(where: { $0.invocations.contains { $0.id == invocationID } }),
                 let invocation = run.invocations.first(where: { $0.id == invocationID }),
-                let instance = run.instance(for: invocation),
+                let bound = run.instance(for: invocation),
+                var instance = archive.instances.first(where: {
+                    $0.matchesProcess(bound) || ($0.target == bound.target && $0.pluginID == bound.pluginID)
+                }),
                 peer.contains(processID: instance.processID, runtimeID: instance.processRuntimeID) else {
                 return denied(request.id, "This caller does not own the workflow invocation.")
+            }
+            if instance.conversationID.isEmpty {
+                instance.conversationID = bound.conversationID
             }
             let live = try await inspect(instance)
             let files = try await store.invocationAttachments(invocation, instance: live, status: .running, now: now())

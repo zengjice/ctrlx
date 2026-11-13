@@ -331,6 +331,15 @@ struct AgentWorkflowExecution: Sendable {
             throw AgentWorkflowError("The native turn does not match this workflow invocation.")
         }
         if [.running, .succeeded, .failed].contains(invocation.status) {
+            if
+                invocation.status == .running, invocation.resultTurnID == nativeTurnID,
+                run.instance(for: invocation)?.matchesBinding(instance) != true {
+                // A verified replay of this exact receipt confirms the resumed
+                // writer; it does not select a different native turn.
+                run.invocations[index].instance = instance
+                run.invocations[index].delivery.toAgentID = instance.id
+                changed()
+            }
             return
         }
         guard [.writing, .awaitingAcceptance, .uncertain].contains(invocation.status) else {
@@ -408,7 +417,11 @@ struct AgentWorkflowExecution: Sendable {
     mutating func observeStepTurn(invocationID: UUID, instance: AgentWorkflowInstance, turn: AgentWorkflowStepTurn) throws {
         let index = try index(of: invocationID)
         let invocation = run.invocations[index]
-        try validate(instance, for: invocation)
+        guard
+            let bound = run.instance(for: invocation),
+            bound.matchesProcess(instance) || (bound.target == instance.target && bound.pluginID == instance.pluginID) else {
+            throw AgentWorkflowError("The Agent tab changed.")
+        }
         guard
             !run.status.isTerminal, invocation.status == .running,
             run.definition.nodes.first(where: { $0.id == invocation.nodeID })?.completion == .explicit,
@@ -423,6 +436,15 @@ struct AgentWorkflowExecution: Sendable {
         } else {
             run.invocations[index].stepTurn = turn
         }
+        // A verified human continuation can resume this step in the same tab.
+        // Keep the original receipt, but bind the selected result turn to its writer.
+        if bound.matchesProcess(instance) {
+            // Moving the live pane must not rewrite the saved delivery target.
+            run.invocations[index].instance?.conversationID = instance.conversationID
+        } else {
+            run.invocations[index].instance = instance
+        }
+        run.invocations[index].delivery.toAgentID = instance.id
         changed()
     }
 
@@ -440,6 +462,7 @@ struct AgentWorkflowExecution: Sendable {
         guard
             !run.status.isTerminal, now < run.authorizationExpiresAt,
             invocation.round == run.round, invocation.status == .running,
+            run.instance(for: invocation)?.matchesBinding(instance) == true,
             run.definition.nodes.first(where: { $0.id == invocation.nodeID })?.completion == .explicit,
             let turn = invocation.stepTurn, turn.id == turnID,
             !turn.stopped || turn.completionRequested else {
@@ -469,24 +492,37 @@ struct AgentWorkflowExecution: Sendable {
         changed()
     }
 
-    mutating func refreshBindings(instances: [AgentWorkflowInstance]) throws {
+    mutating func waitForAgent(_ instance: AgentWorkflowInstance, reason: String) {
+        guard
+            !run.status.isTerminal,
+            let index = run.instances.firstIndex(where: { $0.matchesBinding(instance) }) else { return }
+        run.instances[index].readiness = .unavailable
+        if run.status != .paused {
+            run.issue = "Waiting for Agent: \(instance.displayName). \(reason)"
+        }
+        changed()
+    }
+
+    @discardableResult
+    mutating func refreshBindings(instances: [AgentWorkflowInstance]) throws -> String? {
         var replacements: [AgentWorkflowInstance] = []
+        var waiting: [String] = []
         for id in run.definition.agentInstanceIDs {
-            guard let live = run.definition.instance(for: id, in: instances) else {
-                throw AgentWorkflowError("An Agent tab is unavailable. Restore its window and pane, or select another tab in a new run.")
+            guard var live = run.definition.instance(for: id, in: instances) ?? run.definition.instance(for: id, in: run.instances) else {
+                throw AgentWorkflowError("The workflow has no saved Agent tab.")
             }
-            if let issue = live.capabilityIssue {
+            let isPresent = run.definition.instance(for: id, in: instances) != nil
+            if !isPresent {
+                live.readiness = .unavailable
+            }
+            if isPresent, let issue = live.capabilityIssue {
                 throw AgentWorkflowError("\(live.displayName): \(issue)")
             }
-            guard live.readiness != .unavailable else { throw AgentWorkflowError("\(live.displayName): The Agent input is unavailable. Check its terminal before continuing.") }
-            guard let capabilities = live.capabilities, capabilities.maximumInputBytes > 0 else {
+            if isPresent, (live.capabilities?.maximumInputBytes ?? 0) <= 0 {
                 throw AgentWorkflowError("\(live.displayName): Workflow support is unavailable. Check the Agent's CtrlX plugin.")
             }
-            for invocation in run.invocations where [.writing, .awaitingAcceptance, .running, .uncertain].contains(invocation.status) {
-                guard let bound = run.instance(for: invocation), bound.target == live.target else { continue }
-                guard bound.matchesBinding(live) || canBindFirstConversation(live, invocationID: invocation.id) else {
-                    throw AgentWorkflowError("\(live.displayName): An unfinished task belongs to the previous Agent process or conversation. Verify it before continuing; it will not be resent.")
-                }
+            if live.readiness == .unavailable {
+                waiting.append(live.displayName)
             }
             replacements.append(live)
         }
@@ -494,8 +530,17 @@ struct AgentWorkflowExecution: Sendable {
         for index in run.instances.indices {
             guard let live = replacements.first(where: { $0.target == run.instances[index].target }) else { continue }
             // First-conversation confirmation is committed with its receipt.
-            if !run.instances[index].matchesBinding(live), !canBindFirstConversation(live) {
+            if
+                !run.instances[index].matchesBinding(live) || (run.instances[index].readiness == .unavailable) != (live.readiness == .unavailable),
+                !canBindFirstConversation(live) {
                 run.instances[index] = live
+                updated = true
+            }
+        }
+        let issue = waiting.isEmpty ? nil : "Waiting for Agent: \(waiting.joined(separator: "; ")). Resume the Agent in its existing tab; the workflow will continue automatically."
+        if run.status != .paused {
+            if run.issue != issue {
+                run.issue = issue
                 updated = true
             }
         }
@@ -512,6 +557,7 @@ struct AgentWorkflowExecution: Sendable {
         if updated {
             changed()
         }
+        return issue
     }
 
     mutating func resume(instances: [AgentWorkflowInstance], roundLimit: Int? = nil, now: Date) throws {
@@ -530,13 +576,13 @@ struct AgentWorkflowExecution: Sendable {
         if run.finishRequest == nil, run.definition.loop != nil, roundSucceeded, limit <= run.round {
             throw AgentWorkflowError("Increase the round limit to continue this workflow.")
         }
-        try refreshBindings(instances: instances)
+        let issue = try refreshBindings(instances: instances)
         if let finish = run.finishRequest, run.invocations.first(where: { $0.id == finish.invocationID })?.status == .failed {
             run.finishRequest = nil
         }
         run.roundLimit = limit
         run.status = run.finishRequest == nil ? .running : .finishing
-        run.issue = nil
+        run.issue = issue
         settle(now: now)
         changed()
     }
@@ -551,6 +597,7 @@ struct AgentWorkflowExecution: Sendable {
         guard
             !run.status.isTerminal,
             invocation.round == run.round, invocation.status == .running,
+            run.instance(for: invocation)?.matchesBinding(instance) == true,
             now < run.authorizationExpiresAt, !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AgentWorkflowError("This invocation cannot request workflow completion.")
         }
@@ -593,7 +640,9 @@ struct AgentWorkflowExecution: Sendable {
     }
 
     private func validate(_ instance: AgentWorkflowInstance, for invocation: AgentWorkflowInvocation) throws {
-        guard let bound = run.instance(for: invocation), bound.matchesBinding(instance) else {
+        guard
+            let bound = run.instance(for: invocation),
+            bound.matchesBinding(instance) || (invocation.nativeTurnID != nil && bound.matchesConversation(instance)) else {
             throw AgentWorkflowError("The Agent instance or its conversation changed.")
         }
     }
@@ -620,6 +669,7 @@ struct AgentWorkflowExecution: Sendable {
         guard run.status == .running else { return }
         if roundSucceeded, run.definition.loop == nil {
             run.status = .completed
+            run.issue = nil
         } else if now >= run.authorizationExpiresAt {
             run.status = .paused
             run.issue = "Workflow authorization expired. No further tasks will be sent."

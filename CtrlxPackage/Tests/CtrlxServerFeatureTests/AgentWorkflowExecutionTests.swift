@@ -310,7 +310,7 @@ struct AgentWorkflowExecutionTests {
     }
 
     @Test(arguments: ["conversation", "pane", "server", "plugin", "process", "host", "instance"])
-    func staleIdentityCannotWriteOrComplete(kind: String) throws {
+    func acceptedResultKeepsItsTargetAndConversationAcrossRestarts(kind: String) throws {
         var execution = try execution()
         let invocation = try start(0, in: &execution)
         let original = execution.run.instances[0]
@@ -335,15 +335,15 @@ struct AgentWorkflowExecutionTests {
             capabilities: original.capabilities,
             readiness: .ready
         )
-        #expect(throws: AgentWorkflowError.self) {
-            try execution.succeed(.init(
-                invocationID: invocation.id,
-                nativeTurnID: invocation.id.uuidString,
-                text: "Wrong result",
-                completedAt: now
-            ), instance: stale, now: now)
+        let result = AgentWorkflowResult(invocationID: invocation.id, nativeTurnID: invocation.id.uuidString, text: "Verified result", completedAt: now)
+        if ["server", "process", "instance"].contains(kind) {
+            // The socket/event boundary has already authenticated the current writer.
+            #expect(try execution.succeed(result, instance: stale, now: now))
+            #expect(execution.run.invocations[0].result == result)
+        } else {
+            #expect(throws: AgentWorkflowError.self) { try execution.succeed(result, instance: stale, now: now) }
+            #expect(execution.run.invocations[0].result == nil)
         }
-        #expect(execution.run.invocations[0].result == nil)
     }
 
     @Test

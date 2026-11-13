@@ -138,15 +138,17 @@ struct AgentWorkflowTargetTests {
             workingDirectory: old.workingDirectory, capabilities: old.capabilities, readiness: .ready
         )
         let before = execution.run
-        #expect(throws: AgentWorkflowError.self) { try execution.resume(instances: [replacement, before.instances[1]], now: now) }
+        try execution.resume(instances: [replacement, before.instances[1]], now: now)
+        #expect(execution.run.instances[0].target == old.target)
+        #expect(execution.run.instances[0].readiness == .unavailable)
         #expect(throws: AgentWorkflowStartRejection.self) {
             try AgentWorkflowExecution(definition: before.definition, instances: [replacement, before.instances[1]], now: now, authorizationExpiresAt: before.authorizationExpiresAt)
         }
-        #expect(execution.run == before)
+        #expect(execution.run.issue?.contains("Waiting for Agent") == true)
     }
 
     @Test
-    func pendingInputRebindsButAcceptedInputCannotMoveToReplacement() throws {
+    func pendingInputRebindsWhileAcceptedReceiptStaysCorrelated() throws {
         var execution = try fixture()
         let pending = try execution.prepareInvocation(nodeID: execution.run.definition.entryNodeID, now: now)
         execution.pause(reason: "Operator")
@@ -158,8 +160,66 @@ struct AgentWorkflowTargetTests {
         _ = try accept(0, execution: &execution)
         execution.pause(reason: "Operator")
         let before = execution.run
-        #expect(throws: AgentWorkflowError.self) { try execution.resume(instances: live.map(restarted), now: now) }
-        #expect(execution.run == before)
+        try execution.resume(instances: live.map(restarted), now: now)
+        #expect(execution.run.status == .running)
+        #expect(execution.run.invocations == before.invocations)
+        #expect(execution.readyNodeIDs.isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func waitingDeliveryUsesRecoveredTabExactlyOnce(operatorPaused: Bool) async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("workflow-wait-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let base = try fixture().run
+        let store = AgentWorkflowStore(fileURL: directory.appendingPathComponent("ledger.json"), hostID: base.definition.hostID)
+        let catalog = try await store.reconcile(base.instances.map(AgentWorkflowObservation.init))
+        let definition = try await store.saveDefinition(base.definition.resolvingAgents(in: catalog), expectedRevision: nil)
+        let run = try await store.start(definitionID: definition.id, expectedRevision: definition.revision, requestID: UUID(), now: now, authorizationExpiresAt: now.addingTimeInterval(3_600))
+        _ = try await store.reconcile([])
+        let writes = Writes()
+        let runner = AgentWorkflowRunner(store: store, transport: .init(inspect: { $0 }, prepare: { _, _ in }, write: { invocation, _ in
+            await writes.record(invocation)
+        }), now: { now }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        await runner.schedule(runID: run.id)
+        for _ in 0..<200 {
+            if try await !store.snapshot().runs[0].invocations.isEmpty {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await writes.values.isEmpty)
+        let waiting = try await store.snapshot().runs[0]
+        #expect(waiting.status == .running && waiting.invocations.first?.status == .pending)
+        if operatorPaused {
+            _ = try await store.update(runID: run.id) { $0.pause(reason: "Operator") }
+        }
+        let live = catalog.map(restarted)
+        let service = AgentWorkflowService(store: store, scan: { _ in live.map(AgentWorkflowObservation.init) }, schedule: {
+            await runner.schedule(runID: $0)
+        }, now: { now })
+        // A Viewer refresh may observe recovery before the monitoring tick.
+        _ = try await service.snapshot(refreshInstances: true)
+        try await service.checkActiveRuns()
+        if operatorPaused {
+            #expect(try await store.snapshot().runs[0].status == .paused)
+            #expect(await writes.values.isEmpty)
+            let paused = try await store.snapshot().runs[0]
+            _ = try await service.resume(runID: run.id, expectedRevision: paused.revision)
+        }
+        for _ in 0..<200 {
+            if await !writes.values.isEmpty {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try await service.checkActiveRuns()
+        let delivered = await writes.values
+        #expect(delivered.count == 1)
+        #expect(delivered.first?.id == waiting.invocations.first?.id)
+        #expect(delivered.first?.instance?.target == live[0].target)
+        #expect(delivered.first?.instance?.processID == live[0].processID)
+        await service.shutdown()
+        await runner.shutdown()
     }
 
     @Test

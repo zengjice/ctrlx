@@ -88,6 +88,13 @@ public struct AgentWorkflowInstance: Codable, Equatable, Identifiable, Sendable 
         matchesProcess(other) && conversationID == other.conversationID
     }
 
+    /// A resumed conversation keeps its task correlation across CLI restarts.
+    /// Callers must separately authenticate the current process in this target.
+    public func matchesConversation(_ other: Self) -> Bool {
+        target == other.target && pluginID == other.pluginID
+            && !conversationID.isEmpty && conversationID == other.conversationID
+    }
+
     public func matchesProcess(_ other: Self) -> Bool {
         id == other.id && hostID == other.hostID && pluginID == other.pluginID
             && processID == other.processID && processRuntimeID == other.processRuntimeID

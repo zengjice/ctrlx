@@ -147,9 +147,12 @@ struct AgentWorkflowBridgeTests {
         let current = try #require(await f.store.reconcile([switched]).first)
         #expect(current.id == bound.id)
         #expect(try await f.store.bridgeIssue(for: current) == nil)
-        #expect(try await f.store.snapshot().runs[0].status == .paused)
+        #expect(try await f.store.snapshot().runs[0].status == .running)
         await #expect(throws: AgentWorkflowError.self) {
-            try await f.store.update(runID: run.id) { try $0.resume(instances: [current], now: now) }
+            try await f.store.update(runID: run.id) {
+                let invocation = try #require($0.run.invocations.first)
+                try $0.succeed(.init(invocationID: invocation.id, nativeTurnID: "accepted", text: "Unrelated conversation", completedAt: now), instance: current, now: now)
+            }
         }
         try await f.store.update(runID: run.id) { $0.end() }
         let fresh = try await f.store.start(definitionID: definition.id, expectedRevision: definition.revision, requestID: UUID(), now: now, authorizationExpiresAt: now.addingTimeInterval(60))

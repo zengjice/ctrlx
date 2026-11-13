@@ -68,7 +68,7 @@ extension AgentWorkflowStore {
             let saved = run.invocations.first(where: { $0.id == invocation.id }),
             saved.status == status, saved.round == run.round, saved.delivery == invocation.delivery,
             let bound = run.instance(for: saved),
-            bound.matchesBinding(instance) else {
+            bound.matchesBinding(instance) || (invocation.nativeTurnID != nil && bound.matchesConversation(instance)) else {
             throw AgentWorkflowError("This invocation is no longer authorized to read workflow attachments.")
         }
         return try attachmentFiles(saved.delivery.input.attachmentIDs, instance: instance)

@@ -70,6 +70,14 @@ actor AgentWorkflowService {
         let runs = try await store.snapshot().runs.filter { $0.status == .running || $0.status == .finishing }
         var observedIdle: Set<UUID> = []
         for run in runs {
+            if
+                run.status == .running,
+                run.invocations.contains(where: { invocation in
+                    guard invocation.status == .pending, let bound = run.instance(for: invocation) else { return false }
+                    return run.instances.contains { $0.target == bound.target && $0.readiness != .unavailable }
+                }) {
+                await schedule(run.id)
+            }
             for invocation in run.invocations where invocation.status == .running {
                 if
                     run.definition.nodes.first(where: { $0.id == invocation.nodeID })?.completion == .explicit,

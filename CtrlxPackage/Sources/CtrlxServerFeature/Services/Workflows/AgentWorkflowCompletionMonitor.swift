@@ -40,7 +40,7 @@ actor AgentWorkflowCompletionMonitor {
             // binding cannot inherit the old reader's completion evidence.
             guard context.candidate.kind != .submitted else { return }
             if
-                previous.context.instance.matchesBinding(context.instance),
+                previous.context.instance.matchesBinding(context.instance) || previous.context.instance.matchesConversation(context.instance),
                 previous.context.candidate.nativeTurnID == context.candidate.nativeTurnID,
                 previous.context.candidate.transcriptPath == context.candidate.transcriptPath {
                 watches[id]?.context = context
@@ -108,6 +108,18 @@ actor AgentWorkflowCompletionMonitor {
                     run.invocations.contains(where: {
                         $0.id == id && $0.resultTurnID == context.candidate.nativeTurnID && ($0.status == .running || (!submissionOnly && $0.status == .uncertain))
                     }) else { return }
+                guard
+                    let current = archive.instances.first(where: {
+                        $0.matchesBinding(context.instance) || $0.matchesConversation(context.instance)
+                    }) else {
+                    // Logging out or restarting does not invalidate an accepted
+                    // turn. Wait for its conversation to return to the same tab.
+                    deadline = nil
+                    inspectionDeadline = nil
+                    nextInspection = clock.now
+                    try await Task.sleep(for: .milliseconds(200))
+                    continue
+                }
                 if revision != watch.revision {
                     revision = watch.revision
                     deadline = nil
@@ -120,8 +132,8 @@ actor AgentWorkflowCompletionMonitor {
                 // Completion is always checked against a fresh identity below.
                 do {
                     if clock.now >= nextInspection {
-                        let live = try await inspect(context.instance)
-                        guard live.matchesBinding(context.instance) else {
+                        let live = try await inspect(current)
+                        guard live.matchesBinding(current) else {
                             throw AgentWorkflowError("The Agent identity changed while verifying its final answer.")
                         }
                         inspectionDeadline = nil
@@ -136,9 +148,16 @@ actor AgentWorkflowCompletionMonitor {
                             // transcript completion alone cannot authorize handoff.
                             continue
                         }
-                        let live = try await inspect(context.instance)
+                        let latest = try await store.snapshot().instances.first {
+                            $0.matchesBinding(context.instance) || $0.matchesConversation(context.instance)
+                        }
+                        guard let latest else {
+                            await file.updateCandidate(context.candidate.text)
+                            continue
+                        }
+                        let live = try await inspect(latest)
                         guard isCurrent(id, token: token, revision: revision) else { continue }
-                        guard live.matchesBinding(context.instance) else {
+                        guard live.matchesBinding(latest) else {
                             throw AgentWorkflowError("The Agent identity changed while verifying its final answer.")
                         }
                         switch outcome {
@@ -172,7 +191,7 @@ actor AgentWorkflowCompletionMonitor {
                     guard isCurrent(id, token: token, revision: revision) else { continue }
                     if inspectionDeadline == nil {
                         inspectionDeadline = clock.now.advanced(by: verificationTimeout)
-                        try await store.update(runID: context.runID) { $0.pause(reason: error.localizedDescription) }
+                        try await store.update(runID: context.runID) { $0.waitForAgent(current, reason: error.localizedDescription) }
                     }
                     nextInspection = clock.now
                     // A completed record may already have been consumed.

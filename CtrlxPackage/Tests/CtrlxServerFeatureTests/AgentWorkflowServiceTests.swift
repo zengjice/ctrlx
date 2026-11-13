@@ -261,15 +261,15 @@ struct AgentWorkflowServiceTests {
         f.backend.observations.removeFirst()
         await f.service.startMonitoring(interval: .milliseconds(10))
         for _ in 0..<100 {
-            if try await f.store.snapshot().runs[0].status == .paused {
+            if try await f.store.snapshot().runs[0].issue != nil {
                 break
             }
             try await Task.sleep(for: .milliseconds(10))
         }
         await f.service.shutdown()
         let saved = try await f.store.snapshot().runs[0]
-        #expect(saved.id == run.id && saved.status == .paused)
-        #expect(saved.issue?.contains("tab is unavailable") == true)
+        #expect(saved.id == run.id && saved.status == .running)
+        #expect(saved.issue?.contains("Waiting for Agent") == true)
         #expect(f.backend.scheduled == [run.id])
         let scans = f.backend.scans
         try await Task.sleep(for: .milliseconds(30))
@@ -359,6 +359,7 @@ struct AgentWorkflowServiceTests {
         let f = try await fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
         let run = try await start(f)
+        _ = try await f.service.pause(runID: run.id, expectedRevision: run.revision)
         f.backend.observations[1].readiness = .unavailable
         try await f.service.checkActiveRuns()
         let paused = try #require(await f.store.snapshot().runs.first)

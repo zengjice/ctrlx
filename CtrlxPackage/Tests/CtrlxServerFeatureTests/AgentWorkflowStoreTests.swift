@@ -192,7 +192,7 @@ struct AgentWorkflowStoreTests {
     }
 
     @Test(arguments: ["process", "pane", "server", "conversation", "exited"])
-    func changedIdentityPausesAndCannotInheritRun(scenario: String) async throws {
+    func changedProcessDoesNotPauseOrReplaceAcceptedReceipt(scenario: String) async throws {
         let fixture = try await fixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
         let run = try await start(fixture)
@@ -211,30 +211,32 @@ struct AgentWorkflowStoreTests {
         }
         let current = try await fixture.store.reconcile(observations)
         let snapshot = try await fixture.store.snapshot()
-        #expect(snapshot.runs[0].status == .paused)
+        #expect(snapshot.runs[0].status == .running)
+        #expect(snapshot.runs[0].invocations[0].instance == fixture.instances[0])
+        #expect(snapshot.runs[0].invocations[0].nativeTurnID == "accepted")
         if scenario != "conversation" {
             #expect(!current.contains { $0.id == fixture.instances[0].id })
         }
-        await #expect(throws: AgentWorkflowError.self) {
-            try await fixture.store.update(runID: run.id) { execution in
-                try execution.resume(instances: current, now: now)
-            }
+        if scenario == "pane" || scenario == "exited" {
+            #expect(snapshot.runs[0].issue?.contains("Waiting for Agent") == true)
+            #expect(snapshot.runs[0].instances[0].target == fixture.instances[0].target)
         }
     }
 
     @Test
-    func missingEvidenceKeepsUUIDButPausesUntilVerifiedAgain() async throws {
+    func missingEvidenceWaitsAndRecoversWithoutPausing() async throws {
         let fixture = try await fixture()
         defer { try? FileManager.default.removeItem(at: fixture.directory) }
-        let run = try await start(fixture)
+        _ = try await start(fixture)
         var observations = fixture.observations
         observations[0].readiness = .unavailable
         #expect(try await fixture.store.reconcile(observations).map(\.id) == fixture.instances.map(\.id))
-        #expect(try await fixture.store.snapshot().runs[0].status == .paused)
+        #expect(try await fixture.store.snapshot().runs[0].status == .running)
+        #expect(try await fixture.store.snapshot().runs[0].issue?.contains("Waiting for Agent") == true)
         let current = try await fixture.store.reconcile(fixture.observations)
         #expect(current.map(\.id) == fixture.instances.map(\.id))
-        let resumed = try await fixture.store.update(runID: run.id) { try $0.resume(instances: current, now: now) }
-        #expect(resumed.status == .running)
+        let resumed = try await fixture.store.snapshot().runs[0]
+        #expect(resumed.status == .running && resumed.issue == nil)
     }
 
     @Test

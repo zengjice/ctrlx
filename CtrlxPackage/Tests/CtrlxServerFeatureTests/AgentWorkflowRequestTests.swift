@@ -218,7 +218,7 @@ struct AgentWorkflowRequestTests {
         let live = try #require(await service.refreshInstancesCatalog().first)
         #expect(live.id != original.id && live.workspacePane == original.workspacePane)
         let reserved = try #require(await service.handle(.init(.terminal(original.workspacePane))).run)
-        #expect(reserved.summary.id == oldRun.summary.id && reserved.summary.status == .paused)
+        #expect(reserved.summary.id == oldRun.summary.id && reserved.summary.status == .running)
         _ = try await service.end(runID: oldRun.summary.id, expectedRevision: reserved.summary.revision)
         let node = AgentWorkflowNode(name: "Replacement", agentInstanceID: live.id)
         let definition = try await service.save(.init(name: "New workflow", hostID: f.hostID, nodes: [node], edges: [], entryNodeID: node.id), expectedRevision: nil)
