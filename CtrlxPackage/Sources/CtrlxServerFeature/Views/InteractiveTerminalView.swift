@@ -187,6 +187,7 @@
         private var lastDragPosition: (col: Int, row: Int)?
 
         private var linkGesture = TerminalLinkGestureState()
+        private var linkOwnsMouseSequence = false
         private var pendingLinkActivationTask: Task<Void, Never>?
         private var pendingContentClickTask: Task<Void, Never>?
         private var contentClickEligible = false
@@ -345,17 +346,14 @@
 
         private func forwardMouseDown(_ event: NSEvent) {
             lastDragPosition = nil
+            linkOwnsMouseSequence = false
             if linkGesture.mouseDown(clickCount: event.clickCount) {
                 cancelPendingLinkActivation()
             }
 
-            // In mouse mode, suppress the press if it lands on a URL we'd
-            // intercept in `mouseUp` (file/http/https/ftp). Otherwise SwiftTerm
-            // forwards a mouse-press SGR sequence to the terminal app (e.g.
-            // Claude Code), which can open the link from the press event
-            // before our `handleURLClick` runs — Claude Code in particular
-            // shells out to `open(1)` for OSC 8 hyperlinks, racing past the
-            // `browserLinkBehavior` prompt.
+            // Own the whole link gesture locally: the app must not open it on
+            // mouse-down, and dragging must select text instead of sending
+            // motion/release packets for a press the app never received.
             if
                 let interactive = interactiveView,
                 interactive.shouldReportMouseEvent(event),
@@ -364,11 +362,25 @@
                     allowedSchemes: TerminalURLDetector.defaultAllowedSchemes,
                     includePaths: event.modifierFlags.intersection([.shift, .control]).isEmpty
                 ) {
-                onMouseDown?()
-                return
+                linkOwnsMouseSequence = true
             }
-            terminalView?.mouseDown(with: event)
+            forwardTerminalMouseEvent(event)
             onMouseDown?()
+        }
+
+        private func forwardTerminalMouseEvent(_ event: NSEvent) {
+            guard let terminalView else { return }
+            let reporting = terminalView.allowMouseReporting
+            if linkOwnsMouseSequence {
+                terminalView.allowMouseReporting = false
+            }
+            defer { terminalView.allowMouseReporting = reporting }
+            switch event.type {
+            case .leftMouseDown: terminalView.mouseDown(with: event)
+            case .leftMouseDragged: terminalView.mouseDragged(with: event)
+            case .leftMouseUp: terminalView.mouseUp(with: event)
+            default: break
+            }
         }
 
         override func mouseDragged(with event: NSEvent) {
@@ -379,12 +391,14 @@
                 forwardMouseDown(down)
             }
             linkGesture.mouseDragged()
+            cancelPendingLinkActivation()
 
             // Only synthesize app-owned drags. Shift bypass and disabled reporting
             // must reach SwiftTerm's local selection path, just like down/up.
             // Sending directly also avoids the motion-event filter in
             // send(source:data:) which suppresses SwiftTerm-internal hover tracking.
             if
+                !linkOwnsMouseSequence,
                 let interactive = interactiveView,
                 interactive.shouldReportMouseEvent(event),
                 let tv = terminalView {
@@ -416,7 +430,7 @@
                 interactive.onRawInput?(Data(seq.utf8))
                 return
             }
-            terminalView?.mouseDragged(with: event)
+            forwardTerminalMouseEvent(event)
         }
 
         override func mouseUp(with event: NSEvent) {
@@ -428,6 +442,7 @@
             let shouldActivateLink = linkGesture.mouseUp(clickCount: event.clickCount)
             defer {
                 lastDragPosition = nil
+                linkOwnsMouseSequence = false
                 interactiveView?.scheduleQuestionCheck()
             }
 
@@ -462,12 +477,12 @@
 
             // No matching URL at the click point. In mouse mode, the terminal
             // app owns the click — forward to SwiftTerm and skip auto-copy.
-            if interactiveView?.shouldReportMouseEvent(event) == true {
-                terminalView?.mouseUp(with: event)
+            if !linkOwnsMouseSequence, interactiveView?.shouldReportMouseEvent(event) == true {
+                forwardTerminalMouseEvent(event)
                 return
             }
 
-            terminalView?.mouseUp(with: event)
+            forwardTerminalMouseEvent(event)
 
             // Auto-copy selection to clipboard when mouse is released
             if

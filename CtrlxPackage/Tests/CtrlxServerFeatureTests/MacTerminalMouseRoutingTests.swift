@@ -674,6 +674,53 @@
             #expect(view.getSelectedTextTrimmed() != nil)
         }
 
+        @Test(
+            "Mouse-mode links remain locally selectable and copyable without sending orphaned mouse events",
+            arguments: ["<repo:docs/readme.md>", "(repo:docs/readme.md)", "\u{1b}]8;;repo:docs/readme.md\u{7}Read guide\u{1b}]8;;\u{7}", "https://example.com"],
+            ["drag", "doubleClick", "tripleClick"]
+        )
+        func mouseModeLinkSelection(text: String, action: String) async throws {
+            let clipboard = ClipboardClient.previewValue
+            try await withDependencies {
+                $0[ClipboardClient.self] = clipboard
+            } operation: {
+                let (window, panes) = makeTerminalWindow()
+                defer { withExtendedLifetime(window) { } }
+                let view = panes[1]
+                view.feed(byteArray: Array("\u{1b}[H\u{1b}[2K\(text)\r\n".utf8)[...])
+                enableMouseMode(1_002, in: view)
+                view.autoCopyOnSelect = true
+                var opened = 0
+                var raw: [Data] = []
+                view.onOpenPath = { _, _ in opened += 1 }
+                view.onOpenURL = { _, _ in opened += 1
+                    return true
+                }
+                view.onRawInput = { raw.append($0) }
+
+                if action == "drag" {
+                    // Continue outside the link: ownership must follow the press.
+                    try gesture(in: view, steps: [(.leftMouseDown, 1), (.leftMouseDragged, 2), (.leftMouseDragged, 35), (.leftMouseUp, 35)], modifiers: [])
+                } else {
+                    for count in 1...(action == "doubleClick" ? 2 : 3) {
+                        try gesture(in: view, steps: [(.leftMouseDown, 2), (.leftMouseUp, 2)], modifiers: [], clickCount: count)
+                    }
+                }
+                try await Task.sleep(for: .seconds(NSEvent.doubleClickInterval + 0.1))
+                #expect(opened == 0)
+                let selection = view.getSelectedTextTrimmed()
+                let selected = try #require(selection)
+                #expect(!selected.isEmpty)
+                #expect(clipboard.getString() == selected)
+                #expect(raw.isEmpty)
+                #expect(view.terminalView.allowMouseReporting)
+
+                // The next ordinary drag still belongs to the terminal app.
+                try gesture(in: view, steps: [(.leftMouseDown, 40), (.leftMouseDragged, 42), (.leftMouseUp, 42)], modifiers: [])
+                #expect(mouseButtons(raw) == [0, 32, 0])
+            }
+        }
+
         @Test("Non-mouse repository link activation uses the default preview intent")
         func repositoryLinkDelegate() {
             let (window, panes) = makeTerminalWindow()

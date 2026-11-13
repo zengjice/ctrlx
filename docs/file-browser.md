@@ -516,6 +516,12 @@ Changing windows, leaving the view or changing the source agent during resolutio
 prevents late navigation, including switching to Git in the same Mac window.
 The Viewer never resolves a remote path against its own filesystem.
 
+On Mac Host and Viewer, dragging from a recognized file or web link selects
+terminal text even when the Agent enables mouse reporting. Double/triple clicks
+select words/rows; only a single click without dragging opens the link. The whole
+gesture remains local even after leaving the link, supports the existing copy
+and auto-copy behavior, and does not send partial mouse gestures to the Agent.
+
 Decorations, hover and activation share one bounded visible-row snapshot,
 refreshed on buffer edits, cursor/mouse-mode changes, scrolling, resize and
 payload updates. iOS supplies actual native visible rows during inertial scrolling.
