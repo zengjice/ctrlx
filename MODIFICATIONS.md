@@ -7,6 +7,37 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.163 — Agent logout/resume and workflow continuity
+
+- Add Logout and Resume to supported Mac Agent-tab menus, confirming the account
+  change before stopping the verified process. Run native logout in the same
+  configuration scope before resuming the original conversation; stop if logout
+  fails and reject API Provider logout before terminating its Agent.
+  See [Agent restart](docs/services-reference.md). Source: `98ded85e`.
+- Keep workflow scheduling tied to persistent tabs across Agent exit, login gaps
+  and resume. Wait for verified recovery without replaying accepted tasks, retain
+  result evidence across live-pane moves, and validate current-process receipts,
+  conversation and native turns before allowing completion. Explicitly paused or
+  failed runs still require Continue.
+  See [workflow continuity](docs/multi-agent-design.md). Source: `99c63285`.
+- Allow dragging from terminal file/web links to select text while mouse reporting
+  is enabled. Double/triple clicks select words/rows; a single un-dragged click
+  still opens the link. Preserve local copy behavior without forwarding partial
+  mouse gestures to the Agent.
+  See [terminal links](docs/file-browser.md). Source: `f5e6cf92`.
+- Include source changes for stable, reordered iOS terminal action menus. This
+  release packages macOS only. Source: `deae9be9`.
+
+- Validation: focused Swift suites reported 382 tests and passed serially,
+  including workflow restart/turn/result binding, native Mac link selection,
+  restart/logout availability and isolation, quoted shell arguments, logout
+  failure handling and legacy command compatibility. Lint for 41 Swift files,
+  both boundary checks and diff checks passed. The opt-in real-Agent two-party
+  workflow test was skipped; actual CLI logout/login, iPhone interaction, full
+  E2E and Apple Intelligence evaluations were not run. This release packages
+  macOS only. Native browser code and codec SDK are unchanged; prior media
+  acceptance is reused after checking the SDK hash/UUID.
+
 ## 3.0.162 — Consolidated Relay settings and quieter Simulator actions
 
 - Collect the Relay server URL, startup/reconnection preferences, authorization
