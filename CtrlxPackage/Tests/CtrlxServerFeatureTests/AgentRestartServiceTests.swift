@@ -50,8 +50,8 @@ struct AgentRestartServiceTests {
         return .init(source: source, processID: "123", runtimeID: "original")
     }
 
-    @Test("Both native plugins preserve conversation and config; a retry does not stop the replacement", arguments: ["codex", "claude-code"])
-    func sameConversation(plugin: String) async throws {
+    @Test("Both native plugins preserve conversation and config; a retry does not stop the replacement", arguments: ["codex", "claude-code"], [false, true])
+    func sameConversation(plugin: String, logout: Bool) async throws {
         let proof = try proof(plugin: plugin)
         let core: any AgentSessionResuming = plugin == "codex" ? CodexPluginCore() : ClaudeCodePluginCore()
         var commands: [AgentForkLaunch] = []
@@ -72,14 +72,26 @@ struct AgentRestartServiceTests {
                 #expect(identity == proof)
                 commands.append(command)
             })
-            let request = RestartAgentSession(source: proof.source, runtimeID: proof.runtimeID)
+            let request = RestartAgentSession(source: proof.source, runtimeID: proof.runtimeID, logoutBeforeResume: logout)
             try await service.restart(request)
             try await service.restart(request)
+            await #expect(throws: AgentRestartError.self) {
+                try await service.restart(.init(requestID: request.requestID, source: proof.source, runtimeID: proof.runtimeID, logoutBeforeResume: !logout))
+            }
             #expect(commands.count == 1 && captures == 2)
             let command = try #require(commands.first).command
+            #expect(command.env[plugin == "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"] == "/private/config")
+            if logout {
+                #expect(command.command == "/bin/sh")
+                let script = try #require(command.args.last)
+                #expect(script.hasPrefix(plugin == "codex" ? "if '/original/agent' 'logout';" : "if '/original/agent' 'auth' 'logout';"))
+                #expect(script.contains(plugin == "codex" ? "exec '/original/agent' 'resume' '\(proof.source.sessionID)'" : "exec '/original/agent' '--resume' '\(proof.source.sessionID)'"))
+                #expect(script.contains("'--model' 'fixture-model'"))
+                #expect(!script.contains("'login'"))
+                return
+            }
             #expect(command.command == "/original/agent" && command.args.contains(proof.source.sessionID))
             #expect(command.args.contains("fixture-model") && !command.args.contains("--last") && !command.args.contains("--fork-session"))
-            #expect(command.env[plugin == "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"] == "/private/config")
             if plugin == "codex" {
                 #expect(command.args.prefix(4) == ["resume", proof.source.sessionID, "-C", proof.source.workingDirectory])
                 #expect(command.args.contains("--no-daemon"))
@@ -89,8 +101,8 @@ struct AgentRestartServiceTests {
         }
     }
 
-    @Test("History, invocation and process failures are rejected before exit", arguments: ["history", "invocation", "process", "identity", "stale-request"])
-    func preflightFailure(failure: String) async throws {
+    @Test("History, invocation and process failures are rejected before exit", arguments: ["history", "invocation", "process", "identity", "stale-request"], [false, true])
+    func preflightFailure(failure: String, logout: Bool) async throws {
         let proof = try proof(plugin: "codex")
         var captures = 0
         var stopped = false
@@ -117,7 +129,28 @@ struct AgentRestartServiceTests {
                 }
                 return (captures == 2 && failure == "process") || failure == "stale-request" ? .init(source: proof.source, processID: "456", runtimeID: "replacement") : proof
             }, core: { _ in CodexPluginCore() }, resume: { _, _ in stopped = true })
-            await #expect(throws: AgentRestartError.self) { try await service.restart(.init(source: proof.source, runtimeID: proof.runtimeID)) }
+            await #expect(throws: AgentRestartError.self) { try await service.restart(.init(source: proof.source, runtimeID: proof.runtimeID, logoutBeforeResume: logout)) }
+            #expect(!stopped)
+        }
+    }
+
+    @Test("Logging out an API Provider is rejected before stopping its Agent", arguments: ["codex", "claude-code"])
+    func apiProvider(plugin: String) async throws {
+        let proof = try proof(plugin: plugin)
+        let core: any AgentSessionResuming = plugin == "codex" ? CodexPluginCore() : ClaudeCodePluginCore()
+        var stopped = false
+        try await withDependencies {
+            $0[SessionDirectoryClient.self].resolve = { $0 }
+            $0[WorkspaceAgentProcessClient.self].invocation = { _, _ in
+                .init(executable: "/agent", arguments: [], providerID: "custom-api")
+            }
+            $0[AgentForkHistoryClient.self].root = { _, roots, _ in try #require(roots.first) }
+        } operation: {
+            let service = AgentRestartService(capture: { _, _ in proof }, core: { _ in core }, resume: { _, _ in stopped = true })
+            let error = await #expect(throws: AgentProviderError.self) {
+                try await service.restart(.init(source: proof.source, runtimeID: proof.runtimeID, logoutBeforeResume: true))
+            }
+            #expect(error?.localizedDescription.contains("Do not log out.") == true)
             #expect(!stopped)
         }
     }

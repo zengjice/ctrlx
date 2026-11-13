@@ -941,6 +941,17 @@ Agent without restarting CtrlX. Explicit Provider settings,
 configuration roots and an enabled VISUAL override are applied after shell
 configuration. No user dotfiles are modified.
 
+Mac Host and Viewer tab menus also offer **Log Out and Log In** for Codex and
+Claude Code. This uses the same verified Exit and Resume flow: after the old
+process exits, run `codex logout` or `claude auth logout`, then reopen the exact
+conversation in that pane. The user completes the CLI's login flow manually;
+CtrlX does not run a login command or provide credentials. Logout and Resume use
+the same executable and scoped configuration environment. Logout failure prints
+an error and returns to the shell without resuming. This signs out the CLI's
+shared account for that configuration, not a private per-tab account. Explicit
+custom API Providers are rejected before exit with a "Do not log out" message;
+their keys belong in Provider settings and the running Agent is kept.
+
 The Host uses the shared live process binding and rechecks the conversation after
 acquiring the pane's input queue. It sends SIGTERM only to that process incarnation,
 waits for exit and an empty terminal or idle shell, then replaces that shell with
@@ -965,9 +976,13 @@ the displayed process incarnation. A delayed request for a previous process is
 rejected even when its successor resumed the same conversation. Slow
 restart work stays outside the keyboard receive loop. The operation does not
 change Viewer selection or send workflow tasks/approval responses.
+The logout action additionally requires `supportsAgentLogout`; an older Host
+must not silently treat it as a plain restart. Legacy requests omit
+`logoutBeforeResume` and continue to restart without logging out. Retrying the
+same UUID with a different logout choice is rejected.
 
 Regression entry points: `AgentRestartTests`, `AgentRestartAvailabilityTests`,
-`AgentRestartServiceTests`, `TmuxAgentRestartTests`, and
+`AgentRestartServiceTests`, `AgentRestartShellTests`, `TmuxAgentRestartTests`, and
 `python3 scripts/verify-workspace-agent-resume.py --exit-and-resume --output <new-directory>`.
 The native CLI probe uses synthetic local replies, private configuration roots
 and a private tmux socket. Codex 0.167.0 and Claude Code 2.1.319 passed idle,

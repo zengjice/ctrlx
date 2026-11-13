@@ -73,6 +73,7 @@ public struct SessionStateMessage: Codable, Sendable {
     public let supportsAgentWindowLaunch: Bool?
     public let supportsAgentFork: Bool?
     public let supportsAgentRestart: Bool?
+    public let supportsAgentLogout: Bool?
     /// Older Hosts ignore a Fork's target directory, so Viewers only expose it
     /// after this capability is advertised.
     public let supportsAgentForkDirectory: Bool?
@@ -153,6 +154,7 @@ public struct SessionStateMessage: Codable, Sendable {
         case supportsAgentWindowLaunch
         case supportsAgentFork
         case supportsAgentRestart
+        case supportsAgentLogout
         case supportsAgentForkDirectory
         case supportsTerminalPaste
         case supportsCodexQuestionAcknowledgement
@@ -197,6 +199,7 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsAgentWindowLaunch: Bool? = nil,
         supportsAgentFork: Bool? = nil,
         supportsAgentRestart: Bool? = nil,
+        supportsAgentLogout: Bool? = nil,
         supportsAgentForkDirectory: Bool? = nil,
         supportsTerminalPaste: Bool? = nil,
         supportsCodexQuestionAcknowledgement: Bool? = nil,
@@ -260,6 +263,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsAgentWindowLaunch = supportsAgentWindowLaunch
         self.supportsAgentFork = supportsAgentFork
         self.supportsAgentRestart = supportsAgentRestart
+        self.supportsAgentLogout = supportsAgentLogout
         self.supportsAgentForkDirectory = supportsAgentForkDirectory
         self.supportsTerminalPaste = supportsTerminalPaste
         self.supportsCodexQuestionAcknowledgement = supportsCodexQuestionAcknowledgement
@@ -309,6 +313,7 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsAgentWindowLaunch: supportsAgentWindowLaunch,
             supportsAgentFork: supportsAgentFork,
             supportsAgentRestart: supportsAgentRestart,
+            supportsAgentLogout: supportsAgentLogout,
             supportsAgentForkDirectory: supportsAgentForkDirectory,
             supportsTerminalPaste: supportsTerminalPaste,
             supportsCodexQuestionAcknowledgement: supportsCodexQuestionAcknowledgement,

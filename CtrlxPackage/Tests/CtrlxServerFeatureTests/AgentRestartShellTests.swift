@@ -7,6 +7,49 @@ import Testing
 
 @MainActor
 struct AgentRestartShellTests {
+    @Test("Logout and Resume share config, preserve quoted arguments, and stop on logout failure", arguments: ["/bin/bash", "/bin/zsh"], [0, 17])
+    func logoutBeforeResume(shell: String, logoutStatus: Int) async throws {
+        let tmux = try FakeTmuxLaunchEnvironment()
+        defer { tmux.cleanup() }
+        let home = tmux.root.appendingPathComponent("home with 'quotes'")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let executable = home.appendingPathComponent("fake 'agent'")
+        let cli = #"""
+        #!/bin/sh
+        printf 'CALL[%s]CONFIG[%s]CLEARED[%s]\n' "$1" "$CTRLX_TEST_CONFIG" "${CTRLX_RESTART_VALUE+x}"
+        if [ "$1" = logout ]; then exit "$CTRLX_TEST_LOGOUT_STATUS"; fi
+        printf 'ARG[%s]\n' "$@"
+        """#
+        try Data(cli.utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let argument = "model 'quoted'; $(touch \(home.appendingPathComponent("injected").path))"
+        let command = AgentForkLaunch(command: .init(
+            command: executable.path, args: ["--resume", "original-conversation", "--model", argument],
+            env: ["CTRLX_TEST_CONFIG": home.path, "CTRLX_TEST_LOGOUT_STATUS": String(logoutStatus)],
+            unsetEnvironment: ["CTRLX_RESTART_VALUE"]
+        )).loggingOutFirst(arguments: ["logout"])
+        let preparation = SessionLaunchPreparation(workingDirectory: home.path, fork: command)
+        let launch = try #require(try preparation.agentLaunch(shell: shell, tmuxExecutable: tmux.executable.path))
+        try tmux.install(launch)
+        let process = AgentRestartTerminal.process(
+            loginShell: shell, invocation: launch.command, prefix: nil,
+            shellCommand: #"printf 'FALLBACK[%s]\n' "$CTRLX_RESTART_VALUE""#
+        )
+        let result = try await run(process, home: home)
+        #expect(result.isSuccess)
+        #expect(result.stdoutString.contains("CALL[logout]CONFIG[\(home.path)]CLEARED[]"))
+        if logoutStatus == 0 {
+            #expect(result.stdoutString.contains("CALL[--resume]CONFIG[\(home.path)]CLEARED[]"))
+            #expect(result.stdoutString.contains("ARG[--resume]\nARG[original-conversation]\nARG[--model]\nARG[\(argument)]"))
+        } else {
+            #expect(!result.stdoutString.contains("CALL[--resume]"))
+            #expect(result.stderrString.contains("Logout failed. Resume was not started."))
+        }
+        #expect(result.stdoutString.contains("FALLBACK[stale]"))
+        #expect(!FileManager.default.fileExists(atPath: home.appendingPathComponent("injected").path))
+        #expect(!tmux.containsPayload())
+    }
+
     @Test("Resume reloads edited shell files before applying scoped Provider settings", arguments: ["/bin/bash", "/bin/zsh"], [false, true])
     func reloadEnvironment(shell: String, provider: Bool) async throws {
         let tmux = try FakeTmuxLaunchEnvironment()

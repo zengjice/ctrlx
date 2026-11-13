@@ -551,6 +551,13 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         )
     }
 
+    public func commandForLogoutAndResume(_ descriptor: AgentResumeDescriptor) async throws -> AgentForkLaunch {
+        guard descriptor.providerID == nil || descriptor.providerID == CodexSettings.builtInProviderID else {
+            throw AgentProviderError("Log Out and Log In is not supported for custom API Providers. Do not log out. Update the API key in Settings → Agents → Codex → Providers.")
+        }
+        return try await commandForResume(descriptor).loggingOutFirst(arguments: ["logout"])
+    }
+
     public func commandForResume(_ descriptor: AgentResumeDescriptor) async throws -> AgentForkLaunch {
         guard
             descriptor.pluginID == Self.pluginID, UUID(uuidString: descriptor.sessionID) != nil,

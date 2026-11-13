@@ -4027,6 +4027,7 @@
                     supportsAgentWindowLaunch: true,
                     supportsAgentFork: true,
                     supportsAgentRestart: true,
+                    supportsAgentLogout: true,
                     supportsAgentForkDirectory: true,
                     supportsTerminalPaste: true,
                     supportsCodexQuestionAcknowledgement: true,

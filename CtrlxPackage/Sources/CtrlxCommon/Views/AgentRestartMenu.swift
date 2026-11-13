@@ -6,12 +6,14 @@ public struct AgentRestartMenu: View {
     private let panes: [PaneState]
     private let unavailableReason: String?
     private let busyPaneIDs: Set<String>
+    private let logoutBeforeResume: Bool
     private let choose: (RestartAgentSession) -> Void
 
-    public init(panes: [PaneState], unavailableReason: String? = nil, busyPaneIDs: Set<String> = [], choose: @escaping (RestartAgentSession) -> Void) {
+    public init(panes: [PaneState], unavailableReason: String? = nil, busyPaneIDs: Set<String> = [], logoutBeforeResume: Bool = false, choose: @escaping (RestartAgentSession) -> Void) {
         self.panes = panes
         self.unavailableReason = unavailableReason
         self.busyPaneIDs = busyPaneIDs
+        self.logoutBeforeResume = logoutBeforeResume
         self.choose = choose
     }
 
@@ -20,12 +22,20 @@ public struct AgentRestartMenu: View {
             guard
                 let source = AgentForkSource(pane: pane), source.workspaceIdentity != nil,
                 let runtime = pane.agentSession?.processRuntimeID else { return nil }
-            return RestartAgentSession(source: source, runtimeID: runtime)
+            return RestartAgentSession(source: source, runtimeID: runtime, logoutBeforeResume: logoutBeforeResume)
         }
     }
 
     private var reason: String? {
         unavailableReason ?? (requests.isEmpty ? "Resume requires a verified Codex or Claude Code conversation and process identity." : nil)
+    }
+
+    private var actionTitle: String {
+        logoutBeforeResume ? "Log Out and Log In" : "Exit and Resume"
+    }
+
+    private var accessibilityPrefix: String {
+        logoutBeforeResume ? "agentLogout" : "agentRestart"
     }
 
     private func title(_ request: RestartAgentSession) -> String {
@@ -36,9 +46,9 @@ public struct AgentRestartMenu: View {
     public var body: some View {
         if panes.contains(where: { $0.agentSession != nil }) {
             if requests.count == 1, let request = requests.first, reason == nil {
-                Button { choose(request) } label: { Label("Exit and Resume", symbol: .arrowClockwise) }
+                Button { choose(request) } label: { Label(actionTitle, symbol: .arrowClockwise) }
                     .disabled(busyPaneIDs.contains(request.source.paneID))
-                    .accessibilityIdentifier("agentRestart.\(request.source.paneID)")
+                    .accessibilityIdentifier("\(accessibilityPrefix).\(request.source.paneID)")
             } else {
                 Menu {
                     ForEach(requests) { request in
@@ -47,8 +57,8 @@ public struct AgentRestartMenu: View {
                     if let reason {
                         Text(reason)
                     }
-                } label: { Label("Exit and Resume", symbol: .arrowClockwise) }
-                    .accessibilityIdentifier("agentRestart.menu")
+                } label: { Label(actionTitle, symbol: .arrowClockwise) }
+                    .accessibilityIdentifier("\(accessibilityPrefix).menu")
             }
         }
     }
@@ -57,7 +67,7 @@ public struct AgentRestartMenu: View {
         public var contextMenuItems: [ContextMenuItem] {
             guard panes.contains(where: { $0.agentSession != nil }) else { return [] }
             if requests.count == 1, let request = requests.first, reason == nil {
-                return [.button(title: "Exit and Resume", symbol: .arrowClockwise, isEnabled: !busyPaneIDs.contains(request.source.paneID)) { choose(request) }]
+                return [.button(title: actionTitle, symbol: .arrowClockwise, isEnabled: !busyPaneIDs.contains(request.source.paneID)) { choose(request) }]
             }
             var items = requests.map { request in
                 ContextMenuItem.button(title: title(request), isEnabled: reason == nil && !busyPaneIDs.contains(request.source.paneID)) { choose(request) }
@@ -65,7 +75,7 @@ public struct AgentRestartMenu: View {
             if let reason {
                 items.append(.button(title: reason, isEnabled: false) { })
             }
-            return [.submenu(title: "Exit and Resume", symbol: .arrowClockwise, items: items)]
+            return [.submenu(title: actionTitle, symbol: .arrowClockwise, items: items)]
         }
     #endif
 }

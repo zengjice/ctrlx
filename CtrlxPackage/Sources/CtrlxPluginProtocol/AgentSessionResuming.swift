@@ -4,10 +4,15 @@ import Foundation
 public protocol AgentSessionResuming: PluginCore {
     func recoveryDescriptor(sessionID: String, projectPath: String, invocation: AgentResumeInvocation?) async throws -> AgentResumeDescriptor
     func commandForResume(_ descriptor: AgentResumeDescriptor) async throws -> AgentForkLaunch
+    func commandForLogoutAndResume(_ descriptor: AgentResumeDescriptor) async throws -> AgentForkLaunch
     func automaticResumeUnavailableReason(_ descriptor: AgentResumeDescriptor, currentVersion: String?) async -> String?
 }
 
 public extension AgentSessionResuming {
+    func commandForLogoutAndResume(_ descriptor: AgentResumeDescriptor) async throws -> AgentForkLaunch {
+        throw AgentResumeConfigurationError("This Agent does not support logging out and resuming.")
+    }
+
     func automaticResumeUnavailableReason(_ descriptor: AgentResumeDescriptor, currentVersion: String?) async -> String? {
         if let reason = descriptor.automaticResumeUnavailableReason {
             return reason
@@ -16,6 +21,23 @@ public extension AgentSessionResuming {
             return "The Agent CLI changed or is unavailable. Choose Resume to reopen it explicitly."
         }
         return nil
+    }
+}
+
+public extension AgentForkLaunch {
+    /// Run both commands under the same scoped environment, after the old Agent
+    /// exits. A failed logout must not silently resume the still-signed-in account.
+    func loggingOutFirst(arguments: [String]) -> AgentForkLaunch {
+        func quote(_ value: String) -> String {
+            "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        }
+        let logout = ([command.command] + arguments).map(quote).joined(separator: " ")
+        let resume = ([command.command] + command.args).map(quote).joined(separator: " ")
+        let script = "if \(logout); then exec \(resume); else printf '%s\\n' 'Logout failed. Resume was not started. Check the error above and retry manually.' >&2; exit 1; fi"
+        return AgentForkLaunch(
+            command: LaunchCommand(command: "/bin/sh", args: ["-c", script], env: command.env, unsetEnvironment: command.unsetEnvironment),
+            unsetEnvironment: unsetEnvironment
+        )
     }
 }
 

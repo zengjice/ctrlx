@@ -53,7 +53,7 @@ final class AgentRestartService {
         let invocation = try await processes.invocation(proof.processID, proof.runtimeID)
         let descriptor = try await agent.recoveryDescriptor(sessionID: proof.source.sessionID, projectPath: proof.source.workingDirectory, invocation: invocation)
         // Resolve history, configuration and executable before asking the Agent to exit.
-        let command = try await agent.commandForResume(descriptor)
+        let command = try await request.logoutBeforeResume ? agent.commandForLogoutAndResume(descriptor) : agent.commandForResume(descriptor)
         let current = try await capture(request, workspace)
         guard request.matches(current.source, runtimeID: current.runtimeID), current.processID == proof.processID, current.runtimeID == proof.runtimeID else {
             throw AgentRestartError("The Agent process changed before restart. Reopen its tab's menu.")

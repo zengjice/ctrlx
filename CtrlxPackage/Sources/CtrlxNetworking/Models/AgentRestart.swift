@@ -6,14 +6,31 @@ public struct RestartAgentSession: CommandSpec, Equatable, Identifiable {
     public let requestID: UUID
     public let source: AgentForkSource
     public let runtimeID: String
+    public let logoutBeforeResume: Bool
     public var id: String {
         source.paneID
     }
 
-    public init(requestID: UUID = UUID(), source: AgentForkSource, runtimeID: String) {
+    public init(requestID: UUID = UUID(), source: AgentForkSource, runtimeID: String, logoutBeforeResume: Bool = false) {
         self.requestID = requestID
         self.source = source
         self.runtimeID = runtimeID
+        self.logoutBeforeResume = logoutBeforeResume
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestID
+        case source
+        case runtimeID
+        case logoutBeforeResume
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.requestID = try values.decode(UUID.self, forKey: .requestID)
+        self.source = try values.decode(AgentForkSource.self, forKey: .source)
+        self.runtimeID = try values.decode(String.self, forKey: .runtimeID)
+        self.logoutBeforeResume = try values.decodeIfPresent(Bool.self, forKey: .logoutBeforeResume) ?? false
     }
 
     public var commandType: CommandType {

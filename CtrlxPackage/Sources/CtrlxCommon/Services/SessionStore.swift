@@ -70,6 +70,7 @@ final public class SessionStore {
     public private(set) var hostsSupportingAgentWindowLaunch: Set<String> = []
     public private(set) var hostsSupportingAgentFork: Set<String> = []
     public private(set) var hostsSupportingAgentRestart: Set<String> = []
+    public private(set) var hostsSupportingAgentLogout: Set<String> = []
     public private(set) var hostsSupportingAgentForkDirectory: Set<String> = []
 
     /// Cross-session cost/usage rollup per host (issue #598), from each host's
@@ -369,6 +370,11 @@ final public class SessionStore {
         } else {
             hostsSupportingAgentRestart.remove(hostId)
         }
+        if state.supportsAgentLogout == true {
+            hostsSupportingAgentLogout.insert(hostId)
+        } else {
+            hostsSupportingAgentLogout.remove(hostId)
+        }
         if state.supportsAgentForkDirectory == true {
             hostsSupportingAgentForkDirectory.insert(hostId)
         } else {
@@ -462,6 +468,7 @@ final public class SessionStore {
         hostsSupportingAgentWindowLaunch.remove(hostId)
         hostsSupportingAgentFork.remove(hostId)
         hostsSupportingAgentRestart.remove(hostId)
+        hostsSupportingAgentLogout.remove(hostId)
         hostsSupportingAgentForkDirectory.remove(hostId)
         usageOverviewByHost.removeValue(forKey: hostId)
         sidebarSortModeByHost.removeValue(forKey: hostId)
@@ -576,10 +583,13 @@ final public class SessionStore {
         return nil
     }
 
-    public func agentRestartUnavailableReason(hostID: String, isConnected: Bool) -> String? {
+    public func agentRestartUnavailableReason(hostID: String, isConnected: Bool, logoutBeforeResume: Bool = false) -> String? {
         guard isConnected else { return "Host is offline. Reconnect before restarting an Agent." }
         guard hasReceivedState(for: hostID) else { return "Wait for the Host's session state before restarting an Agent." }
         guard hostsSupportingAgentRestart.contains(hostID) else { return "Update this Host to exit and resume Agent conversations." }
+        if logoutBeforeResume, !hostsSupportingAgentLogout.contains(hostID) {
+            return "Update this Host to log out and resume Agent conversations."
+        }
         return nil
     }
 

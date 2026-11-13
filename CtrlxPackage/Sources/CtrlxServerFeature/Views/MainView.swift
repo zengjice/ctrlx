@@ -1690,6 +1690,7 @@ public struct MainView: View {
                     },
                     onRestartAgent: { restartAgent($0, hostID: remote.hostId) },
                     restartUnavailableReason: agentRestartUnavailableReason(hostID: remote.hostId),
+                    logoutUnavailableReason: agentRestartUnavailableReason(hostID: remote.hostId, logoutBeforeResume: true),
                     restartingAgentPaneIDs: restartingAgentPaneIDs(hostID: remote.hostId)
                 )
                 .environment(\.workbenchTabContext, tabContext(hostID: remote.hostId, session: remote.sessionName))
@@ -7000,12 +7001,12 @@ public struct MainView: View {
         Set(restartingAgents.filter { $0.pairId == (hostID ?? "local") }.map(\.paneId))
     }
 
-    private func agentRestartUnavailableReason(hostID: String) -> String? {
+    private func agentRestartUnavailableReason(hostID: String, logoutBeforeResume: Bool = false) -> String? {
         let connected = coordinator.viewerConnectionManager?.connection(for: hostID)?.isHostConnected == true
         guard let store = coordinator.remoteSessionStore else {
             return connected ? "Update this Host to exit and resume Agent conversations." : "Host is offline."
         }
-        return store.agentRestartUnavailableReason(hostID: hostID, isConnected: connected)
+        return store.agentRestartUnavailableReason(hostID: hostID, isConnected: connected, logoutBeforeResume: logoutBeforeResume)
     }
 
     private func restartAgent(_ request: RestartAgentSession, hostID: String?) {
@@ -7018,7 +7019,7 @@ public struct MainView: View {
             defer { restartingAgents.remove(key) }
             do {
                 if let hostID {
-                    if let reason = agentRestartUnavailableReason(hostID: hostID) {
+                    if let reason = agentRestartUnavailableReason(hostID: hostID, logoutBeforeResume: request.logoutBeforeResume) {
                         throw AgentRestartError(reason)
                     }
                     guard let connection else { throw AgentRestartError("Viewer connection is unavailable.") }

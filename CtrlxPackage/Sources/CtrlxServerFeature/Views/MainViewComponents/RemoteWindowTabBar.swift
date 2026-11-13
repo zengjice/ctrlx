@@ -64,6 +64,7 @@ struct RemoteWindowTabBar: View {
     var onDetachWindow: ((TmuxWindow, CGPoint?) -> Void)?
     var onRestartAgent: ((RestartAgentSession) -> Void)?
     var restartUnavailableReason: String?
+    var logoutUnavailableReason: String?
     var restartingAgentPaneIDs: Set<String> = []
 
     /// Cached width of the split-mode tab strip. Measured via the background
@@ -444,6 +445,7 @@ struct RemoteWindowTabBar: View {
     private func restartMenuItems(for window: TmuxWindow) -> [ContextMenuItem] {
         guard let onRestartAgent else { return [] }
         return AgentRestartMenu(panes: window.panes, unavailableReason: restartUnavailableReason, busyPaneIDs: restartingAgentPaneIDs, choose: onRestartAgent).contextMenuItems
+            + AgentRestartMenu(panes: window.panes, unavailableReason: logoutUnavailableReason, busyPaneIDs: restartingAgentPaneIDs, logoutBeforeResume: true, choose: onRestartAgent).contextMenuItems
     }
 
     private func openBrowserTabView(_ tab: BrowserTab) -> some View {

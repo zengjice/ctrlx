@@ -15,21 +15,35 @@ struct AgentRestartTests {
         )
     }
 
-    @Test("Restart retains its request and source identities across the command wire")
-    func wire() throws {
+    @Test("Restart retains its request and source identities across the command wire", arguments: [false, true])
+    func wire(logout: Bool) throws {
         let source = try #require(AgentForkSource(pane: pane()))
-        let request = RestartAgentSession(source: source, runtimeID: "original")
+        let request = RestartAgentSession(source: source, runtimeID: "original", logoutBeforeResume: logout)
         let message = CommandMessage(paneId: "", command: request.commandType, expectedWorkspacePane: source.workspaceIdentity)
         let decoded = try JSONDecoder().decode(CommandMessage.self, from: JSONEncoder().encode(message))
         #expect(decoded.command == request.commandType && decoded.expectedWorkspacePane == source.workspaceIdentity)
         #expect(decoded.command.requiresResponse)
         let old = try JSONDecoder().decode(SessionStateMessage.self, from: Data(#"{"pairId":"old","paneStates":{},"homeDirectory":"/Host"}"#.utf8))
         #expect(old.supportsAgentRestart == nil)
-        let state = SessionStateMessage(pairId: "one", paneStates: [:], supportsAgentRestart: true)
+        #expect(old.supportsAgentLogout == nil)
+        let state = SessionStateMessage(pairId: "one", paneStates: [:], supportsAgentRestart: true, supportsAgentLogout: true)
         #expect(state.withPairId("two").supportsAgentRestart == true)
+        #expect(state.withPairId("two").supportsAgentLogout == true)
+        let roundTripState = try JSONDecoder().decode(SessionStateMessage.self, from: JSONEncoder().encode(state))
+        #expect(roundTripState.supportsAgentLogout == true)
         let legacyAgent = try JSONDecoder().decode(AgentSession.self, from: Data(#"{"paneId":"%1","pluginID":"codex"}"#.utf8))
         #expect(legacyAgent.processRuntimeID == nil)
         #expect(!request.matches(source, runtimeID: "replacement"))
+    }
+
+    @Test("Legacy restart requests never log out")
+    func legacyRequest() throws {
+        let request = try RestartAgentSession(source: #require(AgentForkSource(pane: pane())), runtimeID: "original")
+        var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
+        json.removeValue(forKey: "logoutBeforeResume")
+        let decoded = try JSONDecoder().decode(RestartAgentSession.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(decoded == request)
+        #expect(!decoded.logoutBeforeResume)
     }
 
     @Test("Moves preserve restart intent; a replaced pane, conversation or directory does not", arguments: ["move", "pane", "server", "conversation", "directory", "plugin", "missing-identity"])

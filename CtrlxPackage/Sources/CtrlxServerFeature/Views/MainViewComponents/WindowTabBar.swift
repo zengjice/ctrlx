@@ -578,7 +578,9 @@ struct WindowTabBar: View {
 
     private func restartMenuItems(for window: LocalTmuxWindow) -> [ContextMenuItem] {
         guard let onRestartAgent else { return [] }
-        return AgentRestartMenu(panes: window.panes.compactMap { windowManager.paneStates[$0.paneId] }, busyPaneIDs: restartingAgentPaneIDs, choose: onRestartAgent).contextMenuItems
+        let panes = window.panes.compactMap { windowManager.paneStates[$0.paneId] }
+        return AgentRestartMenu(panes: panes, busyPaneIDs: restartingAgentPaneIDs, choose: onRestartAgent).contextMenuItems
+            + AgentRestartMenu(panes: panes, busyPaneIDs: restartingAgentPaneIDs, logoutBeforeResume: true, choose: onRestartAgent).contextMenuItems
     }
 
     @ViewBuilder
