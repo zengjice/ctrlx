@@ -1922,8 +1922,8 @@ resending the task remain separate actions.
 ### Global panel and saved-task lookup (stage 3)
 
 General settings provides a shortcut recorder. The initial shortcut is unbound;
-record a letter, digit or Space with at least two modifiers, including Control or
-Option. The dependency-injected Carbon registration exists only while Orbie is
+record a letter, digit or Space with at least one modifier: Command, Control,
+Option or Shift. The dependency-injected Carbon registration exists only while Orbie is
 enabled, cancels on change/shutdown and reports conflicts without removing the
 menu entry. The singleton `orbie-panel` scene is placed inside the display under
 the pointer (or the main display), can appear across Spaces, and hides on Esc or

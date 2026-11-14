@@ -36,8 +36,7 @@ struct OrbieShortcut: Equatable, Sendable {
         let flags = [UInt32(controlKey), UInt32(optionKey), UInt32(shiftKey), UInt32(cmdKey)]
         let supported: Set<UInt32> = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 25, 26, 28, 29, 31, 32, 34, 35, 37, 38, 40, 45, 46, 49]
         return supported.contains(keyCode) && modifiers & ~flags.reduce(0, |) == 0
-            && flags.filter { modifiers & $0 != 0 }.count >= 2
-            && modifiers & UInt32(controlKey | optionKey) != 0
+            && modifiers != 0
             && !keyLabel.isEmpty && keyLabel.utf8.count <= 16
             && !keyLabel.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
     }
@@ -76,7 +75,7 @@ struct OrbieHotkeyClient: Sendable {
 extension OrbieHotkeyClient: DependencyKey {
     static let testValue = Self()
     static let liveValue = Self(register: { shortcut, action in
-        guard shortcut.isValid else { throw AgentWorkflowError("Choose a letter, digit or Space with at least two modifiers, including Control or Option.") }
+        guard shortcut.isValid else { throw AgentWorkflowError("Choose a letter, digit or Space with at least one modifier: Command, Control, Option or Shift.") }
         let binding = CarbonBinding(action: action)
         try binding.install(shortcut)
         return OrbieHotkeyRegistration { binding.cancel() }

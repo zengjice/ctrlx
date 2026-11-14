@@ -16,7 +16,7 @@ struct OrbieShortcutSettingsSection: View {
                     .accessibilityIdentifier("orbie-shortcut-recorder")
                 Button("Clear") { settings.orbieShortcutRaw = nil }.disabled(settings.orbieShortcutRaw == nil)
             }
-            Text("Use at least two modifiers, including Control or Option, with a letter, digit or Space. No shortcut is assigned initially. Enable Orbie on this Mac to register it.")
+            Text("Use at least one modifier (Command, Control, Option or Shift) with a letter, digit or Space. No shortcut is assigned initially. Enable Orbie on this Mac to register it.")
                 .font(.caption).foregroundStyle(.secondary)
             if let issue = coordinator.orbiePanel.shortcutIssue {
                 Text(issue).foregroundStyle(.red)
@@ -75,7 +75,7 @@ private struct OrbieShortcutRecorder: NSViewRepresentable {
                 finish()
                 return
             }
-            guard let shortcut = OrbieShortcut.capture(event) else { title = "Use two modifiers…"
+            guard let shortcut = OrbieShortcut.capture(event) else { title = "Use a modifier + key…"
                 return
             }
             value = shortcut

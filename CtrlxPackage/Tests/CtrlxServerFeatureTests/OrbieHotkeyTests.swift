@@ -20,11 +20,16 @@ struct OrbieHotkeyTests {
     }
 
     @Test
-    func shortcutValidationDoesNotClaimCommonSingleModifierBindings() {
+    func shortcutValidationAllowsOneOrMoreModifiers() {
         let good = OrbieShortcut(keyCode: UInt32(kVK_ANSI_K), modifiers: UInt32(controlKey | optionKey), keyLabel: "K")
         #expect(OrbieShortcut(rawValue: good.rawValue) == good)
         #expect(good.label == "⌃⌥K")
-        for modifiers in [cmdKey, controlKey, optionKey, cmdKey | shiftKey] {
+        for modifiers in [cmdKey, controlKey, optionKey, shiftKey, cmdKey | shiftKey] {
+            let shortcut = OrbieShortcut(keyCode: good.keyCode, modifiers: UInt32(modifiers), keyLabel: "K")
+            #expect(shortcut.isValid)
+            #expect(OrbieShortcut(rawValue: shortcut.rawValue) == shortcut)
+        }
+        for modifiers in [0, alphaLock] {
             #expect(!OrbieShortcut(keyCode: good.keyCode, modifiers: UInt32(modifiers), keyLabel: "K").isValid)
         }
         for code in [kVK_Escape, kVK_Return, kVK_Delete, kVK_F1] {
@@ -54,7 +59,7 @@ struct OrbieHotkeyTests {
             controller.start { presented += 1 }
             controller.start { presented += 1 }
             #expect(backend.installed.isEmpty)
-            let first = OrbieShortcut(keyCode: UInt32(kVK_ANSI_K), modifiers: UInt32(controlKey | optionKey), keyLabel: "K")
+            let first = OrbieShortcut(keyCode: UInt32(kVK_ANSI_K), modifiers: UInt32(controlKey), keyLabel: "K")
             settings.orbieShortcutRaw = first.rawValue
             for _ in 0..<100 {
                 await Task.yield()
