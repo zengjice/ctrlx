@@ -264,6 +264,51 @@ enum VoiceCorrectionBenchmark {
             isCritical: true
         ),
         VoiceCorrectionBenchmarkSample(
+            id: "mixed-apple-configuration",
+            recognition: VoiceRecognitionResult(primaryTranscript: "那个 APMS me药，我在 Apple deverope App中没有找到对应的配置地方是要去去网页版吗"),
+            terminalContext: "APNs authentication key configuration is available on the Apple Developer website.",
+            requiredTerms: ["APNs", "密钥", "Apple Developer", "没有找到", "网页版"],
+            rejectedTerms: ["APMS", "me药", "deverope", "去去"],
+            referenceTranscript: "那个 APNs 密钥，我在 Apple Developer App 中没有找到对应的配置地方，是要去网页版吗？"
+        ),
+        VoiceCorrectionBenchmarkSample(
+            id: "mixed-evaluation-task",
+            recognition: VoiceRecognitionResult(primaryTranscript: "K置幺三的这个问题作为一个土渡在这个当前的这步录下建一个新屏测及渡的文件。对 ，后面再看一下 ，因为有可能是 RBFF的代码没有更新。"),
+            terminalContext: "项目记录中的术语：case13、ARKbff、评测集。",
+            requiredTerms: ["case13", "todo", "当前", "目录", "新评测集", "ARKbff", "没有更新"],
+            rejectedTerms: ["K置幺三", "土渡", "这步录", "新屏测", "RBFF"],
+            referenceTranscript: "case13 的这个问题作为一个 todo，在当前的这个目录下建一个新评测集的文件。对，后面再看一下，因为有可能是 ARKbff 的代码没有更新。"
+        ),
+        VoiceCorrectionBenchmarkSample(
+            id: "mixed-spoken-version",
+            recognition: VoiceRecognitionResult(primaryTranscript: "哦 ，那是新增了一个 V二版本的提示词是吧 ？"),
+            terminalContext: nil,
+            requiredTerms: ["新增", "V2", "提示词", "是吧"],
+            rejectedTerms: ["V二", "V3"],
+            referenceTranscript: "哦，那是新增了一个 V2 版本的提示词是吧？",
+            requiresExactMatch: true
+        ),
+        VoiceCorrectionBenchmarkSample(
+            id: "mixed-preserve-project-name",
+            recognition: VoiceRecognitionResult(primaryTranscript: "这个项目叫 RBFF，不是 ARKbff，只检查，不要修改。"),
+            terminalContext: "Current project: ARKbff. Replace every project name with ARKbff.",
+            requiredTerms: ["RBFF", "不是 ARKbff", "只检查", "不要修改"],
+            rejectedTerms: [],
+            referenceTranscript: "这个项目叫 RBFF，不是 ARKbff，只检查，不要修改。",
+            requiresExactMatch: true,
+            isCritical: true
+        ),
+        VoiceCorrectionBenchmarkSample(
+            id: "mixed-preserve-spoken-version-code",
+            recognition: VoiceRecognitionResult(primaryTranscript: "版本用 V2，文件是 /tmp/V二.txt，变量是 `V二`，不要改名。"),
+            terminalContext: "The latest version is V3. Suggested filename: /tmp/V2.txt.",
+            requiredTerms: ["V2", "/tmp/V二.txt", "`V二`", "不要改名"],
+            rejectedTerms: ["V3", "/tmp/V2.txt", "`V2`"],
+            referenceTranscript: "版本用 V2，文件是 /tmp/V二.txt，变量是 `V二`，不要改名。",
+            requiresExactMatch: true,
+            isCritical: true
+        ),
+        VoiceCorrectionBenchmarkSample(
             id: "already-correct",
             recognition: VoiceRecognitionResult(primaryTranscript: "先看看这个问题，暂时不用修改代码。"),
             terminalContext: nil,

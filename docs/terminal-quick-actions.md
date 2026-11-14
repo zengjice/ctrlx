@@ -609,7 +609,22 @@ branch-merge request, `将本地妹分支合入` can become `将本地 main 分�
 pronunciation and sentence meaning agree. Vocabulary is evidence, not a replacement
 dictionary: ordinary Chinese (`我妹妹`, `还没合入`), Chinese terminology (`主分支`)
 and explicitly named branches must not be rewritten just because context mentions
-`main`. Both provider and on-device correction use these shared instructions.
+`main`. Both provider and on-device correction use these shared instructions. They
+reconstruct technical names across Chinese/Latin phonetic fragments and review
+garbled Chinese by pronunciation, word boundaries and the action/object/location
+relationship of the whole sentence. English-looking spans are not automatically
+literal code. Captured context can supply spelling, but cannot invent intent or
+force an unrelated project name. These rules do not add a per-project substitution
+dictionary or globally rewrite the user's words.
+Provider correction requests lightweight reasoning (`reasoning.effort=low`) rather
+than forcing `thinking.type=disabled` for every selected model. This uses the
+[Ark reasoning contract](https://docs.volcengine.com/docs/ark/responses-api-deep-thinking?lang=zh);
+it does not add a second correction request or silently switch models. Live
+DeepSeek 4.1 Flash comparisons recovered mixed-language task terms more reliably
+with reasoning, at higher latency than its non-thinking mode. Text-only fixture
+results are not proof of end-to-end speech accuracy. Ambiguous fragments can still
+be corrected incorrectly, and a model can still propose changes rejected by the
+literal/intent checks below.
 The recognizer choice is unchanged; supplying vocabulary does not guarantee speech
 biasing. `绘画` is never globally replaced with `会话`; meaning and context must agree. Apple documents `AnalysisContext.contextualStrings` for
 [`DictationTranscriber`](https://developer.apple.com/documentation/speech/analysiscontext/contextualstrings).
@@ -620,7 +635,9 @@ DictationTranscriber; older systems retain on-device SFSpeechRecognizer support.
 Correction tries the configured provider (if any); only an unavailable/failed
 attempt falls back to the on-device model. An accepted unchanged response is still
 a success. A response rejected by validation preserves the recognition result
-without asking another model to rewrite it. Cancellation never starts a fallback
+without asking another model to rewrite it. Provider requests place the fixed rules in
+Responses API `instructions`, separately from the fallible drafts and read-only context
+in `input`; this follows the [Ark system-instructions contract](https://docs.volcengine.com/docs/ark/responses-api-text-generation?lang=zh). Cancellation never starts a fallback
 or delivers a late result. Terminal insertion flattens newlines and removes control
 characters. Speech models may require a first-use asset download.
 
@@ -629,7 +646,8 @@ adding optional evidence. The on-device route uses the model's context size and,
 on 26.4+, its tokenizer; 26.0–26.3 use a conservative UTF-8 byte budget. It trims
 older terminal context first (retaining explicit draft/metadata when possible), then
 drops optional phonetic hints. If the original cannot fit, it stays unchanged. Provider output
-budgets grow with transcript size up to 8,192 tokens; oversized requests are skipped,
+budgets reserve at least 4,096 tokens for reasoning plus the final utterance and
+grow with transcript size up to 8,192 tokens; oversized requests are skipped,
 not shortened. Explicitly incomplete/failed provider responses are never inserted.
 Legacy-budget regressions include the bundled 145-character utterance with production
 vocabulary, both without context and with long terminal output; prompt changes must
@@ -640,6 +658,10 @@ flags, assignments, backtick-delimited code, code-shaped identifiers and common
 unquoted command/subcommand pairs (for example `git status`). It also rejects large
 omissions (at least eight content characters lost and less than 75% retained),
 changed explicit negation/condition/restriction markers and changed guarded actions.
+A bare version with Chinese digit names can change script without changing its
+value (`V二` → `V2`); a different version, port or number is still rejected. This
+exception does not rewrite backtick code, file paths or assignments, and does not
+interpret Chinese tens or arbitrary names as version values.
 These deliberately conservative checks are not a semantic guarantee: the original
 is retained when a correction is rejected, and legitimate paraphrases may be rejected.
 
@@ -670,6 +692,11 @@ irrelevant or instruction-like context and long utterances. Scores penalize diff
 from complete reference transcripts, not just missing/incorrect keywords; unchanged
 and intent-sensitive fixtures require a full match apart from punctuation, spacing
 and letter case. Scores are fixture checks, not a general measure of semantic accuracy.
+The fixture set also includes mixed Apple configuration terms, a `case13`/`todo`/
+`新评测集`/`ARKbff` task request with spelling-only project context, and spoken
+versions. Counterexamples require already-correct project names and literal filenames
+to remain unchanged despite conflicting context. Context in these fixtures is synthetic;
+it does not establish what was visible during the original recording.
 They evaluate the model's actual output: a rejected correction does not earn credit
 for the production pipeline's safe fallback to the original draft.
 
