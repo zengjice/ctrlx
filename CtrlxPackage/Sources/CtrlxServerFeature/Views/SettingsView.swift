@@ -142,6 +142,9 @@ struct GeneralSettingsView: View {
             FullDiskAccessSettingsSection()
                 .settingsAnchor(.diskAccess)
 
+            OrbieShortcutSettingsSection()
+                .settingsAnchor(.orbie)
+
             Section("Terminal") {
                 Picker("Terminal App", selection: $settings.terminalApp) {
                     ForEach(TerminalApp.allCases, id: \.self) { app in

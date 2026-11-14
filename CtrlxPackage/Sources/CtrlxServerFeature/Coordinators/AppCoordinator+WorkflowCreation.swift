@@ -9,7 +9,7 @@ extension AppCoordinator {
         localAgentLaunchAgents().map(\.id).filter { pluginRegistry?.core($0) is any AgentWorkflowProviding }
     }
 
-    func workflowAgentCreation(hostID: UUID, creationID: UUID? = nil) async throws -> AgentWorkflowAgentCreation {
+    func workflowAgentCreation(hostID: UUID, creationID: UUID? = nil, firstWindowName: String? = nil) async throws -> AgentWorkflowAgentCreation {
         guard try await agentWorkflowService?.snapshot().hostID == hostID else {
             throw AgentWorkflowError(agentWorkflowStartupError ?? "The workflow Host is unavailable or changed. Reload before creating an Agent.")
         }
@@ -55,7 +55,7 @@ extension AppCoordinator {
                     baseName: request.sessionName, width: 120, height: 40,
                     workingDirectory: prepared.workingDirectory,
                     runCommand: launch?.command, launchPayload: launch?.payload,
-                    firstWindowName: creationID == nil ? (pluginRegistry?.manifest(pluginID)?.shortName ?? pluginID) : "Orbie",
+                    firstWindowName: firstWindowName ?? (creationID == nil ? (pluginRegistry?.manifest(pluginID)?.shortName ?? pluginID) : "Orbie"),
                     creationID: creationID
                 )
                 paneID = created.paneId

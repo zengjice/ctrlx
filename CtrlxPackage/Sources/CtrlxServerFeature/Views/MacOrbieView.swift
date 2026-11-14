@@ -11,6 +11,7 @@
         @State private var error: String?
         @State private var confirmsRebuild = false
         @State private var confirmsReconnect = false
+        @State private var showsTasks = false
 
         public init() { }
 
@@ -35,6 +36,17 @@
             }
             .frame(minWidth: 520, minHeight: 480)
             .sheet(item: $creation) { NewAgentTabPanel(configuration: $0, destinationDescription: "Create Orbie on this Mac. Its Agent and Provider use the normal launch settings.") }
+            .sheet(isPresented: $showsTasks) {
+                if let orbiters = coordinator.orbiters {
+                    MacOrbiterTasksView(service: orbiters)
+                }
+            }
+            .onChange(of: coordinator.showsOrbieTasksRequested, initial: true) { _, requested in
+                if requested {
+                    showsTasks = true
+                    coordinator.showsOrbieTasksRequested = false
+                }
+            }
             .alert("Could not open Orbie", isPresented: Binding(get: { error != nil }, set: {
                 if !$0 {
                     error = nil
@@ -56,6 +68,8 @@
                 HStack {
                     Label("Orbie", symbol: .sparkles).font(.title2.bold())
                     Spacer()
+                    Button("Tasks…") { showsTasks = true }
+                        .disabled(coordinator.orbiters == nil).accessibilityIdentifier("orbie-tasks")
                     if let record = orbie.record {
                         Toggle("Enabled on this Mac", isOn: Binding(get: { record.enabled }, set: { value in Task { await orbie.setEnabled(value) } }))
                             .toggleStyle(.switch).disabled(orbie.isBusy)

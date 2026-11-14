@@ -76,7 +76,7 @@ final private class ForkFixture {
                 MainActor.preconditionIsolated()
                 self.refreshes += 1
             },
-            launch: { source, name, preparation, providerID in
+            launch: { source, name, preparation, providerID, _ in
                 MainActor.preconditionIsolated()
                 await Task.detached { }.value
                 MainActor.preconditionIsolated()

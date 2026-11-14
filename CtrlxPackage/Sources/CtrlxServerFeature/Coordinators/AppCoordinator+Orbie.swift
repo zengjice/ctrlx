@@ -4,7 +4,7 @@ import Foundation
 
 extension AppCoordinator {
     func setupOrbie(hostID: UUID, paths: CtrlxPaths, workflows: AgentWorkflowService) {
-        orbie = OrbieService(store: OrbieStore(paths: paths, hostID: hostID), workflows: workflows) { [weak self] intent in
+        orbie = OrbieService(store: OrbieStore(paths: paths, hostID: hostID), workflows: workflows, taskQueryCommand: Bundle.main.url(forAuxiliaryExecutable: "CtrlXCLI")?.path.posixSingleQuoted) { [weak self] intent in
             guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
             let creation = try await workflowAgentCreation(hostID: hostID, creationID: intent.id)
             let created = try await creation.launch(nil, .init(

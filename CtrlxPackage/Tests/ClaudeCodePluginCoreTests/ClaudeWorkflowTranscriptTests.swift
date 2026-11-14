@@ -80,6 +80,30 @@ struct ClaudeWorkflowTranscriptTests {
     }
 
     @Test
+    func toolReplyWithNativeStopWhitespaceNormalizationStillRequiresAnUnblockedSummary() throws {
+        var parser = try started()
+        _ = try parser.consume(record("tool", parent: "user", [
+            "type": "assistant", "message": ["id": "tool-message", "stop_reason": "tool_use", "content": [["type": "tool_use", "id": "list", "name": "Bash"]]],
+        ]))
+        _ = try parser.consume(record("tool-result", parent: "tool", ["type": "user", "promptId": "prompt", "message": ["content": [["type": "tool_result", "tool_use_id": "list", "content": "Saved tasks"]]]]))
+        _ = try parser.consume(answer("answer", parent: "tool-result", text: " \nFinal answer\n\n"))
+        #expect(try parser.consume(summary("blocked", parent: "answer", errors: ["Continue"])) == nil)
+        #expect(parser.updateCandidate("Final answer") == nil)
+        _ = try parser.consume(answer("final", parent: "blocked", text: "Final answer\n"))
+        #expect(try parser.consume(summary("stop", parent: "final")) == .succeeded("Final answer"))
+    }
+
+    @Test
+    func whitespaceNormalizationPreservesInternalTextAndLateCandidateChecks() throws {
+        var parser = try started()
+        _ = try parser.consume(answer("answer", parent: "user", text: "\nFinal\n  answer\n"))
+        #expect(try parser.consume(summary("stop", parent: "answer")) == nil)
+        #expect(parser.updateCandidate("Final answer") == nil)
+        #expect(parser.updateCandidate("  \nFinal\n  answer\r\n") == .succeeded("Final\n  answer"))
+        #expect(parser.updateCandidate(" \n ") == nil)
+    }
+
+    @Test
     func onlyDurableUnblockedSummaryCompletes() throws {
         var parser = try started()
         #expect(try parser.consume(answer("answer", parent: "user")) == nil)

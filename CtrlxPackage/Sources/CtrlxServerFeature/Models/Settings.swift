@@ -196,6 +196,10 @@ final public class AppSettings {
     /// Currently selected settings tab (for programmatic navigation)
     public var selectedSettingsTab: SettingsTab = .general
 
+    var orbieShortcutRaw: String? {
+        didSet { preferences.setString(orbieShortcutRaw, Keys.orbieShortcut) }
+    }
+
     // MARK: - Terminal Settings
 
     /// Font name for terminal display
@@ -504,6 +508,7 @@ final public class AppSettings {
     // MARK: - Initialization
 
     public init() {
+        self.orbieShortcutRaw = preferences.string(Keys.orbieShortcut)
         self.debugModeEnabled = preferences.optionalBool(Keys.debugModeEnabled) ?? false
         self.fontName = preferences.string(Keys.fontName) ?? Defaults.fontName
         // Clamp on load so a persisted/synced value that predates these
@@ -628,6 +633,7 @@ final public class AppSettings {
     // MARK: - Keys
 
     public enum Keys: String {
+        case orbieShortcut
         case debugModeEnabled
         case workspaceRecoveryMode
         case fontName

@@ -86,9 +86,7 @@ public struct MenuBarExtraView: View {
         Button("Dashboard…", action: showDashboard)
             .accessibilityIdentifier("menubar-dashboard")
         Button("Orbie…") {
-            NSApp.setActivationPolicy(.regular)
-            openWindow(id: "orbie")
-            Self.bringAppToFront()
+            coordinator.presentOrbiePanel(openWindow: openWindow)
         }
         .accessibilityIdentifier("menubar-orbie")
         Button("Workflows…") {

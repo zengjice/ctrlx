@@ -81,6 +81,78 @@ struct OrbiePanelTests {
         }
     }
 
+    @Test
+    func taskDraftControlsFitSmallestWindowWithoutCreatingAnAgent() async throws {
+        try await withDependencies {
+            $0[PreferencesService.self] = .inMemory()
+            $0[SecretsService.self] = .inMemory()
+            $0[SimulatorSystemClient.self] = SimulatorSystemClient()
+        } operation: {
+            _ = NSApplication.shared
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-orbiter-ui-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let hostID = UUID()
+            let workflows = AgentWorkflowService(store: AgentWorkflowStore(fileURL: root.appendingPathComponent("ledger.json"), hostID: hostID), scan: { _ in [] }, schedule: { _ in Issue.record("Opening tasks must not send") })
+            let service = OrbiterService(store: OrbiterStore(paths: .init(stateRootOverride: root.appendingPathComponent("state")), hostID: hostID), workflows: workflows, enabled: { true }, forkSource: { throw CancellationError() }, launch: { _ in throw CancellationError() }, locateCreation: { _ in nil })
+            await service.refresh()
+            let window = NSWindow(contentRect: CGRect(x: -10_000, y: -10_000, width: 740, height: 620), styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let hosting = NSHostingView(rootView: MacOrbiterTasksView(service: service).environment(AppCoordinator()))
+            window.contentView = hosting
+            window.orderBack(nil)
+            defer { window.close() }
+            try await Task.sleep(for: .milliseconds(200))
+            hosting.layoutSubtreeIfNeeded()
+            for identifier in ["orbiter-title", "orbiter-goal", "orbiter-create-new", "orbiter-create-fork", "orbiter-search"] {
+                let control = try #require(find(identifier, in: hosting))
+                let selector = NSSelectorFromString("accessibilityFrame")
+                let implementation = try #require(control.method(for: selector))
+                let frame = unsafeBitCast(implementation, to: (@convention(c) (AnyObject, Selector) -> CGRect).self)(control, selector)
+                #expect(frame.width > 0 && frame.height > 0 && window.frame.contains(frame))
+            }
+            #expect(service.tasks.isEmpty)
+        }
+    }
+
+    @Test(arguments: [560.0, 640.0])
+    func quickPanelKeepsSearchAndDraftWithinItsWindow(width: Double) async throws {
+        try await withDependencies {
+            $0[PreferencesService.self] = .inMemory()
+            $0[SecretsService.self] = .inMemory()
+            $0[SimulatorSystemClient.self] = SimulatorSystemClient()
+        } operation: {
+            _ = NSApplication.shared
+            NSApp.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-orbie-quick-ui-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let hostID = UUID()
+            let workflows = AgentWorkflowService(store: AgentWorkflowStore(fileURL: root.appendingPathComponent("ledger.json"), hostID: hostID), scan: { _ in [] }, schedule: { _ in Issue.record("Showing a quick panel must not submit work") })
+            let orbie = OrbieService(store: .init(paths: .init(stateRootOverride: root.appendingPathComponent("state")), hostID: hostID), workflows: workflows, launch: { _ in throw CancellationError() }, locateCreation: { _ in nil })
+            await orbie.refresh()
+            orbie.draft = "Keep this unsent message"
+            let coordinator = AppCoordinator()
+            coordinator.orbie = orbie
+            let window = NSWindow(contentRect: .init(x: -10_000, y: -10_000, width: width, height: 600), styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let hosting = NSHostingView(rootView: MacOrbiePanelView().environment(coordinator))
+            window.contentView = hosting
+            defer { window.close() }
+            try await Task.sleep(for: .milliseconds(200))
+            hosting.layoutSubtreeIfNeeded()
+            for identifier in ["orbie-panel-search", "orbie-panel-draft", "orbie-panel-send", "orbie-panel-close"] {
+                let control = try #require(find(identifier, in: hosting))
+                let selector = NSSelectorFromString("accessibilityFrame")
+                let implementation = try #require(control.method(for: selector))
+                let frame = unsafeBitCast(implementation, to: (@convention(c) (AnyObject, Selector) -> CGRect).self)(control, selector)
+                #expect(frame.width > 0 && frame.height > 0 && window.frame.contains(frame))
+            }
+            coordinator.orbiePanel.dismiss(restoreFocus: false)
+            await orbie.saveDraft()
+            #expect(orbie.draft == "Keep this unsent message")
+            #expect(try await workflows.snapshot().runs.isEmpty)
+        }
+    }
+
     private func find(_ identifier: String, in node: NSObject) -> NSObject? {
         for name in ["accessibilityIdentifier", "accessibilityLabel", "accessibilityValue"] {
             let selector = NSSelectorFromString(name)

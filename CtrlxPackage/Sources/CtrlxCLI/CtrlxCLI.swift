@@ -43,6 +43,7 @@ struct CtrlxCLI: AsyncParsableCommand {
             // Plugins
             PluginCommand.self,
             WorkflowCommand.self,
+            OrbieCommand.self,
             // Layouts
             ApplyCommand.self,
             // Utility

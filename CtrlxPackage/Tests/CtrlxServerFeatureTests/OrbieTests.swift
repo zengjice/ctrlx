@@ -37,7 +37,7 @@ struct OrbieTests {
         }
     }
 
-    private func fixture(plugin: String = "codex", emptyConversation: Bool = false) async throws -> Fixture {
+    private func fixture(plugin: String = "codex", emptyConversation: Bool = false, queryCommand: String? = nil) async throws -> Fixture {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-orbie-\(UUID())")
         let paths = CtrlxPaths(stateRootOverride: root.appendingPathComponent("state"))
         let hostID = UUID()
@@ -54,7 +54,7 @@ struct OrbieTests {
             backend.schedules.append(id)
             backend.beforeSchedule?()
         } })
-        let service = OrbieService(store: storage, workflows: workflows) { intent in
+        let service = OrbieService(store: storage, workflows: workflows, taskQueryCommand: queryCommand) { intent in
             backend.launches.append(intent)
             await backend.beforeLaunch?()
             backend.observations = [.init(
@@ -87,6 +87,68 @@ struct OrbieTests {
         #expect(f.backend.launches.count == 1)
         #expect(f.backend.schedules.isEmpty)
         #expect(f.paths.orbieBinding.path.hasPrefix(f.root.path))
+    }
+
+    @Test
+    func taskLookupInstructionsUseTheExistingWorkflowAndKeepTheOriginalMessage() async throws {
+        let f = try await fixture(queryCommand: "'/private/fixture/CtrlXCLI'")
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        try await f.service.create(pluginID: "codex", providerID: nil)
+        f.service.draft = "继续昨天那个音频问题"
+        await f.service.send()
+        let run = try #require(try await f.ledger.snapshot().runs.first)
+        #expect(run.definition.initialInput.text == "继续昨天那个音频问题")
+        #expect(run.definition.nodes.first?.input.text.contains("'/private/fixture/CtrlXCLI' orbie tasks list") == true)
+        #expect(run.definition.nodes.first?.input.text.contains("[CtrlX task: UUID]") == true)
+        #expect(f.backend.schedules.count == 1)
+    }
+
+    @Test(arguments: ["codex", "claude-code"])
+    func sendSnapshotsTheMessageBeforePreflightAndPreservesLaterEditing(plugin: String) async throws {
+        let f = try await fixture(plugin: plugin)
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        try await f.service.create(pluginID: plugin, providerID: nil)
+        f.service.draft = "Message A selected for sending"
+        f.backend.beforeScan = {
+            #expect(f.service.isBusy)
+            f.service.draft = "Message B edited during preflight"
+            f.backend.beforeScan = nil
+        }
+        await f.service.send()
+        let run = try #require(try await f.ledger.snapshot().runs.first)
+        #expect(f.service.issue == nil)
+        #expect(run.definition.initialInput.text == "Message A selected for sending")
+        #expect(f.service.draft == "Message B edited during preflight")
+        #expect(try await f.storage.load().draft == "Message B edited during preflight")
+        #expect(f.backend.schedules.count == 1)
+        let reopened = f.freshService()
+        await reopened.refresh()
+        #expect(reopened.draft == "Message B edited during preflight")
+        #expect(f.backend.schedules.count == 1)
+    }
+
+    @Test
+    func savedDraftSurvivesClosingAndPendingRunReconciliation() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        try await f.service.create(pluginID: "codex", providerID: nil)
+        f.service.draft = "First submitted message"
+        await f.service.send()
+        let run = try #require(try await f.ledger.snapshot().runs.first)
+        var record = try await f.storage.load()
+        record.pendingRunID = run.id
+        record.draft = "New unsent draft after submission"
+        try await f.storage.save(record)
+        let reopened = f.freshService()
+        await reopened.refresh()
+        #expect(reopened.draft == "New unsent draft after submission")
+        #expect(try await f.storage.load().draft == reopened.draft)
+        reopened.draft = "Changed while the panel was open"
+        await reopened.saveDraft()
+        let again = f.freshService()
+        await again.refresh()
+        #expect(again.draft == "Changed while the panel was open")
+        #expect(f.backend.schedules.count == 1)
     }
 
     @Test

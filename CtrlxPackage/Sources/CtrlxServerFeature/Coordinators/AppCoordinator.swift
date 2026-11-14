@@ -38,6 +38,8 @@
 
         let detachedWindows = DetachedTerminalWindows()
         let workflowNavigation = AgentWorkflowNavigation()
+        @ObservationIgnored lazy var orbiePanel = OrbiePanelController(settings: settings) { [weak self] in self?.orbie?.record?.enabled == true }
+        var showsOrbieTasksRequested = false
 
         /// Owns the hosted-relay license status and trial-expiry alerting
         /// (Task 14).
@@ -161,6 +163,8 @@
         var agentWorkflowStartupError: String?
 
         var orbie: OrbieService?
+        var orbiters: OrbiterService?
+        @ObservationIgnored var orbieTaskQueries: OrbieTaskQueryService?
 
         @ObservationIgnored var agentWorkflowAgentService: AgentWorkflowAgentService?
 
@@ -182,8 +186,11 @@
                     windowManager.updatePaneStates(from: await tmuxService.refreshPanes())
                     await refreshAgentCommandIdentity()
                 },
-                launch: { [weak self] source, windowName, prepared, providerID in
+                launch: { [weak self] source, windowName, prepared, providerID, creationID in
                     guard let self else { throw AgentForkError("Host is shutting down.") }
+                    if let creationID {
+                        try await validateOrbiterFork(creationID, source: source)
+                    }
                     let shortcutDefaults = forkAgentModelShortcuts(pluginID: source.pluginID, providerID: providerID)
                     let agentLaunch = try tmuxService.agentLaunch(prepared)
                     let paneID = try await tmuxService.newWindow(
@@ -192,7 +199,8 @@
                         runCommand: agentLaunch?.command,
                         launchPayload: agentLaunch?.payload,
                         forceLoginShell: true,
-                        expectedWorkspacePane: source.workspaceIdentity, expectedSourcePaneID: source.paneID
+                        expectedWorkspacePane: source.workspaceIdentity, expectedSourcePaneID: source.paneID,
+                        creationID: creationID
                     )
                     for attempt in 0..<PaneSurfaceRetry.attempts {
                         let panes = await tmuxService.refreshPanes()
@@ -217,8 +225,8 @@
             try await agentForkService.prepare(source, expectedWorkspacePane: expectedWorkspacePane)
         }
 
-        func forkAgentSession(_ request: ForkAgentSession, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws -> String {
-            try await agentForkService.fork(request, expectedWorkspacePane: expectedWorkspacePane)
+        func forkAgentSession(_ request: ForkAgentSession, expectedWorkspacePane: WorkspacePaneIdentity? = nil, creationID: UUID? = nil) async throws -> String {
+            try await agentForkService.fork(request, expectedWorkspacePane: expectedWorkspacePane, creationID: creationID)
         }
 
         /// Bumped whenever the *set* of registered plugins changes (install /
@@ -600,6 +608,7 @@
         /// doesn't reparent them to launchd. See `AppShutdownDelegate` for
         /// how this is invoked.
         public func shutdown() async {
+            orbiePanel.stop()
             async let ipaShutdown: Void = shutdownStage("ipa-installer") { await IPAInstaller.shared.shutdown() }
             agentWorkflowAgentService = nil
             await shutdownStage("agent-workflows") { await stopAgentWorkflows() }
@@ -3189,6 +3198,12 @@
 
             // Set the router as the request handler on the socket server
             await apiSocketServer.setRequestHandler { [weak self, agentSimulator] request, peer in
+                if ["orbie.tasks.list", "orbie.tasks.show"].contains(request.method) {
+                    guard let service = await self?.orbieTaskQueries, let ingress = await self?.ingressSocketServer else { return .internalError(id: request.id, "Orbie is still starting on this Mac.") }
+                    do { try await ingress.waitForPendingFrames() }
+                    catch { return .internalError(id: request.id, "Could not verify pending Agent events. Try again after Orbie refreshes.") }
+                    return await service.handle(request, peer: peer)
+                }
                 if request.method == "simulator.action" {
                     return await agentSimulator.handle(request)
                 }

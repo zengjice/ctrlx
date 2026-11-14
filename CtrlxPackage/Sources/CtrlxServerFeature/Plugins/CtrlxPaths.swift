@@ -71,6 +71,14 @@
             ctrlxRoot.appendingPathComponent("agents/main", isDirectory: true)
         }
 
+        var orbiterIndex: URL {
+            orbieStateRoot.appendingPathComponent("tasks.json")
+        }
+
+        func orbiterDirectory(_ id: UUID) -> URL {
+            ctrlxRoot.appendingPathComponent("agents/experts/\(id.uuidString)", isDirectory: true)
+        }
+
         /// `<stateRoot>/plugins` — parent of all per-plugin state directories.
         public var pluginsStateRoot: URL {
             stateRoot.appendingPathComponent("plugins", isDirectory: true)

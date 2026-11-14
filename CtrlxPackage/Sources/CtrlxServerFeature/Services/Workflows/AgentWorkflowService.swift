@@ -107,6 +107,10 @@ actor AgentWorkflowService {
         return try await store.snapshot()
     }
 
+    func changes() async -> AsyncStream<Void> {
+        await store.changes()
+    }
+
     /// Coalesce complete scans so a late scan cannot overwrite newer process
     /// evidence. A failed scan preserves the existing catalog and run bindings.
     @discardableResult
@@ -143,7 +147,7 @@ actor AgentWorkflowService {
         try await store.deleteDefinition(id: id, expectedRevision: expectedRevision)
     }
 
-    func start(definitionID: UUID, expectedRevision: Int, requestID: UUID, authorizationExpiresAt: Date, initialInput: AgentWorkflowInput? = nil, expectedInstances: [AgentWorkflowInstance]? = nil) async throws -> AgentWorkflowRun {
+    func start(definitionID: UUID, expectedRevision: Int, requestID: UUID, authorizationExpiresAt: Date, initialInput: AgentWorkflowInput? = nil, expectedInstances: [AgentWorkflowInstance]? = nil, retain: Bool = false) async throws -> AgentWorkflowRun {
         // A retry after a lost reply must return the original run even when the
         // Agent is now busy, the template changed, or a new scan is unavailable.
         if let existing = try await store.snapshot().runs.first(where: { $0.id == requestID }) {
@@ -162,7 +166,7 @@ actor AgentWorkflowService {
         let run = try await store.start(
             definitionID: definitionID, expectedRevision: expectedRevision,
             requestID: requestID, now: now(), authorizationExpiresAt: authorizationExpiresAt, initialInput: initialInput,
-            expectedInstances: expectedInstances
+            expectedInstances: expectedInstances, retain: retain
         )
         await schedule(run.id)
         return run

@@ -362,7 +362,7 @@ struct AgentForkWorktreeTests {
                     let service = AgentForkService(
                         source: { $0 == source.paneID ? source : nil }, core: { _ in core },
                         refresh: { _ = await tmux.refreshPanes() },
-                        launch: { source, name, prepared, _ in
+                        launch: { source, name, prepared, _, creationID in
                             let agentLaunch = try tmux.agentLaunch(prepared)
                             return try await tmux.newWindow(
                                 sessionName: source.sessionName,
@@ -373,7 +373,7 @@ struct AgentForkWorktreeTests {
                                 launchPayload: agentLaunch?.payload,
                                 forceLoginShell: true,
                                 expectedWorkspacePane: source.workspaceIdentity,
-                                expectedSourcePaneID: source.paneID
+                                expectedSourcePaneID: source.paneID, creationID: creationID
                             )
                         }
                     )
@@ -381,8 +381,13 @@ struct AgentForkWorktreeTests {
                     let worktree = try mode.worktree ? ForkAgentSession.Worktree(name: "probe", expectedHead: #require(plan.worktree).head) : nil
                     let name = mode.worktree ? "probe" : "我的 Fork probe"
                     let request = ForkAgentSession(source: source, windowName: name, worktree: worktree)
-                    let paneID = try await service.fork(request)
-                    #expect(try await service.fork(request) == paneID)
+                    let creationID = UUID()
+                    let paneID = try await service.fork(request, creationID: creationID)
+                    #expect(try await service.fork(request, creationID: creationID) == paneID)
+                    let token = try await tmux.runTmuxCommand(["show-option", "-pv", "-t", paneID, "@ctrlx-creation-id"])
+                    #expect(token.isSuccess && token.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines) == creationID.uuidString)
+                    let sourceToken = try await tmux.runTmuxCommand(["show-option", "-pqv", "-t", source.paneID, "@ctrlx-creation-id"])
+                    #expect(sourceToken.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     let expectedDirectory = mode.worktree ? fixture.root.path + "/.worktrees/probe/src folder" : fixture.source
                     var screen = ""
                     for _ in 0..<30 {

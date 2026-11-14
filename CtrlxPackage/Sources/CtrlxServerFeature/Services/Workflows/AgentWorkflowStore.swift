@@ -63,6 +63,7 @@ struct AgentWorkflowArchive: Codable, Equatable, Sendable {
     var runs: [AgentWorkflowRun] = []
     var attachments: [AgentWorkflowAttachment]?
     var bridgeEvidence: [AgentWorkflowBridgeEvidence]?
+    var retainedRunIDs: [UUID]?
 
     var instancesForNames: [AgentWorkflowInstance] {
         instances + runs.reversed().flatMap(\.instances)
@@ -82,6 +83,7 @@ actor AgentWorkflowStore {
     let fileURL: URL
     private let hostID: UUID
     private var archive: AgentWorkflowArchive?
+    private var observers: [UUID: AsyncStream<Void>.Continuation] = [:]
     private var writeAuthorizations: [UUID: AgentWorkflowWriteAuthorization] = [:]
     let attachmentUploads = HostFileUploads()
     var pendingAttachments: [UUID: PendingAttachment] = [:]
@@ -96,6 +98,19 @@ actor AgentWorkflowStore {
 
     func snapshot() throws -> AgentWorkflowArchive {
         try load()
+    }
+
+    func changes() -> AsyncStream<Void> {
+        let id = UUID()
+        return AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            observers[id] = continuation
+            continuation.yield(())
+            continuation.onTermination = { [weak self] _ in Task { await self?.removeObserver(id) } }
+        }
+    }
+
+    private func removeObserver(_ id: UUID) {
+        observers.removeValue(forKey: id)
     }
 
     func hasAskedQuestion(for instance: AgentWorkflowInstance) throws -> Bool {
@@ -181,7 +196,7 @@ actor AgentWorkflowStore {
     }
 
     @discardableResult
-    func start(definitionID: UUID, expectedRevision: Int, requestID: UUID, now: Date, authorizationExpiresAt: Date, initialInput: AgentWorkflowInput? = nil, expectedInstances: [AgentWorkflowInstance]? = nil) throws -> AgentWorkflowRun {
+    func start(definitionID: UUID, expectedRevision: Int, requestID: UUID, now: Date, authorizationExpiresAt: Date, initialInput: AgentWorkflowInput? = nil, expectedInstances: [AgentWorkflowInstance]? = nil, retain: Bool = false) throws -> AgentWorkflowRun {
         var updated = try load()
         if let existing = updated.runs.first(where: { $0.id == requestID }) {
             guard
@@ -232,6 +247,9 @@ actor AgentWorkflowStore {
         // misreported as an unsupported image. No run has been committed yet.
         try validateStartAttachments(definition, instances: instances)
         updated.runs.append(execution.run)
+        if retain {
+            updated.retainedRunIDs = (updated.retainedRunIDs ?? []) + [requestID]
+        }
         try commit(updated)
         return execution.run
     }
@@ -296,6 +314,9 @@ actor AgentWorkflowStore {
 
     func deleteRun(id: UUID, expectedRevision: Int) throws {
         var updated = try load()
+        guard updated.retainedRunIDs?.contains(id) != true else {
+            throw AgentWorkflowError("This execution is referenced by an Orbie task. Archive the task to hide it; its execution history is retained.")
+        }
         guard let index = updated.runs.firstIndex(where: { $0.id == id }), updated.runs[index].revision == expectedRevision else {
             throw AgentWorkflowError("The workflow run changed. Reload before deleting.")
         }
@@ -414,6 +435,9 @@ actor AgentWorkflowStore {
         )
         try data.write(to: fileURL, options: .atomic)
         archive = updated
+        for observer in observers.values {
+            observer.yield(())
+        }
         let writable = Set(updated.runs.filter { $0.status == .running }.flatMap {
             $0.invocations.filter { $0.status == .writing }.map(\.id)
         })

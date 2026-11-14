@@ -105,6 +105,14 @@ extension AppCoordinator {
             controlClientManager.workflowInputGate = gate
             if let agentWorkflowService {
                 setupOrbie(hostID: hostID, paths: paths, workflows: agentWorkflowService)
+                setupOrbiters(hostID: hostID, paths: paths, workflows: agentWorkflowService)
+                orbieTaskQueries = OrbieTaskQueryService(
+                    orbie: OrbieStore(paths: paths, hostID: hostID), tasks: OrbiterStore(paths: paths, hostID: hostID), workflows: agentWorkflowService
+                ) { [weak self] instance in
+                    guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
+                    return try await inspectWorkflowInstance(instance, verifyNativeWriter: true)
+                }
+                await orbie?.refresh(inspect: false)
             }
         } catch {
             agentWorkflowStartupError = "Could not load workflows on this Mac: \(error.localizedDescription)"
@@ -113,6 +121,10 @@ extension AppCoordinator {
     }
 
     func stopAgentWorkflows() async {
+        await orbiters?.shutdown()
+        orbiters = nil
+        orbieTaskQueries = nil
+        await orbie?.saveDraft()
         orbie = nil
         await agentWorkflowService?.shutdown()
         await agentWorkflowEvents?.shutdown()

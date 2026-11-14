@@ -2694,7 +2694,8 @@ final public class TmuxService {
         forceLoginShell: Bool = false,
         expectedWorkspacePane: WorkspacePaneIdentity? = nil,
         expectedSourcePaneID: String? = nil,
-        resourceSessionID: UUID? = nil
+        resourceSessionID: UUID? = nil,
+        creationID: UUID? = nil
     ) async throws -> String {
         let identity = expectedWorkspacePane ?? panes.first { $0.sessionName == sessionName }?.workspaceIdentity
         if let resourceSessionID {
@@ -2758,6 +2759,11 @@ final public class TmuxService {
 
         // Remove legacy NO_COLOR only while the originating session still exists.
         var commands = [["set-environment", "-u", "-t", target, "NO_COLOR"], args]
+        if let creationID {
+            // A separate command preserves the new-window target through the
+            // workspace guard; an embedded semicolon would become shell argv.
+            commands.append(["set-option", "-p", "@ctrlx-creation-id", creationID.uuidString])
+        }
         if let expectedSourcePaneID {
             guard let identity = expectedWorkspacePane else { throw TmuxError.commandFailed(message: "The source terminal identity is unavailable. Reopen Fork.") }
             commands = try [WorkspaceTerminalInputGuard.arguments(target: expectedSourcePaneID, identity: identity, commands: commands)]
