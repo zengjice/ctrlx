@@ -4,6 +4,15 @@ import Testing
 
 @Suite("Voice correction budgets and evidence")
 struct VoiceCorrectionBudgetTests {
+    @Test("Provider budgets reserve bounded room for lightweight reasoning without changing on-device budgets")
+    func providerReasoningBudget() {
+        #expect(VoiceCorrectionBudget.providerResponseTokens(for: "V二版本") == 4_096)
+        #expect(VoiceCorrectionBudget.providerResponseTokens(for: String(repeating: "x", count: 3_000)) == 6_064)
+        #expect(VoiceCorrectionBudget.providerResponseTokens(for: String(repeating: "x", count: 4_064)) == 8_192)
+        #expect(VoiceCorrectionBudget.providerResponseTokens(for: String(repeating: "x", count: 4_065)) == nil)
+        #expect(VoiceCorrectionBudget.responseTokens(for: 5) == 256)
+    }
+
     @Test("Long utterances and production vocabulary still fit the legacy byte budget", arguments: [false, true])
     func legacyLongUtteranceBudget(withContext: Bool) async throws {
         let sample = try #require(VoiceCorrectionBenchmark.samples.first { $0.id == "long-utterance-completeness" })
@@ -120,6 +129,28 @@ struct VoiceCorrectionBudgetTests {
 
 @Suite("Voice correction literal preservation")
 struct VoiceCorrectionLiteralTests {
+    @Test("Spoken version digits can change script without changing their value", arguments: [
+        ("哦，那是新增了一个 V二版本的提示词是吧？", "哦，那是新增了一个 V2 版本的提示词是吧？"),
+        ("对比 V一 和 V二", "对比 V1 和 V2"),
+        ("使用 v二零 版本", "使用 v20 版本"),
+    ])
+    func spokenVersions(_ source: String, _ corrected: String) {
+        #expect(VoiceTranscriptCorrectionPolicy.evaluate(corrected, replacing: source) == .accepted(corrected))
+    }
+
+    @Test("Version normalization never changes values or rewrites code", arguments: [
+        ("用 V二 版本", "用 V3 版本"),
+        ("用 V二 版本", "用 2 版本"),
+        ("用 V2 版本", "用 V3 版本"),
+        ("用 V二十 版本", "用 V2 版本"),
+        ("保留 `V二`", "保留 `V2`"),
+        ("保留 /tmp/V二.txt", "保留 /tmp/V2.txt"),
+        ("保留 release=V二", "保留 release=V2"),
+    ])
+    func protectedVersions(_ source: String, _ changed: String) {
+        #expect(VoiceTranscriptCorrectionPolicy.evaluate(changed, replacing: source) == .rejected(.changedLiterals))
+    }
+
     @Test("Rejects changed or omitted literal evidence", arguments: [
         ("端口改为8080", "端口改为8081"),
         ("保持版本v3.0.57", "保持版本v3.0.58"),

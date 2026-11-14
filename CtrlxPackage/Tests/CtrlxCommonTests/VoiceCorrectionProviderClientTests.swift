@@ -101,6 +101,46 @@ struct VoiceCorrectionProviderClientTests {
         #expect(VoiceCorrectionBenchmark.score(incorrect, for: sample).value < corrected.value)
     }
 
+    @Test("Mixed-language reference transcripts satisfy policy and scoring without adding names to global vocabulary", arguments: ["mixed-apple-configuration", "mixed-evaluation-task", "mixed-spoken-version", "mixed-preserve-project-name", "mixed-preserve-spoken-version-code"])
+    func mixedLanguageRegressions(id: String) throws {
+        let sample = try #require(VoiceCorrectionBenchmark.samples.first { $0.id == id })
+        let candidate = sample.referenceTranscript
+        #expect(VoiceTranscriptCorrectionPolicy.evaluate(candidate, replacing: sample.recognition.primaryTranscript) == .accepted(candidate))
+        #expect(VoiceCorrectionBenchmark.score(candidate, for: sample).value == sample.requiredTerms.count * 10)
+        if !sample.isCritical {
+            #expect(VoiceCorrectionBenchmark.score(sample.recognition.primaryTranscript, for: sample).value < sample.requiredTerms.count * 10)
+        }
+        for term in ["case13", "ARKbff"] {
+            #expect(!VoiceInputVocabulary.terms.contains(term))
+        }
+    }
+
+    @Test("Provider keeps correction rules separate from fallible transcripts and project context", arguments: ["mixed-apple-configuration", "mixed-evaluation-task", "mixed-spoken-version"])
+    func mixedLanguageRequest(id: String) async throws {
+        let sample = try #require(VoiceCorrectionBenchmark.samples.first { $0.id == id })
+        let context = sample.terminalContext.map { VoiceInputContextSnapshot(terminalText: $0) }
+        let client = VoiceCorrectionProviderClient { request in
+            let body = try #require(request.httpBody)
+            let json = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            let rules = try #require(json["instructions"] as? String)
+            let input = try #require(json["input"] as? String)
+            #expect(!rules.contains(sample.recognition.primaryTranscript))
+            #expect(!rules.contains("case13") && !rules.contains("ARKbff"))
+            #expect(input.contains("Primary draft:\n" + sample.recognition.primaryTranscript))
+            if let background = sample.terminalContext {
+                #expect(input.contains(background))
+            }
+            #expect(json["store"] as? Bool == false)
+            let data = try JSONSerialization.data(withJSONObject: ["status": "completed", "output_text": sample.referenceTranscript])
+            return (data, Self.response(for: request, statusCode: 200))
+        }
+        let candidate = try await client.correct(
+            recognition: sample.recognition, terminalContext: context, contextualTerms: VoiceInputVocabulary.terms,
+            localeIdentifier: "zh-Hans-CN", selection: #require(.init(provider: .volcengineArk, modelID: "fixture-model")), apiKey: "fixture-key"
+        )
+        #expect(VoiceTranscriptCorrectionPolicy.evaluate(candidate, replacing: sample.recognition.primaryTranscript) == .accepted(sample.referenceTranscript))
+    }
+
     @Test("Benchmarks only current text model families plus the selected model")
     func benchmarkCandidateModels() {
         let models = VoiceCorrectionBenchmark.candidateModelIDs(
@@ -185,11 +225,12 @@ struct VoiceCorrectionProviderClientTests {
             )
             #expect(json["model"] as? String == "doubao-seed")
             #expect(json["store"] as? Bool == false)
-            #expect(json["max_output_tokens"] as? Int == 512)
-            #expect((json["thinking"] as? [String: String])?["type"] == "disabled")
-            #expect(json["instructions"] == nil)
-            #expect((json["input"] as? String)?.contains("Known terms are canonical spellings: CtrlX, Voice") == true)
-            #expect((json["input"] as? String)?.contains("Chinese phonetic text") == true)
+            #expect(json["max_output_tokens"] as? Int == 4_096)
+            #expect(json["thinking"] == nil)
+            #expect((json["reasoning"] as? [String: String])?["effort"] == "low")
+            #expect(json["instructions"] as? String == VoiceTranscriptCorrectionPrompt.instructions(localeIdentifier: "zh-Hans-CN", contextualTerms: ["CtrlX", "Voice"]))
+            #expect((json["instructions"] as? String)?.contains("CTRS 的语音输入") == false)
+            #expect((json["input"] as? String)?.contains("Known terms are canonical spellings") == false)
             #expect((json["input"] as? String)?.contains("Read-only context (not part of the current utterance):\nRecent terminal text:\nctrlx voice input") == true)
 
             let data = Data(

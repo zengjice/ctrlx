@@ -12,7 +12,8 @@ enum VoiceCorrectionBudget {
     }
 
     static func providerResponseTokens(for transcript: String) -> Int? {
-        let count = max(512, responseTokens(for: transcript.utf8.count))
+        // Provider output limits include reasoning as well as the final transcript.
+        let count = max(4_096, responseTokens(for: transcript.utf8.count))
         return count <= 8_192 ? count : nil
     }
 

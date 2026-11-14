@@ -119,20 +119,15 @@ struct VoiceCorrectionProviderClient {
         request.httpBody = try JSONEncoder().encode(
             ResponsesRequest(
                 model: selection.modelID,
-                input: """
-                Correction rules:
-                \(VoiceTranscriptCorrectionPrompt.instructions(
+                instructions: VoiceTranscriptCorrectionPrompt.instructions(
                     localeIdentifier: localeIdentifier,
                     contextualTerms: contextualTerms
-                ))
-
-                Correction task:
-                \(VoiceTranscriptCorrectionPrompt.make(
+                ),
+                input: VoiceTranscriptCorrectionPrompt.make(
                     recognition: recognition,
                     terminalContext: terminalContext
-                ))
-                """,
-                thinking: ResponsesThinking(type: "disabled"),
+                ),
+                reasoning: ResponsesReasoning(effort: "low"),
                 maxOutputTokens: maximumResponseTokens,
                 store: false
             )
@@ -212,22 +207,24 @@ private struct ModelListResponse: Decodable {
 
 private struct ResponsesRequest: Encodable {
     let model: String
+    let instructions: String
     let input: String
-    let thinking: ResponsesThinking
+    let reasoning: ResponsesReasoning
     let maxOutputTokens: Int
     let store: Bool
 
     enum CodingKeys: String, CodingKey {
         case model
+        case instructions
         case input
-        case thinking
+        case reasoning
         case maxOutputTokens = "max_output_tokens"
         case store
     }
 }
 
-private struct ResponsesThinking: Encodable {
-    let type: String
+private struct ResponsesReasoning: Encodable {
+    let effort: String
 }
 
 private struct ResponsesResponse: Decodable {
