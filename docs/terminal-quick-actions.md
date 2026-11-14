@@ -616,15 +616,15 @@ relationship of the whole sentence. English-looking spans are not automatically
 literal code. Captured context can supply spelling, but cannot invent intent or
 force an unrelated project name. These rules do not add a per-project substitution
 dictionary or globally rewrite the user's words.
-Provider correction requests lightweight reasoning (`reasoning.effort=low`) rather
-than forcing `thinking.type=disabled` for every selected model. This uses the
-[Ark reasoning contract](https://docs.volcengine.com/docs/ark/responses-api-deep-thinking?lang=zh);
-it does not add a second correction request or silently switch models. Live
-DeepSeek 4.1 Flash comparisons recovered mixed-language task terms more reliably
-with reasoning, at higher latency than its non-thinking mode. Text-only fixture
-results are not proof of end-to-end speech accuracy. Ambiguous fragments can still
-be corrected incorrectly, and a model can still propose changes rejected by the
-literal/intent checks below.
+Provider correction explicitly disables thinking (`thinking.type=disabled`) and
+omits `reasoning.effort`, following the
+[Ark reasoning contract](https://docs.volcengine.com/docs/ark/responses-api-deep-thinking?lang=zh).
+Correction blocks terminal insertion, so provider calls must prioritize responsiveness.
+Even low-effort reasoning can add several seconds to an utterance.
+The request uses the selected model and produces the corrected utterance directly.
+Text-only fixture results are not proof of end-to-end speech accuracy. Ambiguous
+fragments can still be corrected incorrectly, and a model can still propose changes
+rejected by the literal/intent checks below.
 The recognizer choice is unchanged; supplying vocabulary does not guarantee speech
 biasing. `绘画` is never globally replaced with `会话`; meaning and context must agree. Apple documents `AnalysisContext.contextualStrings` for
 [`DictationTranscriber`](https://developer.apple.com/documentation/speech/analysiscontext/contextualstrings).
@@ -646,9 +646,9 @@ adding optional evidence. The on-device route uses the model's context size and,
 on 26.4+, its tokenizer; 26.0–26.3 use a conservative UTF-8 byte budget. It trims
 older terminal context first (retaining explicit draft/metadata when possible), then
 drops optional phonetic hints. If the original cannot fit, it stays unchanged. Provider output
-budgets reserve at least 4,096 tokens for reasoning plus the final utterance and
-grow with transcript size up to 8,192 tokens; oversized requests are skipped,
-not shortened. Explicitly incomplete/failed provider responses are never inserted.
+budgets start at 512 tokens and grow with transcript size up to 8,192 tokens;
+oversized requests are skipped, not shortened. Explicitly incomplete/failed provider
+responses are never inserted.
 Legacy-budget regressions include the bundled 145-character utterance with production
 vocabulary, both without context and with long terminal output; prompt changes must
 leave room for the complete utterance and its response reserve.

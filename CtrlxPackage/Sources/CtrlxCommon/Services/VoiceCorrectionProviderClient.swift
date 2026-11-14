@@ -127,7 +127,7 @@ struct VoiceCorrectionProviderClient {
                     recognition: recognition,
                     terminalContext: terminalContext
                 ),
-                reasoning: ResponsesReasoning(effort: "low"),
+                thinking: ResponsesThinking(type: "disabled"),
                 maxOutputTokens: maximumResponseTokens,
                 store: false
             )
@@ -209,7 +209,7 @@ private struct ResponsesRequest: Encodable {
     let model: String
     let instructions: String
     let input: String
-    let reasoning: ResponsesReasoning
+    let thinking: ResponsesThinking
     let maxOutputTokens: Int
     let store: Bool
 
@@ -217,14 +217,14 @@ private struct ResponsesRequest: Encodable {
         case model
         case instructions
         case input
-        case reasoning
+        case thinking
         case maxOutputTokens = "max_output_tokens"
         case store
     }
 }
 
-private struct ResponsesReasoning: Encodable {
-    let effort: String
+private struct ResponsesThinking: Encodable {
+    let type: String
 }
 
 private struct ResponsesResponse: Decodable {
