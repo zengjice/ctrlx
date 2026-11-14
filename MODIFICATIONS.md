@@ -7,6 +7,28 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.164 — Continue idle workflow steps
+
+- On an explicit user Continue, send a bounded continuation reminder to an idle
+  Agent whose accepted explicit-completion step has not finished. Keep the same
+  invocation and existing task, and bind the new native receipt to the current
+  verified Agent/turn. Do not resend the original task or bypass drafts, questions,
+  approvals, identity checks or terminal input authorization.
+- Persist the attempted continuation turn before writing to the terminal, so
+  repeated Continue or Host restart cannot silently duplicate an unconfirmed
+  reminder. Pause with a diagnostic when continuation cannot be confirmed, while
+  preserving normal scheduling and already completed results.
+  See [workflow continuation](docs/multi-agent-design.md). Source: `8797f589`.
+
+- Validation: focused Swift suites reported 316 tests and passed serially,
+  covering continuation reminders, duplicate/restart protection, uncertain writes,
+  current-turn receipts, failure/pause handling and workflow UI/contracts. Lint
+  for seven Swift files, both boundary checks and diff checks passed. The opt-in
+  real-Agent two-party workflow test was skipped; live Agent continuation, full
+  E2E, iPhone UI and Apple Intelligence evaluations were not run. This release
+  packages macOS only. Native browser code and codec SDK are unchanged; prior
+  media acceptance is reused after checking the SDK hash/UUID.
+
 ## 3.0.163 — Agent logout/resume and workflow continuity
 
 - Add Logout and Resume to supported Mac Agent-tab menus, confirming the account
