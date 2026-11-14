@@ -4,6 +4,25 @@ import Testing
 @testable import CtrlxCommon
 
 struct ViewerWorkspaceCatalogTests {
+    @MainActor
+    @Test("Identical and unusable snapshots still signal freshness; disconnect invalidates it")
+    func snapshotFreshness() throws {
+        let store = SessionStore()
+        let state = message()
+        store.handleStateUpdate(state)
+        let first = try #require(store.sessionSnapshotIDsByHost["pair"])
+        store.handleStateUpdate(state)
+        #expect(store.sessionSnapshotIDsByHost["pair"] != first)
+        let second = store.sessionSnapshotIDsByHost["pair"]
+        store.handleStateUpdate(.init(pairId: "other", paneStates: [:]))
+        #expect(store.sessionSnapshotIDsByHost["pair"] == second)
+        store.handleStateUpdate(.init(pairId: "pair", paneStates: [:]))
+        #expect(store.workspaceCatalogsByHost["pair"] == nil)
+        #expect(store.sessionSnapshotIDsByHost["pair"] != second)
+        store.clearSessions(for: "pair")
+        #expect(store.sessionSnapshotIDsByHost["pair"] == nil)
+    }
+
     private let host = UUID()
     private let session = UUID()
     private let window = UUID()

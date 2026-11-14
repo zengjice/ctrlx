@@ -196,6 +196,8 @@ final public class ConnectedViewer: Identifiable {
     /// Called when partner's public key is received (for persisting to settings)
     public var onPartnerKeyReceived: (@MainActor @Sendable (String, String) async -> Void)?
 
+    public var onStableAgentNotificationsReceived: (@MainActor @Sendable (Bool, String, String) -> Void)?
+
     /// Called when the partner's device name is received (for persisting to settings).
     /// Fires whenever the relay reports a (possibly updated) viewer device name —
     /// e.g. on `HostRegisteredMessage.viewerDeviceName` or `ViewerConnectedMessage.deviceName`.
@@ -248,6 +250,7 @@ final public class ConnectedViewer: Identifiable {
         self.pongTimeoutSeconds = pongTimeoutSeconds
         self.partnerPublicKey = pairedViewer.partnerPublicKey
         self.partnerPublicKeyId = pairedViewer.partnerPublicKeyId
+        self.supportsStableAgentNotifications = pairedViewer.supportsStableAgentNotifications == true
     }
 
     nonisolated static func canSendTerminalStream(
@@ -973,6 +976,7 @@ final public class ConnectedViewer: Identifiable {
                 isViewerConnected = true
                 if case .encrypted = message, connectionGeneration.isCurrent(generation) {
                     supportsStableAgentNotifications = peerHello.supportsStableAgentNotifications == true
+                    onStableAgentNotificationsReceived?(supportsStableAgentNotifications, partnerPublicKey, partnerPublicKeyId)
                     quickPhraseSync?.receiveHello(peerHello.quickPhraseSync)
                 }
                 // Push the current plugin presentations now that the viewer is

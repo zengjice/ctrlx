@@ -204,7 +204,9 @@ final public class PairingManager {
             partnerPublicKey: publicKey,
             partnerPublicKeyId: publicKeyId,
             pairedAt: viewer.pairedAt,
-            customName: viewer.customName
+            customName: viewer.customName,
+            supportsStableAgentNotifications: viewer.partnerPublicKey == publicKey && viewer.partnerPublicKeyId == publicKeyId
+                ? viewer.supportsStableAgentNotifications : nil
         )
         settings.updatePairing(viewer)
         logger.info("Partner public key updated for E2EE", metadata: ["deviceId": "\(deviceId)"])

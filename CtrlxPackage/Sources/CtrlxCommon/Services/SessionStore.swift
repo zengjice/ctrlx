@@ -45,6 +45,8 @@ final public class SessionStore {
     @ObservationIgnored private var cachedWindowsByHost: [String: [TmuxWindow]] = [:]
     @ObservationIgnored private var cachedSessionsByHost: [String: [TmuxSession]] = [:]
     public private(set) var workspaceCatalogsByHost: [String: ViewerWorkspaceCatalog] = [:]
+    /// Changes even when a fresh snapshot contains the same routes, or cannot form a catalog.
+    public private(set) var sessionSnapshotIDsByHost: [String: UUID] = [:]
     private var lastWorkspaceScopeByHost: [String: WorkspaceIdentityScope] = [:]
 
     /// Paths are meaningful only within their source Host.
@@ -309,6 +311,7 @@ final public class SessionStore {
     /// Handle a full session state update from a host
     public func handleStateUpdate(_ state: SessionStateMessage) {
         let hostId = state.pairId
+        sessionSnapshotIDsByHost[hostId] = UUID()
         resourceSessionsByHost[hostId] = state.independentResources?.sessions ?? []
         let catalog = ViewerWorkspaceCatalog(state: state)
         let previousScope = lastWorkspaceScopeByHost[hostId]
@@ -450,6 +453,7 @@ final public class SessionStore {
 
     /// Clear all sessions and panes for a specific host
     public func clearSessions(for hostId: String) {
+        sessionSnapshotIDsByHost.removeValue(forKey: hostId)
         agentModelShortcutsByHost.removeValue(forKey: hostId)
         resourceSessionsByHost.removeValue(forKey: hostId)
         workspaceCatalogsByHost.removeValue(forKey: hostId)

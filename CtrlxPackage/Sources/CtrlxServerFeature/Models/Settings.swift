@@ -147,6 +147,9 @@ public struct PairedViewer: Codable, Identifiable, Sendable, Hashable {
     /// Optional custom name set by user for this device
     public var customName: String?
 
+    /// Last authenticated Hello for this pairing's public key. Nil on older records.
+    public var supportsStableAgentNotifications: Bool?
+
     // MARK: - Computed Properties
 
     /// Display name for UI (custom name if set, otherwise device name)
@@ -162,7 +165,8 @@ public struct PairedViewer: Codable, Identifiable, Sendable, Hashable {
         partnerPublicKey: String,
         partnerPublicKeyId: String,
         pairedAt: Date = Date(),
-        customName: String? = nil
+        customName: String? = nil,
+        supportsStableAgentNotifications: Bool? = nil
     ) {
         self.id = id
         self.deviceName = deviceName
@@ -170,6 +174,7 @@ public struct PairedViewer: Codable, Identifiable, Sendable, Hashable {
         self.partnerPublicKeyId = partnerPublicKeyId
         self.pairedAt = pairedAt
         self.customName = customName
+        self.supportsStableAgentNotifications = supportsStableAgentNotifications
     }
 }
 
@@ -888,6 +893,15 @@ final public class AppSettings {
         if let index = pairedViewers.firstIndex(where: { $0.id == viewer.id }) {
             pairedViewers[index] = viewer
         }
+    }
+
+    func recordStableAgentNotifications(_ supported: Bool, pairID: String, publicKey: String, keyID: String) {
+        guard
+            var viewer = getPairing(id: pairID),
+            viewer.partnerPublicKey == publicKey, viewer.partnerPublicKeyId == keyID,
+            viewer.supportsStableAgentNotifications != supported else { return }
+        viewer.supportsStableAgentNotifications = supported
+        updatePairing(viewer)
     }
 
     /// Clear all pairings

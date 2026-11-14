@@ -98,10 +98,20 @@ journal. A history file's existence alone never revalidates an obsolete record.
 targets and actions. New Hosts remove both raw pane targets and answer actions for
 old Viewers. New Viewers open only the Host list for old notifications. Stable IDs
 and answer evidence stay inside encrypted content; Relay still forwards ciphertext.
-Authenticated capabilities survive Viewer/Relay disconnections for offline APNs.
+Authenticated capabilities are saved with the paired public key and survive
+Host restarts as well as Viewer/Relay disconnections for offline APNs.
 A subsequent authenticated Hello replaces them; changing the paired public key
 or removing the pairing clears them. An unadvertised peer remains unsupported.
 The action context, including identity evidence, retains the 1,200-byte budget.
+
+iOS notification navigation requests a fresh snapshot from the target Host and
+waits up to 15 seconds for connection and directory synchronization. A cached
+list alone does not establish that a tab is still available. Missing notification
+identity, connection/sync timeout and a missing target in a fresh catalog have
+distinct messages and diagnostic reason codes. Waiting can be cancelled; a newer
+notification or manual navigation cancels the previous request. No raw pane-ID
+fallback is used, and notifications already delivered without identity cannot
+be retroactively repaired.
 
 Rollback requires preserving new records and restoring the corresponding schema
 backup; replacing the App alone does not promise backward readability.

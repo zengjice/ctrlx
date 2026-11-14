@@ -25,10 +25,12 @@ struct StableNotificationTransportTests {
         try await app.server.start(address: .hostname("127.0.0.1", port: 0))
         let hostEncryption = try await encryption()
         let viewerEncryption = try await encryption()
-        let host = ConnectedViewer(
-            pairedViewer: .init(id: "pair", deviceName: "Viewer", partnerPublicKey: viewerEncryption.publicKey.base64EncodedString(), partnerPublicKeyId: viewerEncryption.keyId),
-            e2eeService: hostEncryption
-        )
+        var pairing = PairedViewer(id: "pair", deviceName: "Viewer", partnerPublicKey: viewerEncryption.publicKey.base64EncodedString(), partnerPublicKeyId: viewerEncryption.keyId)
+        var host = ConnectedViewer(pairedViewer: pairing, e2eeService: hostEncryption)
+        host.onStableAgentNotificationsReceived = { supported, publicKey, keyID in
+            #expect(publicKey == pairing.partnerPublicKey && keyID == pairing.partnerPublicKeyId)
+            pairing.supportsStableAgentNotifications = supported
+        }
         do {
             let port = try #require(app.http.server.shared.localAddress?.port)
             let url = try #require(URL(string: "ws://127.0.0.1:\(port)"))
@@ -71,6 +73,12 @@ struct StableNotificationTransportTests {
             try await checkPush(using: viewerEncryption, actionable: true)
             await host.disconnect() // Relay connection cleanup also preserves capability.
             try await connect()
+            try await checkPush(using: viewerEncryption, actionable: true)
+
+            await host.disconnect()
+            let restored = try JSONDecoder().decode(PairedViewer.self, from: JSONEncoder().encode(pairing))
+            host = ConnectedViewer(pairedViewer: restored, e2eeService: hostEncryption)
+            try await connect() // A new Host object has not received another Viewer Hello.
             try await checkPush(using: viewerEncryption, actionable: true)
 
             let replacement = try await encryption()

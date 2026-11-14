@@ -349,9 +349,18 @@
             NavigationStack(path: $sessionsNavigationPath) {
                 SessionListView(
                     navigationPath: $sessionsNavigationPath,
-                    onOpenSettings: { showingSettings = true },
-                    onOpenDashboard: { showingDashboard = true },
-                    onOpenWorkflows: { workflowNavigation.isPresented = true }
+                    onOpenSettings: {
+                        _ = pushService.consumePendingDeepLink()
+                        showingSettings = true
+                    },
+                    onOpenDashboard: {
+                        _ = pushService.consumePendingDeepLink()
+                        showingDashboard = true
+                    },
+                    onOpenWorkflows: {
+                        _ = pushService.consumePendingDeepLink()
+                        workflowNavigation.isPresented = true
+                    }
                 )
             }
             .alert("Notification", isPresented: .init(get: { notificationNavigationIssue != nil }, set: {
@@ -362,6 +371,18 @@
                 Button("OK", role: .cancel) { notificationNavigationIssue = nil }
             } message: {
                 Text(notificationNavigationIssue ?? "")
+            }
+            .safeAreaInset(edge: .top) {
+                if pushService.pendingDeepLink?.agentID != nil {
+                    HStack {
+                        ProgressView()
+                        Text("Opening notification…")
+                        Spacer()
+                        Button("Cancel") { _ = pushService.consumePendingDeepLink() }
+                    }
+                    .padding()
+                    .background(.regularMaterial)
+                }
             }
             .sheet(isPresented: $showingSettings, onDismiss: {
                 if pushService.pendingDashboard {
@@ -427,6 +448,7 @@
         }
 
         private func openDashboardNotification() {
+            _ = pushService.consumePendingDeepLink()
             if workflowNavigation.isPresented {
                 workflowNavigation.isPresented = false
                 return
@@ -446,28 +468,42 @@
             showingSettings = false
             showingDashboard = false
             workflowNavigation.isPresented = false
+            notificationNavigationIssue = nil
 
-            var destination = SessionNavigation.notification(
-                agentID: deepLink.agentID, hostID: deepLink.hostId, catalog: sessionStore.workspaceCatalogsByHost[deepLink.hostId]
-            )
-            // Preserve the bounded cold-start wait; a newer notification or
-            // view removal cancels this task instead of appending an old target.
-            for _ in 0..<5 {
-                guard destination == nil, deepLink.agentID != nil else { break }
-                do { try await Task.sleep(for: .milliseconds(500)) }
-                catch { return }
-                destination = SessionNavigation.notification(
-                    agentID: deepLink.agentID, hostID: deepLink.hostId, catalog: sessionStore.workspaceCatalogsByHost[deepLink.hostId]
-                )
+            let result: Result<SessionNavigation, NotificationNavigation.Issue>
+            do {
+                result = try await NotificationNavigation.resolve(agentID: deepLink.agentID, hostID: deepLink.hostId) {
+                    .init(
+                        isConnected: connectionManager.connection(for: deepLink.hostId)?.isHostConnected == true,
+                        id: sessionStore.sessionSnapshotIDsByHost[deepLink.hostId],
+                        catalog: sessionStore.workspaceCatalogsByHost[deepLink.hostId]
+                    )
+                } requestSnapshot: {
+                    await connectionManager.connection(for: deepLink.hostId)?.requestSessionState() ?? false
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                Logger(label: "com.jicezeng.ctrlx.notificationnavigation").error("Notification navigation interrupted: \(error)")
+                return
             }
             guard !Task.isCancelled, pushService.pendingDeepLink == deepLink else { return }
             _ = pushService.consumePendingDeepLink()
-            guard let destination else {
+            switch result {
+            case let .success(destination):
+                sessionsNavigationPath = NavigationPath([destination])
+            case let .failure(issue):
+                Logger(label: "com.jicezeng.ctrlx.notificationnavigation").warning("Notification navigation failed", metadata: [
+                    "reason": "\(issue.rawValue)", "pairId": "\(deepLink.hostId)",
+                    "hasAgentID": "\(deepLink.agentID != nil)",
+                    "hasCatalog": "\(sessionStore.workspaceCatalogsByHost[deepLink.hostId] != nil)",
+                    "agentHostID": "\(deepLink.agentID?.hostID.uuidString ?? "none")",
+                    "agentPaneID": "\(deepLink.agentID?.paneID.uuidString ?? "none")",
+                    "catalogHostID": "\(sessionStore.workspaceCatalogsByHost[deepLink.hostId]?.scope.hostID.uuidString ?? "none")",
+                ])
                 sessionsNavigationPath = NavigationPath()
-                notificationNavigationIssue = "The notification target is no longer available. Choose its tab from the Host's session list."
-                return
+                notificationNavigationIssue = issue.message
             }
-            sessionsNavigationPath = NavigationPath([destination])
         }
 
         private func connectIfNeeded() async {

@@ -408,6 +408,10 @@ final public class ConnectedViewerManager {
             await self.onPartnerDeviceNameReceived?(viewerId, deviceName)
         }
 
+        connection.onStableAgentNotificationsReceived = { [weak self, viewerId] supported, publicKey, keyID in
+            self?.settings?.recordStableAgentNotifications(supported, pairID: viewerId, publicKey: publicKey, keyID: keyID)
+        }
+
         connection.onUnpaired = { [weak self, viewerId] in
             guard let self else { return }
             self.connections.removeValue(forKey: viewerId)

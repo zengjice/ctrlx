@@ -391,6 +391,7 @@ var targets: [Target] = [
             .ctrlxEncryption,
             .dependencies,
             .dependenciesMacros,
+            .clocks,
         ] + macOnlyTargetDependencies(for: "CtrlxFeature")
     ),
     .target(

@@ -1753,7 +1753,7 @@ snapshots from all paired Hosts in that foreground period. Missing or disconnect
 Hosts do not become zero counts; returning to the app no longer clears the badge
 unconditionally. This badge delivery change requires both the Relay and iOS update.
 The Notification Service Extension decrypts alerts and scopes
-replacement to `(pairId, paneId)`. Foreground remote alerts are shown only for
+replacement to `(pairId, AgentID)`. Foreground remote alerts are shown only for
 `agent.question` or a structured `askUserQuestion` action from older Hosts;
 ordinary remote activity remains in the session UI. Local
 follow-up questions, reply failures and on-device alerts retain their presentation.
@@ -1771,9 +1771,17 @@ Update both iOS and Relay for this delivery policy: an older Relay still suppres
 APNs while the Viewer is connected. No background-monitor compatibility mode or
 local-notification fallback is provided when APNs is unavailable.
 
-On iOS, notification taps carry `(hostId, paneId)` through the session route and
-select the owning tab and exact split pane before applying saved/default
-selection. The pane request is consumed once, outside the recoverable terminal
+Authenticated notification support is saved with each paired Viewer's public key,
+so Host restarts preserve offline navigation targets and answer buttons. A new key,
+unpairing or an authenticated Hello without support revokes that capability.
+
+On iOS, notification taps resolve the stable `AgentID` within the authenticated
+pairing's fresh Host catalog, then carry the current pane through the session route.
+Navigation waits up to 15 seconds for connection and a fresh directory, with a
+cancel action. Missing identity, connection failure, directory sync timeout and
+an absent target have separate messages and diagnostic reason codes. Raw pane IDs
+are never used to guess a missing destination. The owning tab and exact split pane
+are selected before saved/default selection. The pane request is consumed once, outside the recoverable terminal
 view, so later tab changes and workspace recovery do not replay it. Explicit tab
 selection or starting a Terminal, Agent or Fork creation cancels a pending
 request, including when its target has disappeared. Creation keeps its existing
@@ -1782,7 +1790,7 @@ a new destination identity, allowing the same notification to reselect its pane
 after manual navigation. New notifications cancel an older cold-start wait and
 replace the single destination rather than stacking session pages.
 
-On Mac, notification taps resolve `(hostId, paneId)` against current pane metadata
+On Mac, notification taps resolve the stable `AgentID` against current pane metadata
 and this Mac's window ownership. A detached terminal selects its tab and restores
 and activates its owning native window; a terminal in the main window uses the
 Sessions window. Moving a tab or closing its detached window before opening an
