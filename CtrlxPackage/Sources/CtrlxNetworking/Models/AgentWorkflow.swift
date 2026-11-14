@@ -222,40 +222,24 @@ public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendabl
     public func instance(for agentID: UUID?, in instances: [AgentWorkflowInstance]) -> AgentWorkflowInstance? {
         guard let agentID else { return nil }
         if let target = agentTargets?[agentID] {
-            return instances.first { $0.target == target }
+            return target.agentID.resolve(in: instances, identity: { $0.agentID }).value
         }
         return instances.first { $0.id == agentID && $0.hostID == hostID }
     }
 
     public mutating func rememberTargets(from instances: [AgentWorkflowInstance]) {
-        var targets = (agentTargets ?? [:]).filter { agentInstanceIDs.contains($0.key) }
-        for id in agentInstanceIDs where targets[id] == nil {
+        let ids = agentInstanceIDs.union(agents.map(\.id))
+        var targets = (agentTargets ?? [:]).filter { ids.contains($0.key) }
+        for id in ids where targets[id] == nil {
             targets[id] = instances.first { $0.id == id && $0.hostID == hostID }?.target
         }
         agentTargets = targets.isEmpty ? nil : targets
     }
 
-    /// Refresh picker IDs without changing the configured destination or revision.
+    /// Retain participant IDs; only their durable destinations are extracted.
     public func resolvingAgents(in instances: [AgentWorkflowInstance]) -> Self {
         var resolved = self
         resolved.rememberTargets(from: instances)
-        var replacements: [UUID: UUID] = [:]
-        for id in agentInstanceIDs {
-            replacements[id] = resolved.instance(for: id, in: instances)?.id ?? id
-        }
-        for index in resolved.nodes.indices {
-            if let id = resolved.nodes[index].agentInstanceID {
-                resolved.nodes[index].agentInstanceID = replacements[id]
-            }
-        }
-        if let participants {
-            resolved.participants = participants.map {
-                .init(agentInstanceID: replacements[$0.id] ?? $0.id, name: $0.name)
-            }
-        }
-        if let targets = resolved.agentTargets {
-            resolved.agentTargets = Dictionary(targets.map { (replacements[$0.key] ?? $0.key, $0.value) }, uniquingKeysWith: { first, _ in first })
-        }
         return resolved
     }
 
@@ -312,7 +296,7 @@ public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendabl
         let targets = (agentTargets ?? [:]).filter { agentInstanceIDs.contains($0.key) }
         guard
             targets.values.allSatisfy({ $0.hostID == hostID }),
-            Set(targets.values).count == targets.count else {
+            Set(targets.values.map(\.agentID)).count == targets.count else {
             throw AgentWorkflowError("Choose distinct Agent tabs on this Host.")
         }
         guard revision > 0, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {

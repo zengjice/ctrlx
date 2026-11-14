@@ -389,6 +389,22 @@ class TranslateEventTests(unittest.TestCase):
         r = self.evt("message.part.updated", {"sessionID": "s1"})
         self.assertIsNone(r)
 
+    def test_placeholder_binds_real_root_and_late_completion_cannot_rebind(self):
+        ctx = {**CTX, "OPENCODE_RUN_ID": "run"}
+        started = self.evt("ctrlx.lifecycle.started", {}, ctx)
+        self.assertEqual(started["sessionID"], PANE)
+        self.assertTrue(started["conversationStarted"])
+        self.evt("session.created", {"info": {"id": "child", "parentID": "ses_A"}}, ctx)
+        self.assertIsNone(self.evt("session.status", {"sessionID": "child", "status": {"type": "busy"}}, ctx))
+        a = self.evt("session.status", {"sessionID": "ses_A", "status": {"type": "busy"}}, ctx)
+        self.assertTrue(a["conversationStarted"])
+        b = self.evt("session.status", {"sessionID": "ses_B", "status": {"type": "busy"}}, ctx)
+        self.assertTrue(b["conversationStarted"])
+        late = self.evt("session.status", {"sessionID": "ses_A", "status": {"type": "idle"}}, ctx)
+        self.assertFalse(late["conversationStarted"])
+        stopped = self.evt("ctrlx.lifecycle.stopped", {}, ctx)
+        self.assertEqual(stopped["sessionID"], "ses_B")
+
     def test_lifecycle_started_is_idle(self):
         # The bridge's synthetic "opencode loaded me" frame (no sessionID) →
         # session appears idle immediately, keyed by the pane (mirrors Claude's
@@ -516,6 +532,8 @@ console.log(JSON.stringify(frames))
                                      os.path.join(ROOT, "opencode-bridge", "ctrlx.js")],
                                     env=env, check=True, capture_output=True, text=True, timeout=15)
             frames = json.loads(output.stdout)
+            sequences = [f["payload"]["sourceSequence"] for f in frames]
+            self.assertEqual(sequences, list(range(1, len(frames) + 1)))
             starts = [f for f in frames if f["payload"]["type"] == "ctrlx.lifecycle.started"]
             self.assertEqual(len(starts), 2)
             self.assertNotEqual(starts[0]["context"]["OPENCODE_RUN_ID"], starts[1]["context"]["OPENCODE_RUN_ID"])
@@ -523,10 +541,16 @@ console.log(JSON.stringify(frames))
             try:
                 sc.request("initialize", {"settings": {"close_pane_on_session_end": True}})
                 ends = []
+                starts = []
                 for frame in frames:
                     event = sc.translate(frame["payload"], frame["context"])
+                    if event:
+                        self.assertEqual(event["sourceSequence"], frame["payload"]["sourceSequence"])
+                        if event["conversationStarted"]:
+                            starts.append(event["sessionID"])
                     if event and event["appActions"]:
                         ends.append(event)
+                self.assertEqual(starts, [PANE, "ses_old", PANE, "ses_current"])
                 self.assertEqual([e["sessionID"] for e in ends], ["ses_old", "ses_current"])
                 for event in ends:
                     self.assertEqual(event["appActions"], [{"sessionEnded": {"sessionID": PANE, "closePaneEligible": True}}])
@@ -672,7 +696,7 @@ class InstallTests(unittest.TestCase):
                 dest = os.path.join(proj, ".opencode", "plugin", "ctrlx.js")
                 self.assertTrue(os.path.exists(dest))
                 self.assertEqual(sc.request("install_status", {"configRoot": proj}).get("result"),
-                                 {"installed": {"version": "0.2.1"}})
+                                 {"installed": {"version": "0.2.3"}})
             finally:
                 sc.close()
 
@@ -704,7 +728,7 @@ class InstallTests(unittest.TestCase):
                 self.assertIn("CtrlXMonitor", content)
 
                 self.assertEqual(sc.request("install_status").get("result"),
-                                 {"installed": {"version": "0.2.1"}})
+                                 {"installed": {"version": "0.2.3"}})
 
                 sc.request("uninstall")
                 self.assertFalse(os.path.exists(dest))

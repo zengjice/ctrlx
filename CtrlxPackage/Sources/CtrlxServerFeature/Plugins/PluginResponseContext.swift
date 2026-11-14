@@ -12,6 +12,7 @@ struct PluginResponseContext: Sendable {
     let workspaceIdentity: WorkspacePaneIdentity?
     let agentPluginID: String?
     let conversationID: String?
+    let processRuntimeID: String?
     let requestID: String?
 
     init(pluginID: String, pane: PaneState, requestID: String?, expectedWorkspacePane: WorkspacePaneIdentity? = nil) throws {
@@ -20,6 +21,7 @@ struct PluginResponseContext: Sendable {
         self.workspaceIdentity = expectedWorkspacePane ?? pane.workspaceIdentity
         self.agentPluginID = pane.agentSession?.pluginID
         self.conversationID = pane.claudeSessionID
+        self.processRuntimeID = pane.agentSession?.processRuntimeID
         self.requestID = requestID
         guard agentPluginID == nil || agentPluginID == pluginID else { throw Failure.changed }
         try validate(pluginID: pluginID, paneID: paneID, pane: pane)
@@ -33,6 +35,7 @@ struct PluginResponseContext: Sendable {
             workspaceIdentity?.isSamePane(as: pane.workspaceIdentity) ?? (pane.workspaceIdentity == nil),
             agentPluginID == pane.agentSession?.pluginID,
             conversationID == pane.claudeSessionID,
+            processRuntimeID == pane.agentSession?.processRuntimeID,
             requestID == nil || requestID == pane.agentSession?.state.openForm?.requestID else {
             throw Failure.changed
         }

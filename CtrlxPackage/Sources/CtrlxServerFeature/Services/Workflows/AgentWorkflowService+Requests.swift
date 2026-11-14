@@ -26,7 +26,7 @@ extension AgentWorkflowService {
             if
                 let instance = archive.instances.first(where: { $0.workspacePane.isSamePane(as: pane) }),
                 let run = archive.runs.first(where: { run in
-                    !run.status.isTerminal && run.instances.contains { $0.target == instance.target }
+                    !run.status.isTerminal && run.instances.contains { $0.agentID == instance.agentID }
                 }) {
                 response.run = try AgentWorkflowRunState(run, currentInstances: archive.instances)
             }

@@ -10,13 +10,16 @@ public struct AgentNotificationPresentation: Equatable, Sendable {
     public let title: String
     public let subtitle: String?
     public let body: String
+    public let agentID: AgentID?
 
     public init(
         title: String,
         subtitle: String? = nil,
         body: String,
-        paneState: PaneState?
+        paneState: PaneState?,
+        agentID: AgentID? = nil
     ) {
+        self.agentID = agentID
         guard let paneState else {
             self.title = title
             self.subtitle = subtitle

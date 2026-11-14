@@ -10,7 +10,10 @@ extension AppCoordinator {
         guard
             let registry = pluginRegistry, let hostID = workspaceRecovery?.hostID,
             identities.runtimeID(String(owner.pid)) == owner.key else { return nil }
-        await windowManager.refreshDetectedAgentSessions(processNamesByPlugin: registry.processNamesByPlugin, refreshSnapshot: true)
+        await windowManager.refreshDetectedAgentSessions(
+            processNamesByPlugin: registry.processNamesByPlugin, refreshSnapshot: true,
+            verifyingConversationForProcessID: String(owner.pid)
+        )
         guard
             let detected = await tmuxService.detectAgentPanesIfAvailable(
                 processNamesByPlugin: registry.processNamesByPlugin, refreshSnapshot: true

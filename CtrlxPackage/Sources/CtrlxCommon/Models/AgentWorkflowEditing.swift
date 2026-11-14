@@ -8,6 +8,22 @@ enum AgentWorkflowConnectionMode: String, CaseIterable, Sendable {
 }
 
 extension AgentWorkflowDefinition {
+    func participantID(for instance: AgentWorkflowInstance, in instances: [AgentWorkflowInstance]) -> UUID? {
+        agents.first(where: { self.instance(for: $0.id, in: instances)?.agentID == instance.agentID })?.id
+    }
+
+    @discardableResult
+    mutating func addAgent(_ instance: AgentWorkflowInstance, in instances: [AgentWorkflowInstance]) -> UUID {
+        if let id = participantID(for: instance, in: instances) {
+            return id
+        }
+        let id = UUID()
+        participants = agents + [.init(agentInstanceID: id, name: AgentWorkflowWire.boundedName(instance.displayName))]
+        agentTargets = agentTargets ?? [:]
+        agentTargets?[id] = instance.target
+        return id
+    }
+
     func duplicated() -> Self {
         let steps = nodes.map { node in
             var step = node

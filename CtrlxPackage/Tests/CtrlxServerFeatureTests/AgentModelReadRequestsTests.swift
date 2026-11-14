@@ -99,6 +99,18 @@ struct AgentModelReadRequestsTests {
         #expect(cache.entry(for: remote)?.snapshot == snapshot)
     }
 
+    @Test("A new running conversation replaces rather than accumulates old display entries")
+    func displayConversationReplacement() {
+        let cache = AgentModelDisplayCache()
+        let old = AgentModelDisplayCache.Key(hostID: "local", pane: identity, pluginID: "codex", runtimeID: "first", conversationID: "old")
+        let new = AgentModelDisplayCache.Key(hostID: "local", pane: identity, pluginID: "claude-code", runtimeID: "second", conversationID: "new")
+        cache.store(snapshot, for: old)
+        #expect(cache.entry(for: new) == nil)
+        cache.store(snapshot, for: new)
+        #expect(cache.entry(for: old) == nil)
+        #expect(cache.entry(for: new)?.snapshot == snapshot)
+    }
+
     @Test("Revisiting a tab reuses only the remaining three-second freshness window")
     func recentDisplay() {
         let cache = AgentModelDisplayCache()

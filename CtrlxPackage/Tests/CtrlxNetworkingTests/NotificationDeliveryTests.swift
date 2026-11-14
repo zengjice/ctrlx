@@ -13,10 +13,6 @@ struct NotificationDeliveryTests {
         let decoded = try JSONDecoder().decode(NotificationContent.self, from: JSONEncoder().encode(content))
         #expect(decoded.action == nil)
         #expect(try NotificationDelivery.shouldPresentInForeground(isRemote: true, userInfo: userInfo(for: decoded)))
-        #expect(try NotificationDelivery.matchesPane(
-            userInfo: ["pairId": decoded.pairId, "paneId": #require(decoded.paneId)],
-            pairId: "office", paneId: "%7"
-        ))
     }
 
     @Test("Older Host structured questions alert even with cli.notify event type")
@@ -61,19 +57,20 @@ struct NotificationDeliveryTests {
         #expect(!NotificationDelivery.shouldPresentInForeground(isRemote: true, userInfo: [:]))
     }
 
-    @Test("Replacing a pane alert retains notifications from other Hosts and panes")
+    @Test("Dedupe follows stable targets across moves and never a reused raw ID")
     func notificationScope() {
-        let delivered: [[AnyHashable: Any]] = [
-            ["pairId": "home", "paneId": "%0"],
-            ["pairId": "office", "paneId": "%0"],
-            ["pairId": "home", "paneId": "%1"],
-            ["paneId": "%0"],
-            ["pairId": "home"],
-        ]
-        let replaced = delivered.indices.filter {
-            NotificationDelivery.matchesPane(userInfo: delivered[$0], pairId: "home", paneId: "%0")
+        let agent = AgentID(hostID: UUID(), paneID: UUID())
+        let other = AgentID(hostID: agent.hostID, paneID: UUID())
+        func info(_ id: AgentID, _ pair: String, _ pane: String) -> [AnyHashable: Any] {
+            var result: [AnyHashable: Any] = ["pairId": pair, "paneId": pane]
+            for (key, value) in id.notificationUserInfo {
+                result[key] = value
+            }
+            return result
         }
-        #expect(replaced == [0])
+        let delivered = [info(agent, "home", "%0"), info(other, "home", "%0"), info(agent, "office", "%0"), info(agent, "home", "%9"), ["pairId": "home", "paneId": "%0"]]
+        let replaced = delivered.indices.filter { NotificationDelivery.matchesAgent(userInfo: delivered[$0], pairId: "home", agentID: agent) }
+        #expect(replaced == [0, 3])
     }
 
     /// Matches the NSE's decrypted metadata and JSON action-context representation.

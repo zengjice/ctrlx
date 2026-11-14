@@ -22,6 +22,11 @@ struct AgentSessionIdentityTests {
         return manager
     }
 
+    private func applyVerifiedState(to manager: MirrorWindowManager, processID: String = "101", pluginID: String, sessionID: String, state: AgentState, tmuxPane: String?, projectPath: String?) {
+        manager.reconcileDetectedAgentSessions(["%5": .init(path: "/repo", pluginID: pluginID, processIDs: [processID])])
+        manager.applyState(pluginID: pluginID, sessionID: sessionID, state: state, tmuxPane: tmuxPane, projectPath: projectPath)
+    }
+
     private func runner(_ rows: LockIsolated<String>) -> ProcessRunner {
         var runner = ProcessRunner.previewValue
         runner.run = { executable, arguments, _, _ in
@@ -94,7 +99,7 @@ struct AgentSessionIdentityTests {
             stored.setValue($0)
             writes.withValue { $0 += 1 }
             return true
-        }, runtimeID: { "\($0):start-1" }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { pid, runtime in
+        }, invalidate: { _ in }, isInvalidated: { _ in false }, runtimeID: { "\($0):start-1" }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { pid, runtime in
             #expect(pid == "101" && runtime == "101:start-1")
             probes.withValue { $0 += 1 }
             return id
@@ -117,12 +122,46 @@ struct AgentSessionIdentityTests {
         }
     }
 
+    @Test("Resource requests refresh a same-process conversation and can return to the original")
+    func resourceConversationChanges() async throws {
+        let rows = LockIsolated("100 1 zsh\n101 100 codex\n")
+        let stored = LockIsolated<AgentSessionIdentity?>(nil)
+        let first = UUID().uuidString
+        let second = UUID().uuidString
+        let writer = LockIsolated<String?>(first)
+        var client = AgentSessionIdentityClient.previewValue
+        client.runtimeID = { _ in "runtime" }
+        client.load = { _ in stored.value }
+        client.save = { stored.setValue($0)
+            return true
+        }
+        client.codexSessionID = { _, _ in writer.value }
+        try await withDependencies {
+            defaults(&$0, rows: rows, client: client)
+        } operation: {
+            let manager = manager()
+            for conversation in [first, second, nil, first] {
+                writer.setValue(conversation)
+                await manager.refreshDetectedAgentSessions(
+                    processNamesByPlugin: ["codex": ["codex"]], refreshSnapshot: true,
+                    verifyingConversationForProcessID: "101"
+                )
+                let pane = try #require(manager.paneStates["%5"])
+                #expect(pane.claudeSessionID == conversation)
+                if let conversation {
+                    #expect(stored.value?.source.sessionID == conversation)
+                }
+                #expect(pane.agentSession?.state == .idle)
+            }
+        }
+    }
+
     @Test("Workflow input requires the current Codex writer and stable runtime", arguments: ["current", "switched", "missing", "runtime-before", "runtime-during", "claude"])
     func workflowInputRevalidatesTheActiveConversation(scenario: String) async {
         let runtime = LockIsolated(scenario == "runtime-before" ? "replaced" : "runtime")
         let reads = LockIsolated(0)
         let conversation = UUID().uuidString
-        let client = AgentSessionIdentityClient(load: { _ in nil }, recoverySource: { _, _, _ in nil }, save: { _ in false }, runtimeID: { _ in runtime.value }, codexOwnsSession: { _, _, id in
+        let client = AgentSessionIdentityClient(load: { _ in nil }, recoverySource: { _, _, _ in nil }, save: { _ in false }, invalidate: { _ in }, isInvalidated: { _ in false }, runtimeID: { _ in runtime.value }, codexOwnsSession: { _, _, id in
             reads.withValue { $0 += 1 }
             if scenario == "runtime-during" {
                 runtime.setValue("replaced")
@@ -153,7 +192,7 @@ struct AgentSessionIdentityTests {
         let client = AgentSessionIdentityClient(load: { _ in nil }, recoverySource: { _, _, _ in nil }, save: { _ in
             writes.withValue { $0 += 1 }
             return true
-        }, runtimeID: { scenario == "missing-runtime" ? nil : "\($0):start-1" }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in
+        }, invalidate: { _ in }, isInvalidated: { _ in false }, runtimeID: { scenario == "missing-runtime" ? nil : "\($0):start-1" }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in
             probes.withValue { $0 += 1 }
             return scenario == "invalid-id" ? "--last" : nil
         })
@@ -184,7 +223,7 @@ struct AgentSessionIdentityTests {
         let client = AgentSessionIdentityClient(load: { _ in nil }, recoverySource: { _, _, _ in nil }, save: { _ in
             writes.withValue { $0 += 1 }
             return true
-        }, runtimeID: { _ in runtime.value }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in
+        }, invalidate: { _ in }, isInvalidated: { _ in false }, runtimeID: { _ in runtime.value }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in
             start.yield(())
             var iterator = release.makeAsyncIterator()
             _ = await iterator.next()
@@ -199,7 +238,7 @@ struct AgentSessionIdentityTests {
             _ = await iterator.next()
             let freshID = UUID().uuidString
             switch scenario {
-            case "hook": recovered.applyState(pluginID: "codex", sessionID: freshID, state: .working, tmuxPane: "%5", projectPath: "/repo")
+            case "hook": applyVerifiedState(to: recovered, pluginID: "codex", sessionID: freshID, state: .working, tmuxPane: "%5", projectPath: "/repo")
             case "runtime": runtime.setValue("101:start-2")
             case "process": recovered.reconcileDetectedAgentSessions([:])
             default: refresh.cancel()
@@ -230,7 +269,7 @@ struct AgentSessionIdentityTests {
             }
             stored.setValue(identity)
             return true
-        }, runtimeID: { "\($0):start-1" }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in oldID })
+        }, invalidate: { _ in }, isInvalidated: { _ in false }, runtimeID: { "\($0):start-1" }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in oldID })
         await withDependencies {
             defaults(&$0, rows: rows, client: client)
         } operation: {
@@ -238,7 +277,7 @@ struct AgentSessionIdentityTests {
             let refresh = Task { await recovered.refreshDetectedAgentSessions(processNamesByPlugin: ["codex": ["codex"]], refreshSnapshot: true) }
             var iterator = started.makeAsyncIterator()
             _ = await iterator.next()
-            recovered.applyState(pluginID: "codex", sessionID: newID, state: .working, tmuxPane: "%5", projectPath: "/repo")
+            applyVerifiedState(to: recovered, pluginID: "codex", sessionID: newID, state: .working, tmuxPane: "%5", projectPath: "/repo")
             let hookWrite = Task { await recovered.rememberAgentSessionIdentity(forPane: "%5", processNamesByPlugin: ["codex": ["codex"]]) }
             resume.yield(())
             await refresh.value
@@ -264,7 +303,7 @@ struct AgentSessionIdentityTests {
             defaults(&$0, rows: rows, client: client)
         } operation: {
             let original = manager()
-            original.applyState(pluginID: pluginID, sessionID: sessionID, state: .working, tmuxPane: "%5", projectPath: "/repo")
+            applyVerifiedState(to: original, pluginID: pluginID, sessionID: sessionID, state: .working, tmuxPane: "%5", projectPath: "/repo")
             await original.rememberAgentSessionIdentity(forPane: "%5", processNamesByPlugin: names)
             #expect(await client.load("%5")?.processID == "101")
         }
@@ -323,7 +362,7 @@ struct AgentSessionIdentityTests {
         let data = try String(decoding: JSONEncoder().encode(valid), as: UTF8.self)
         let identity = try JSONDecoder().decode(AgentSessionIdentity.self, from: Data((scenario == "invalid-id"
                 ? data.replacingOccurrences(of: valid.source.sessionID, with: "--last") : data).utf8))
-        let client = AgentSessionIdentityClient(load: { _ in identity }, recoverySource: { _, _, _ in nil }, save: { _ in false }, runtimeID: {
+        let client = AgentSessionIdentityClient(load: { _ in identity }, recoverySource: { _, _, _ in nil }, save: { _ in false }, invalidate: { _ in }, isInvalidated: { _ in false }, runtimeID: {
             if scenario == "missing-process" {
                 return nil
             }
@@ -359,18 +398,18 @@ struct AgentSessionIdentityTests {
         let client = AgentSessionIdentityClient(load: { _ in nil }, recoverySource: { _, _, _ in nil }, save: { _ in
             writes.withValue { $0 += 1 }
             return true
-        }, runtimeID: { "\($0):start-1" }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in nil })
+        }, invalidate: { _ in }, isInvalidated: { _ in false }, runtimeID: { "\($0):start-1" }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in nil })
         await withDependencies {
             defaults(&$0, rows: rows, client: client)
         } operation: {
             let original = manager()
-            original.applyState(pluginID: pluginID, sessionID: UUID().uuidString, state: .idle, tmuxPane: "%5", projectPath: "/repo")
+            applyVerifiedState(to: original, pluginID: pluginID, sessionID: UUID().uuidString, state: .idle, tmuxPane: "%5", projectPath: "/repo")
             await original.rememberAgentSessionIdentity(forPane: "%5", processNamesByPlugin: [pluginID: [command]])
             #expect(writes.value == 0)
         }
     }
 
-    @Test("Missing or corrupt identity caches fail closed and can be replaced by fresh native events", arguments: [false, true])
+    @Test("Missing caches accept fresh evidence; corrupt files remain preserved", arguments: [false, true])
     func unavailableCache(corrupt: Bool) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-native-identity-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -382,15 +421,19 @@ struct AgentSessionIdentityTests {
         var client = AgentSessionIdentityClient.diskBacked(stateRoot: directory)
         client.runtimeID = { _ in "101:start-1" }
         let sessionID = UUID().uuidString
-        await withDependencies {
+        try await withDependencies {
             defaults(&$0, rows: rows, client: client)
         } operation: {
             let restarted = manager()
             await restarted.refreshDetectedAgentSessions(processNamesByPlugin: ["codex": ["codex"]], refreshSnapshot: true)
             #expect(restarted.paneStates["%5"]?.claudeSessionID == nil)
-            restarted.applyState(pluginID: "codex", sessionID: sessionID, state: .working, tmuxPane: "%5", projectPath: "/repo")
+            applyVerifiedState(to: restarted, pluginID: "codex", sessionID: sessionID, state: .working, tmuxPane: "%5", projectPath: "/repo")
             await restarted.rememberAgentSessionIdentity(forPane: "%5", processNamesByPlugin: ["codex": ["codex"]])
-            #expect(await client.load("%5")?.source.sessionID == sessionID)
+            #expect(await client.load("%5")?.source.sessionID == (corrupt ? nil : sessionID))
+            if corrupt {
+                let retained = try String(contentsOf: directory.appendingPathComponent("agent-session-identities.json"), encoding: .utf8)
+                #expect(retained == "{incomplete")
+            }
         }
     }
 
@@ -413,7 +456,7 @@ struct AgentSessionIdentityTests {
             var iterator = release.makeAsyncIterator()
             _ = await iterator.next()
             return identity
-        }, recoverySource: { _, _, _ in nil }, save: { _ in false }, runtimeID: { _ in "101:start-1" }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in nil })
+        }, recoverySource: { _, _, _ in nil }, save: { _ in false }, invalidate: { _ in }, isInvalidated: { _ in false }, runtimeID: { _ in "101:start-1" }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in nil })
         await withDependencies {
             defaults(&$0, rows: rows, client: client)
         } operation: {
@@ -422,7 +465,7 @@ struct AgentSessionIdentityTests {
             var iterator = started.makeAsyncIterator()
             _ = await iterator.next()
             let newID = UUID().uuidString
-            restarted.applyState(pluginID: "codex", sessionID: newID, state: .working, tmuxPane: "%5", projectPath: "/repo")
+            applyVerifiedState(to: restarted, pluginID: "codex", sessionID: newID, state: .working, tmuxPane: "%5", projectPath: "/repo")
             resume.yield(())
             await refresh.value
             #expect(restarted.paneStates["%5"]?.claudeSessionID == newID)
@@ -436,19 +479,28 @@ struct AgentSessionIdentityTests {
     func writeRetry() async {
         let rows = LockIsolated("100 1 zsh\n101 100 codex\n")
         let writes = LockIsolated(0)
+        let scans = LockIsolated(0)
         let client = AgentSessionIdentityClient(load: { _ in nil }, recoverySource: { _, _, _ in nil }, save: { _ in
             writes.withValue { $0 += 1 }
             return writes.value > 1
-        }, runtimeID: { _ in "101:start-1" }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in nil })
+        }, invalidate: { _ in }, isInvalidated: { _ in false }, runtimeID: { _ in "101:start-1" }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in nil })
         await withDependencies {
             defaults(&$0, rows: rows, client: client)
+            let execute = $0[ProcessRunner.self].run
+            $0[ProcessRunner.self].run = { executable, arguments, environment, timeout in
+                if executable == "/bin/ps" {
+                    scans.withValue { $0 += 1 }
+                }
+                return try await execute(executable, arguments, environment, timeout)
+            }
         } operation: {
             let original = manager()
-            original.applyState(pluginID: "codex", sessionID: UUID().uuidString, state: .idle, tmuxPane: "%5", projectPath: "/repo")
-            for _ in 0..<3 {
+            applyVerifiedState(to: original, pluginID: "codex", sessionID: UUID().uuidString, state: .idle, tmuxPane: "%5", projectPath: "/repo")
+            for _ in 0..<1_000 {
                 await original.rememberAgentSessionIdentity(forPane: "%5", processNamesByPlugin: ["codex": ["codex"]])
             }
             #expect(writes.value == 2)
+            #expect(scans.value == 2)
         }
     }
 
@@ -463,14 +515,15 @@ struct AgentSessionIdentityTests {
         let client = AgentSessionIdentityClient(load: { _ in stored.value }, recoverySource: { _, _, _ in nil }, save: {
             stored.setValue($0)
             return true
-        }, runtimeID: { runtimes.value[$0] }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in nil })
+        }, invalidate: { _ in }, isInvalidated: { _ in false }, runtimeID: { runtimes.value[$0] }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in nil })
         try await withDependencies {
             defaults(&$0, rows: rows, client: client)
         } operation: {
             let original = manager()
             let sessionID = UUID().uuidString
             let names = ["claude-code": ["claude"]]
-            original.applyState(
+            applyVerifiedState(
+                to: original,
                 pluginID: "claude-code",
                 sessionID: sessionID,
                 state: .idle,
@@ -485,7 +538,9 @@ struct AgentSessionIdentityTests {
             let replacementPID = reusesPID ? "101" : "202"
             rows.setValue("100 1 zsh\n\(replacementPID) 100 claude\n")
             runtimes.setValue([replacementPID: "\(replacementPID):start-2"])
-            original.applyState(
+            applyVerifiedState(
+                to: original,
+                processID: replacementPID,
                 pluginID: "claude-code",
                 sessionID: sessionID,
                 state: .idle,
@@ -524,14 +579,15 @@ struct AgentSessionIdentityTests {
                 }
                 stored.setValue(identity)
                 return true
-            }, runtimeID: { "\($0):start-1" }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in nil })
+            }, invalidate: { _ in }, isInvalidated: { _ in false }, runtimeID: { "\($0):start-1" }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in nil })
             try await withDependencies {
                 defaults(&$0, rows: rows, client: client)
             } operation: {
                 let original = manager()
                 let sessionID = UUID().uuidString
                 let names = ["claude-code": ["claude"]]
-                original.applyState(
+                applyVerifiedState(
+                    to: original,
                     pluginID: "claude-code",
                     sessionID: sessionID,
                     state: .idle,
@@ -554,8 +610,8 @@ struct AgentSessionIdentityTests {
         }
     }
 
-    @Test("Conversation-switch writes are serialized so a delayed old UUID cannot replace the new one")
-    func switchDuringWrite() async {
+    @Test("Delayed saves cannot outlive conversation invalidation or its successor", arguments: [false, true])
+    func switchDuringWrite(invalidateOnly: Bool) async {
         let rows = LockIsolated("100 1 zsh\n101 100 codex\n")
         let stored = LockIsolated<AgentSessionIdentity?>(nil)
         let (started, start) = AsyncStream<String>.makeStream()
@@ -570,21 +626,32 @@ struct AgentSessionIdentityTests {
             }
             stored.setValue(identity)
             return true
-        }, runtimeID: { _ in "101:start-1" }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in nil })
+        }, invalidate: { _ in stored.setValue(nil) }, isInvalidated: { _ in false }, runtimeID: { _ in "101:start-1" }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in nil })
         await withDependencies {
             defaults(&$0, rows: rows, client: client)
         } operation: {
             let original = manager()
-            original.applyState(pluginID: "codex", sessionID: oldID, state: .idle, tmuxPane: "%5", projectPath: "/repo")
+            var pane = original.paneStates["%5"]!
+            pane.workspaceIdentity = .init(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+            original.setPaneStatesForPreview([pane])
+            applyVerifiedState(to: original, pluginID: "codex", sessionID: oldID, state: .idle, tmuxPane: "%5", projectPath: "/repo")
             let first = Task { await original.rememberAgentSessionIdentity(forPane: "%5", processNamesByPlugin: ["codex": ["codex"]]) }
             var iterator = started.makeAsyncIterator()
             _ = await iterator.next()
-            original.applyState(pluginID: "codex", sessionID: newID, state: .working, tmuxPane: "%5", projectPath: "/repo")
-            let second = Task { await original.rememberAgentSessionIdentity(forPane: "%5", processNamesByPlugin: ["codex": ["codex"]]) }
-            resume.yield(())
-            await first.value
-            await second.value
-            #expect(stored.value?.source.sessionID == newID)
+            if invalidateOnly {
+                let invalidation = original.invalidateSavedConversation(forPane: "%5")
+                resume.yield(())
+                await first.value
+                await invalidation?.value
+                #expect(stored.value == nil)
+            } else {
+                applyVerifiedState(to: original, pluginID: "codex", sessionID: newID, state: .working, tmuxPane: "%5", projectPath: "/repo")
+                let second = Task { await original.rememberAgentSessionIdentity(forPane: "%5", processNamesByPlugin: ["codex": ["codex"]]) }
+                resume.yield(())
+                await first.value
+                await second.value
+                #expect(stored.value?.source.sessionID == newID)
+            }
         }
         start.finish()
         resume.finish()

@@ -46,7 +46,7 @@ final class OrbieService {
         guard let target = record.target, let instance else {
             return "Waiting for the Orbie Agent. Open its terminal to finish startup, or check the existing workspace recovery controls."
         }
-        guard target == instance.target else {
+        guard target.agentID == instance.agentID else {
             return "The Orbie tab changed. Refresh Orbie to locate its current terminal."
         }
         if let issue = instance.capabilityIssue {

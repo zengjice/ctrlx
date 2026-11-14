@@ -90,4 +90,11 @@ public struct ViewerWorkspaceCatalog: Equatable, Sendable {
             $0.identity.sessionID == reference.sessionID && (reference.windowID == nil || $0.identity.windowID == reference.windowID)
         }.sorted { $0.paneID < $1.paneID }.first
     }
+
+    /// Agent navigation follows the pane's current location; layout references remain position-scoped.
+    public func resolve(agentID: AgentID, pairID: String) -> AgentResolution<Route> {
+        guard pairID == self.pairID, agentID.hostID == scope.hostID else { return .missing }
+        guard let route = routes[agentID.paneID] else { return .missing }
+        return .found(route)
+    }
 }

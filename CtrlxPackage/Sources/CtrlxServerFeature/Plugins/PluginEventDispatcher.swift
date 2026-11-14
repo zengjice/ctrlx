@@ -55,7 +55,7 @@
         ) async -> Void
 
         /// One discrete agent-blind Mac-side trigger (markdown suggestion, pane close…).
-        public typealias AppActionSink = @Sendable (_ action: AppAction, _ event: PluginEvent, _ peer: PluginIngressPeer?) async -> Void
+        public typealias AppActionSink = @Sendable (_ action: AppAction, _ event: PluginEvent, _ peer: PluginIngressPeer?, _ origin: PluginEventOrigin?) async -> Void
 
         public typealias WorkflowSink = @Sendable (_ event: PluginEvent, _ peer: PluginIngressPeer) async -> Void
 
@@ -72,6 +72,8 @@
         private let onAppAction: AppActionSink
         private let isYoloModeEnabled: AutoApproveCheck
         private let onWorkflow: WorkflowSink
+        public typealias CurrentEventSink = @Sendable (PluginEvent, PluginIngressPeer?, @escaping @Sendable () async -> Void) async -> Void
+        private let withCurrentEvent: CurrentEventSink
 
         // MARK: - Initialization
 
@@ -79,9 +81,10 @@
             onState: @escaping StateSink = { _, _, _, _, _, _ in },
             onNotification: @escaping NotificationSink = { _, _, _, _ in },
             onAutoApprove: @escaping AutoApproveSink = { _, _, _ in },
-            onAppAction: @escaping AppActionSink = { _, _, _ in },
+            onAppAction: @escaping AppActionSink = { _, _, _, _ in },
             isYoloModeEnabled: @escaping AutoApproveCheck = { _ in false },
-            onWorkflow: @escaping WorkflowSink = { _, _ in }
+            onWorkflow: @escaping WorkflowSink = { _, _ in },
+            withCurrentEvent: @escaping CurrentEventSink = { _, _, operation in await operation() }
         ) {
             self.onState = onState
             self.onNotification = onNotification
@@ -89,14 +92,13 @@
             self.onAppAction = onAppAction
             self.isYoloModeEnabled = isYoloModeEnabled
             self.onWorkflow = onWorkflow
+            self.withCurrentEvent = withCurrentEvent
         }
 
         // MARK: - Dispatch
 
         /// Fan one envelope out to the sinks (spec §5).
-        public func dispatch(_ event: PluginEvent, ingressPeer: PluginIngressPeer? = nil) async {
-            let paneID = event.tmuxPane ?? event.sessionID
-
+        public func dispatch(_ event: PluginEvent, ingressPeer: PluginIngressPeer? = nil, origin: PluginEventOrigin? = nil) async {
             if event.workflow != nil || event.workflowBridgeVersion != nil, let ingressPeer {
                 await onWorkflow(event, ingressPeer)
             }
@@ -112,11 +114,19 @@
                     }
                 }) {
                 for action in event.appActions {
-                    await onAppAction(action, event, ingressPeer)
+                    guard case .sessionEnded = action else { continue }
+                    await onAppAction(action, event, ingressPeer, origin)
                 }
                 return
             }
 
+            await withCurrentEvent(event, ingressPeer) {
+                await self.dispatchCurrent(event, ingressPeer: ingressPeer)
+            }
+        }
+
+        private func dispatchCurrent(_ event: PluginEvent, ingressPeer: PluginIngressPeer?) async {
+            let paneID = event.tmuxPane ?? event.sessionID
             if let state = event.state {
                 // Yolo auto-approve (spec §6): an auto-approvable permission on a
                 // yolo pane is approved silently — deliver .allow, keep the session
@@ -150,7 +160,7 @@
 
             // App actions.
             for action in event.appActions {
-                await onAppAction(action, event, ingressPeer)
+                await onAppAction(action, event, ingressPeer, nil)
             }
         }
     }

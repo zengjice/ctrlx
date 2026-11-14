@@ -1,6 +1,6 @@
 import CtrlxNetworking
-import Foundation
 import CtrlxPluginProtocol
+import Foundation
 
 // MARK: - PendingRequest
 
@@ -101,7 +101,7 @@ enum ClaudeCodeTranslator {
             return nil
         }
 
-        let event = PluginEvent(
+        var event = PluginEvent(
             pluginID: pluginID,
             sessionID: sessionID,
             state: state,
@@ -115,6 +115,9 @@ enum ClaudeCodeTranslator {
             // rather than waiting for an OTEL `permission_mode_changed` (issue #597).
             permissionMode: body.permissionMode
         )
+        if case .sessionStart = action {
+            event.conversationStarted = true
+        }
         return Output(event: event, pending: pending)
     }
 
@@ -404,9 +407,13 @@ enum MarkdownPath {
         }
         let url = URL(fileURLWithPath: path)
         let parent = url.deletingLastPathComponent().lastPathComponent.lowercased()
-        if parent == "plans" { return true }
+        if parent == "plans" {
+            return true
+        }
         let basename = url.deletingPathExtension().lastPathComponent.lowercased()
-        if basename == "plan" { return true }
+        if basename == "plan" {
+            return true
+        }
         return basename.hasPrefix("plan-") || basename.hasPrefix("plan_")
     }
 

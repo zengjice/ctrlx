@@ -93,7 +93,7 @@ struct WorkspaceViewerRecoveryTests {
         for pane in state().paneStates.values {
             let identity = try #require(pane.workspaceIdentity)
             preferences.initialize(.init(pane: identity, defaults: .init(models: ["default-hidden"], efforts: ["low"])), hostID: "pair")
-            preferences.tabs[.init(hostID: "pair", serverID: "100:1", windowID: identity.windowID)]?.models.insert("custom")
+            preferences.tabs[.init(hostID: "pair", windowID: identity.windowID)]?.models.insert("custom")
         }
         let saved = recovery.capture(windows: windows)
         recovery.suspend("pair", windows: windows)
@@ -107,8 +107,8 @@ struct WorkspaceViewerRecoveryTests {
         let partial = state(server: "200:2", offset: 20, indices: [0])
         recovery.update(partial, windows: windows)
         preferences.prune(hostID: "pair", identities: partial.paneStates.values.compactMap(\.workspaceIdentity))
-        let first = AgentModelPreferences.Key(hostID: "pair", serverID: "200:2", windowID: windowIDs[0])
-        let second = AgentModelPreferences.Key(hostID: "pair", serverID: "200:2", windowID: windowIDs[1])
+        let first = AgentModelPreferences.Key(hostID: "pair", windowID: windowIDs[0])
+        let second = AgentModelPreferences.Key(hostID: "pair", windowID: windowIDs[1])
         #expect(preferences.tabs[first]?.models == ["default-hidden", "custom"])
         #expect(preferences.defaults[first]?.models == ["default-hidden"])
         #expect(preferences.tabs[second] == nil)
@@ -570,7 +570,7 @@ struct WorkspaceViewerRecoveryTests {
         tabs.selectedRight = .file(fileID)
         tabs.directoryTabs[fileID]?.navigate("/Host/late-file")
         for id in windowIDs {
-            preferences.tabs[.init(hostID: "pair", serverID: "100:1", windowID: id)] = .init(models: [id.uuidString])
+            preferences.tabs[.init(hostID: "pair", windowID: id)] = .init(models: [id.uuidString])
         }
         let restoredPreferences = AgentModelPreferences()
         let restored = WorkspaceViewerRecovery(modelPreferences: restoredPreferences), owner = DetachedTerminalWindows()
@@ -590,7 +590,7 @@ struct WorkspaceViewerRecoveryTests {
         }
         restored.update(state(server: "200:2", offset: 20), windows: owner)
         for id in windowIDs {
-            #expect(restoredPreferences.tabs[.init(hostID: "pair", serverID: "200:2", windowID: id)]?.models == [id.uuidString])
+            #expect(restoredPreferences.tabs[.init(hostID: "pair", windowID: id)]?.models == [id.uuidString])
         }
         let store = closeWindow ? owner.mainTabs : partial.tabs
         let result = try #require(store.existing(hostID: "pair", session: "project"))

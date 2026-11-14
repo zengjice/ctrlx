@@ -543,11 +543,16 @@ tmux ──pipe-pane──→ FIFO ──→ PipePaneReader ──OSC side effec
 - `CtrlxServerFeature/Plugins/AgentResponseSubmissionGuard.swift`: validates
   current request identity before delivering responses.
 - `CtrlxServerFeature/Plugins/PluginResponseContext.swift`: retains the original
-  physical pane, plugin, conversation and form request through response delivery.
+  physical pane, plugin, process incarnation, conversation and form request through response delivery.
   Native core calls inherit the context; sidecars retain it through their ordered
-  response notifications. Each text/key sink revalidates it, and tmux checks the
+  response notifications. Each text/key batch revalidates it at launch, and tmux checks the
   actual server/pane identity in the same queue as the write. Live pane moves
   remain valid; reconstructed terminals and retracted requests do not.
+
+Current-state plugin events retain the kernel socket peer and are checked against
+`AgentEventContext` before state, notification and automatic-response sinks.
+Synthetic exits carry Host-only origin evidence. Long-term product association
+uses [AgentID](agent-identity.md), not these runtime checks.
 
 Structured Viewer responses use the existing workspace-input capability to carry
 an optional expected pane identity. Old Hosts retain their compatibility path.

@@ -12,6 +12,7 @@ struct AgentResourceIdentityTests {
             .init(hostID: host, pane: pane, pluginID: plugin, conversationID: conversation)
         }
         let original = identity(host, pane)
+        pane.serverID = "rebuilt"
         pane.windowID = UUID()
         pane.sessionID = UUID()
         #expect(identity(host, pane) == original)

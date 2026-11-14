@@ -184,6 +184,9 @@ rolling back a newer configuration. No extra polling is added.
 With workspace recovery enabled, the Host saves hidden IDs, creation-time defaults
 and revision in its presentation snapshot. Recovery maps persistent window IDs to
 the current tmux server without overwriting edits to already restored tabs.
+The in-memory preference key is Host/window, without a tmux server generation.
+Model display entries include runtime and conversation; changing either retires
+the previous entry, and asynchronous discovery rechecks the captured Agent.
 On upgrade, the Host's saved configuration is authoritative; existing Viewer-local
 settings are not uploaded automatically. A Viewer connected to an older Host
 continues to save its own configuration locally, scoped to pairing and Host identity.

@@ -71,6 +71,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         /// Panes confirmed running a `codex` process on the previous monitor tick.
         /// A recorded pane dropping out of this set means its Codex process exited.
         private var previouslyAlivePanes: Set<String> = []
+        private var sessionEndOrigins: [String: PluginEventOrigin] = [:]
         /// On its first tick the monitor reconciles correlation files left over
         /// from a prior app run instead of reporting them as fresh session ends.
         private var didReconcileOrphans = false
@@ -859,6 +860,11 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
             // both the live baseline and first-successful-tick reconciliation.
             guard let panes = await host.agentPanesIfAvailable() else { return }
             let alive = Set(panes).intersection(known)
+            for pane in alive {
+                if let origin = await host.eventOrigin(paneID: pane) {
+                    sessionEndOrigins[pane] = origin
+                }
+            }
 
             // First tick after launch: a recorded pane whose process is already
             // gone is an orphan from a previous run (its session ended while we
@@ -886,7 +892,10 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
                 guard let record = records[pane], correlation.record(forPane: pane) == record else { continue }
                 removeReviewerSnapshot(pane: pane)
                 correlation.remove(pane: pane)
-                await emitSessionEnded(pane: pane, sessionID: record.sessionID)
+                let currentOrigin = await host.eventOrigin(paneID: pane)
+                let origin = currentOrigin ?? sessionEndOrigins.removeValue(forKey: pane)
+                sessionEndOrigins.removeValue(forKey: pane)
+                await emitSessionEnded(pane: pane, sessionID: origin?.conversationID ?? record.sessionID, origin: origin)
             }
             previouslyAlivePanes = alive
         }
@@ -904,7 +913,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         /// have produced. `closePaneEligible` folds in the per-agent pref the same
         /// way `CodexTranslator` does for the hook path; we only emit once the
         /// process is actually gone, which is the clean-exit condition.
-        private func emitSessionEnded(pane: String, sessionID: String) async {
+        private func emitSessionEnded(pane: String, sessionID: String, origin: PluginEventOrigin?) async {
             guard let host else { return }
             await log(.debug, "Codex process exited; synthesizing session end for pane \(pane)")
             await host.emit(PluginEvent(
@@ -915,7 +924,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
                     closePaneEligible: settings.closePaneOnSessionEnd
                 )],
                 tmuxPane: pane
-            ))
+            ), origin: origin)
         }
 
         private func startWatchers() {

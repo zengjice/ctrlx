@@ -40,6 +40,8 @@ struct AgentSessionIdentityClient: Sendable {
     var load: @Sendable (_ paneID: String) async -> AgentSessionIdentity? = { _ in nil }
     var recoverySource: @Sendable (_ sessionIDs: Set<UUID>, _ windowID: UUID, _ paneID: UUID) async throws -> AgentForkSource? = { _, _, _ in nil }
     var save: @Sendable (_ identity: AgentSessionIdentity) async -> Bool = { _ in false }
+    var invalidate: @Sendable (_ paneID: UUID) async -> Void = { _ in }
+    var isInvalidated: @Sendable (_ paneID: UUID) async -> Bool = { _ in false }
     var runtimeID: @Sendable (_ processID: String) -> String? = { _ in nil }
     var codexOwnsSession: @Sendable (_ processID: String, _ runtimeID: String, _ conversationID: String) async -> Bool = { _, _, _ in false }
     var codexSessionID: @Sendable (_ processID: String, _ runtimeID: String) async -> String? = { _, _ in nil }
@@ -70,7 +72,7 @@ extension AgentSessionIdentityClient {
 }
 
 extension AgentSessionIdentityClient: DependencyKey {
-    static let previewValue = Self(load: { _ in nil }, recoverySource: { _, _, _ in nil }, save: { _ in false }, runtimeID: { _ in nil }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in nil })
+    static let previewValue = Self(load: { _ in nil }, recoverySource: { _, _, _ in nil }, save: { _ in false }, invalidate: { _ in }, isInvalidated: { _ in false }, runtimeID: { _ in nil }, codexOwnsSession: { _, _, _ in false }, codexSessionID: { _, _ in nil })
     static let testValue: Self = previewValue
 
     static let liveValue: Self = diskBacked(stateRoot: {
@@ -89,6 +91,8 @@ extension AgentSessionIdentityClient: DependencyKey {
             load: { await storage.load($0) },
             recoverySource: { try await storage.recoverySource(sessionIDs: $0, windowID: $1, paneID: $2) },
             save: { await storage.save($0) },
+            invalidate: { await storage.invalidate($0) },
+            isInvalidated: { await storage.isInvalidated($0) },
             runtimeID: { processRuntimeID($0) },
             codexOwnsSession: { await codex.ownsSession(processID: $0, runtimeID: $1, conversationID: $2) },
             codexSessionID: { await codex.sessionID(processID: $0, runtimeID: $1) }
@@ -108,6 +112,14 @@ extension AgentSessionIdentityClient: DependencyKey {
 
 private actor AgentSessionIdentityStorage {
     private let fileURL: URL
+    private struct Archive: Codable {
+        var schemaVersion = 2
+        var records: [String: AgentSessionIdentity]
+        var invalidated: Set<UUID>
+    }
+
+    private var loadIssue: String?
+    private var invalidated: Set<UUID> = []
     private var records: [String: AgentSessionIdentity]?
     private let logger = Logger(label: "com.jicezeng.ctrlx.agent-session-identity")
 
@@ -122,11 +134,14 @@ private actor AgentSessionIdentityStorage {
 
     func recoverySource(sessionIDs: Set<UUID>, windowID: UUID, paneID: UUID) throws -> AgentForkSource? {
         ensureLoaded()
+        if let loadIssue {
+            throw WorkspaceRecoveryError(loadIssue)
+        }
         // Recovery crosses tmux incarnations. Runtime pane IDs and process IDs
         // remain mandatory for live matching, but are not recovery identities.
         let matches = (records ?? [:]).values.filter {
             guard let identity = $0.source.workspaceIdentity else { return false }
-            return sessionIDs.contains(identity.sessionID) && identity.windowID == windowID && identity.paneID == paneID
+            return identity.paneID == paneID && !invalidated.contains(paneID)
         }
         guard matches.count <= 1 else {
             throw WorkspaceRecoveryError("Multiple saved Agent identities match this terminal. Use Shell and select the original conversation from the Agent's history.")
@@ -134,14 +149,43 @@ private actor AgentSessionIdentityStorage {
         return matches.first?.source
     }
 
+    func isInvalidated(_ paneID: UUID) -> Bool {
+        ensureLoaded()
+        return loadIssue != nil || invalidated.contains(paneID)
+    }
+
+    func invalidate(_ paneID: UUID) {
+        ensureLoaded()
+        let updated = (records ?? [:]).filter { $0.value.source.workspaceIdentity?.paneID != paneID }
+        // In-memory invalidation must survive a failed disk write in this process.
+        records = updated
+        invalidated.insert(paneID)
+        if !commit(updated, invalidated: invalidated) {
+            loadIssue = "Could not persist the changed Agent identity. Check workspace storage before recovery."
+        }
+    }
+
     func save(_ identity: AgentSessionIdentity) -> Bool {
         ensureLoaded()
         var updated = records ?? [:]
+        if let paneID = identity.source.workspaceIdentity?.paneID {
+            updated = updated.filter { $0.value.source.workspaceIdentity?.paneID != paneID }
+        }
         updated[identity.source.paneID] = identity
+        var invalidated = invalidated
+        if let paneID = identity.source.workspaceIdentity?.paneID {
+            invalidated.remove(paneID)
+        }
+        return commit(updated, invalidated: invalidated)
+    }
+
+    private func commit(_ updated: [String: AgentSessionIdentity], invalidated: Set<UUID>) -> Bool {
+        guard loadIssue == nil else { return false }
         do {
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try JSONEncoder().encode(updated).write(to: fileURL, options: .atomic)
+            try JSONEncoder().encode(Archive(records: updated, invalidated: invalidated)).write(to: fileURL, options: .atomic)
             records = updated
+            self.invalidated = invalidated
             return true
         } catch {
             logger.warning("Could not save native Agent identity: \(error)")
@@ -156,9 +200,22 @@ private actor AgentSessionIdentityStorage {
             return
         }
         do {
-            records = try JSONDecoder().decode([String: AgentSessionIdentity].self, from: Data(contentsOf: fileURL))
+            let data = try Data(contentsOf: fileURL)
+            if let archive = try? JSONDecoder().decode(Archive.self, from: data) {
+                guard archive.schemaVersion == 2 else { throw WorkspaceRecoveryError("Unsupported native conversation cache format.") }
+                records = archive.records
+                invalidated = archive.invalidated
+            } else {
+                let legacy = try JSONDecoder().decode([String: AgentSessionIdentity].self, from: data)
+                let backup = fileURL.appendingPathExtension("schema-1.backup")
+                if !FileManager.default.fileExists(atPath: backup.path) {
+                    try data.write(to: backup, options: .atomic)
+                }
+                records = legacy
+            }
         } catch {
-            logger.warning("Could not read native Agent identities; awaiting fresh Agent events: \(error)")
+            loadIssue = "Could not read the saved Agent identities. The original file was preserved: \(error.localizedDescription)"
+            logger.warning("\(loadIssue ?? "")")
             records = [:]
         }
     }

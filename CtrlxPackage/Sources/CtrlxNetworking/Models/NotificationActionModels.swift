@@ -25,6 +25,7 @@ public struct NotificationActionContext: Codable, Sendable, Equatable {
 
     /// The form-specific action set.
     public let form: Form
+    public var agent: AgentNotificationBinding?
 
     /// The action set a notification can offer for one open form. Only the
     /// forms that map cleanly onto notification buttons are represented;
@@ -36,11 +37,12 @@ public struct NotificationActionContext: Codable, Sendable, Equatable {
         case askUserQuestion(QuestionActions)
     }
 
-    public init(sessionId: String, pluginId: String, requestId: String, form: Form) {
+    public init(sessionId: String, pluginId: String, requestId: String, form: Form, agent: AgentNotificationBinding? = nil) {
         self.sessionId = sessionId
         self.pluginId = pluginId
         self.requestId = requestId
         self.form = form
+        self.agent = agent
     }
 }
 
@@ -130,7 +132,8 @@ public extension NotificationActionContext {
     static func make(
         state: AgentState,
         sessionId: String,
-        pluginId: String
+        pluginId: String,
+        agent: AgentNotificationBinding? = nil
     ) -> NotificationActionContext? {
         let context: NotificationActionContext?
         switch state {
@@ -162,8 +165,9 @@ public extension NotificationActionContext {
 
         // Enforce the payload budget: an oversized context degrades to a plain
         // notification instead of risking APNs rejecting the whole push.
+        guard var context else { return nil }
+        context.agent = agent
         guard
-            let context,
             let encoded = try? JSONEncoder().encode(context),
             encoded.count <= Limits.maxEncodedBytes
         else { return nil }

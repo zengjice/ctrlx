@@ -30,7 +30,7 @@ import json
 import os
 import sys
 
-PLUGIN_VERSION = "0.1.0"
+PLUGIN_VERSION = "0.1.1"
 
 # Marker the bridge file carries; install_status greps for it to tell an
 # installed CtrlX bridge from any other extension the user may have.
@@ -159,6 +159,9 @@ def _done_state_and_notification(payload, project_path):
 def handle_translate_event(req_id, params):
     context = params.get("context") or {}
     payload = params.get("payload") or {}
+    sequence = payload.get("sourceSequence")
+    if type(sequence) is not int or not 0 < sequence <= 9007199254740991:
+        sequence = None
 
     tmux_pane = context.get("TMUX_PANE")
     project_path = context.get("PI_PROJECT_DIR")
@@ -208,6 +211,8 @@ def handle_translate_event(req_id, params):
     respond(req_id, {
         "pluginID": plugin_id,
         "sessionID": session_id,
+        "sourceSequence": sequence,
+        "conversationStarted": etype == "session_start",
         "state": state,
         "notification": notification,
         "appActions": app_actions,

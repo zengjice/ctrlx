@@ -68,6 +68,7 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
     }()
 
     var onTabsChanged: (() -> Void)?
+    var agentIDForPane: (String) -> AgentID? = { _ in nil }
     var imageTargetForPane: (String) -> AgentImageTarget? = { _ in nil }
     var resolveSourcePane: (@MainActor (String, String) async throws -> PaneInfo)?
     var resolveResourceIdentity: (@MainActor (SimulatorOwner) async -> AgentResourceIdentity?)?
@@ -234,9 +235,19 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
                 movePresentation(tab, to: workspace)
                 continue
             }
-            guard let pane = routePanes.first(where: { $0.paneId == tab.paneID }) else { continue }
+            guard let pane = sourcePane(for: tab, in: routePanes) else { continue }
             movePresentation(tab, to: displayWorkspace(for: tab, pane: pane))
         }
+    }
+
+    private func sourcePane(for tab: AgentBrowserTabState, in panes: [PaneInfo]) -> PaneInfo? {
+        if let source = tab.sourceAgentID {
+            return source.resolve(in: panes, identity: { pane in
+                pane.workspaceIdentity.map { .init(hostID: source.hostID, paneID: $0.paneID) }
+            }).value
+        }
+        let matches = panes.filter { $0.paneId == tab.paneID }
+        return matches.count == 1 ? matches.first : nil
     }
 
     private func displayWorkspace(for tab: AgentBrowserTabState, pane: PaneInfo) -> AgentBrowserWorkspace? {
@@ -339,9 +350,12 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         for tab in tabs.values {
             if
                 let grant = tab.grant, let session = tab.resourceSessionID,
-                !panes.contains(where: { $0.paneId == grant.agent.paneID && $0.workspaceIdentity?.sessionID == session }) {
+                !panes.contains(where: { pane in
+                    (tab.grantAgentID.map { pane.workspaceIdentity?.paneID == $0.paneID } ?? (pane.paneId == grant.agent.paneID)) && pane.workspaceIdentity?.sessionID == session
+                }) {
                 _ = runtime?.setAgentGrant?(nil, forTab: tab.identifier)
                 tab.grant = nil
+                tab.grantAgentID = nil
             }
         }
         for rename in SessionRenameMapping.detect(from: routePanes, to: panes) {
@@ -349,14 +363,19 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
         }
         routePanes = panes
         for tab in tabs.values where tab.manualTarget?.hostID == nil {
-            let matches = panes.filter { $0.paneId == tab.paneID }
-            guard matches.count == 1, let pane = matches.first else { continue }
+            guard let pane = sourcePane(for: tab, in: panes) else {
+                if tab.sourceAgentID != nil, tab.paneID != nil {
+                    tab.paneID = nil
+                    publishBrowserTabs()
+                }
+                continue
+            }
             updateRoute(tab, pane: pane)
         }
     }
 
     private func updateRoute(_ tab: AgentBrowserTabState, pane: PaneInfo) {
-        guard tab.sessionName != pane.sessionName || tab.windowID != pane.windowId else {
+        guard tab.sessionName != pane.sessionName || tab.windowID != pane.windowId || tab.paneID != pane.paneId else {
             movePresentation(tab, to: displayWorkspace(for: tab, pane: pane))
             return
         }
@@ -366,6 +385,7 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
             workspaces[tab.workspaceID]?.onDetach(tab)
             detachingTabs.remove(tab.identifier)
         }
+        tab.paneID = pane.paneId
         tab.sessionName = pane.sessionName
         tab.windowID = pane.windowId
         if tab.manualTarget != nil {
@@ -420,12 +440,17 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
                 let pane = try await resolvePane(pid)
                 let candidates = self.workspaces.values.filter { $0.window != nil && $0.acceptsPane(pane) }
                 let workspaceID = candidates.sorted { $0.id.uuidString < $1.id.uuidString }.first?.id ?? self.parkingID
-                completion([
+                var route = [
                     "workspace": workspaceID.uuidString,
                     "pane": pane.paneId,
                     "session": pane.sessionName,
                     "window": pane.windowId,
-                ], nil)
+                ]
+                if let id = self.agentIDForPane(pane.paneId) {
+                    route["sourceHostID"] = id.hostID.uuidString
+                    route["sourcePaneUUID"] = id.paneID.uuidString
+                }
+                completion(route, nil)
             } catch { completion(nil, error.localizedDescription) }
         }
     }
@@ -487,6 +512,13 @@ final public class AgentBrowserService: NSObject, @preconcurrency CXBrowserHostD
             resourceSessionID: resourceSessionID
         )
         state.sessionName = manualTarget?.sessionName ?? parent.flatMap { tabs[$0]?.sessionName } ?? route["session"] ?? ""
+        state.sourceAgentID = parent.flatMap { tabs[$0]?.sourceAgentID }
+        if state.sourceAgentID == nil, let host = route["sourceHostID"].flatMap(UUID.init(uuidString:)), let pane = route["sourcePaneUUID"].flatMap(UUID.init(uuidString:)) {
+            state.sourceAgentID = .init(hostID: host, paneID: pane)
+        }
+        if state.sourceAgentID == nil, resourceSessionID == nil {
+            state.sourceAgentID = paneID.flatMap(agentIDForPane)
+        }
         state.sourceAgent = parent.flatMap { tabs[$0]?.sourceAgent } ?? (resourceSessionID == nil ? paneID.flatMap(imageTargetForPane) : nil)
         state.windowID = parent.flatMap { tabs[$0]?.windowID } ?? route["window"]
         state.parentID = parent.flatMap(UUID.init(uuidString:))
@@ -882,7 +914,9 @@ final class AgentBrowserTabState {
     let identifier: String
     let view: NSView
     var workspaceID: UUID
-    let paneID: String?
+    var paneID: String?
+    var sourceAgentID: AgentID?
+    var grantAgentID: AgentID?
     let resourceSessionID: UUID?
     var grant: ResourceTabGrant?
     let owner: String

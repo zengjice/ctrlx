@@ -152,8 +152,8 @@ struct AgentWorkflowNativeEventsTests {
         await f.runner.shutdown()
     }
 
-    @Test(arguments: ["codex", "claude-code"])
-    func finalVerificationWaitsForResumedConversation(plugin: String) async throws {
+    @Test(arguments: ["codex", "claude-code"], [false, true])
+    func finalVerificationWaitsForResumedConversation(plugin: String, moved: Bool) async throws {
         let f = try await fixture(plugin: plugin)
         defer { try? FileManager.default.removeItem(at: f.directory) }
         _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, plugin: plugin), peer: f.peer)
@@ -171,6 +171,9 @@ struct AgentWorkflowNativeEventsTests {
         var observation = AgentWorkflowObservation(f.instance)
         observation.processID = 20
         observation.processRuntimeID = "501:20:200:0"
+        if moved {
+            observation.workspacePane.windowID = UUID()
+        }
         _ = try await f.store.reconcile([observation])
         for _ in 0..<200 {
             if try await f.store.snapshot().runs[0].status == .completed {
@@ -307,9 +310,17 @@ struct AgentWorkflowNativeEventsTests {
             kind: .stopCandidate, nativeTurnID: "turn", transcriptPath: f.transcript.path, text: "Finished"
         ))
         #expect(try await f.router.receive(event, peer: peer) == nil)
+        if change == "process" {
+            // The replacement cannot supply the old Stop. The previously verified
+            // Stop may still finish its original turn after native Resume.
+            await f.router.shutdown()
+            await f.runner.shutdown()
+            #expect(try await f.store.snapshot().runs[0].invocations[0].result == nil)
+            return
+        }
         try Data("{\"final\":\"Finished\"}\n".utf8).write(to: f.transcript)
         let monitor = AgentWorkflowCompletionMonitor(store: f.store, runner: f.runner, inspect: {
-            Issue.record("A moved tab with a different writer or conversation must not verify the old result.")
+            Issue.record("Another conversation must not verify the old result.")
             return $0
         }, onFailure: { Issue.record(Comment(rawValue: $0)) })
         await monitor.verify(stop, provider: NativeWorkflowTestProvider())
@@ -1040,7 +1051,8 @@ struct AgentWorkflowNativeEventsTests {
         var expected = f.instance
         expected.conversationID = conversation
         #expect(saved.status == (paused ? .paused : .running))
-        #expect(saved.instances[0].target == expected.target)
+        #expect(saved.instances[0].agentID == expected.agentID)
+        #expect(saved.instances[0].workspacePane.windowID == (!paused && catalogRefreshed ? windowID : expected.workspacePane.windowID))
         #expect(saved.instances[0].matchesBinding(expected))
         #expect(saved.invocations[0].instance == expected)
         #expect(saved.invocations[0].nativeTurnID == "first-turn")
@@ -1091,7 +1103,7 @@ struct AgentWorkflowNativeEventsTests {
         let conversation = UUID().uuidString
         let scans = LockIsolated(0)
         let receiptSnapshot = LockIsolated<AgentWorkflowArchive?>(nil)
-        let identities = AgentSessionIdentityClient(load: { _ in nil }, recoverySource: { _, _, _ in nil }, save: { _ in false }, runtimeID: { _ in f.instance.processRuntimeID }, codexOwnsSession: { _, _, id in
+        let identities = AgentSessionIdentityClient(load: { _ in nil }, recoverySource: { _, _, _ in nil }, save: { _ in false }, invalidate: { _ in }, isInvalidated: { _ in false }, runtimeID: { _ in f.instance.processRuntimeID }, codexOwnsSession: { _, _, id in
             id == conversation
         }, codexSessionID: { _, _ in conversation })
         let service = AgentWorkflowService(store: f.store, scan: { previous in

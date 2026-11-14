@@ -47,6 +47,7 @@ public struct AgentResponseSubmissionMessage: Codable, Sendable, Equatable {
     public let requestId: String
     public let response: AgentResponse
     public let expectedWorkspacePane: WorkspacePaneIdentity?
+    public let notificationBinding: AgentNotificationBinding?
 
     public init(
         pairId: String,
@@ -54,7 +55,8 @@ public struct AgentResponseSubmissionMessage: Codable, Sendable, Equatable {
         pluginId: String,
         requestId: String,
         response: AgentResponse,
-        expectedWorkspacePane: WorkspacePaneIdentity? = nil
+        expectedWorkspacePane: WorkspacePaneIdentity? = nil,
+        notificationBinding: AgentNotificationBinding? = nil
     ) {
         self.pairId = pairId
         self.sessionId = sessionId
@@ -62,6 +64,7 @@ public struct AgentResponseSubmissionMessage: Codable, Sendable, Equatable {
         self.requestId = requestId
         self.response = response
         self.expectedWorkspacePane = expectedWorkspacePane
+        self.notificationBinding = notificationBinding
     }
 
     public func withPairId(_ pairId: String) -> AgentResponseSubmissionMessage {
@@ -71,7 +74,8 @@ public struct AgentResponseSubmissionMessage: Codable, Sendable, Equatable {
             pluginId: pluginId,
             requestId: requestId,
             response: response,
-            expectedWorkspacePane: expectedWorkspacePane
+            expectedWorkspacePane: expectedWorkspacePane,
+            notificationBinding: notificationBinding
         )
     }
 }
@@ -99,6 +103,7 @@ public struct PluginPresentationsMessage: Codable, Sendable, Equatable {
 public struct AgentNotificationMessage: Codable, Sendable, Equatable {
     public let pairId: String
     public let sessionId: String?
+    public let agentID: AgentID?
     public let title: String
     public let subtitle: String?
     public let body: String
@@ -118,10 +123,12 @@ public struct AgentNotificationMessage: Codable, Sendable, Equatable {
         body: String,
         timestamp: Date,
         action: NotificationActionContext? = nil,
-        isQuestion: Bool? = nil
+        isQuestion: Bool? = nil,
+        agentID: AgentID? = nil
     ) {
         self.pairId = pairId
         self.sessionId = sessionId
+        self.agentID = agentID
         self.title = title
         self.subtitle = subtitle
         self.body = body
@@ -139,13 +146,15 @@ public struct AgentNotificationMessage: Codable, Sendable, Equatable {
             body: body,
             timestamp: timestamp,
             action: action,
-            isQuestion: isQuestion
+            isQuestion: isQuestion,
+            agentID: agentID
         )
     }
 
     private enum CodingKeys: String, CodingKey {
         case pairId
         case sessionId
+        case agentID
         case title
         case subtitle
         case body
@@ -158,6 +167,7 @@ public struct AgentNotificationMessage: Codable, Sendable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.pairId = try container.decode(String.self, forKey: .pairId)
         self.sessionId = try container.decodeIfPresent(String.self, forKey: .sessionId)
+        self.agentID = try container.decodeIfPresent(AgentID.self, forKey: .agentID)
         self.title = try container.decode(String.self, forKey: .title)
         self.subtitle = try container.decodeIfPresent(String.self, forKey: .subtitle)
         self.body = try container.decode(String.self, forKey: .body)

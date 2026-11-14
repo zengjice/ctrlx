@@ -490,6 +490,9 @@ final class DetachedTerminalWindows {
         let hostID: String?
         let windowID: String?
         switch selection {
+        case .agent:
+            openMain()
+            return nil
         case let .local(paneID):
             hostID = nil
             windowID = localPanes.first { $0.paneId == paneID }?.stableWindowId

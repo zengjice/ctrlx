@@ -354,6 +354,9 @@ def _build_question(props, session_id, server_url):
 def handle_translate_event(req_id, params):
     context = params.get("context") or {}
     payload = params.get("payload") or {}
+    sequence = payload.get("sourceSequence")
+    if type(sequence) is not int or not 0 < sequence <= 9007199254740991:
+        sequence = None
 
     tmux_pane = context.get("TMUX_PANE")
     run_id = context.get("OPENCODE_RUN_ID")
@@ -494,8 +497,19 @@ def handle_translate_event(req_id, params):
         respond(req_id, None)
         return
 
+    conversation_started = etype == "ctrlx.lifecycle.started"
     if state is not None and run_key is not None:
-        RUN_SESSIONS[run_key] = session_id
+        previous = RUN_SESSIONS.get(run_key)
+        # The synthetic launch only identifies the pane. The first real root
+        # event binds its native conversation; a later busy/approval is native
+        # activity, but a delayed completion must not select another session.
+        activates = (
+            etype == "session.status" and (props.get("status") or {}).get("type") in ("busy", "retry")
+        ) or etype in ("permission.asked", "permission.updated", "permission.v2.asked",
+                      "question.asked", "question.v2.asked")
+        if previous in (None, tmux_pane, session_id) or activates:
+            conversation_started = conversation_started or previous != session_id
+            RUN_SESSIONS[run_key] = session_id
 
     # `appActions` is NON-optional in Swift's PluginEvent — its synthesized
     # Decodable requires the key (the memberwise default is not used at decode).
@@ -504,6 +518,8 @@ def handle_translate_event(req_id, params):
     respond(req_id, {
         "pluginID": plugin_id,
         "sessionID": session_id,
+        "sourceSequence": sequence,
+        "conversationStarted": conversation_started,
         "state": state,
         "notification": notification,
         "appActions": app_actions,
@@ -827,7 +843,7 @@ def handle_refresh_projects(req_id, params):
 # ---------------------------------------------------------------------------
 # Remaining RPC handlers.
 # ---------------------------------------------------------------------------
-PLUGIN_VERSION = "0.2.1"
+PLUGIN_VERSION = "0.2.3"
 
 
 def _store_settings(value):

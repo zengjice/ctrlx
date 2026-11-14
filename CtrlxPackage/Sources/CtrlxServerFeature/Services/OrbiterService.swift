@@ -62,20 +62,16 @@ final class OrbiterService {
     }
 
     func currentInstance(_ task: OrbiterTask) -> AgentWorkflowInstance? {
-        if let bound = task.binding, let current = instances.first(where: { bound.matchesProcess($0) }) {
-            return current
-        }
-        guard let pane = task.pane ?? task.binding?.workspacePane else { return nil }
-        return instances.first { $0.pluginID == task.pluginID && $0.workspacePane.isSamePane(as: pane) }
+        guard let hostID = index?.hostID else { return nil }
+        return task.agentID(hostID: hostID)?.resolve(in: instances, identity: { $0.agentID }).value
     }
 
     func availability(_ task: OrbiterTask) -> String? {
         guard enabled() else { return "Enable Orbie on this Mac before delivering tasks." }
         guard !task.archived else { return "Unarchive this task to continue." }
-        guard let binding = task.binding, let current = currentInstance(task) else {
+        guard let current = currentInstance(task) else {
             return "Waiting for the existing Agent. Open its tab and use Resume or Use Shell if recovery is needed. No task will be resent automatically."
         }
-        guard binding.matchesBinding(current) else { return "The Agent changed. Confirm its conversation and reconnect explicitly before sending." }
         if let reason = current.capabilityIssue {
             return reason
         }
@@ -189,7 +185,7 @@ final class OrbiterService {
         guard
             enabled(), var updated = index, candidate.hostID == updated.hostID,
             let current = instances.first(where: { candidate.matchesBinding($0) }), current.capabilities != nil,
-            !tasks.contains(where: { $0.id != taskID && $0.pane?.isSamePane(as: current.workspacePane) == true }) else {
+            !tasks.contains(where: { $0.id != taskID && $0.agentID(hostID: updated.hostID) == current.agentID }) else {
             throw AgentWorkflowError("Choose an unassociated, verified Agent on this Host.")
         }
         if let taskID {
@@ -318,15 +314,9 @@ final class OrbiterService {
                 task.pane = try await locateCreation(task.id)
             }
             if let current = currentInstance(task) {
-                if task.binding == nil || (task.binding?.matchesProcess(current) == true && task.binding?.conversationID.isEmpty == true) {
-                    task.binding = current
-                } else if task.binding?.matchesProcess(current) == true {
-                    task.binding?.workspacePane = current.workspacePane
-                }
-                if task.binding?.matchesProcess(current) == true {
-                    task.pane = current.workspacePane
-                    task.directory = current.workingDirectory
-                }
+                task.binding = current
+                task.pane = current.workspacePane
+                task.directory = current.workingDirectory
             }
             if let pending = task.pendingRunID, let run = runs.first(where: { $0.id == pending }) {
                 task.pendingRunID = nil

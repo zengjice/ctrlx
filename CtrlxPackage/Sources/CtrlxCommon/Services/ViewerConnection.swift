@@ -152,13 +152,15 @@ final public class ViewerConnection: Identifiable {
         sessionId: String,
         pluginId: String,
         requestId: String,
-        response: AgentResponse
+        response: AgentResponse,
+        notificationBinding: AgentNotificationBinding? = nil
     ) async -> Bool {
         await relayClient.submitAgentResponse(
             sessionId: sessionId,
             pluginId: pluginId,
             requestId: requestId,
-            response: response
+            response: response,
+            notificationBinding: notificationBinding
         )
     }
 

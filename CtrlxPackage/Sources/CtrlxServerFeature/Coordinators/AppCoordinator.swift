@@ -13,6 +13,7 @@
 
     /// A pending selection set by the menu bar to be consumed by MainView.
     public enum PendingMenuBarSelection: Equatable {
+        case agent(AgentID, pairID: String?)
         case local(paneId: String)
         case remote(hostId: String, hostName: String, paneId: String)
     }
@@ -29,6 +30,7 @@
 
         /// Set by menu bar clicks to tell MainView which session to select when the panes window opens.
         public var pendingMenuBarSelection: PendingMenuBarSelection?
+        public var notificationNavigationIssue: String?
 
         /// App settings
         public let settings: AppSettings
@@ -492,6 +494,7 @@
         public func setupAllServices() async {
             guard !isServiceSetupComplete else { return }
             isServiceSetupComplete = true
+            agentBrowser.agentIDForPane = { [weak self] in self?.agentID(forPane: $0) }
             agentBrowser.imageTargetForPane = { [weak windowManager] paneID in
                 windowManager?.paneStates[paneID].flatMap(AgentImageTarget.init(pane:))
             }
@@ -823,8 +826,8 @@
                         requiresOpenForm: false
                     )
                 },
-                onAppAction: { [weak self] action, event, peer in
-                    await self?.handlePluginAppAction(action, event: event, peer: peer)
+                onAppAction: { [weak self] action, event, peer, origin in
+                    await self?.handlePluginAppAction(action, event: event, peer: peer, origin: origin)
                 },
                 isYoloModeEnabled: { [weak self] paneID in
                     guard let self else { return false }
@@ -832,6 +835,9 @@
                 },
                 onWorkflow: { [weak self] event, peer in
                     await self?.handleAgentWorkflowEvent(event, peer: peer)
+                },
+                withCurrentEvent: { [weak self] event, peer, operation in
+                    await self?.withCurrentPluginEvent(event, peer: peer, operation: operation)
                 }
             )
             pluginDispatcher = dispatcher
@@ -1116,6 +1122,9 @@
                 },
                 onAgentPanes: { [weak self] pluginID in
                     await self?.handlePluginAgentPanes(pluginID: pluginID)
+                },
+                captureOrigin: { [weak self] paneID in
+                    await self?.capturePluginEventOrigin(pluginID: id, paneID: paneID)
                 }
             )
         }
@@ -1851,6 +1860,7 @@
             projectPath: String?,
             permissionMode: String?
         ) async {
+            guard currentPluginEventIsValid else { return }
             windowManager.applyState(
                 pluginID: pluginID,
                 sessionID: sessionID,
@@ -1928,6 +1938,7 @@
             pluginID: String? = nil,
             formState: AgentState? = nil
         ) async {
+            guard currentPluginEventIsValid else { return }
             if
                 pluginID == "codex", notification.isQuestion == true,
                 let paneId, paneId.hasPrefix("%"), let questionID = notification.questionID,
@@ -1935,6 +1946,7 @@
                 windowManager.recordCodexQuestion(paneID: paneId, questionID: questionID)
                 await connectedViewerManager?.pushSessionStateToAll()
             }
+            guard currentPluginEventIsValid else { return }
             let isQuestion: Bool = if case .awaitingReplies = formState {
                 true
             } else {
@@ -1947,14 +1959,17 @@
                 action = NotificationActionContext.make(
                     state: formState,
                     sessionId: paneId,
-                    pluginId: pluginID
+                    pluginId: pluginID,
+                    agent: self.agentID(forPane: paneId).flatMap { id in windowManager.paneStates[paneId].flatMap { AgentNotificationBinding(agentID: id, pane: $0) } }
                 )
             }
             let paneState = paneId.flatMap { windowManager.paneStates[$0] }
+            let agentID = self.agentID(forPane: paneId)
             let presentation = AgentNotificationPresentation(
                 title: notification.title,
                 body: notification.body,
-                paneState: paneState
+                paneState: paneState,
+                agentID: agentID
             )
             // Stamp the real pane id so tapping the banner navigates to the
             // originating session; fall back to "system" only when the event
@@ -1966,7 +1981,8 @@
                 body: presentation.body,
                 paneId: paneId,
                 action: action,
-                isQuestion: isQuestion ? true : nil
+                isQuestion: isQuestion ? true : nil,
+                agentID: agentID
             )
         }
 
@@ -2221,7 +2237,8 @@
         }
 
         /// AppActionSink → drive the matching agent-blind Mac feature (spec §6).
-        func handlePluginAppAction(_ action: AppAction, event: PluginEvent, peer: PluginIngressPeer?) async {
+        func handlePluginAppAction(_ action: AppAction, event: PluginEvent, peer: PluginIngressPeer?, origin: PluginEventOrigin? = nil) async {
+            guard currentPluginEventIsValid else { return }
             switch action {
             case let .openFileSuggestion(sessionID, path, displayName, isPlan, projectDir):
                 // `sessionID` is the plugin's opaque session id; resolve it to a
@@ -2251,6 +2268,7 @@
                 guard
                     let pane = windowManager.paneStates[sessionID],
                     let context = AgentSessionEndContext(event: event, pane: pane),
+                    (peer != nil || origin.map { context.matches(origin: $0) } == true),
                     await acceptsSessionEnd(context, peer: peer) else { return }
                 let workspacePane = pane.workspaceIdentity
                 // `sessionID` carries the pane id in the plugin path. A session end
@@ -2320,7 +2338,7 @@
             expectedWorkspacePane: WorkspacePaneIdentity? = nil,
             requiresOpenForm: Bool = true
         ) async {
-            guard let core = pluginRegistry?.core(pluginID), let pane = windowManager.paneStates[sessionID] else { return }
+            guard currentPluginEventIsValid, let core = pluginRegistry?.core(pluginID), let pane = windowManager.paneStates[sessionID] else { return }
             let blocking: Bool = switch response {
             case .prompt,
                  .replyAfterStop: false
@@ -2336,10 +2354,14 @@
             }
         }
 
-        private func pluginInputIdentity(pluginID: String, sessionID: String) throws -> WorkspacePaneIdentity? {
+        private func pluginInputIdentity(pluginID: String, sessionID: String, captured: PluginResponseContext? = nil) throws -> WorkspacePaneIdentity? {
             guard let pane = windowManager.paneStates[sessionID] else { throw PluginResponseContext.Failure.changed }
-            let context = try PluginResponseContext.current ?? PluginResponseContext(pluginID: pluginID, pane: pane, requestID: nil)
+            let context = try captured ?? PluginResponseContext.current ?? PluginResponseContext(pluginID: pluginID, pane: pane, requestID: nil)
             try context.validate(pluginID: pluginID, paneID: sessionID, pane: pane)
+            guard
+                currentPluginEventIsValid,
+                let live = windowManager.currentAgentBinding(forPane: sessionID),
+                live.pluginID == pluginID, live.runtimeID == context.processRuntimeID else { throw PluginResponseContext.Failure.changed }
             return context.workspaceIdentity
         }
 
@@ -2347,8 +2369,13 @@
         private func handlePluginSendText(pluginID: String, sessionID: String, text: String) async {
             guard !text.isEmpty else { return }
             do {
-                let identity = try pluginInputIdentity(pluginID: pluginID, sessionID: sessionID)
-                try await tmuxService.sendKeys(sessionID, keys: text, literal: true, expectedWorkspacePane: identity)
+                guard let pane = windowManager.paneStates[sessionID] else { throw PluginResponseContext.Failure.changed }
+                let context = try PluginResponseContext.current ?? PluginResponseContext(pluginID: pluginID, pane: pane, requestID: nil)
+                let identity = try pluginInputIdentity(pluginID: pluginID, sessionID: sessionID, captured: context)
+                try await tmuxService.sendKeys(sessionID, keys: text, literal: true, expectedWorkspacePane: identity) { [self] launch in
+                    _ = try pluginInputIdentity(pluginID: pluginID, sessionID: sessionID, captured: context)
+                    try launch()
+                }
             } catch {
                 logger.warning("Plugin sendText failed for \(sessionID): \(error)")
             }
@@ -2360,8 +2387,13 @@
         private func handlePluginSendKeys(pluginID: String, sessionID: String, keys: [PluginTmuxKey]) async {
             guard !keys.isEmpty else { return }
             do {
-                let identity = try pluginInputIdentity(pluginID: pluginID, sessionID: sessionID)
-                try await tmuxService.sendKeystrokes(sessionID, keys: keys, expectedWorkspacePane: identity)
+                guard let pane = windowManager.paneStates[sessionID] else { throw PluginResponseContext.Failure.changed }
+                let context = try PluginResponseContext.current ?? PluginResponseContext(pluginID: pluginID, pane: pane, requestID: nil)
+                let identity = try pluginInputIdentity(pluginID: pluginID, sessionID: sessionID, captured: context)
+                try await tmuxService.sendKeystrokes(sessionID, keys: keys, expectedWorkspacePane: identity) { [self] launch in
+                    _ = try pluginInputIdentity(pluginID: pluginID, sessionID: sessionID, captured: context)
+                    try launch()
+                }
             } catch {
                 logger.warning("Plugin sendKeys failed for \(sessionID): \(error)")
             }
@@ -2853,10 +2885,12 @@
                     try await tmux.sendKeys(target.info.paneId, keys: key, expectedWorkspacePane: target.identity)
                 },
                 onNotify: { [weak self, notificationService] title, body, paneId, push in
+                    let agentID = await self?.agentID(forPane: paneId)
                     let notification = AgentNotificationPresentation(
                         title: title,
                         body: body,
-                        paneState: nil
+                        paneState: nil,
+                        agentID: agentID
                     )
                     let targetPane = paneId ?? "system"
                     notificationService.showNotification(targetPane, notification, nil)
@@ -2867,7 +2901,8 @@
                         await manager.sendCustomPushNotificationToAll(
                             title: title,
                             body: body,
-                            paneId: paneId
+                            paneId: paneId,
+                            agentID: agentID
                         )
                     }
                 },
@@ -3329,6 +3364,13 @@
             // answered long after the form was retracted, and a stale answer
             // would inject keystrokes into whatever the pane shows now (#710).
             connectionManager.onAgentResponseSubmission = { [weak self] submission in
+                if let binding = submission.notificationBinding {
+                    guard
+                        let self, binding.pluginID == submission.pluginId,
+                        let live = windowManager.currentAgentBinding(forPane: submission.sessionId),
+                        live.runtimeID == binding.runtimeID, live.pluginID == binding.pluginID,
+                        binding.matches(agentID: self.agentID(forPane: submission.sessionId), pane: windowManager.paneStates[submission.sessionId]) else { return }
+                }
                 let openFormRequestID = self?.windowManager
                     .paneStates[submission.sessionId]?.agentSession?.state.openForm?.requestID
                 guard
@@ -3417,11 +3459,12 @@
 
             // Wire terminal notification display (fires for any monitored pane, regardless of streaming)
             let notificationService = terminalNotificationService
-            paneStreamManager.onNotification = { paneId, notification in
+            paneStreamManager.onNotification = { [weak self] paneId, notification in
                 notificationService.showNotification(paneId, AgentNotificationPresentation(
                     title: notification.title ?? "Terminal",
                     body: notification.body,
-                    paneState: nil
+                    paneState: nil,
+                    agentID: self?.agentID(forPane: paneId)
                 ), nil)
             }
 
@@ -4225,12 +4268,12 @@
         /// Reveals the owning native window for local and remote panes.
         private func setupNotificationTapHandler() {
             ForegroundNotificationDelegate.install()
-            ForegroundNotificationDelegate.shared.onTapped = { [weak self] paneId, hostId in
+            ForegroundNotificationDelegate.shared.onTapped = { [weak self] agentID, hostId in
                 guard let self else { return }
-                if let hostId {
-                    self.revealRemotePane(hostId: hostId, paneId: paneId)
+                if let agentID {
+                    self.revealPane(.agent(agentID, pairID: hostId))
                 } else {
-                    self.revealLocalPane(paneId)
+                    self.showUnavailableNotificationTarget(hostID: hostId)
                 }
             }
 
@@ -4281,13 +4324,40 @@
             revealPane(.remote(hostId: hostId, hostName: hostName, paneId: paneId))
         }
 
+        func resolveNotificationSelection(_ selection: PendingMenuBarSelection) -> PendingMenuBarSelection? {
+            guard case let .agent(id, pairID) = selection else { return selection }
+            if let pairID {
+                guard let route = remoteSessionStore?.workspaceCatalogsByHost[pairID]?.resolve(agentID: id, pairID: pairID).value else { return nil }
+                return .remote(hostId: pairID, hostName: settings.getHostPairing(id: pairID)?.displayName ?? pairID, paneId: route.paneID)
+            }
+            guard
+                id.hostID == workspaceRecovery?.hostID,
+                let pane = id.resolve(in: Array(windowManager.paneStates.values), identity: { self.agentID(forPane: $0.paneId) }).value else { return nil }
+            return .local(paneId: pane.paneId)
+        }
+
+        private func showUnavailableNotificationTarget(hostID: String?) {
+            pendingMenuBarSelection = nil
+            let host = hostID.flatMap { settings.getHostPairing(id: $0)?.displayName } ?? "this Mac"
+            notificationNavigationIssue = "This notification's Agent is unavailable on \(host). Choose its tab from the session list."
+            NSApp.setActivationPolicy(.regular)
+            NotificationCenter.default.post(name: .openPanesWindow, object: nil)
+            forceActivate(workspaceID: nil)
+        }
+
         private func revealPane(_ selection: PendingMenuBarSelection) {
             paneActivationTask?.cancel()
             pendingMenuBarSelection = nil
             detachedWindows.mainTabs.pendingPaneSelection = nil
             NSApp.setActivationPolicy(.regular)
+            guard let resolved = resolveNotificationSelection(selection) else {
+                if case let .agent(_, hostID) = selection {
+                    showUnavailableNotificationTarget(hostID: hostID)
+                }
+                return
+            }
             let workspaceID = detachedWindows.reveal(
-                selection, localPanes: tmuxService.panes, remoteSessions: remoteSessionStore
+                resolved, localPanes: tmuxService.panes, remoteSessions: remoteSessionStore
             ) {
                 pendingMenuBarSelection = selection
                 NotificationCenter.default.post(name: .openPanesWindow, object: nil)
@@ -4839,7 +4909,8 @@
                         title: notification.title,
                         subtitle: notification.subtitle,
                         body: notification.body,
-                        paneState: paneState
+                        paneState: paneState,
+                        agentID: notification.agentID
                     )
                     self.terminalNotificationService.showNotification(
                         notification.sessionId ?? "system",

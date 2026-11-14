@@ -136,7 +136,9 @@
             try await wait { saved != nil }
             let value = try #require(saved)
             #expect(value.id == copy.id && value.id != original.id)
-            #expect(value.agentInstanceIDs == Set(instances.map(\.id)))
+            #expect(value.agentInstanceIDs.count == 2)
+            #expect(Set(value.agents.compactMap { value.instance(for: $0.id, in: instances)?.id }) == Set(instances.map(\.id)))
+            #expect(value.agentInstanceIDs.isDisjoint(with: instances.map(\.id)))
             #expect(value.nodes[0].agentInstanceID == value.nodes[2].agentInstanceID && value.nodes[0].agentInstanceID == value.nodes[4].agentInstanceID)
             #expect(value.initialInput == .init() && value.attachmentIDs.isEmpty)
             #expect(value.nodes.map(\.input.text) == original.nodes.map(\.input.text))
@@ -277,14 +279,10 @@
             try await click("workflow-editor-save", in: window)
             try await wait { saved != nil }
             var expected = original
-            for index in [0, 2, 4] {
-                expected.nodes[index].agentInstanceID = catalog[0].id
-            }
-            expected.nodes[1].agentInstanceID = catalog[1].id
-            for index in catalog.indices {
-                expected.participants?[index].agentInstanceID = catalog[index].id
-            }
-            expected.agentTargets = Dictionary(uniqueKeysWithValues: catalog.map { ($0.id, $0.target) })
+            // Refreshing the runtime catalog must not rewrite participant or node references.
+            expected.agentTargets = Dictionary(uniqueKeysWithValues: original.agents.enumerated().map {
+                ($0.element.agentInstanceID, catalog[$0.offset].target)
+            })
             if edit {
                 expected.nodes[0].input.text = "Updated instructions, kept after switching steps"
             }
@@ -384,10 +382,12 @@
             try await wait { saved != nil }
             let value = try #require(saved)
             #expect(value.nodes.count == (empty ? 2 : 3))
-            #expect(value.agents.map(\.id) == [instances[0].id])
+            let participantID = try #require(value.agents.first?.id)
+            #expect(value.agents.count == 1 && participantID != instances[0].id)
+            #expect(value.instance(for: participantID, in: instances)?.id == instances[0].id)
             #expect(value.agents.allSatisfy { $0.name.utf8.count <= 256 })
             #expect(value.nodes.allSatisfy { $0.name.utf8.count <= 256 })
-            #expect(value.nodes.suffix(2).allSatisfy { $0.agentInstanceID == instances[0].id })
+            #expect(value.nodes.suffix(2).allSatisfy { $0.agentInstanceID == participantID })
             #expect(value.edges == zip(value.nodes, value.nodes.dropFirst()).map { .init(source: $0.0.id, target: $0.1.id) })
             #expect(value.entryNodeID == value.nodes.first?.id)
             #expect(value.nodes.first?.initialTask == .textAndAttachments)
@@ -395,14 +395,99 @@
         }
 
         @Test(arguments: [false, true])
-        func configuredAgentPickerNeverOffersUnrelatedInstances(unavailable: Bool) async throws {
+        func restartedAgentStepsKeepTheOriginalParticipantID(bindUnassignedStep: Bool) async throws {
             _ = NSApplication.shared
             NSApp.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
             let hostID = UUID()
-            let instances = ["Configured", "Unrelated"].enumerated().map { index, name in
+            let original = AgentWorkflowInstance(hostID: hostID, pluginID: "codex", processID: 100, processRuntimeID: "original", workspacePane: .init(serverID: "original-server", sessionID: UUID(), windowID: UUID(), paneID: UUID()), paneID: "%1", conversationID: "A", displayName: "Original", workingDirectory: "/fixture", capabilities: .init(maximumInputBytes: 100_000), readiness: .ready)
+            let live = AgentWorkflowInstance(hostID: hostID, pluginID: "codex", processID: 200, processRuntimeID: "restarted", workspacePane: .init(serverID: "new-server", sessionID: UUID(), windowID: UUID(), paneID: original.workspacePane.paneID), paneID: "%8", conversationID: "B", displayName: "Current Agent", workingDirectory: "/fixture", capabilities: original.capabilities, readiness: .ready)
+            let unrelated = AgentWorkflowInstance(hostID: hostID, pluginID: "codex", processID: 300, processRuntimeID: "unrelated", workspacePane: .init(serverID: "new-server", sessionID: UUID(), windowID: UUID(), paneID: UUID()), paneID: "%9", conversationID: "C", displayName: "Unrelated", workingDirectory: "/fixture", capabilities: original.capabilities, readiness: .ready)
+            let existing = AgentWorkflowNode(name: "Existing step", agentInstanceID: original.id, initialTask: .textAndAttachments)
+            var unassigned = AgentWorkflowNode(name: "Unassigned", agentInstanceID: UUID(), initialTask: .omit)
+            unassigned.agentInstanceID = nil
+            var definition = AgentWorkflowDefinition(name: "Restarted Agent", hostID: hostID, nodes: bindUnassignedStep ? [existing, unassigned] : [existing], edges: bindUnassignedStep ? [.init(source: existing.id, target: unassigned.id)] : [], entryNodeID: existing.id, participants: [.init(agentInstanceID: original.id, name: original.displayName)])
+            definition.rememberTargets(from: [original])
+            var saved: AgentWorkflowDefinition?
+            var refreshCount = 0
+            var available = false
+            let endpoint = AgentWorkflowEndpoint(id: "restart-fixture", name: "Host", connected: { true }, supported: { true }) { request in
+                var response = AgentWorkflowResponse(hostID: hostID)
+                switch request.operation {
+                case .catalog:
+                    refreshCount += 1
+                    response.instances = .init(items: available ? [live, unrelated] : [unrelated], nextOffset: nil)
+                case .attachments: response.attachments = []
+                case let .save(value, _):
+                    try AgentWorkflowWire.validate(value)
+                    saved = value
+                    response.definition = value
+                default: Issue.record("Unexpected restarted Agent editor request")
+                }
+                return response
+            }
+            let window = NSWindow(contentRect: .init(x: -10_000, y: -10_000, width: 700, height: 1_100), styleMask: .titled, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = NSHostingView(rootView: AgentWorkflowEditor(endpoint: endpoint, definition: definition, isNew: false, createAgent: nil))
+            window.orderBack(nil)
+            defer { window.close() }
+            try await wait { refreshCount > 0 }
+            let warning = "Some Agents are unavailable"
+            try await wait("The missing target must show the unavailable warning") {
+                guard
+                    let toggle = element("workflow-agents-toggle", in: window),
+                    let label = attribute("accessibilityLabel", from: toggle) as? String else { return false }
+                return label.contains(warning)
+            }
+            available = true
+            try await click("workflow-agents-toggle", in: window)
+            try await click("Refresh Agents", in: window, attributeName: "accessibilityLabel")
+            try await wait("The restarted target must clear the unavailable warning") {
+                guard
+                    refreshCount > 1, let toggle = element("workflow-agents-toggle", in: window),
+                    let label = attribute("accessibilityLabel", from: toggle) as? String else { return false }
+                return !label.contains(warning)
+            }
+            try await click("workflow-agents-toggle", in: window)
+            if bindUnassignedStep {
+                try await click("workflow-step-toggle-\(unassigned.id)", in: window)
+                try await click("workflow-step-agent-\(unassigned.id)", in: window)
+            } else {
+                try await click("workflow-add-agent-step", in: window)
+            }
+            try await wait { element("workflow-choose-agent-\(live.id)", in: window) != nil }
+            #expect((element("workflow-choose-agent-\(unrelated.id)", in: window) != nil) == bindUnassignedStep)
+            let previousRefreshCount = refreshCount
+            try await click("Refresh Agents", in: window, attributeName: "accessibilityLabel")
+            try await wait { refreshCount > previousRefreshCount }
+            try await click("workflow-choose-agent-\(live.id)", in: window)
+            try await wait { window.sheets.isEmpty }
+            try await click("workflow-editor-save", in: window)
+            try await wait { saved != nil }
+            let value = try #require(saved)
+            #expect(value.nodes.count == 2)
+            #expect(value.agents.map(\.id) == [original.id])
+            #expect(value.nodes.allSatisfy { $0.agentInstanceID == original.id })
+            #expect(value.agentTargets?[original.id]?.agentID == live.agentID)
+            #expect(value.agentTargets?[live.id] == nil)
+            #expect(value.instance(for: original.id, in: [live])?.id == live.id)
+        }
+
+        @Test(arguments: [false, true], [false, true])
+        func configuredAgentPickerNeverOffersUnrelatedInstances(unavailable: Bool, restarted: Bool) async throws {
+            _ = NSApplication.shared
+            NSApp.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
+            let hostID = UUID()
+            var instances = ["Configured", "Unrelated"].enumerated().map { index, name in
                 AgentWorkflowInstance(hostID: hostID, pluginID: "codex", processID: Int32(index + 42), processRuntimeID: "runtime-\(index)", workspacePane: .init(serverID: "1:1", sessionID: UUID(), windowID: UUID(), paneID: UUID()), paneID: "%\(index)", conversationID: "conversation-\(index)", displayName: name, workingDirectory: "/fixture", capabilities: .init(maximumInputBytes: 100_000), readiness: .ready)
             }
-            let picker = AgentWorkflowAgentPicker(instances: unavailable ? [instances[1]] : instances, participants: [.init(agentInstanceID: instances[0].id, name: "Configured role")], refreshing: false, error: nil, refresh: { }) { _ in
+            let original = instances[0]
+            let node = AgentWorkflowNode(name: "Existing step", agentInstanceID: original.id)
+            var definition = AgentWorkflowDefinition(name: "Configured", hostID: hostID, nodes: [node], edges: [], entryNodeID: node.id, participants: [.init(agentInstanceID: original.id, name: "Configured role")])
+            definition.rememberTargets(from: instances)
+            if restarted {
+                instances[0] = .init(hostID: hostID, pluginID: "codex", processID: 200, processRuntimeID: "restarted", workspacePane: .init(serverID: "new-server", sessionID: UUID(), windowID: UUID(), paneID: original.workspacePane.paneID), paneID: "%99", conversationID: "resumed", displayName: "Configured", workingDirectory: "/fixture", capabilities: original.capabilities, readiness: .ready)
+            }
+            let picker = AgentWorkflowAgentPicker(instances: unavailable ? [instances[1]] : instances, definition: definition, refreshing: false, error: nil, refresh: { }) { _ in
                 Issue.record("Inspecting the picker must not select an Agent")
             }
             let window = NSWindow(contentRect: .init(x: -10_000, y: -10_000, width: 560, height: 500), styleMask: .titled, backing: .buffered, defer: false)
@@ -568,8 +653,10 @@
                 try await click("workflow-editor-save", in: window)
                 try await wait { saved != nil }
                 let value = try #require(saved)
-                #expect(value.agents.map(\.id) == [instance.id])
-                #expect(value.nodes.map(\.agentInstanceID) == [instance.id])
+                let participantID = try #require(value.agents.first?.id)
+                #expect(value.agents.count == 1 && participantID != instance.id)
+                #expect(value.instance(for: participantID, in: [instance])?.id == instance.id)
+                #expect(value.nodes.map(\.agentInstanceID) == [participantID])
                 #expect(value.creationSession == AgentWorkflowSessionReference(instance.workspacePane))
                 #expect(launchCount == 1)
             } else {

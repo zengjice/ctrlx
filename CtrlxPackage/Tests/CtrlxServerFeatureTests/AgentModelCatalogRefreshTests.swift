@@ -11,7 +11,7 @@ import Testing
 
 @MainActor
 struct AgentModelCatalogRefreshTests {
-    @Test("Catalog refresh preserves only the same process's valid list", arguments: ["failed", "unsupported", "replaced", "cancelled"])
+    @Test("Catalog refresh preserves only the same process's valid list", arguments: ["failed", "unsupported", "replaced", "cancelled", "conversation"])
     func refresh(mode: String) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-catalog-refresh-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -22,6 +22,7 @@ struct AgentModelCatalogRefreshTests {
         let runtime = LockIsolated("runtime")
         let behavior = LockIsolated(mode)
         let calls = LockIsolated(0)
+        let replaceConversation = LockIsolated<(@MainActor @Sendable () -> Void)?>(nil)
         let models = [AgentModelOption(id: "test-model", name: "Test Model", efforts: ["low", "high"], defaultEffort: "low")]
         try await withDependencies {
             $0[PreferencesService.self] = .inMemory()
@@ -31,6 +32,9 @@ struct AgentModelCatalogRefreshTests {
             $0[WorkspaceAgentProcessClient.self].modelContext = { _, _, _, command in
                 calls.withValue { $0 += 1 }
                 #expect(command == "codex")
+                if behavior.value == "conversation" {
+                    await replaceConversation.value?()
+                }
                 switch behavior.value {
                 case "replaced": runtime.setValue("replacement")
                     throw AgentModelError("Process replaced")
@@ -60,13 +64,18 @@ struct AgentModelCatalogRefreshTests {
             }
         } operation: {
             let coordinator = AppCoordinator()
+            replaceConversation.setValue { [weak coordinator] in
+                guard let coordinator, var pane = coordinator.windowManager.paneStates["%1"] else { return }
+                pane.claudeSessionID = "new-native-conversation"
+                coordinator.windowManager.setPaneStatesForPreview([pane])
+            }
             let registry = PluginRegistry()
             try await registry.enable("codex", host: MockPluginHost(), env: .init(pluginRoot: root, stateDir: root, appVersion: "test", settings: JSONEncoder().encode(CodexSettings(exportTelemetry: false)), marketplaceSource: root))
             coordinator.pluginRegistry = registry
             coordinator.windowManager.setPaneStatesForPreview([.init(paneId: "%1", agentSession: .init(paneId: "%1", pluginID: "codex"), workspaceIdentity: identity)])
-            coordinator.agentModelCatalogs["%1"] = .init(runtimeID: "runtime", models: models)
+            coordinator.agentModelCatalogs["%1"] = .init(runtimeID: "runtime", models: models, pluginID: "codex")
             do {
-                if mode == "replaced" || mode == "cancelled" {
+                if mode == "replaced" || mode == "cancelled" || mode == "conversation" {
                     await #expect(throws: (any Error).self) { try await coordinator.handleAgentModels(.init(workspacePane: identity, refresh: true), paneID: "%1") }
                     #expect(coordinator.agentModelCatalogs["%1"]?.catalogWarning == nil)
                 } else {

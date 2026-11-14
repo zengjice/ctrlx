@@ -243,12 +243,12 @@ struct OrbiterTests {
         #expect(f.service.taskDrafts[id] == "Keep this follow-up")
         #expect(f.service.tasks.first?.pendingRunID == nil)
         f.backend.observations[0].conversationID = UUID().uuidString
-        await #expect(throws: AgentWorkflowError.self) { try await f.service.send(id) }
+        await #expect(throws: AgentWorkflowStartRejection.self) { try await f.service.send(id) }
         #expect(f.backend.schedules.count == 2)
     }
 
     @Test
-    func moveKeepsBindingButRuntimeChangeRequiresExplicitAssociation() async throws {
+    func moveAndRuntimeChangeKeepTaskAssociation() async throws {
         let f = try await fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
         let id = try await f.service.create(pluginID: "codex", providerID: nil)
@@ -262,10 +262,19 @@ struct OrbiterTests {
         f.backend.observations[0].processRuntimeID = "replacement"
         await f.service.refresh()
         let task = try #require(f.service.tasks.first)
-        #expect(f.service.availability(task) != nil)
-        let current = try #require(f.service.currentInstance(task))
-        _ = try await f.service.associate(current, with: id)
+        #expect(f.service.availability(task) == nil)
         #expect(f.service.tasks.first?.binding?.processRuntimeID == "replacement")
+        f.backend.observations[0].workspacePane.serverID = "recovered-server"
+        f.backend.observations[0].workspacePane.windowID = UUID()
+        f.backend.observations[0].paneID = "%99"
+        f.backend.observations[0].processID = 999
+        f.backend.observations[0].conversationID = UUID().uuidString
+        await f.service.refresh()
+        let recovered = try #require(f.service.tasks.first)
+        #expect(f.service.currentInstance(recovered)?.paneID == "%99")
+        #expect(f.service.availability(recovered) == nil)
+        #expect(recovered.runIDs == task.runIDs)
+        #expect(recovered.binding?.agentID == task.binding?.agentID)
         #expect(f.backend.schedules.count == 1)
     }
 

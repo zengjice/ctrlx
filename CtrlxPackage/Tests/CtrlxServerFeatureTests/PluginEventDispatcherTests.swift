@@ -85,7 +85,7 @@
                     requestID: requestID
                 ))
             },
-            onAppAction: { action, _, _ in
+            onAppAction: { action, _, _, _ in
                 await recorder.recordAction(action)
             },
             isYoloModeEnabled: { _ in yolo }
@@ -254,7 +254,6 @@
             let actions: [AppAction] = [
                 .openFileSuggestion(sessionID: "s1", path: "/tmp/PLAN.md", displayName: "PLAN.md", isPlan: true, projectDir: nil),
                 .dismissFileSuggestions(sessionID: "s1"),
-                .sessionEnded(sessionID: "s1", closePaneEligible: true),
             ]
             await dispatcher.dispatch(PluginEvent(pluginID: "echo", sessionID: "s1", appActions: actions))
 

@@ -93,7 +93,7 @@ actor AgentWorkflowEventRouter {
         if
             native.kind != .submitted,
             let id = pending.first(where: {
-                ($0.value.context.instance.matchesBinding(observed) || $0.value.context.instance.matchesConversation(observed))
+                $0.value.context.instance.matchesBinding(observed)
                     && $0.value.context.candidate.nativeTurnID == native.nativeTurnID
                     && $0.value.context.candidate.transcriptPath == native.transcriptPath
             })?.key {
@@ -106,7 +106,7 @@ actor AgentWorkflowEventRouter {
         if
             let id = pending.first(where: { entry in
                 guard
-                    entry.value.context.instance.matchesBinding(observed) || entry.value.context.instance.matchesConversation(observed),
+                    entry.value.context.instance.matchesBinding(observed),
                     entry.value.context.candidate.nativeTurnID != native.nativeTurnID,
                     let run = archive.runs.first(where: { $0.id == entry.value.context.runID }),
                     !run.status.isTerminal,
@@ -133,14 +133,14 @@ actor AgentWorkflowEventRouter {
         let instance = observed
 
         for run in archive.runs where (run.instances + run.invocations.compactMap { run.instance(for: $0) }).contains(where: {
-            $0.matchesProcess(instance) || ($0.target == instance.target && $0.pluginID == instance.pluginID)
+            $0.matchesProcess(instance) || ($0.agentID == instance.agentID && $0.pluginID == instance.pluginID)
         }) {
             let invocations = run.invocations.filter {
                 guard let bound = run.instance(for: $0) else { return false }
                 if native.kind == .submitted, !run.status.isTerminal, $0.status == .running, $0.stepTurn?.completionRequested == false {
-                    return bound.matchesProcess(instance) || (bound.target == instance.target && bound.pluginID == instance.pluginID)
+                    return bound.matchesProcess(instance) || (bound.agentID == instance.agentID && bound.pluginID == instance.pluginID)
                 }
-                return bound.matchesBinding(instance) || ($0.nativeTurnID != nil && bound.matchesConversation(instance))
+                return bound.matchesBinding(instance) || (native.kind == .submitted && $0.nativeTurnID != nil && bound.matchesConversation(instance))
                     || (native.kind == .submitted && bound.matchesProcess(instance))
             }
             switch native.kind {
@@ -211,7 +211,7 @@ actor AgentWorkflowEventRouter {
         let live: AgentWorkflowInstance
         do {
             let current = try await store.snapshot().instances.first {
-                $0.matchesBinding(candidate.instance) || $0.matchesConversation(candidate.instance)
+                $0.matchesBinding(candidate.instance)
             }
             live = try await inspect(submission.isStepContinuation ? current ?? candidate.instance : candidate.instance)
         } catch is AgentWorkflowInspectionUnavailable {
@@ -227,7 +227,7 @@ actor AgentWorkflowEventRouter {
         }
         try Task.checkCancellation()
         guard pending[id] != nil else { return nil }
-        guard candidate.instance.matchesBinding(live) || (submission.isStepContinuation && candidate.instance.matchesConversation(live)) else {
+        guard candidate.instance.matchesBinding(live) else {
             throw AgentWorkflowError("The Agent changed before its submission receipt could be verified.")
         }
         if let issue = live.capabilityIssue {

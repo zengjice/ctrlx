@@ -8,6 +8,7 @@ import Testing
 struct AgentBindingTests {
     private func pane() -> PaneState {
         var pane = PaneState(paneId: "%5", agentSession: .init(paneId: "%5", pluginID: "codex", state: .idle), workspaceIdentity: .init(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID()))
+        pane.agentSession?.processRuntimeID = "501:101:100:0"
         pane.sessionName = "work"
         pane.tmuxWindowId = "@7"
         pane.currentPath = "/repo"
@@ -112,6 +113,10 @@ struct AgentBindingTests {
         #expect(!context.accepts(detected: detected, peer: nil, runtimeID: { _ in process.runtimeID }))
         #expect(context.accepts(detected: detected, peer: peer, runtimeID: { _ in process.runtimeID }))
         #expect(!context.accepts(detected: detected, peer: peer, runtimeID: { _ in "restarted" }))
+        let successor = PluginIngressPeer.Process(processID: 101, parentProcessID: 1, userID: 501, startSeconds: 200, startMicroseconds: 0)
+        let successorPeer = try #require(PluginIngressPeer.capture(peerPID: 101, userID: 501, inspect: { $0 == 101 ? successor : nil }))
+        #expect(!context.accepts(detected: detected, peer: successorPeer, runtimeID: { _ in successor.runtimeID }))
+        #expect(!context.accepts(detected: nil, peer: successorPeer, runtimeID: { _ in nil }))
         #expect(!context.accepts(detected: .init(path: "/repo", pluginID: "claude-code", processIDs: ["101"]), peer: peer, runtimeID: { _ in process.runtimeID }))
     }
 }

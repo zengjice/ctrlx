@@ -24,6 +24,7 @@ extension AgentBrowserService {
         guard runtime.setAgentGrant?(identity, forTab: tab.identifier) == true else {
             throw RemoteBrowserError.message("The page is busy or the Agent exited. No authorization was granted.")
         }
+        tab.grantAgentID = conversation?.agentID
         tab.grant = .init(agent: agent, canWrite: true)
         publishBrowserTabs()
     }
@@ -35,6 +36,7 @@ extension AgentBrowserService {
             throw RemoteBrowserError.message("The human browser tab is no longer available.")
         }
         tab.grant = nil
+        tab.grantAgentID = nil
         publishBrowserTabs()
     }
 }

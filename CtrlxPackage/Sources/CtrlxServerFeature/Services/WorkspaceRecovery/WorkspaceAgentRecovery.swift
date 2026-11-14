@@ -32,6 +32,7 @@ final class WorkspaceAgentRecovery {
     let directoryExists: (String) -> Bool
     let inspect: (String) async throws -> WorkspaceRecoveryAgentPane
     let recoverySource: (Set<UUID>, UUID, UUID) async throws -> AgentForkSource?
+    let identityInvalidated: (UUID) async -> Bool
     let launch: (String, WorkspaceRecoveryPane, WorkspaceRecoveryAgentLaunch, AgentForkLaunch?) async throws -> Void
     private var savedIdentityErrors: [UUID: String] = [:]
 
@@ -41,6 +42,7 @@ final class WorkspaceAgentRecovery {
         directoryExists: @escaping (String) -> Bool,
         inspect: @escaping (String) async throws -> WorkspaceRecoveryAgentPane,
         recoverySource: @escaping (Set<UUID>, UUID, UUID) async throws -> AgentForkSource? = { _, _, _ in nil },
+        identityInvalidated: @escaping (UUID) async -> Bool = { _ in false },
         launch: @escaping (String, WorkspaceRecoveryPane, WorkspaceRecoveryAgentLaunch, AgentForkLaunch?) async throws -> Void
     ) {
         self.core = core
@@ -51,6 +53,7 @@ final class WorkspaceAgentRecovery {
         self.inspect = inspect
         self.recoverySource = recoverySource
         self.launch = launch
+        self.identityInvalidated = identityInvalidated
     }
 
     func recover(
@@ -135,6 +138,10 @@ final class WorkspaceAgentRecovery {
                 }
                 if isShell {
                     throw WorkspaceRecoveryError("The original terminal is saved. Choose Retry to reopen it.")
+                }
+                if await identityInvalidated(pane.id) {
+                    canResume = false
+                    throw WorkspaceRecoveryError("The previous Agent conversation is no longer associated with this terminal. Use Shell and choose the intended conversation.")
                 }
                 var descriptor = pane.agent
                 if descriptor == nil, pane.savedAgentIdentityInvalidated == true {

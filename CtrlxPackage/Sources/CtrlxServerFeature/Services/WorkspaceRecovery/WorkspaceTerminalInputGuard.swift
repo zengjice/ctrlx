@@ -68,9 +68,9 @@ extension TmuxService {
         try WorkspaceTerminalInputGuard.validate(output: result.stdoutString)
     }
 
-    func sendWorkspaceInput(_ commands: [[String]], target: String, identity: WorkspacePaneIdentity, editsInput: Bool = true) async throws {
+    func sendWorkspaceInput(_ commands: [[String]], target: String, identity: WorkspacePaneIdentity, editsInput: Bool = true, launch: (@MainActor @Sendable (@Sendable () throws -> Void) throws -> Void)? = nil) async throws {
         let arguments = try WorkspaceTerminalInputGuard.arguments(target: target, identity: identity, commands: commands)
-        let result = try await runHumanTmuxInput(arguments, target: target, editsInput: editsInput)
+        let result = try await runHumanTmuxInput(arguments, target: target, editsInput: editsInput, launch: launch)
         guard result.isSuccess else { throw TmuxError.commandFailed(message: result.stderrString) }
         try WorkspaceTerminalInputGuard.validate(output: result.stdoutString)
     }

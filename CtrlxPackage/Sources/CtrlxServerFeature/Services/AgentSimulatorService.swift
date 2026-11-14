@@ -139,7 +139,9 @@
             for state in tabs.values {
                 if
                     let grant = state.grant, let session = state.resourceSession,
-                    !panes.contains(where: { $0.paneId == grant.agent.paneID && $0.workspaceIdentity?.sessionID == session.id }) {
+                    !panes.contains(where: { pane in
+                        (state.conversation.map { pane.workspaceIdentity?.paneID == $0.agentID.paneID } ?? (pane.paneId == grant.agent.paneID)) && pane.workspaceIdentity?.sessionID == session.id
+                    }) {
                     revokeResourceGrant(state)
                 }
             }
@@ -151,15 +153,14 @@
                     attach(state)
                     continue
                 }
-                let matches = panes.filter { $0.paneId == state.paneID }
+                let persistentPaneID = state.sourcePane?.workspaceIdentity?.paneID
+                let matches = panes.filter { pane in
+                    persistentPaneID.map { pane.workspaceIdentity?.paneID == $0 } ?? (pane.paneId == state.paneID)
+                }
                 guard matches.count == 1, let pane = matches.first else {
                     if state.owner == nil {
                         close(state)
                     }
-                    continue
-                }
-                if let identity = state.sourcePane?.workspaceIdentity, !identity.isSamePane(as: pane.workspaceIdentity) {
-                    close(state)
                     continue
                 }
                 if renames.contains(where: { $0.oldName == state.sessionName && $0.newName == pane.sessionName }) {
@@ -177,13 +178,18 @@
         private func updateRoute(_ state: SimulatorTabState, pane: PaneInfo) {
             guard
                 pane.sessionName != state.sessionName || pane.windowId != state.sourcePane?.windowId
-                || pane.stableWindowId != state.sourcePane?.stableWindowId else { return }
+                || pane.stableWindowId != state.sourcePane?.stableWindowId || pane.paneId != state.paneID
+                || pane.workspaceIdentity != state.sourcePane?.workspaceIdentity else { return }
             // Reindexing the same window preserves its tab selection and split placement.
             if pane.sessionName != state.sessionName || pane.stableWindowId != state.sourcePane?.stableWindowId {
                 workspaces[state.workspaceID]?.onDetach(state)
                 state.view.removeFromSuperview()
                 visibility(state, visible: false)
                 state.workspaceID = detachedWorkspaceID
+            }
+            if let previous = state.paneID, previous != pane.paneId, primaryDevices[previous] == state.id {
+                primaryDevices.removeValue(forKey: previous)
+                primaryDevices[pane.paneId] = state.id
             }
             state.source = .pane(pane)
             attach(state)
@@ -540,11 +546,16 @@
         }
 
         private func remoteDescriptor(_ state: SimulatorTabState) -> RemoteSimulatorTab {
-            RemoteSimulatorTab(
+            let matches = routePanes.filter { pane in
+                state.sourcePane?.workspaceIdentity.map { pane.workspaceIdentity?.paneID == $0.paneID }
+                    ?? (pane.paneId == state.paneID)
+            }
+            let source = matches.count == 1 ? matches.first : nil
+            return RemoteSimulatorTab(
                 id: state.id,
                 sessionName: state.sessionName,
-                windowID: state.sourcePane?.stableWindowId,
-                sourcePaneID: state.paneID,
+                windowID: source?.stableWindowId,
+                sourcePaneID: source?.paneId,
                 title: String(state.handle.name.prefix(256)),
                 runtime: state.handle.runtime,
                 isPrimary: state.paneID.map { primaryDevices[$0] == state.id } == true,
@@ -898,7 +909,9 @@
                 return try await createDevice(parameters: parameters, owner: owner, conversation: conversation, sourcePane: pane, coordinator: coordinator, resolve: resolve)
             }
             let state: SimulatorTabState
-            if let id = primaryDevices[pane.paneId], let existing = tabs[id], !existing.isClosed {
+            if
+                let id = primaryDevices[pane.paneId], let existing = tabs[id], !existing.isClosed,
+                existing.sourcePane?.workspaceIdentity?.paneID == pane.workspaceIdentity?.paneID {
                 state = existing
             } else if let pending = pendingOpens[pane.paneId] {
                 guard owner == nil || pending.owner == owner else {

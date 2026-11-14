@@ -134,7 +134,7 @@ enum CodexTranslator {
             return nil
         }
 
-        let event = PluginEvent(
+        var event = PluginEvent(
             pluginID: pluginID,
             sessionID: sessionID,
             state: state,
@@ -154,6 +154,9 @@ enum CodexTranslator {
                 approvalsReviewer: approvalsReviewer
             )
         )
+        if case .sessionStart = action {
+            event.conversationStarted = true
+        }
         return Output(event: event, pending: pending, guardianHandled: guardianHandled)
     }
 

@@ -14,8 +14,8 @@ struct SessionNavigation: Hashable, Sendable {
     var restoresSelection = false
     var paneSelection: PaneSelection? = nil
 
-    static func notification(paneID: String, hostID: String, paneStates: [PaneKey: PaneState]) -> Self? {
-        guard let pane = paneStates[PaneKey(pairId: hostID, paneId: paneID)], !pane.sessionName.isEmpty else { return nil }
-        return .init(sessionName: pane.sessionName, hostId: hostID, paneSelection: .init(paneID: paneID))
+    static func notification(agentID: AgentID?, hostID: String, catalog: ViewerWorkspaceCatalog?) -> Self? {
+        guard let agentID, let catalog, let route = catalog.resolve(agentID: agentID, pairID: hostID).value else { return nil }
+        return .init(sessionName: route.sessionName, hostId: hostID, reference: catalog.reference(paneID: route.paneID), paneSelection: .init(paneID: route.paneID))
     }
 }

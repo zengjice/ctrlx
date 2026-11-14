@@ -3,7 +3,7 @@
   "id": "pi",
   "display_name": "pi",
   "short_name": "pi",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "process_names": ["pi"],
   "runtime": "sidecar",
   "sidecar": {

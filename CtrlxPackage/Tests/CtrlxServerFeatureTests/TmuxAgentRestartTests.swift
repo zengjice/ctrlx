@@ -101,7 +101,12 @@ struct TmuxAgentRestartTests {
                 let source = try #require(AgentForkSource(pane: pane))
                 let end = {
                     let action = AppAction.sessionEnded(sessionID: source.paneID, closePaneEligible: true)
-                    await coordinator.handlePluginAppAction(action, event: .init(pluginID: source.pluginID, sessionID: source.sessionID, appActions: [action], tmuxPane: source.paneID), peer: nil)
+                    await coordinator.handlePluginAppAction(
+                        action,
+                        event: .init(pluginID: source.pluginID, sessionID: source.sessionID, appActions: [action], tmuxPane: source.paneID),
+                        peer: nil,
+                        origin: .init(pluginID: source.pluginID, paneID: source.paneID, workspacePane: workspace, conversationID: source.sessionID, processID: pid, runtimeID: pane.agentSession?.processRuntimeID ?? runtime)
+                    )
                     #expect(coordinator.windowManager.paneStates[source.paneID]?.agentSession == nil)
                     #expect(coordinator.windowManager.paneStates[source.paneID]?.claudeSessionID == nil)
                     #expect(!coordinator.windowManager.isYoloModeEnabled(for: source.paneID))
@@ -181,6 +186,7 @@ struct TmuxAgentRestartTests {
                         let detected = await tmux.detectAgentPanesIfAvailable(processNamesByPlugin: ["codex": ["cat"]], refreshSnapshot: true)
                         let nextPID = try #require(detected?[info.paneId]?.processIDs.first)
                         let nextRuntime: String = try #require(AgentSessionIdentityClient.processRuntimeID(nextPID))
+                        pid = nextPID
                         pane.agentSession?.processRuntimeID = nextRuntime
                         #expect(pane.agentSession?.processRuntimeID != runtime)
                         coordinator.windowManager.setPaneStatesForPreview([pane])

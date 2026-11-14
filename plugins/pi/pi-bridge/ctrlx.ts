@@ -74,7 +74,18 @@ function debug(line: string) {
  * Promise); the `session_shutdown` handler awaits it so pi's teardown waits for
  * the final frame to land before the process exits.
  */
+// Keep ordering across native /reload in the same Agent process.
+const ingressState = (globalThis as any)[Symbol.for("ctrlx.pi.ingress")] ??= {
+  sequence: 0,
+  pending: Promise.resolve(),
+}
 function forward(payload: Record<string, unknown>, context: Record<string, string>): Promise<void> {
+  const ordered = { ...payload, sourceSequence: ++ingressState.sequence }
+  ingressState.pending = ingressState.pending.then(() => sendFrame(ordered, context))
+  return ingressState.pending
+}
+
+function sendFrame(payload: Record<string, unknown>, context: Record<string, string>): Promise<void> {
   return new Promise((resolve) => {
     if (!context.TMUX_PANE) return resolve() // no pane → nothing to route
     let sock: net.Socket | undefined

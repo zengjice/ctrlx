@@ -22,6 +22,27 @@ the JSON-RPC vocabulary, wire keys, or plugin storage paths.
 
 ---
 
+## Current event evidence
+
+Lifecycle/state translations should return from `handleIngress`, so the Host can
+retain the kernel-captured socket peer. Set optional `conversationStarted: true`
+only for the agent's native conversation-start event. Shared code accepts native
+IDs such as OpenCode `ses_*`; they need not be UUIDs. A JSON event cannot assert
+Host-verified process evidence. Unsolicited `host.emitEvent` state without such
+evidence cannot update a current pane. See [Agent identity](../agent-identity.md).
+
+Resident bridges that switch/resume conversations in the same process must also
+send an optional positive `sourceSequence` on every event, assigned before async
+work and increasing across extension reloads. Serialize ingress sends. The
+sidecar passes this counter through; the Host scopes it to the kernel-observed
+sender, rejects replay/downgrade, and permits a newer native start to resume a
+retired conversation. It is event-order evidence, not another Agent identifier.
+OpenCode's synthetic pane-only launch is followed by a real root binding;
+child events and delayed completions must not rebind it. The bundled pi 0.1.1,
+omp 0.1.2 and OpenCode 0.2.3 bridges implement this contract. Existing running
+extensions need the updated bridge loaded (restart/reload); updating only the
+Host does not add a sequence to an already-loaded old bridge.
+
 ## 1. Manifest Schema
 
 A sidecar plugin is a directory under `~/.ctrlx/plugins/<id>/` containing a

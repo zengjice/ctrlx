@@ -12,6 +12,7 @@ generic-settings handlers. Zero third-party deps — just the stdlib.
 Run:  python3 tests/test_sidecar.py        (from the plugin root)
 """
 import json
+import shutil
 import os
 import subprocess
 import sys
@@ -131,6 +132,32 @@ class TranslateEventTests(unittest.TestCase):
             payload.update(extra)
         return self.sc.translate(payload, ctx if ctx is not None else CTX)
 
+    @unittest.skipUnless(shutil.which("node"), "Node with TypeScript support is required")
+    def test_real_bridge_resume_and_reload_keep_process_order(self):
+        support = subprocess.run([shutil.which("node"), "--experimental-strip-types", "-e", ""],
+                                 capture_output=True, timeout=5)
+        if support.returncode:
+            self.skipTest("Node does not support native TypeScript stripping")
+        with tempfile.TemporaryDirectory(prefix="cx-bridge-", dir="/tmp") as root:
+            env = {**os.environ, "CTRLX_INGRESS_SOCK": os.path.join(root, "ingress.sock"),
+                   "TMUX_PANE": PANE, "CTRLX_PLUGIN_ID": "omp", "CTRLX_OTLP_ENDPOINT": ""}
+            script = os.path.join(ROOT, "..", "tests", "resident-bridge.mjs")
+            bridge = os.path.join(ROOT, "omp-bridge", "ctrlx.ts")
+            output = subprocess.run([shutil.which("node"), "--experimental-strip-types", script, bridge], env=env,
+                                    check=True, capture_output=True, text=True, timeout=15)
+            trace = json.loads(output.stdout)
+            self.assertEqual(trace["nativeCalls"], ["session_start", "session_switch", "session_switch",
+                                                   "agent_start", "agent_end", "session_shutdown"])
+            frames = trace["frames"]
+            self.assertTrue(all(f["plugin_id"] == "omp" for f in frames))
+            self.assertEqual([f["payload"]["sourceSequence"] for f in frames], list(range(1, 7)))
+            self.assertEqual([f["payload"]["sessionId"] for f in frames], ["A", "B", "A", "A", "A", "A"])
+            events = [self.sc.translate(f["payload"], f["context"]) for f in frames]
+            self.assertEqual([e["sourceSequence"] for e in events], list(range(1, 7)))
+            self.assertEqual([e["conversationStarted"] for e in events], [True, True, True, False, False, False])
+            self.assertEqual(events[4]["state"], {"doneWorking": {"summary": "Done"}})
+            self.assertIsNotNone(events[4]["notification"])
+
     def test_session_start_is_idle(self):
         r = self.evt("session_start")
         self.assertEqual(r["state"], {"idle": {}})
@@ -148,6 +175,18 @@ class TranslateEventTests(unittest.TestCase):
         for reason in ("new", "resume", "fork", "handoff"):
             r = self.evt("session_start", {"reason": reason})
             self.assertEqual(r["state"], {"idle": {}})
+
+    def test_resident_bridge_sequence_and_native_resume(self):
+        for sequence, session in enumerate(("A", "B", "A"), start=1):
+            r = self.evt("session_start", {"sessionId": session, "sourceSequence": sequence})
+            self.assertTrue(r["conversationStarted"])
+            self.assertEqual(r["sessionID"], session)
+            self.assertEqual(r["sourceSequence"], sequence)
+        r = self.evt("agent_start", {"sessionId": "A", "sourceSequence": 4})
+        self.assertFalse(r["conversationStarted"])
+        self.assertEqual(r["sourceSequence"], 4)
+        for invalid in (None, True, -1, 0, "5", 1.5, 9007199254740992):
+            self.assertIsNone(self.evt("session_start", {"sourceSequence": invalid})["sourceSequence"])
 
     def test_agent_start_is_working(self):
         r = self.evt("agent_start")
@@ -511,7 +550,7 @@ class InstallTests(unittest.TestCase):
         self.assertIn("CtrlXOmpBridge", content)
 
         r = self.sc.request("install_status", {"configRoot": None})
-        self.assertEqual(r["result"], {"installed": {"version": "0.1.0"}})
+        self.assertEqual(r["result"], {"installed": {"version": "0.1.2"}})
 
         r = self.sc.request("uninstall", {"configRoot": None})
         self.assertEqual(r["result"], {})
@@ -527,7 +566,7 @@ class InstallTests(unittest.TestCase):
         local = os.path.join(project, ".omp", "extensions", "ctrlx.ts")
         self.assertTrue(os.path.exists(local))
         r = self.sc.request("install_status", {"configRoot": project})
-        self.assertEqual(r["result"], {"installed": {"version": "0.1.0"}})
+        self.assertEqual(r["result"], {"installed": {"version": "0.1.2"}})
         # The global row is unaffected.
         r = self.sc.request("install_status", {"configRoot": None})
         self.assertEqual(r["result"], {"notInstalled": {}})

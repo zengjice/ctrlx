@@ -36,6 +36,13 @@ public struct PluginEvent: Codable, Sendable, Equatable {
     /// `permission_mode_changed` event (which only fires on a change; issue #597).
     public let permissionMode: String?
 
+    /// Native lifecycle evidence; the Host still authenticates its process and conversation.
+    public var conversationStarted: Bool?
+
+    /// Monotonic event order from a resident bridge. Scoped by the Host to the
+    /// kernel-authenticated sender process, never used as Agent identity.
+    public var sourceSequence: UInt64?
+
     /// Native turn evidence consumed locally by the workflow executor. Its
     /// claimed source is accepted only with a separate kernel peer snapshot.
     public var workflow: PluginWorkflowEvent?
@@ -54,7 +61,9 @@ public struct PluginEvent: Codable, Sendable, Equatable {
         projectPath: String? = nil,
         permissionMode: String? = nil,
         workflow: PluginWorkflowEvent? = nil,
-        workflowBridgeVersion: Int? = nil
+        workflowBridgeVersion: Int? = nil,
+        conversationStarted: Bool? = nil,
+        sourceSequence: UInt64? = nil
     ) {
         self.pluginID = pluginID
         self.sessionID = sessionID
@@ -66,6 +75,8 @@ public struct PluginEvent: Codable, Sendable, Equatable {
         self.permissionMode = permissionMode
         self.workflow = workflow
         self.workflowBridgeVersion = workflowBridgeVersion
+        self.conversationStarted = conversationStarted
+        self.sourceSequence = sourceSequence
     }
 }
 

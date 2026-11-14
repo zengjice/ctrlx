@@ -120,11 +120,13 @@ struct AgentModelPreferencesTests {
         #expect(invalidations.value == 0)
 
         let identity = WorkspacePaneIdentity(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID())
-        let key = AgentModelPreferences.Key(hostID: "local", serverID: identity.serverID, windowID: identity.windowID)
+        let key = AgentModelPreferences.Key(hostID: "local", windowID: identity.windowID)
         store.tabs[key] = .init(models: ["hidden"])
         invalidations.setValue(0)
         withObservationTracking { _ = store.tabs } onChange: { invalidations.withValue { $0 += 1 } }
-        store.prune(hostID: "local", identities: [identity])
+        var rebuilt = identity
+        rebuilt.serverID = "new-server"
+        store.prune(hostID: "local", identities: [rebuilt])
         #expect(invalidations.value == 0)
         store.prune(hostID: "local", identities: [])
         #expect(invalidations.value == 1)
@@ -177,8 +179,8 @@ struct AgentModelPreferencesTests {
     func tabIdentitySurvivesDisplayMoveButNeverCrossesHostsOrClosedTabs() {
         let store = AgentModelPreferences()
         let identity = WorkspacePaneIdentity(serverID: "1:2", sessionID: UUID(), windowID: UUID(), paneID: UUID())
-        let local = AgentModelPreferences.Key(hostID: "local", serverID: identity.serverID, windowID: identity.windowID)
-        let remote = AgentModelPreferences.Key(hostID: "other-host", serverID: identity.serverID, windowID: identity.windowID)
+        let local = AgentModelPreferences.Key(hostID: "local", windowID: identity.windowID)
+        let remote = AgentModelPreferences.Key(hostID: "other-host", windowID: identity.windowID)
         store.tabs[local] = .init(models: ["a"])
         store.tabs[remote] = .init(models: ["b"])
         store.prune(hostID: "local", identities: [identity])

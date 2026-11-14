@@ -179,6 +179,9 @@ final public class ConnectedViewer: Identifiable {
     /// Partner's public key ID
     private var partnerPublicKeyId: String
 
+    /// Last authenticated Hello for this paired key, including while offline.
+    private var supportsStableAgentNotifications = false
+
     // MARK: - Callbacks
 
     /// Called when a command is received from viewer
@@ -399,7 +402,8 @@ final public class ConnectedViewer: Identifiable {
         body: String,
         paneId: String?,
         action: NotificationActionContext? = nil,
-        isQuestion: Bool? = nil
+        isQuestion: Bool? = nil,
+        agentID: AgentID? = nil
     ) async {
         guard state.isConnected else {
             logger.debug("Not connected to \(viewerName), cannot send custom push")
@@ -418,9 +422,13 @@ final public class ConnectedViewer: Identifiable {
             eventType: isQuestion == true ? "agent.question" : "cli.notify",
             pairId: id,
             paneId: paneId,
+            agentID: agentID,
             timestamp: Date(),
             action: action
-        )
+        ).forPeer(supportsStableAgentNotifications: supportsStableAgentNotifications)
+        let paneId = content.paneId
+        let agentID = content.agentID
+        let action = content.action
 
         do {
             let encryptedContent = try await e2eeService.encrypt(content)
@@ -444,7 +452,8 @@ final public class ConnectedViewer: Identifiable {
                 body: body,
                 paneId: paneId,
                 action: action,
-                isQuestion: isQuestion
+                isQuestion: isQuestion,
+                agentID: agentID
             )
         } catch {
             logger.error("Failed to encrypt custom push notification: \(error)")
@@ -459,7 +468,8 @@ final public class ConnectedViewer: Identifiable {
         body: String,
         paneId: String?,
         action: NotificationActionContext?,
-        isQuestion: Bool?
+        isQuestion: Bool?,
+        agentID: AgentID?
     ) async {
         guard state.isConnected else { return }
         let message = WebSocketMessage.agentNotification(
@@ -471,7 +481,8 @@ final public class ConnectedViewer: Identifiable {
                 body: body,
                 timestamp: Date(),
                 action: action,
-                isQuestion: isQuestion
+                isQuestion: isQuestion,
+                agentID: agentID
             )
         )
         await sendEncrypted(message)
@@ -961,6 +972,7 @@ final public class ConnectedViewer: Identifiable {
                 // session-state push will fire when the viewer requests it.
                 isViewerConnected = true
                 if case .encrypted = message, connectionGeneration.isCurrent(generation) {
+                    supportsStableAgentNotifications = peerHello.supportsStableAgentNotifications == true
                     quickPhraseSync?.receiveHello(peerHello.quickPhraseSync)
                 }
                 // Push the current plugin presentations now that the viewer is
@@ -979,6 +991,7 @@ final public class ConnectedViewer: Identifiable {
         case .unpaired:
             logger.info("Pairing removed by the other side")
             shouldReconnect = false
+            supportsStableAgentNotifications = false
             await cleanupConnection()
             await updateState(.disconnected)
             await onUnpaired?()
@@ -1093,6 +1106,9 @@ final public class ConnectedViewer: Identifiable {
     /// - Returns: Whether the session was established successfully
     @discardableResult
     private func establishE2EEWithPartner(publicKey: String, keyId: String) async -> Bool {
+        if publicKey != partnerPublicKey || keyId != partnerPublicKeyId {
+            supportsStableAgentNotifications = false
+        }
         guard let keyData = Data(base64Encoded: publicKey) else {
             logger.error("Failed to decode partner public key from base64")
             return false
@@ -1283,6 +1299,7 @@ final public class ConnectedViewer: Identifiable {
         invalidateConnectionWork()
         let viewerWasConnected = isViewerConnected
         isViewerConnected = false
+        // Offline APNs still uses this peer's authenticated capabilities.
         connectedViewerDeviceName = nil
 
         receiveTask?.cancel()

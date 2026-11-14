@@ -8,7 +8,6 @@ import Foundation
 final class AgentModelPreferences {
     struct Key: Hashable {
         let hostID: String
-        let serverID: String
         let windowID: UUID
     }
 
@@ -35,7 +34,7 @@ final class AgentModelPreferences {
 
     func shared(identities: [WorkspacePaneIdentity]) -> [UUID: Snapshot] {
         Dictionary(identities.map { identity in
-            (identity.windowID, preferences(for: .init(hostID: "local", serverID: identity.serverID, windowID: identity.windowID)))
+            (identity.windowID, preferences(for: .init(hostID: "local", windowID: identity.windowID)))
         }, uniquingKeysWith: { first, _ in first })
     }
 
@@ -43,11 +42,11 @@ final class AgentModelPreferences {
         guard request.pane.isSamePane(as: current), request.pane.isSameWindow(as: current) else {
             throw AgentModelError("The terminal changed. Reopen this tab's model controls.")
         }
-        return update(request.hidden, for: .init(hostID: "local", serverID: current.serverID, windowID: current.windowID))
+        return update(request.hidden, for: .init(hostID: "local", windowID: current.windowID))
     }
 
     func initialize(_ snapshot: AgentModelShortcutInitialization, hostID: String) {
-        let key = Key(hostID: hostID, serverID: snapshot.pane.serverID, windowID: snapshot.pane.windowID)
+        let key = Key(hostID: hostID, windowID: snapshot.pane.windowID)
         guard defaults[key] == nil else { return }
         defaults[key] = snapshot.defaults
         revisions[key] = (revisions[key] ?? 0) + 1
@@ -57,9 +56,9 @@ final class AgentModelPreferences {
     }
 
     func capture(hostID: String, serverID: String?, windowIDs: [UUID]) -> [UUID: Snapshot]? {
-        guard let serverID else { return nil }
+        guard serverID != nil else { return nil }
         let saved = Dictionary(uniqueKeysWithValues: windowIDs.compactMap { id -> (UUID, Snapshot)? in
-            let key = Key(hostID: hostID, serverID: serverID, windowID: id)
+            let key = Key(hostID: hostID, windowID: id)
             guard let hidden = tabs[key] else { return nil }
             return (id, Snapshot(hidden: hidden, defaults: defaults[key], revision: revisions[key]))
         })
@@ -67,10 +66,10 @@ final class AgentModelPreferences {
     }
 
     func restore(_ saved: [UUID: Snapshot]?, hostID: String, serverID: String?, windowIDs: [UUID]) {
-        guard let serverID, let saved else { return }
+        guard serverID != nil, let saved else { return }
         for id in windowIDs {
             guard let snapshot = saved[id] else { continue }
-            let key = Key(hostID: hostID, serverID: serverID, windowID: id)
+            let key = Key(hostID: hostID, windowID: id)
             // A retry must not overwrite edits made after the tab became available.
             let restoringHidden = tabs[key] == nil
             if restoringHidden {
@@ -87,7 +86,7 @@ final class AgentModelPreferences {
     }
 
     func prune(hostID: String, identities: [WorkspacePaneIdentity]) {
-        let live = Set(identities.map { Key(hostID: hostID, serverID: $0.serverID, windowID: $0.windowID) })
+        let live = Set(identities.map { Key(hostID: hostID, windowID: $0.windowID) })
         let retained = tabs.filter { $0.key.hostID != hostID || live.contains($0.key) }
         if retained.count != tabs.count {
             tabs = retained

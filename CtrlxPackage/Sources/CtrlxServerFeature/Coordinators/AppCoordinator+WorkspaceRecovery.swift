@@ -26,6 +26,7 @@ extension AppCoordinator {
                 return state
             },
             recoverySource: agentIdentities.recoverySource,
+            identityInvalidated: agentIdentities.isInvalidated,
             launch: { [tmuxService] runtime, pane, record, command in
                 try await tmuxService.launchWorkspaceAgent(runtimeID: runtime, pane: pane, record: record, command: command)
             }
@@ -132,6 +133,7 @@ extension AppCoordinator {
                     let scannedPlugin = pane.agent.map { processNames[$0.pluginID] != nil } ?? true
                     if WorkspaceAgentCapture.invalidateChangedAgent(&pane, state: state, detected: detected?[pane.runtimeID], scanAvailable: detected != nil && scannedPlugin, runtimeID: identities.runtimeID) {
                         recoveryAgentDescriptors.removeValue(forKey: pane.id)
+                        await windowManager.invalidateSavedConversation(forPane: pane.runtimeID)?.value
                     }
                     if let identity = AgentForkSource(pane: state), let core = pluginRegistry?.core(identity.pluginID) as? any AgentSessionResuming {
                         guard

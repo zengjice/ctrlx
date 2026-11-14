@@ -8,6 +8,8 @@ final class AgentModelDisplayCache {
         let hostID: String
         let pane: WorkspacePaneIdentity
         let pluginID: String
+        var runtimeID: String? = nil
+        var conversationID: String? = nil
     }
 
     struct Entry {
@@ -22,6 +24,7 @@ final class AgentModelDisplayCache {
     }
 
     func store(_ snapshot: AgentModelSnapshot, for key: Key, now: ContinuousClock.Instant = .now) {
+        entries = entries.filter { $0.key.hostID != key.hostID || $0.key.pane.paneID != key.pane.paneID }
         entries[key] = Entry(snapshot: snapshot, updatedAt: now)
     }
 

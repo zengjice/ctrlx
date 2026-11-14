@@ -4,7 +4,7 @@ import SwiftUI
 @MainActor
 struct AgentWorkflowAgentPicker: View {
     let instances: [AgentWorkflowInstance]
-    let participants: [AgentWorkflowParticipant]
+    let definition: AgentWorkflowDefinition?
     let refreshing: Bool
     let error: String?
     let refresh: () async -> Void
@@ -12,10 +12,14 @@ struct AgentWorkflowAgentPicker: View {
     @Environment(\.dismiss) private var dismiss
     @State private var search = ""
 
+    private var hasParticipants: Bool {
+        definition?.agents.isEmpty == false
+    }
+
     private var available: [AgentWorkflowInstance] {
-        instances.filter { instance in
-            participants.isEmpty || participants.contains { $0.id == instance.id }
-        }
+        guard let definition, hasParticipants else { return instances }
+        let currentIDs = Set(definition.agents.compactMap { definition.instance(for: $0.id, in: instances)?.id })
+        return instances.filter { currentIDs.contains($0.id) }
     }
 
     private var filtered: [AgentWorkflowInstance] {
@@ -48,9 +52,9 @@ struct AgentWorkflowAgentPicker: View {
                         ProgressView("Loading Agents…")
                     } else if available.isEmpty {
                         ContentUnavailableView(
-                            participants.isEmpty ? "No Agents available" : "No participating Agents available",
+                            hasParticipants ? "No participating Agents available" : "No Agents available",
                             symbol: .sparkles,
-                            description: participants.isEmpty ? "Start an Agent tab, then refresh this list." : "Refresh this list or choose a replacement in Participating Agents."
+                            description: hasParticipants ? "Refresh this list or choose a replacement in Participating Agents." : "Start an Agent tab, then refresh this list."
                         )
                         .accessibilityIdentifier("workflow-agent-picker-empty")
                     } else {

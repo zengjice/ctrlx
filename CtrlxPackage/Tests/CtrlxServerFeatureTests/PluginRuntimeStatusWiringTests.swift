@@ -103,7 +103,7 @@
                         permissionMode: permissionMode
                     )
                 },
-                onAppAction: { action, event, _ in
+                onAppAction: { action, event, _, _ in
                     if case let .sessionEnded(sessionID, _) = action {
                         await MainActor.run {
                             guard let pane = windowManager.paneStates[sessionID], AgentSessionEndContext(event: event, pane: pane) != nil else { return }
@@ -693,7 +693,7 @@
                 onState: { plugin, session, state, pane, path, mode in
                     await manager.applyState(pluginID: plugin, sessionID: session, state: state, tmuxPane: pane, projectPath: path, permissionMode: mode)
                 },
-                onAppAction: { action, event, peer in
+                onAppAction: { action, event, peer, _ in
                     await MainActor.run {
                         guard
                             case let .sessionEnded(paneID, close) = action,

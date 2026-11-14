@@ -2408,7 +2408,7 @@ final public class TmuxService {
     ///   - target: The pane target
     ///   - keys: The keys to send (can be literal text or tmux key names like "Enter", "C-c")
     ///   - literal: If true, sends keys literally without interpreting special names
-    public func sendKeys(_ target: String, keys: String, literal: Bool = false, expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws {
+    public func sendKeys(_ target: String, keys: String, literal: Bool = false, expectedWorkspacePane: WorkspacePaneIdentity? = nil, launch: (@MainActor @Sendable (@Sendable () throws -> Void) throws -> Void)? = nil) async throws {
         var args = ["send-keys", "-t", target]
         if literal {
             args.append("-l") // Disable key name lookup
@@ -2419,11 +2419,11 @@ final public class TmuxService {
             args.append("--")
         }
         if let expectedWorkspacePane {
-            return try await sendWorkspaceInput([args + [keys]], target: target, identity: expectedWorkspacePane)
+            return try await sendWorkspaceInput([args + [keys]], target: target, identity: expectedWorkspacePane, launch: launch)
         }
         args.append(escapeTmuxSemicolon(keys))
 
-        let result = try await runHumanTmuxInput(args, target: target)
+        let result = try await runHumanTmuxInput(args, target: target, launch: launch)
         guard result.isSuccess else {
             throw TmuxError.commandFailed(message: result.stderrString)
         }
@@ -2436,16 +2436,16 @@ final public class TmuxService {
     /// - Parameters:
     ///   - target: The pane target
     ///   - keys: Array of tmux key names (e.g., ["Enter", "Up", "C-c"])
-    public func sendBatchKeys(_ target: String, keys: [String], expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws {
+    public func sendBatchKeys(_ target: String, keys: [String], expectedWorkspacePane: WorkspacePaneIdentity? = nil, launch: (@MainActor @Sendable (@Sendable () throws -> Void) throws -> Void)? = nil) async throws {
         guard !keys.isEmpty else { return }
         var args = ["send-keys", "-t", target]
         if let expectedWorkspacePane {
-            return try await sendWorkspaceInput([args + keys], target: target, identity: expectedWorkspacePane)
+            return try await sendWorkspaceInput([args + keys], target: target, identity: expectedWorkspacePane, launch: launch)
         }
         for key in keys {
             args.append(escapeTmuxSemicolon(key))
         }
-        let result = try await runHumanTmuxInput(args, target: target)
+        let result = try await runHumanTmuxInput(args, target: target, launch: launch)
         guard result.isSuccess else {
             throw TmuxError.commandFailed(message: result.stderrString)
         }
@@ -2456,13 +2456,13 @@ final public class TmuxService {
     /// concatenated into a single `send-keys -l`, runs of named keys go through
     /// `sendBatchKeys`, and a `.delay` flushes the current batch then sleeps.
     /// Shared by the keystroke-command path and the plugin `sendKeys` sink.
-    public func sendKeystrokes(_ target: String, keys: [TmuxKey], expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws {
+    public func sendKeystrokes(_ target: String, keys: [TmuxKey], expectedWorkspacePane: WorkspacePaneIdentity? = nil, launch: (@MainActor @Sendable (@Sendable () throws -> Void) throws -> Void)? = nil) async throws {
         var batch: [TmuxKey] = []
         var batchIsLiteral = false
 
         for key in keys {
             if case let .delay(milliseconds) = key {
-                try await flushKeystrokeBatch(target, keys: &batch, literal: batchIsLiteral, expectedWorkspacePane: expectedWorkspacePane)
+                try await flushKeystrokeBatch(target, keys: &batch, literal: batchIsLiteral, expectedWorkspacePane: expectedWorkspacePane, launch: launch)
                 batchIsLiteral = false
                 try await Task.sleep(for: .milliseconds(milliseconds))
                 continue
@@ -2470,21 +2470,21 @@ final public class TmuxService {
 
             let isLiteral = key.requiresLiteralMode
             if !batch.isEmpty, isLiteral != batchIsLiteral {
-                try await flushKeystrokeBatch(target, keys: &batch, literal: batchIsLiteral, expectedWorkspacePane: expectedWorkspacePane)
+                try await flushKeystrokeBatch(target, keys: &batch, literal: batchIsLiteral, expectedWorkspacePane: expectedWorkspacePane, launch: launch)
             }
             batchIsLiteral = isLiteral
             batch.append(key)
         }
 
-        try await flushKeystrokeBatch(target, keys: &batch, literal: batchIsLiteral, expectedWorkspacePane: expectedWorkspacePane)
+        try await flushKeystrokeBatch(target, keys: &batch, literal: batchIsLiteral, expectedWorkspacePane: expectedWorkspacePane, launch: launch)
     }
 
-    private func flushKeystrokeBatch(_ target: String, keys: inout [TmuxKey], literal: Bool, expectedWorkspacePane: WorkspacePaneIdentity?) async throws {
+    private func flushKeystrokeBatch(_ target: String, keys: inout [TmuxKey], literal: Bool, expectedWorkspacePane: WorkspacePaneIdentity?, launch: (@MainActor @Sendable (@Sendable () throws -> Void) throws -> Void)? = nil) async throws {
         guard !keys.isEmpty else { return }
         if literal {
-            try await sendKeys(target, keys: keys.map(\.tmuxKeyName).joined(), literal: true, expectedWorkspacePane: expectedWorkspacePane)
+            try await sendKeys(target, keys: keys.map(\.tmuxKeyName).joined(), literal: true, expectedWorkspacePane: expectedWorkspacePane, launch: launch)
         } else {
-            try await sendBatchKeys(target, keys: keys.map(\.tmuxKeyName), expectedWorkspacePane: expectedWorkspacePane)
+            try await sendBatchKeys(target, keys: keys.map(\.tmuxKeyName), expectedWorkspacePane: expectedWorkspacePane, launch: launch)
         }
         keys.removeAll()
     }

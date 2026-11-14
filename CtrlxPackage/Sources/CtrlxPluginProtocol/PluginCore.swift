@@ -71,6 +71,8 @@ public protocol PluginHost: Sendable {
     /// Push a `PluginEvent` into the session pipeline (used when the core
     /// generates events without an incoming ingress frame — e.g. an FSEvents tick).
     func emit(_ event: PluginEvent) async
+    func emit(_ event: PluginEvent, origin: PluginEventOrigin?) async
+    func eventOrigin(paneID: String) async -> PluginEventOrigin?
 
     /// Write text to the tmux pane backing this session (verbatim, no key
     /// processing). Used to deliver prompt/reply text or free-text answers.
@@ -97,10 +99,22 @@ public protocol PluginHost: Sendable {
 }
 
 public extension PluginHost {
+    func emit(_ event: PluginEvent, origin: PluginEventOrigin?) async {
+        await emit(event)
+    }
+
+    func eventOrigin(paneID: String) async -> PluginEventOrigin? {
+        nil
+    }
+
     /// Default: the host exposes no pane introspection (non-macOS, or a test
     /// double that doesn't model panes). The live macOS host overrides this.
-    func agentPanes() async -> [String] { [] }
+    func agentPanes() async -> [String] {
+        []
+    }
 
     /// Unsupported introspection is unknown, never evidence that an agent exited.
-    func agentPanesIfAvailable() async -> [String]? { nil }
+    func agentPanesIfAvailable() async -> [String]? {
+        nil
+    }
 }

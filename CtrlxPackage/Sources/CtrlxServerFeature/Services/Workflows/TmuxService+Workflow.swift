@@ -60,8 +60,8 @@ extension TmuxService {
         }
     }
 
-    func runHumanTmuxInput(_ arguments: [String], target: String, editsInput: Bool = true) async throws -> ProcessResult {
-        guard let workflowInputGate else { return try await runTmuxCommand(arguments) }
+    func runHumanTmuxInput(_ arguments: [String], target: String, editsInput: Bool = true, launch: (@MainActor @Sendable (@Sendable () throws -> Void) throws -> Void)? = nil) async throws -> ProcessResult {
+        guard let workflowInputGate else { return try await runTmuxCommand(arguments, launch: launch) }
         let paneID: String
         if target.first == "%", UInt64(target.dropFirst()) != nil {
             paneID = target
@@ -69,7 +69,7 @@ extension TmuxService {
             paneID = try await captureWorkspacePane(target: target).info.paneId
         }
         return try await workflowInputGate.human(paneID: paneID, editsInput: editsInput) {
-            try await self.runTmuxCommand(arguments)
+            try await self.runTmuxCommand(arguments, launch: launch)
         }
     }
 }

@@ -331,6 +331,7 @@
         @Environment(SessionStore.self) private var sessionStore
 
         @State private var sessionsNavigationPath = NavigationPath()
+        @State private var notificationNavigationIssue: String?
         @State private var showingSettings = false
         @State private var showingDashboard = false
         @State private var dashboardDestination: SessionNavigation?
@@ -352,6 +353,15 @@
                     onOpenDashboard: { showingDashboard = true },
                     onOpenWorkflows: { workflowNavigation.isPresented = true }
                 )
+            }
+            .alert("Notification", isPresented: .init(get: { notificationNavigationIssue != nil }, set: {
+                if !$0 {
+                    notificationNavigationIssue = nil
+                }
+            })) {
+                Button("OK", role: .cancel) { notificationNavigationIssue = nil }
+            } message: {
+                Text(notificationNavigationIssue ?? "")
             }
             .sheet(isPresented: $showingSettings, onDismiss: {
                 if pushService.pendingDashboard {
@@ -403,6 +413,9 @@
                 }
                 await connectIfNeeded()
             }
+            .onChange(of: sessionsNavigationPath) {
+                _ = pushService.consumePendingDeepLink()
+            }
             .task(id: pushService.pendingDeepLink) {
                 guard let deepLink = pushService.pendingDeepLink else { return }
                 await handleDeepLink(deepLink)
@@ -435,19 +448,25 @@
             workflowNavigation.isPresented = false
 
             var destination = SessionNavigation.notification(
-                paneID: deepLink.paneId, hostID: deepLink.hostId, paneStates: sessionStore.paneStates
+                agentID: deepLink.agentID, hostID: deepLink.hostId, catalog: sessionStore.workspaceCatalogsByHost[deepLink.hostId]
             )
             // Preserve the bounded cold-start wait; a newer notification or
             // view removal cancels this task instead of appending an old target.
             for _ in 0..<5 {
-                guard destination == nil else { break }
+                guard destination == nil, deepLink.agentID != nil else { break }
                 do { try await Task.sleep(for: .milliseconds(500)) }
                 catch { return }
                 destination = SessionNavigation.notification(
-                    paneID: deepLink.paneId, hostID: deepLink.hostId, paneStates: sessionStore.paneStates
+                    agentID: deepLink.agentID, hostID: deepLink.hostId, catalog: sessionStore.workspaceCatalogsByHost[deepLink.hostId]
                 )
             }
-            guard !Task.isCancelled, pushService.pendingDeepLink == deepLink, let destination else { return }
+            guard !Task.isCancelled, pushService.pendingDeepLink == deepLink else { return }
+            _ = pushService.consumePendingDeepLink()
+            guard let destination else {
+                sessionsNavigationPath = NavigationPath()
+                notificationNavigationIssue = "The notification target is no longer available. Choose its tab from the Host's session list."
+                return
+            }
             sessionsNavigationPath = NavigationPath([destination])
         }
 

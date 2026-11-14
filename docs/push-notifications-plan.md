@@ -635,6 +635,17 @@ Events that should **NOT** trigger push notifications:
 - `userPromptSubmit` - User initiated, no need to notify
 - `subagentStop`, `preCompact` - Internal events
 
+### Stable Agent targets (current contract)
+
+Notifications now carry `AgentID` inside encrypted content and persisted `userInfo`.
+Mac/iOS resolve it in the authenticated Host catalog; raw `%pane` is not a fallback.
+The notification extension deduplicates by stable target. Old notifications open
+the Host list. Peer Hello's `supportsStableAgentNotifications` gates precise targets
+and actions; old Viewers receive content without raw pane targets or answer actions.
+Answers additionally retain the original plugin, conversation, runtime and request.
+These fields are included in the 1,200-byte action budget. See
+[Agent identity](agent-identity.md) for migration and authorization boundaries.
+
 ### 6.1 Actionable Notifications (issue #710)
 
 Permission requests and agent questions can be answered straight from the
@@ -658,7 +669,7 @@ notification, without opening the app:
    notification sink; for `awaitingPermission` / `awaitingReplies` the
    coordinator builds a `NotificationActionContext` (sessionId/pluginId/
    requestId + trimmed form) via `NotificationActionContext.make`. Oversized
-   contexts (> ~2 KB encoded) degrade to plain notifications to respect the
+   contexts (> 1,200 bytes encoded) degrade to plain notifications to respect the
    APNs 4 KB budget.
 2. The context rides the **encrypted** `NotificationContent` (APNs path) and
    `AgentNotificationMessage` (live-socket fallback path) — both additive

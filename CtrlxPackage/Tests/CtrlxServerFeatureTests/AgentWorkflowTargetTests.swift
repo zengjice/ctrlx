@@ -61,6 +61,30 @@ struct AgentWorkflowTargetTests {
         return invocation
     }
 
+    @Test
+    func restartDoesNotReleaseInFlightOccupancyWithinTheSameRun() throws {
+        let base = try fixture().run
+        var definition = base.definition
+        definition.nodes[1].agentInstanceID = definition.nodes[0].agentInstanceID
+        definition.agentTargets = nil
+        var execution = try AgentWorkflowExecution(definition: definition, instances: [base.instances[0]], now: now, authorizationExpiresAt: base.authorizationExpiresAt)
+        _ = try accept(0, execution: &execution)
+        let first = execution.run.invocations[0]
+        var run = execution.run
+        let current = try restarted(#require(first.instance))
+        run.instances[0] = current
+        let id = UUID()
+        let delivery = AgentWorkflowDelivery(runID: run.id, round: run.round, invocationID: id, toAgentID: current.id, sources: [], input: first.delivery.input)
+        var second = AgentWorkflowInvocation(id: id, nodeID: definition.nodes[1].id, round: run.round, delivery: delivery, createdAt: now)
+        second.instance = current
+        run.invocations.append(second)
+        execution = try AgentWorkflowExecution(validating: run)
+        #expect(throws: AgentWorkflowError.self) {
+            try execution.beginWriting(invocationID: second.id, instance: current, now: now)
+        }
+        #expect(execution.run.invocations[0] == first)
+    }
+
     @Test(arguments: ["codex", "claude-code"])
     func restartThenRetryPreservesResultsAndRejectsOldTurns(pluginID: String) throws {
         var base = try fixture().run
@@ -119,7 +143,29 @@ struct AgentWorkflowTargetTests {
         #expect(state.nodes[0].instance?.id == live[0].id)
     }
 
-    @Test(arguments: ["host", "window", "pane"])
+    @Test
+    func movedPaneKeepsParticipantAndFrozenInvocation() throws {
+        var execution = try fixture()
+        let originalDefinition = execution.run.definition
+        _ = try accept(0, execution: &execution)
+        let invocation = execution.run.invocations[0]
+        let original = execution.run.instances[0]
+        var moved = original
+        moved.workspacePane.windowID = UUID()
+        moved.workspacePane.sessionID = UUID()
+        moved.displayName = "moved"
+        try execution.refreshBindings(instances: [moved, execution.run.instances[1]])
+        #expect(execution.run.instances[0] == moved)
+        #expect(execution.run.definition.nodes == originalDefinition.nodes)
+        #expect(execution.run.invocations[0] == invocation)
+        try execution.succeed(.init(invocationID: invocation.id, nativeTurnID: invocation.id.uuidString, text: "Done", completedAt: now), instance: moved, now: now)
+        _ = try AgentWorkflowExecution(validating: execution.run)
+        let resolved = originalDefinition.resolvingAgents(in: execution.run.instances.map(restarted))
+        #expect(resolved.agentInstanceIDs == originalDefinition.agentInstanceIDs)
+        #expect(resolved.nodes == originalDefinition.nodes)
+    }
+
+    @Test(arguments: ["host", "pane"])
     func reusedRuntimeIDAndNameDoNotReplaceTarget(component: String) throws {
         var execution = try fixture()
         execution.pause(reason: "Operator")
@@ -239,14 +285,14 @@ struct AgentWorkflowTargetTests {
         try await store.update(runID: run.id) { $0.pause(reason: "Operator") }
         let live = try await store.reconcile(catalog.map(restarted).map(AgentWorkflowObservation.init))
         #expect(live.map(\.id) != catalog.map(\.id))
-        #expect(saved.resolvingAgents(in: live).agentInstanceIDs == Set(live.map(\.id)))
+        #expect(saved.resolvingAgents(in: live).agentInstanceIDs == saved.agentInstanceIDs)
         await #expect(throws: AgentWorkflowStartRejection.self) {
             try await store.start(definitionID: saved.id, expectedRevision: saved.revision, requestID: UUID(), now: now, authorizationExpiresAt: now.addingTimeInterval(3_600))
         }
         try await store.update(runID: run.id) { $0.end() }
         let next = try await store.start(definitionID: saved.id, expectedRevision: saved.revision, requestID: UUID(), now: now, authorizationExpiresAt: now.addingTimeInterval(3_600))
         #expect(next.instances == live)
-        #expect(next.definition.agentInstanceIDs == Set(live.map(\.id)))
+        #expect(next.definition.agentInstanceIDs == saved.agentInstanceIDs)
     }
 
     @Test
@@ -275,7 +321,7 @@ struct AgentWorkflowTargetTests {
         try JSONEncoder().encode(saved).write(to: file)
         let store = AgentWorkflowStore(fileURL: file, hostID: host)
         let restored = try await store.snapshot()
-        #expect(restored.schemaVersion == 7)
+        #expect(restored.schemaVersion == 8)
         let reviewAgentID = try #require(legacy.definition.nodes[1].agentInstanceID)
         #expect(restored.definitions[0].agentTargets?[reviewAgentID] == live[1].target)
         #expect(try restored.runs[0].invocations[1].instance?.matchesBinding(#require(review.instance)) == true)

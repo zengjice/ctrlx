@@ -40,10 +40,10 @@ struct HostFileTabServiceTests {
         }
         if publishBeforeOpen {
             try service.updateRoutes([await replacement("work", "%1")])
-            #expect(service.tabs.isEmpty)
+            #expect(restart ? service.tabs.first?.id == original.id : service.tabs.isEmpty)
         }
         let current = try await service.open(sessionName: "work", paneID: "%1", expectedWorkspacePane: fresh)
-        #expect(current.id != original.id)
+        #expect(restart ? current.id == original.id : current.id != original.id)
         #expect(service.tabs == [current])
     }
 
@@ -151,6 +151,7 @@ struct HostFileTabServiceTests {
         let replacement = WorkspacePaneIdentity(serverID: "300:3", sessionID: identity.sessionID, windowID: identity.windowID, paneID: identity.paneID)
         let replaced = try #require(fixture(identity: replacement).resolvePane)
         try service.updateRoutes([await replaced("work", "%1")])
-        #expect(service.tabs.isEmpty)
+        #expect(service.tabs.first?.id == saved.id)
+        #expect(service.tabs.first?.initialDirectory == "/saved")
     }
 }

@@ -1,5 +1,6 @@
 #if os(iOS)
     import CtrlxCommon
+    import CtrlxNetworking
     import Dependencies
     import DependenciesMacros
     import Foundation
@@ -84,6 +85,7 @@
         /// Information needed to deep link to a specific session
         public struct DeepLinkInfo: Equatable {
             public let paneId: String
+            public var agentID: AgentID? = nil
             public let hostId: String
         }
 
@@ -184,10 +186,8 @@
                 return
             }
 
-            if
-                let paneId = userInfo["paneId"] as? String,
-                let hostId = userInfo["pairId"] as? String {
-                pendingDeepLink = DeepLinkInfo(paneId: paneId, hostId: hostId)
+            if let hostId = userInfo["pairId"] as? String {
+                pendingDeepLink = DeepLinkInfo(paneId: userInfo["paneId"] as? String ?? "", agentID: AgentID(notificationUserInfo: userInfo), hostId: hostId)
             }
         }
 

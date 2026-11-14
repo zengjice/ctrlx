@@ -66,6 +66,100 @@ struct AgentWorkflowRequestTests {
     }
 
     @Test
+    func targetlessLegacyParticipantStillDetectsOccupiedInstance() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let occupied = try await start(f)
+        var archive = try await f.store.snapshot()
+        archive.schemaVersion = 7
+        archive.definitions[0].agentTargets = nil
+        archive.instances = []
+        let file = f.root.appendingPathComponent("ledger.json")
+        try JSONEncoder().encode(archive).write(to: file, options: .atomic)
+        let reopened = AgentWorkflowStore(fileURL: file, hostID: f.hostID)
+        let legacy = try #require(try await reopened.snapshot().definitions.first)
+        #expect(legacy.agentTargets == nil)
+        let service = AgentWorkflowService(store: reopened, scan: { _ in [] }, schedule: { _ in }, now: { now })
+        let response = try await service.handle(.init(.start(definitionID: legacy.id, expectedRevision: legacy.revision, requestID: UUID(), authorizationExpiresAt: now.addingTimeInterval(3_600)), expectedHostID: f.hostID))
+        #expect(response.run == nil)
+        #expect(response.startRejection?.conflicts.map(\.id) == [occupied.summary.id])
+        #expect(response.startRejection?.conflicts.first?.agentNames == [f.instances[0].displayName])
+        #expect(try await reopened.snapshot().definitions.first?.agentTargets == nil)
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func reboundLegacyParticipantChecksOnlyItsCurrentTarget(targetOccupied: Bool, targetRestarted: Bool) async throws {
+        let f = try await fixture(count: 2)
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let originalRun = try await start(f)
+        let a = f.instances[0], b = f.instances[1]
+        var occupyingTargetRunID: UUID?
+        if targetOccupied {
+            let node = AgentWorkflowNode(name: "Use B", agentInstanceID: b.id)
+            let definition = try await f.service.save(.init(name: "Occupying B", hostID: f.hostID, nodes: [node], edges: [], entryNodeID: node.id), expectedRevision: nil)
+            let run = try await f.service.start(definitionID: definition.id, expectedRevision: definition.revision, requestID: UUID(), authorizationExpiresAt: now.addingTimeInterval(3_600))
+            _ = try await f.service.pause(runID: run.id, expectedRevision: run.revision)
+            occupyingTargetRunID = run.id
+        }
+        var rebound = f.definition
+        rebound.agentTargets?[a.id] = b.target
+        let saved = try await f.service.save(rebound, expectedRevision: f.definition.revision)
+        #expect(saved.agentInstanceIDs == [a.id])
+        #expect(saved.instance(for: a.id, in: f.instances)?.id == b.id)
+        var observations = f.instances.map(AgentWorkflowObservation.init)
+        if targetRestarted {
+            observations[1].processID += 100
+            observations[1].processRuntimeID = "restarted-B"
+            observations[1].conversationID = "resumed-B"
+        }
+        let current = observations
+        let service = AgentWorkflowService(store: f.store, scan: { _ in current }, schedule: { _ in }, now: { now })
+        let response = try await service.handle(.init(.start(definitionID: saved.id, expectedRevision: saved.revision, requestID: UUID(), authorizationExpiresAt: now.addingTimeInterval(3_600)), expectedHostID: f.hostID))
+        let after = try await f.store.snapshot()
+        #expect(after.runs.first { $0.id == originalRun.summary.id }?.instances.map(\.agentID) == [a.agentID])
+        if targetOccupied {
+            #expect(response.run == nil)
+            let rejection = try #require(response.startRejection)
+            #expect(try rejection.conflicts.map(\.id) == [#require(occupyingTargetRunID)])
+            #expect(rejection.conflicts.first?.agentNames == [b.displayName])
+            #expect(after.runs.count == 2)
+        } else {
+            #expect(response.startRejection == nil)
+            let runID = try #require(response.run?.summary.id)
+            let started = try #require(after.runs.first { $0.id == runID })
+            #expect(started.instances.map(\.agentID) == [b.agentID])
+            #expect(started.definition.agentInstanceIDs == [a.id])
+            #expect((started.instances.first?.id != b.id) == targetRestarted)
+        }
+    }
+
+    @Test
+    func unusedParticipantTargetIsSavedWithoutReservingItsAgent() async throws {
+        let f = try await fixture(count: 2)
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let occupied = try await start(f)
+        let activeID = UUID(), unusedID = UUID()
+        let node = AgentWorkflowNode(name: "Use B", agentInstanceID: activeID)
+        var draft = AgentWorkflowDefinition(name: "B with unused A", hostID: f.hostID, nodes: [node], edges: [], entryNodeID: node.id, participants: [
+            .init(agentInstanceID: activeID, name: "B"),
+            .init(agentInstanceID: unusedID, name: "A"),
+        ])
+        draft.agentTargets = [activeID: f.instances[1].target, unusedID: f.instances[0].target]
+        let saved = try await f.service.save(draft, expectedRevision: nil)
+        #expect(saved.agentTargets == draft.agentTargets)
+        let reopened = AgentWorkflowStore(fileURL: f.root.appendingPathComponent("ledger.json"), hostID: f.hostID)
+        let loaded = try #require(try await reopened.snapshot().definitions.first { $0.id == saved.id })
+        #expect(loaded.agentTargets == draft.agentTargets)
+        let started = try await f.service.start(definitionID: saved.id, expectedRevision: saved.revision, requestID: UUID(), authorizationExpiresAt: now.addingTimeInterval(3_600))
+        #expect(started.instances.map(\.agentID) == [f.instances[1].agentID])
+        var used = saved
+        used.nodes[0].agentInstanceID = unusedID
+        let updated = try await f.service.save(used, expectedRevision: saved.revision)
+        let response = try await f.service.handle(.init(.start(definitionID: updated.id, expectedRevision: updated.revision, requestID: UUID(), authorizationExpiresAt: now.addingTimeInterval(3_600)), expectedHostID: f.hostID))
+        #expect(response.startRejection?.conflicts.map(\.id) == [occupied.summary.id])
+    }
+
+    @Test
     func startRejectionIdentifiesAllOccupyingRunsAndRetryStillFindsAcceptedRequest() async throws {
         let f = try await fixture(count: 3)
         defer { try? FileManager.default.removeItem(at: f.root) }
@@ -95,7 +189,10 @@ struct AgentWorkflowRequestTests {
             return observation
         }
         let busyService = AgentWorkflowService(store: f.store, scan: { _ in busy }, schedule: { _ in }, now: { now })
-        #expect(try await busyService.handle(attempt).startRejection == rejection)
+        let busyRejection = try #require(await busyService.handle(attempt).startRejection)
+        #expect(busyRejection.conflicts.map(\.id) == rejection.conflicts.map(\.id))
+        #expect(busyRejection.conflicts.map(\.agentNames) == rejection.conflicts.map(\.agentNames))
+        #expect(busyRejection.conflicts.map { $0.run.status } == rejection.conflicts.map { $0.run.status })
         #expect(try await f.store.snapshot().runs.count == 2)
         #expect(try await start(f, id: first.summary.id).summary.id == first.summary.id)
         for run in try await f.store.snapshot().runs {

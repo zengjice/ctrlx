@@ -291,6 +291,7 @@
             switch PaneLinkedTabs.adjacent(to: source, direction: direction, groups: linkedTabs.groups) {
             case let .tab(item):
                 initialPaneSelection.cancel()
+                _ = PushNotificationService.shared.consumePendingDeepLink()
                 fileWorkspace.selectedID = nil
                 browserSelection.selectedID = nil
                 simulatorSelection.selectedID = nil
@@ -1497,6 +1498,7 @@
                 simulatorSelection.selectedID = nil
                 guard fileWorkspace.tabs.contains(where: { $0.id == id }) else { return }
                 initialPaneSelection.cancel()
+                _ = PushNotificationService.shared.consumePendingDeepLink()
                 cancelCreationFollowUp()
                 isKeyboardActive = false
                 quickActionPresentation.dismiss()
@@ -1531,6 +1533,7 @@
             case let .selectSimulator(id):
                 guard sessionSimulators.contains(where: { $0.id == id }) else { return }
                 initialPaneSelection.cancel()
+                _ = PushNotificationService.shared.consumePendingDeepLink()
                 cancelCreationFollowUp()
                 isKeyboardActive = false
                 quickActionPresentation.dismiss()
@@ -1540,6 +1543,7 @@
             case let .selectBrowser(id):
                 guard sessionBrowsers.contains(where: { $0.id == id }) else { return }
                 initialPaneSelection.cancel()
+                _ = PushNotificationService.shared.consumePendingDeepLink()
                 cancelCreationFollowUp()
                 isKeyboardActive = false
                 quickActionPresentation.dismiss()
@@ -1607,6 +1611,7 @@
 
         private func selectTerminalWindow(_ target: TmuxWindow, preferredPaneID: String? = nil) {
             initialPaneSelection.cancel()
+            _ = PushNotificationService.shared.consumePendingDeepLink()
             pendingSimulatorRequest = nil
             pendingResourceRequest = nil
             fileWorkspace.hasPendingTerminalSelection = false
@@ -1740,6 +1745,7 @@
             }
             guard request.source.sessionName == sessionName else { throw AgentForkError("Reopen Fork in the source session.") }
             initialPaneSelection.cancel()
+            _ = PushNotificationService.shared.consumePendingDeepLink()
             isCreatingWindow = true
             automaticTabFit.cancel()
             initialSessionFit?.cancel(hostID: hostId, sessionName: sessionName)
@@ -1780,6 +1786,7 @@
                 throw NewAgentTabConfiguration.LaunchError(reason)
             }
             initialPaneSelection.cancel()
+            _ = PushNotificationService.shared.consumePendingDeepLink()
             isCreatingWindow = true
             initialSessionFit?.cancel(hostID: hostId, sessionName: sessionName)
             let revision = windowCreation.begin(hostID: hostId, automaticFit: settings.newSessionAutoFit, sessionBinding: resourceID == nil ? binding : nil)

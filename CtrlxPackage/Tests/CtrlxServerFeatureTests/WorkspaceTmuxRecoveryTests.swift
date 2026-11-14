@@ -44,7 +44,7 @@ struct WorkspaceTmuxRecoveryTests {
                 let preferences = AgentModelPreferences(), windows = DetachedTerminalWindows()
                 let identity = try #require(panes[0].workspaceIdentity)
                 preferences.initialize(.init(pane: identity, defaults: .init(efforts: ["low"])), hostID: "local")
-                let key = AgentModelPreferences.Key(hostID: "local", serverID: identity.serverID, windowID: identity.windowID)
+                let key = AgentModelPreferences.Key(hostID: "local", windowID: identity.windowID)
                 preferences.tabs[key]?.models.insert("hidden-model")
                 source.serverID = restored.state.serverID
                 source.sessions = restored.state.sessions

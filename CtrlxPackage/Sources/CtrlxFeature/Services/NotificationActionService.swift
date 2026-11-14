@@ -113,7 +113,7 @@
                 }
                 if !delivered {
                     logger.error("Failed to deliver notification action response")
-                    await scheduleFailureNotification(pairId: pairId, paneId: paneId)
+                    await scheduleFailureNotification(pairId: pairId, paneId: paneId, agentID: context.agent?.agentID)
                 }
 
             case let .nextQuestion(index, progress):
@@ -329,6 +329,7 @@
             settings: IOSSettings,
             manager: ViewerConnectionManager
         ) async -> Bool {
+            guard let binding = context.agent, binding.pluginID == context.pluginId else { return false }
             if manager.connection(for: hostId)?.isHostConnected != true {
                 await manager.connect(
                     to: host,
@@ -345,7 +346,7 @@
                 if
                     let connection = manager.connection(for: hostId),
                     connection.isHostConnected,
-                    connection.relayClient.workspaceInputState.binding(paneID: context.sessionId) != .unavailable {
+                    connection.relayClient.workspaceInputState.catalog?.resolve(agentID: binding.agentID, pairID: hostId).value != nil {
                     break
                 }
                 guard !Task.isCancelled else { return false }
@@ -355,7 +356,7 @@
             guard
                 let connection = manager.connection(for: hostId),
                 connection.isHostConnected,
-                connection.relayClient.workspaceInputState.binding(paneID: context.sessionId) != .unavailable
+                let route = connection.relayClient.workspaceInputState.catalog?.resolve(agentID: binding.agentID, pairID: hostId).value
             else {
                 logger.error("Host terminal not available for notification action submission")
                 return false
@@ -365,10 +366,11 @@
             // transport — a socket that died between the poll above and the
             // send must surface as "not delivered", not silently succeed.
             return await connection.submitAgentResponse(
-                sessionId: context.sessionId,
+                sessionId: route.paneID,
                 pluginId: context.pluginId,
                 requestId: context.requestId,
-                response: response
+                response: response,
+                notificationBinding: binding
             )
         }
 
@@ -418,6 +420,11 @@
             if let paneId {
                 userInfo["paneId"] = paneId
             }
+            if let agentID = context.agent?.agentID {
+                for (key, value) in agentID.notificationUserInfo {
+                    userInfo[key] = value
+                }
+            }
             content.userInfo = userInfo
 
             await addNotification(content)
@@ -425,10 +432,10 @@
 
         /// Posts a tap-to-open notification when a submission could not be
         /// delivered, so the user's answer is never silently dropped.
-        private func scheduleFailureNotification(pairId: String?, paneId: String?) async {
+        private func scheduleFailureNotification(pairId: String?, paneId: String?, agentID: AgentID?) async {
             let content = UNMutableNotificationContent()
             content.title = "Answer not delivered"
-            content.body = "Couldn't reach your Mac. Tap to open the session and answer there."
+            content.body = "The answer could not be delivered. Open CtrlX to check the current request."
             content.sound = .default
             var userInfo: [String: Any] = [:]
             if let pairId {
@@ -436,6 +443,11 @@
             }
             if let paneId {
                 userInfo["paneId"] = paneId
+            }
+            if let agentID {
+                for (key, value) in agentID.notificationUserInfo {
+                    userInfo[key] = value
+                }
             }
             content.userInfo = userInfo
 

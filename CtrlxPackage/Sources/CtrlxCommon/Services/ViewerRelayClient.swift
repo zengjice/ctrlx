@@ -963,7 +963,8 @@ final public class ViewerRelayClient {
         pluginId: String,
         requestId: String,
         response: AgentResponse,
-        inputBinding: ViewerWorkspaceInputBinding? = nil
+        inputBinding: ViewerWorkspaceInputBinding? = nil,
+        notificationBinding: AgentNotificationBinding? = nil
     ) async -> Bool {
         guard state.isConnected else {
             logger.debug("Not connected, cannot submit agent response")
@@ -980,7 +981,8 @@ final public class ViewerRelayClient {
             pluginId: pluginId,
             requestId: requestId,
             response: response,
-            expectedWorkspacePane: expectedWorkspacePane
+            expectedWorkspacePane: expectedWorkspacePane,
+            notificationBinding: notificationBinding
         )
         return await sendEncrypted(.agentResponseSubmission(message))
     }

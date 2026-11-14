@@ -68,6 +68,9 @@
             if let hostId {
                 userInfo["hostId"] = hostId
             }
+            if let agentID = notification.agentID {
+                userInfo.merge(agentID.notificationUserInfo) { _, current in current }
+            }
             content.userInfo = userInfo
             return content
         }
@@ -189,7 +192,7 @@
         /// Handler called on the main actor when a notification is tapped.
         /// `hostId` is non-nil when the notification came from a remote host
         /// (viewer mode), so the tap reveals that host's remote session.
-        @MainActor var onTapped: ((_ paneId: String, _ hostId: String?) -> Void)?
+        @MainActor var onTapped: ((_ agentID: AgentID?, _ hostId: String?) -> Void)?
 
         /// Handler called on the main actor when a trial-expiry alert
         /// (`userInfo["licenseAlert"] == true`) is tapped.
@@ -227,7 +230,8 @@
                 return
             }
 
-            guard let paneId = userInfo["paneId"] as? String else { return }
+            guard userInfo["paneId"] != nil || userInfo["hostId"] != nil else { return }
+            let agentID = AgentID(notificationUserInfo: userInfo)
             let hostId = userInfo["hostId"] as? String
             // Schedule after didReceive returns — the system may reclaim focus
             // while this async method is still running.
@@ -235,7 +239,7 @@
                 let handler = onTapped
                 Task { @MainActor in
                     try? await Task.sleep(for: .milliseconds(300))
-                    handler?(paneId, hostId)
+                    handler?(agentID, hostId)
                 }
             }
         }

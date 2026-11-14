@@ -99,7 +99,7 @@ struct AgentWorkflowModelControlsTests {
             coordinator.pluginRegistry = registry
             coordinator.tmuxService.workflowInputGate = gate
             coordinator.windowManager.setPaneStatesForPreview([.init(paneId: "%1", agentSession: .init(paneId: "%1", pluginID: pluginID), workspaceIdentity: identity)])
-            coordinator.agentModelCatalogs["%1"] = .init(runtimeID: "runtime", models: [.init(id: "test-model", name: "Test Model", efforts: ["low", "high"], defaultEffort: "low", screenNames: ["Test Model"])])
+            coordinator.agentModelCatalogs["%1"] = .init(runtimeID: "runtime", models: [.init(id: "test-model", name: "Test Model", efforts: ["low", "high"], defaultEffort: "low", screenNames: ["Test Model"])], pluginID: pluginID)
             let request = AgentModelControls(workspacePane: identity, runtimeID: "runtime", selection: .init(model: "test-model", effort: "high"))
             do {
                 if mode == "success" {

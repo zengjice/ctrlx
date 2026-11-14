@@ -160,18 +160,22 @@ function forward(event, context) {
 // frame, and the sidecar would see busy→idle and fire a spurious "finished".
 // The promise never rejects and self-times-out (fetchIdleSummary), so it can't
 // wedge the chain.
-let sendChain = Promise.resolve()
+const ingressState = globalThis[Symbol.for("ctrlx.opencode.ingress")] ??= {
+  sequence: 0,
+  pending: Promise.resolve(),
+}
 function enqueue(event, context, summaryPromise) {
-  sendChain = sendChain.then(async () => {
-    let payload = event
+  const ordered = { ...event, sourceSequence: ++ingressState.sequence }
+  ingressState.pending = ingressState.pending.then(async () => {
+    let payload = ordered
     if (summaryPromise) {
       const summary = await summaryPromise
       // Copy — the same event object is dispatched to every subscribed plugin.
-      if (summary) payload = { ...event, properties: { ...(event.properties || {}), ctrlxSummary: summary } }
+      if (summary) payload = { ...ordered, properties: { ...(event.properties || {}), ctrlxSummary: summary } }
     }
     return forward(payload, context)
   })
-  return sendChain
+  return ingressState.pending
 }
 
 // --- Turn summaries -----------------------------------------------------------

@@ -152,6 +152,7 @@ actor PhraseTestRelay {
     var hostKey: ViewerConnectedMessage?
     var viewerKey: ViewerConnectedMessage?
     private(set) var encryptedFrames = 0
+    private(set) var pushes: [EncryptedPushPayload] = []
     private(set) var unexpectedTypes: [String] = []
     private(set) var errors: [String] = []
 
@@ -174,6 +175,8 @@ actor PhraseTestRelay {
                 if let target = ws === host ? viewer : host {
                     try await target.send(raw: data, opcode: .binary)
                 }
+            case let .encryptedPush(payload):
+                pushes.append(payload)
             case .requestSessionState:
                 if ws === viewer, let host {
                     try await host.send(raw: data, opcode: .binary)
@@ -206,6 +209,11 @@ actor PhraseTestRelay {
         guard let host, let viewer, let hostKey, let viewerKey else { return }
         try await send(.hostConnected(hostKey), to: viewer)
         try await send(.viewerConnected(viewerKey), to: host)
+    }
+
+    func sendToHost(_ message: WebSocketMessage) async throws {
+        guard let host else { throw CocoaError(.fileNoSuchFile) }
+        try await send(message, to: host)
     }
 
     private func send(_ message: WebSocketMessage, to ws: WebSocket) async throws {

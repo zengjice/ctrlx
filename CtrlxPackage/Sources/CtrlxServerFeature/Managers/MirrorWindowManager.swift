@@ -1,5 +1,6 @@
 import CtrlxCommon
 import CtrlxNetworking
+import CtrlxPluginProtocol
 import Dependencies
 import Foundation
 import Logging
@@ -52,13 +53,16 @@ final public class MirrorWindowManager {
     private var suppressedAgentProcessIDs: [String: Set<String>] = [:]
 
     @ObservationIgnored
+    private var conversationEvidence: [String: AgentConversationEvidence] = [:]
+
+    @ObservationIgnored
     private var lastDetectedAgentProcesses: [String: TmuxService.DetectedAgentPane] = [:]
 
     @ObservationIgnored
     private var rememberedAgentIdentities: [String: AgentSessionIdentity] = [:]
 
     @ObservationIgnored
-    private var identityWrites: [String: (id: UUID, source: AgentForkSource, task: Task<Void, Never>)] = [:]
+    private var identityWrites: [String: (id: UUID, source: AgentForkSource?, task: Task<Void, Never>)] = [:]
 
     @ObservationIgnored
     @Dependency(AgentSessionIdentityClient.self) private var agentIdentities
@@ -208,6 +212,7 @@ final public class MirrorWindowManager {
             processDetectedPaneIds.remove(paneId)
             suppressedAgentProcessIDs.removeValue(forKey: paneId)
             lastDetectedAgentProcesses.removeValue(forKey: paneId)
+            conversationEvidence.removeValue(forKey: paneId)
             updatedStates.removeValue(forKey: paneId)
             changed = true
         }
@@ -474,19 +479,87 @@ final public class MirrorWindowManager {
         agentReconciliationTask = nil
     }
 
+    func currentAgentBinding(forPane paneID: String) -> AgentProcessBinding? {
+        guard
+            let pane = paneStates[paneID], let workspace = pane.workspaceIdentity,
+            let detected = lastDetectedAgentProcesses[paneID],
+            let binding = AgentProcessBinding(paneID: paneID, workspacePane: workspace, detected: detected, runtimeID: agentIdentities.runtimeID),
+            pane.agentSession?.pluginID == binding.pluginID,
+            pane.agentSession?.processRuntimeID == binding.runtimeID else { return nil }
+        return binding
+    }
+
+    /// A previously verified observation may prove its own exit after the PID is gone.
+    func recordedAgentBinding(forPane paneID: String) -> AgentProcessBinding? {
+        guard
+            let pane = paneStates[paneID], let workspace = pane.workspaceIdentity,
+            let runtime = pane.agentSession?.processRuntimeID,
+            let detected = lastDetectedAgentProcesses[paneID], detected.pluginID == pane.agentSession?.pluginID else { return nil }
+        return AgentProcessBinding(paneID: paneID, workspacePane: workspace, detected: detected, runtimeID: { _ in runtime })
+    }
+
+    /// Called on the main actor with no suspension between revalidation and mutation.
+    func acceptCurrentEvent(_ event: PluginEvent, binding: AgentProcessBinding, peer: PluginIngressPeer, nativeConversationID: String?) -> AgentEventContext? {
+        guard
+            nativeConversationID == nil || nativeConversationID == event.sessionID,
+            let current = currentAgentBinding(forPane: binding.paneID),
+            current.pluginID == event.pluginID, current.runtimeID == binding.runtimeID,
+            current.workspacePane.isSamePane(as: binding.workspacePane),
+            let pid = Int32(current.processID), peer.contains(processID: pid, runtimeID: current.runtimeID),
+            let pane = paneStates[binding.paneID] else { return nil }
+        if var evidence = conversationEvidence[binding.paneID], evidence.runtimeID == binding.runtimeID {
+            guard evidence.accept(event, nativeConversationID: nativeConversationID, source: peer.processes.first) else { return nil }
+            conversationEvidence[binding.paneID] = evidence
+        } else {
+            let previous = pane.claudeSessionID
+            if
+                let previous, previous != event.sessionID, nativeConversationID == nil,
+                event.conversationStarted != true, event.workflow?.kind != .submitted {
+                return nil
+            }
+            conversationEvidence[binding.paneID] = .init(runtimeID: binding.runtimeID, conversationID: event.sessionID, latestSource: peer.processes.first, latestSequence: event.sourceSequence)
+        }
+        if pane.claudeSessionID != event.sessionID {
+            _ = clearAgentSessionState(forPane: binding.paneID)
+            invalidateSavedConversation(forPane: binding.paneID)
+            updateSession(paneId: binding.paneID) { session in
+                session.pluginID = event.pluginID
+                session.processRuntimeID = binding.runtimeID
+            }
+            paneStates[binding.paneID]?.claudeSessionID = event.sessionID
+        }
+        return AgentEventContext(binding: current, conversationID: event.sessionID)
+    }
+
     func refreshDetectedAgentSessions(
         processNamesByPlugin: [String: [String]],
-        refreshSnapshot: Bool = false
+        refreshSnapshot: Bool = false,
+        verifyingConversationForProcessID: String? = nil
     ) async {
         guard
             let panes = await tmuxService.detectAgentPanesIfAvailable(
                 processNamesByPlugin: processNamesByPlugin, refreshSnapshot: refreshSnapshot
             ), !Task.isCancelled else { return }
         let changed = reconcileDetectedAgentSessions(panes)
-        let restored = await restoreNativeAgentIdentities(from: panes, processNamesByPlugin: processNamesByPlugin)
+        let restored = await restoreNativeAgentIdentities(from: panes, processNamesByPlugin: processNamesByPlugin, verifyingConversationForProcessID: verifyingConversationForProcessID)
         if changed || restored {
             await onAgentProcessReconciliationChanged?()
         }
+    }
+
+    @discardableResult
+    func invalidateSavedConversation(forPane paneID: String) -> Task<Void, Never>? {
+        guard let identity = paneStates[paneID]?.workspaceIdentity else { return nil }
+        let previous = identityWrites[paneID]?.task
+        previous?.cancel()
+        let id = UUID()
+        let task = Task { [agentIdentities] in
+            // Finish any already-enqueued save before invalidating its record.
+            await previous?.value
+            await agentIdentities.invalidate(identity.paneID)
+        }
+        identityWrites[paneID] = (id, nil, task)
+        return task
     }
 
     func rememberAgentSessionIdentity(
@@ -497,7 +570,8 @@ final public class MirrorWindowManager {
         guard
             let pane = paneStates[paneID], let source = AgentForkSource(pane: pane),
             recoveredIdentity == nil || recoveredIdentity?.source == source,
-            let names = processNamesByPlugin[source.pluginID], !names.isEmpty
+            let names = processNamesByPlugin[source.pluginID], !names.isEmpty,
+            let expectedRuntime = pane.agentSession?.processRuntimeID
         else { return }
         if let pending = identityWrites[paneID], pending.source == source {
             await pending.task.value
@@ -519,10 +593,11 @@ final public class MirrorWindowManager {
                     processNamesByPlugin: [source.pluginID: names], refreshSnapshot: true
                 )?[paneID],
                 detected.processIDs.count == 1, let pid = detected.processIDs.first,
-                let runtime = agentIdentities.runtimeID(pid),
+                let runtime = agentIdentities.runtimeID(pid), runtime == expectedRuntime,
                 recoveredIdentity == nil || (recoveredIdentity?.processID == pid && recoveredIdentity?.runtimeID == runtime),
                 !Task.isCancelled,
-                paneStates[paneID].flatMap(AgentForkSource.init(pane:)) == source
+                paneStates[paneID].flatMap(AgentForkSource.init(pane:)) == source,
+                paneStates[paneID]?.agentSession?.processRuntimeID == expectedRuntime
             else { return }
             let identity = AgentSessionIdentity(source: source, processID: pid, runtimeID: runtime)
             if
@@ -540,7 +615,8 @@ final public class MirrorWindowManager {
 
     private func restoreNativeAgentIdentities(
         from detected: [String: TmuxService.DetectedAgentPane],
-        processNamesByPlugin: [String: [String]]
+        processNamesByPlugin: [String: [String]],
+        verifyingConversationForProcessID: String?
     ) async -> Bool {
         var changed = false
         for (paneID, info) in detected {
@@ -561,7 +637,21 @@ final public class MirrorWindowManager {
                 lastDetectedAgentProcesses[paneID]?.pluginID == info.pluginID,
                 lastDetectedAgentProcesses[paneID]?.processIDs == info.processIDs
             else { continue }
-            if let identity, identity.matches(pane: pane, detected: info, runtimeID: agentIdentities.runtimeID(identity.processID)) {
+            // Resource authorization must refresh a process-detected conversation:
+            // /new and /resume can change its writer without replacing the process.
+            let verifiesWriter = info.pluginID == "codex" && verifyingConversationForProcessID.map { info.processIDs == [$0] } == true
+            var verifiedSessionID: String?
+            if verifiesWriter, let pid = info.processIDs.first, let runtime = agentIdentities.runtimeID(pid) {
+                verifiedSessionID = await agentIdentities.codexSessionID(pid, runtime)
+                guard
+                    !Task.isCancelled, processDetectedPaneIds.contains(paneID),
+                    lastDetectedAgentProcesses[paneID]?.pluginID == info.pluginID,
+                    lastDetectedAgentProcesses[paneID]?.processIDs == info.processIDs,
+                    agentIdentities.runtimeID(pid) == runtime else { continue }
+            }
+            if
+                let identity, !verifiesWriter || verifiedSessionID == identity.source.sessionID,
+                identity.matches(pane: pane, detected: info, runtimeID: agentIdentities.runtimeID(identity.processID)) {
                 // Restore only the join key, never old working/approval/notification state.
                 if pane.claudeSessionID != identity.source.sessionID {
                     paneStates[paneID]?.claudeSessionID = identity.source.sessionID
@@ -580,10 +670,13 @@ final public class MirrorWindowManager {
                 rememberedAgentIdentities.removeValue(forKey: paneID)
                 changed = true
             }
+            if verifiesWriter, verifiedSessionID == nil {
+                continue
+            }
             guard
                 info.pluginID == "codex", info.processIDs.count == 1, let pid = info.processIDs.first,
                 let runtime = agentIdentities.runtimeID(pid),
-                let sessionID = await agentIdentities.codexSessionID(pid, runtime),
+                let sessionID = verifiesWriter ? verifiedSessionID : await agentIdentities.codexSessionID(pid, runtime),
                 !Task.isCancelled, processDetectedPaneIds.contains(paneID),
                 lastDetectedAgentProcesses[paneID]?.pluginID == info.pluginID,
                 lastDetectedAgentProcesses[paneID]?.processIDs == info.processIDs,
@@ -655,6 +748,20 @@ final public class MirrorWindowManager {
             else { continue }
 
             let runtime = info.processIDs.count == 1 ? info.processIDs.first.flatMap(agentIdentities.runtimeID) : nil
+            if let runtime, let previous = paneStates[paneId]?.agentSession {
+                let replaced = previous.pluginID != info.pluginID
+                    || previous.processRuntimeID.map { $0 != runtime } == true
+                    || (previousProcesses[paneId].map {
+                        $0.pluginID == previous.pluginID && $0.processIDs != info.processIDs
+                    } ?? false)
+                if replaced {
+                    // A verified successor supersedes hook ownership too. Do not
+                    // combine its runtime with the old conversation or approval.
+                    changed = clearAgentSessionState(forPane: paneId) || changed
+                    invalidateSavedConversation(forPane: paneId)
+                    processDetectedPaneIds.remove(paneId)
+                }
+            }
             // A cached PID can outlive its process. Keep the last verified owner
             // until a successor is verified or SessionEnd clears the session.
             if let runtime, paneStates[paneId]?.agentSession?.processRuntimeID != runtime {
@@ -718,7 +825,7 @@ final public class MirrorWindowManager {
 
     private func clearAgentSessionState(forPane paneId: String) -> Bool {
         guard paneStates[paneId]?.agentSession != nil else { return false }
-        identityWrites.removeValue(forKey: paneId)?.task.cancel()
+        identityWrites[paneId]?.task.cancel()
         rememberedAgentIdentities.removeValue(forKey: paneId)
         paneStates[paneId]?.agentSession = nil
         // Drop the OTEL telemetry joined to this session (issue #597) so a fresh

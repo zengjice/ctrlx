@@ -20,8 +20,7 @@ public enum NotificationDelivery {
         return false
     }
 
-    /// Tmux pane IDs are only unique within one Host.
-    public static func matchesPane(userInfo: [AnyHashable: Any], pairId: String, paneId: String) -> Bool {
-        userInfo["pairId"] as? String == pairId && userInfo["paneId"] as? String == paneId
+    public static func matchesAgent(userInfo: [AnyHashable: Any], pairId: String, agentID: AgentID) -> Bool {
+        userInfo["pairId"] as? String == pairId && AgentID(notificationUserInfo: userInfo) == agentID
     }
 }

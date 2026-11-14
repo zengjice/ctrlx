@@ -13,11 +13,13 @@ public struct PeerHelloMessage: Codable, Sendable {
     public let minRequiredPartnerVersion: String
 
     public let quickPhraseSync: QuickPhraseSyncOffer?
+    public let supportsStableAgentNotifications: Bool?
 
-    public init(appVersion: String, minRequiredPartnerVersion: String, quickPhraseSync: QuickPhraseSyncOffer? = nil) {
+    public init(appVersion: String, minRequiredPartnerVersion: String, quickPhraseSync: QuickPhraseSyncOffer? = nil, supportsStableAgentNotifications: Bool? = true) {
         self.appVersion = appVersion
         self.minRequiredPartnerVersion = minRequiredPartnerVersion
         self.quickPhraseSync = quickPhraseSync
+        self.supportsStableAgentNotifications = supportsStableAgentNotifications
     }
 }
 

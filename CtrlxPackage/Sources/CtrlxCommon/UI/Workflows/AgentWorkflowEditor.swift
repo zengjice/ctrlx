@@ -85,10 +85,10 @@ struct AgentWorkflowEditor: View {
                         ForEach(draft.agents) { participant in
                             VStack(alignment: .leading, spacing: 8) {
                                 Picker("Agent", selection: participantBinding(participant.id)) {
-                                    ForEach(instances.filter { instance in instance.id == participant.id || !draft.agents.contains(where: { $0.id == instance.id }) }) { instance in
+                                    ForEach(instances.filter { draft.participantID(for: $0, in: instances) == participant.id || draft.participantID(for: $0, in: instances) == nil }) { instance in
                                         Text(instance.displayName).tag(instance.id)
                                     }
-                                    if !instances.contains(where: { $0.id == participant.id }) {
+                                    if draft.instance(for: participant.id, in: instances) == nil {
                                         Text("Agent unavailable · choose a replacement").tag(participant.id)
                                     }
                                 }
@@ -98,8 +98,8 @@ struct AgentWorkflowEditor: View {
                             }
                         }
                         Menu {
-                            ForEach(instances.filter { instance in !draft.agents.contains(where: { $0.id == instance.id }) }) { instance in
-                                Button(instance.displayName) { add(instance) }
+                            ForEach(instances.filter { draft.participantID(for: $0, in: instances) == nil }) { instance in
+                                Button(instance.displayName) { draft.addAgent(instance, in: instances) }
                             }
                         } label: { Label("Add existing Agent", symbol: .plus) }
                         Button { Task { await refreshInstances() } } label: {
@@ -112,7 +112,7 @@ struct AgentWorkflowEditor: View {
                             Text("Participating Agents")
                             Text(draft.agents.isEmpty ? "Choose an Agent in each step, or add an Agent step." : draft.agents.map { agentName($0.id) }.joined(separator: ", "))
                                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                            if draft.agents.contains(where: { participant in !instances.contains { $0.id == participant.id } }), !refreshing {
+                            if draft.agents.contains(where: { draft.instance(for: $0.id, in: instances) == nil }), !refreshing {
                                 Text("Some Agents are unavailable. Choose a replacement.").font(.caption).foregroundStyle(.orange)
                             }
                         }
@@ -347,14 +347,14 @@ struct AgentWorkflowEditor: View {
             }
         }
         .sheet(isPresented: $showingAgentPicker, onDismiss: { choosingAgentFor = nil }) {
-            AgentWorkflowAgentPicker(instances: instances, participants: choosingAgentFor == nil ? draft.agents : [], refreshing: refreshing, error: error, refresh: refreshInstances) { instance in
+            AgentWorkflowAgentPicker(instances: instances, definition: choosingAgentFor == nil ? draft : nil, refreshing: refreshing, error: error, refresh: refreshInstances) { instance in
                 guard !importing else { return }
-                add(instance)
+                let participantID = draft.addAgent(instance, in: instances)
                 if let choosingAgentFor {
                     guard let index = draft.nodes.firstIndex(where: { $0.id == choosingAgentFor }) else { return }
-                    draft.nodes[index].agentInstanceID = instance.id
+                    draft.nodes[index].agentInstanceID = participantID
                 } else {
-                    addNode(.init(name: AgentWorkflowWire.boundedName("\(instance.displayName) task"), agentInstanceID: instance.id, initialTask: draft.nodes.isEmpty ? .textAndAttachments : .omit))
+                    addNode(.init(name: AgentWorkflowWire.boundedName("\(instance.displayName) task"), agentInstanceID: participantID, initialTask: draft.nodes.isEmpty ? .textAndAttachments : .omit))
                 }
             }
         }
@@ -445,26 +445,18 @@ struct AgentWorkflowEditor: View {
     }
 
     private func participantBinding(_ id: UUID) -> Binding<UUID> {
-        Binding(get: { id }, set: { replacement in
-            let target = instances.first { $0.id == replacement }?.target
-            guard replacement != id || draft.agentTargets?[id] != target else { return }
-            guard let index = draft.participants?.firstIndex(where: { $0.id == id }) else { return }
-            draft.participants?[index].agentInstanceID = replacement
-            if let target {
-                draft.agentTargets = draft.agentTargets ?? [:]
-                draft.agentTargets?[replacement] = target
-            }
-            draft.participants?[index].name = AgentWorkflowWire.boundedName(agentName(replacement))
+        Binding(get: { draft.instance(for: id, in: instances)?.id ?? id }, set: { replacement in
+            guard
+                let target = instances.first(where: { $0.id == replacement })?.target,
+                draft.agentTargets?[id]?.agentID != target.agentID,
+                let index = draft.participants?.firstIndex(where: { $0.id == id }) else { return }
+            draft.agentTargets = draft.agentTargets ?? [:]
+            draft.agentTargets?[id] = target
+            draft.participants?[index].name = AgentWorkflowWire.boundedName(agentName(id))
             for step in draft.nodes.indices where draft.nodes[step].agentInstanceID == id {
-                draft.nodes[step].agentInstanceID = replacement
                 draft.nodes[step].modelSelection = nil
             }
         })
-    }
-
-    private func add(_ instance: AgentWorkflowInstance) {
-        guard !draft.agents.contains(where: { $0.id == instance.id }) else { return }
-        draft.participants = draft.agents + [.init(agentInstanceID: instance.id, name: AgentWorkflowWire.boundedName(instance.displayName))]
     }
 
     private func addNode(_ node: AgentWorkflowNode) {
@@ -506,9 +498,7 @@ struct AgentWorkflowEditor: View {
             draft.updateAgentNames(from: values)
             if let target = createdAgent, let instance = values.first(where: { target.matches($0) }) {
                 draft.creationSession = AgentWorkflowSessionReference(instance.workspacePane)
-                if !draft.agents.contains(where: { $0.id == instance.id }) {
-                    add(instance)
-                }
+                draft.addAgent(instance, in: instances)
                 createdAgent = nil
             }
             error = nil

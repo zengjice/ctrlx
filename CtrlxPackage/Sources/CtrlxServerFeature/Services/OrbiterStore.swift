@@ -42,6 +42,14 @@ struct OrbiterTask: Codable, Equatable, Sendable, Identifiable {
     var draft: String
     var archived = false
 
+    func agentID(hostID: UUID) -> AgentID? {
+        if let binding {
+            guard binding.hostID == hostID else { return nil }
+            return binding.agentID
+        }
+        return pane.map { AgentID(hostID: hostID, paneID: $0.paneID) }
+    }
+
     var initialInput: String {
         """
         Goal:

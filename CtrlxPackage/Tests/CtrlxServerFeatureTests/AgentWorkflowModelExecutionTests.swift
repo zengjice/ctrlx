@@ -88,7 +88,7 @@ struct AgentWorkflowModelExecutionTests {
         let archive = AgentWorkflowArchive(schemaVersion: 5, hostID: hostID, definitions: [definition])
         try JSONEncoder().encode(archive).write(to: file)
         let restored = try await AgentWorkflowStore(fileURL: file, hostID: hostID).snapshot()
-        #expect(restored.schemaVersion == 7)
+        #expect(restored.schemaVersion == 8)
         #expect(restored.definitions == [definition])
         #expect(restored.definitions.first?.nodes.first?.modelSelection == nil)
     }

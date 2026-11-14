@@ -125,7 +125,7 @@ actor AgentWorkflowRunner {
                 for invocation in prepared.invocations where invocation.status == .pending {
                     guard
                         let binding = prepared.instance(for: invocation),
-                        prepared.instances.contains(where: { $0.target == binding.target && $0.readiness != .unavailable }) else { continue }
+                        prepared.instances.contains(where: { $0.agentID == binding.agentID && $0.readiness != .unavailable }) else { continue }
                     guard deliveries[invocation.id] == nil else { continue }
                     deliveries[invocation.id] = Task { await self.deliver(runID: runID, invocationID: invocation.id) }
                 }

@@ -621,6 +621,15 @@ public struct MainView: View {
                 coordinator.agentSimulator.unregister(simulatorWorkspace)
             }
         }
+        .alert("Notification", isPresented: .init(get: { detachedWorkspace == nil && coordinator.notificationNavigationIssue != nil }, set: {
+            if !$0 {
+                coordinator.notificationNavigationIssue = nil
+            }
+        })) {
+            Button("OK", role: .cancel) { coordinator.notificationNavigationIssue = nil }
+        } message: {
+            Text(coordinator.notificationNavigationIssue ?? "")
+        }
         .task(id: coordinator.workspaceRecoveryReady) {
             guard coordinator.workspaceRecoveryReady, detachedWorkspace == nil else { return }
             // Initial load only - periodic refresh is handled by MirrorWindowManager
@@ -3291,10 +3300,16 @@ public struct MainView: View {
     /// Called both from `.task` (when the view first appears) and `.onChange` (when already visible).
     private func applyPendingMenuBarSelection() {
         guard detachedWorkspace == nil else { return }
-        guard let selection = coordinator.pendingMenuBarSelection else { return }
+        guard let pending = coordinator.pendingMenuBarSelection else { return }
+        guard let selection = coordinator.resolveNotificationSelection(pending) else {
+            coordinator.pendingMenuBarSelection = nil
+            coordinator.notificationNavigationIssue = "The notification target is no longer available. Choose another tab."
+            return
+        }
         coordinator.pendingMenuBarSelection = nil
         tabStore.pendingPaneSelection = nil
         switch selection {
+        case .agent: return
         case let .local(paneId):
             guard
                 let pane = windowManager.paneStates[paneId],

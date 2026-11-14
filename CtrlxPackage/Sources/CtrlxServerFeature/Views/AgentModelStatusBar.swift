@@ -25,7 +25,7 @@ struct AgentModelStatusBar: View {
 
     private var displayKey: AgentModelDisplayCache.Key? {
         guard let identity = pane?.workspaceIdentity, let pluginID = pane?.agentSession?.pluginID else { return nil }
-        return .init(hostID: hostID ?? "local", pane: identity, pluginID: pluginID)
+        return .init(hostID: hostID ?? "local", pane: identity, pluginID: pluginID, runtimeID: pane?.agentSession?.processRuntimeID, conversationID: pane?.claudeSessionID)
     }
 
     private var pane: PaneState? {
@@ -37,7 +37,7 @@ struct AgentModelStatusBar: View {
 
     private var preferenceKey: AgentModelPreferences.Key? {
         guard let identity = pane?.workspaceIdentity else { return nil }
-        return .init(hostID: hostID ?? "local", serverID: identity.serverID, windowID: identity.windowID)
+        return .init(hostID: hostID ?? "local", windowID: identity.windowID)
     }
 
     private var hidden: AgentModelPreferences.Hidden {

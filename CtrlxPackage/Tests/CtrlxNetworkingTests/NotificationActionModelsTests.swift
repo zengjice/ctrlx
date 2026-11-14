@@ -543,6 +543,7 @@ struct NotificationActionWireTests {
 
     @Test("a cap-sized context still fits the APNs 4 KB envelope after double base64")
     func worstCaseAPNsEnvelopeFitsBudget() throws {
+        let agentID = AgentID(hostID: UUID(), paneID: UUID())
         // The `Limits.maxEncodedBytes` cap is measured on the RAW context, but
         // the wire applies double base64: NotificationContent JSON → ChaChaPoly
         // seal → base64 ciphertext inside EncryptedPayload JSON → that whole
@@ -590,6 +591,7 @@ struct NotificationActionWireTests {
             eventType: "PermissionRequest",
             pairId: UUID().uuidString,
             paneId: "%42",
+            agentID: agentID,
             timestamp: Date(timeIntervalSince1970: 1_750_000_000),
             action: capped
         )
@@ -611,7 +613,7 @@ struct NotificationActionWireTests {
         {"aps":{"alert":{"title":"CtrlX","body":"New activity"},"badge":42,\
         "mutable-content":1},"encrypted":"\(encryptedField)","pairId":"\(UUID().uuidString)"}
         """
-        #expect(envelope.utf8.count <= 4096)
+        #expect(envelope.utf8.count <= 4_096)
     }
 
     @Test("NotificationContent round-trips the action context")

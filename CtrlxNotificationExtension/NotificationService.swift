@@ -114,8 +114,8 @@ class NotificationService: UNNotificationServiceExtension {
 
             // Remove previous notifications for this session before showing the new one
             // This keeps only the most recent notification per pane/session
-            if let paneId = notificationContent.paneId {
-                await removePreviousNotifications(pairId: notificationContent.pairId, paneId: paneId)
+            if let agentID = notificationContent.agentID {
+                await removePreviousNotifications(pairId: notificationContent.pairId, agentID: agentID)
             }
 
             // Update the notification with decrypted content
@@ -126,6 +126,11 @@ class NotificationService: UNNotificationServiceExtension {
             // Add context to userInfo for deep linking and analytics
             content.userInfo["eventType"] = notificationContent.eventType
             content.userInfo["decrypted"] = true
+            if let agentID = notificationContent.agentID {
+                for (key, value) in agentID.notificationUserInfo {
+                    content.userInfo[key] = value
+                }
+            }
             content.userInfo["pairId"] = notificationContent.pairId
             if let paneId = notificationContent.paneId {
                 content.userInfo["paneId"] = paneId
@@ -136,7 +141,7 @@ class NotificationService: UNNotificationServiceExtension {
             // buttons) and stash the context for the app's action handler.
             // Only the NSE can do this — the category depends on the encrypted
             // content, which the relay and APNs never see.
-            if let action = notificationContent.action {
+            if let action = notificationContent.action, action.agent?.agentID == notificationContent.agentID, action.agent != nil {
                 await applyActionContext(action, to: content)
             }
 
@@ -200,14 +205,14 @@ class NotificationService: UNNotificationServiceExtension {
 
     /// Removes any previously delivered notifications for the same pane/session.
     /// This ensures only the most recent notification per session is shown.
-    private func removePreviousNotifications(pairId: String, paneId: String) async {
+    private func removePreviousNotifications(pairId: String, agentID: AgentID) async {
         let center = UNUserNotificationCenter.current()
         let deliveredNotifications = await center.deliveredNotifications()
 
         let identifiersToRemove = deliveredNotifications
             .filter {
-                NotificationDelivery.matchesPane(
-                    userInfo: $0.request.content.userInfo, pairId: pairId, paneId: paneId
+                NotificationDelivery.matchesAgent(
+                    userInfo: $0.request.content.userInfo, pairId: pairId, agentID: agentID
                 )
             }
             .map(\.request.identifier)

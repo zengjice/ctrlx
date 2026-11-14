@@ -1019,6 +1019,31 @@
         }
 
         @Test
+        func persistentSourceSurvivesRebuiltTmuxWithoutBootingAnotherDevice() async throws {
+            let fixture = try Fixture()
+            let identity = WorkspacePaneIdentity(serverID: "old", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+            fixture.pane = Fixture.pane(session: "work", window: 0, identity: identity)
+            fixture.service.updateSimulatorRoutes([fixture.pane])
+            #expect((await fixture.action("open")).ok)
+            let state = try #require(fixture.created.first)
+            var recovered = identity
+            recovered.serverID = "new"
+            recovered.windowID = UUID()
+            fixture.pane = Fixture.pane(session: "work", window: 3, paneID: "%42", identity: recovered)
+            fixture.service.updateSimulatorRoutes([fixture.pane])
+            #expect(state.paneID == "%42" && !state.isClosed)
+            #expect(fixture.service.sharedSimulatorTabs.first?.id == state.id)
+            #expect(fixture.service.sharedSimulatorTabs.first?.sourcePaneID == "%42")
+            #expect((await fixture.action("open")).ok)
+            #expect(fixture.boots == 1)
+            var unrelated = recovered
+            unrelated.paneID = UUID()
+            fixture.service.updateSimulatorRoutes([Fixture.pane(session: "work", window: 3, paneID: "%42", identity: unrelated)])
+            #expect(fixture.service.sharedSimulatorTabs.first?.sourcePaneID == nil)
+            await fixture.service.shutdown()
+        }
+
+        @Test
         func closingDefaultClearsItsMapping() async throws {
             let fixture = try Fixture()
             let first = await fixture.action("open")

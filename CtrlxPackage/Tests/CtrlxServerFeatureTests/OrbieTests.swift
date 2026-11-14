@@ -404,7 +404,7 @@ struct OrbieTests {
     }
 
     @Test(arguments: ["process", "pane", "server", "plugin"])
-    func movedReplacementCannotInheritTheOriginalBinding(change: String) async throws {
+    func movedAgentRebindsButDifferentPaneDoesNot(change: String) async throws {
         let f = try await fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
         try await f.service.create(pluginID: "codex", providerID: nil)
@@ -419,10 +419,17 @@ struct OrbieTests {
         f.service.draft = "Do not send to a moved replacement"
         await f.service.send()
         await f.service.refresh()
-        #expect(f.service.instance == nil)
-        #expect(f.service.record?.binding == original)
-        #expect(f.service.draft == "Do not send to a moved replacement")
-        #expect(f.backend.schedules.isEmpty)
+        if change == "pane" {
+            #expect(f.service.instance == nil)
+            #expect(f.service.record?.binding == original)
+            #expect(f.service.draft == "Do not send to a moved replacement")
+            #expect(f.backend.schedules.isEmpty)
+        } else {
+            #expect(f.service.instance?.agentID == original.agentID)
+            #expect(f.service.record?.binding?.workspacePane == f.backend.observations[0].workspacePane)
+            #expect(f.service.draft.isEmpty && f.backend.schedules.count == 1)
+            #expect(f.service.issue == nil)
+        }
     }
 
     @Test

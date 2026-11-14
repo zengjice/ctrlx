@@ -2,6 +2,10 @@ import Foundation
 
 /// Durable destination; process and conversation authentication belongs to each invocation.
 public struct AgentWorkflowTarget: Codable, Equatable, Hashable, Sendable {
+    public var agentID: AgentID {
+        .init(hostID: hostID, paneID: paneID)
+    }
+
     public let hostID: UUID
     public let windowID: UUID
     public let paneID: UUID
@@ -34,6 +38,10 @@ public enum AgentWorkflowReadiness: String, Codable, Sendable {
 /// Assigned by the Host after inspecting the live main process. Neither the
 /// display name nor a provider conversation ID authenticates an instance.
 public struct AgentWorkflowInstance: Codable, Equatable, Identifiable, Sendable {
+    public var agentID: AgentID {
+        .init(hostID: hostID, paneID: workspacePane.paneID)
+    }
+
     public var target: AgentWorkflowTarget {
         .init(hostID: hostID, windowID: workspacePane.windowID, paneID: workspacePane.paneID)
     }
@@ -95,12 +103,12 @@ public struct AgentWorkflowInstance: Codable, Equatable, Identifiable, Sendable 
     /// A resumed conversation keeps its task correlation across CLI restarts.
     /// Callers must separately authenticate the current process in this target.
     public func matchesConversation(_ other: Self) -> Bool {
-        target == other.target && pluginID == other.pluginID
+        agentID == other.agentID && pluginID == other.pluginID
             && !conversationID.isEmpty && conversationID == other.conversationID
     }
 
     public func matchesProcess(_ other: Self) -> Bool {
-        id == other.id && hostID == other.hostID && pluginID == other.pluginID
+        hostID == other.hostID && pluginID == other.pluginID
             && processID == other.processID && processRuntimeID == other.processRuntimeID
             && workspacePane.isSamePane(as: other.workspacePane)
     }

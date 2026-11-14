@@ -20,7 +20,7 @@ struct AgentWorkflowExecution: Sendable {
         guard authorizationExpiresAt > now else { throw AgentWorkflowError("The workflow authorization has expired.") }
         guard
             instances.count == definition.agentInstanceIDs.count,
-            Set(instances.map(\.id)) == definition.agentInstanceIDs,
+            Set(instances.map(\.agentID)).count == instances.count,
             definition.agentInstanceIDs.allSatisfy({ definition.instance(for: $0, in: instances) != nil }) else {
             throw AgentWorkflowStartRejection("A participating Agent is no longer available. Edit the workflow and select a live Agent.")
         }
@@ -65,7 +65,7 @@ struct AgentWorkflowExecution: Sendable {
         try run.definition.validate()
         guard
             run.round > 0, run.roundLimit >= run.round,
-            Set(run.instances.map(\.target)).count == run.instances.count,
+            Set(run.instances.map(\.agentID)).count == run.instances.count,
             run.definition.agentInstanceIDs.allSatisfy({ run.definition.instance(for: $0, in: run.instances) != nil }),
             run.instances.count == run.definition.agentInstanceIDs.count,
             Set(run.invocations.map(\.id)).count == run.invocations.count else {
@@ -84,7 +84,7 @@ struct AgentWorkflowExecution: Sendable {
                 invocation.delivery.round == invocation.round,
                 node.kind == .content ? invocation.delivery.toAgentID == nil && invocation.instance == nil
                 : invocation.instance.map({ $0.id == invocation.delivery.toAgentID
-                        && $0.target == run.definition.instance(for: node.agentInstanceID, in: run.instances)?.target }) == true,
+                        && $0.agentID == run.definition.instance(for: node.agentInstanceID, in: run.instances)?.agentID }) == true,
                 attachments.count <= AgentWorkflowWire.maximumAttachments,
                 Set(attachments).count == attachments.count,
                 (invocation.status == .succeeded) == (invocation.result != nil),
@@ -253,7 +253,7 @@ struct AgentWorkflowExecution: Sendable {
         }
         guard
             !run.invocations.contains(where: {
-                $0.id != invocationID && $0.delivery.toAgentID == instance.id
+                $0.id != invocationID && run.instance(for: $0)?.agentID == instance.agentID
                     && [.writing, .awaitingAcceptance, .running, .uncertain].contains($0.status)
             }) else { throw AgentWorkflowError("Another step is still using this Agent. Resolve it before sending more input.") }
         run.invocations[index].status = .writing
@@ -419,7 +419,7 @@ struct AgentWorkflowExecution: Sendable {
         let invocation = run.invocations[index]
         guard
             let bound = run.instance(for: invocation),
-            bound.matchesProcess(instance) || (bound.target == instance.target && bound.pluginID == instance.pluginID) else {
+            bound.matchesProcess(instance) || (bound.agentID == instance.agentID && bound.pluginID == instance.pluginID) else {
             throw AgentWorkflowError("The Agent tab changed.")
         }
         guard
@@ -557,10 +557,10 @@ struct AgentWorkflowExecution: Sendable {
         }
         var updated = false
         for index in run.instances.indices {
-            guard let live = replacements.first(where: { $0.target == run.instances[index].target }) else { continue }
+            guard let live = replacements.first(where: { $0.agentID == run.instances[index].agentID }) else { continue }
             // First-conversation confirmation is committed with its receipt.
             if
-                !run.instances[index].matchesBinding(live) || (run.instances[index].readiness == .unavailable) != (live.readiness == .unavailable),
+                run.instances[index] != live,
                 !canBindFirstConversation(live) {
                 run.instances[index] = live
                 updated = true

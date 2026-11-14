@@ -78,7 +78,8 @@ class BrowserOwnership {
     it->second.revision = ++nextGrantRevision;
   }
   // Only the trusted Host supplies this key after verifying the live process
-  // and native conversation. Never accept it from an Agent's JSON request.
+  // and native conversation (host UUID + pane UUID + plugin + conversation).
+  // Tmux server/window are location, not this key. Never accept it from Agent JSON.
   bool BindConversation(const std::string& run, const std::string& key, std::vector<std::string>& changed, const std::string& session = "") {
     auto instance = runs.find(run);
     if (instance == runs.end() || !instance->second.active) return false;

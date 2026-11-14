@@ -17,7 +17,7 @@ struct WorkspaceRecoveryPresentationTests {
             let window = session.windows[0]
             let pane = WorkspacePaneIdentity(serverID: "old", sessionID: session.id, windowID: window.id, paneID: window.panes[0].id)
             preferences.initialize(.init(pane: pane, defaults: .init(models: ["provider-default"], efforts: ["low"])), hostID: "local")
-            let key = AgentModelPreferences.Key(hostID: "local", serverID: "old", windowID: window.id)
+            let key = AgentModelPreferences.Key(hostID: "local", windowID: window.id)
             preferences.tabs[key]?.models.insert(session.name)
         }
         var snapshot = WorkspaceRecoveryStoreTests.snapshot()
@@ -35,7 +35,7 @@ struct WorkspaceRecoveryPresentationTests {
         let restored = AgentModelPreferences(), windows = DetachedTerminalWindows()
         WorkspaceRecoveryPresentationMapper.restoreLocal(saved.scenes, live: live, windows: windows, files: [], modelPreferences: restored)
         for session in old {
-            let key = AgentModelPreferences.Key(hostID: "local", serverID: rebuild ? "new" : "old", windowID: session.windows[0].id)
+            let key = AgentModelPreferences.Key(hostID: "local", windowID: session.windows[0].id)
             #expect(restored.tabs[key]?.models == ["provider-default", session.name])
             #expect(restored.tabs[key]?.efforts == ["low"])
             #expect(restored.defaults[key]?.models == ["provider-default"])
@@ -69,7 +69,7 @@ struct WorkspaceRecoveryPresentationTests {
         #expect(preferences.tabs.isEmpty)
         live.sessions = source.sessions
         WorkspaceRecoveryPresentationMapper.restoreLocal(retained, live: live, windows: windows, files: [], modelPreferences: preferences)
-        #expect(preferences.tabs[.init(hostID: "local", serverID: "new", windowID: second.id)] == record.hidden)
+        #expect(preferences.tabs[.init(hostID: "local", windowID: second.id)] == record.hidden)
 
         // A new window can reuse the old tmux number, but not the closed tab's configuration.
         live.sessions[0].windows[1].id = UUID()

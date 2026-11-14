@@ -40,6 +40,23 @@ struct ViewerWorkspaceCatalogTests {
         #expect(try newer.resolve(#require(old.reference(sessionName: "project")))?.sessionName == "renamed")
     }
 
+    @Test("Agent navigation follows a moved and recovered pane without relaxing layout or pairing guards")
+    func agentNavigation() throws {
+        let old = try #require(ViewerWorkspaceCatalog(state: message()))
+        let location = try #require(old.reference(paneID: "%1"))
+        let agentID = AgentID(hostID: host, paneID: pane)
+        let moved = message(server: "restarted", runtime: "%8", name: "new-session", windowRuntime: "@12")
+        var panes = moved.paneStates
+        panes["%8"]?.workspaceIdentity?.windowID = UUID()
+        panes["%8"]?.workspaceIdentity?.sessionID = UUID()
+        let current = try #require(ViewerWorkspaceCatalog(state: .init(pairId: moved.pairId, paneStates: panes, workspaceIdentity: moved.workspaceIdentity)))
+        #expect(current.resolve(agentID: agentID, pairID: "pair").value?.paneID == "%8")
+        #expect(current.resolve(location) == nil)
+        #expect(current.resolve(agentID: agentID, pairID: "other").value == nil)
+        #expect(current.resolve(agentID: .init(hostID: UUID(), paneID: pane), pairID: "pair").value == nil)
+        #expect(current.resolve(agentID: .init(hostID: host, paneID: UUID()), pairID: "pair").value == nil)
+    }
+
     @Test("A recycled pane number is not evidence of persistent identity")
     func reusedNumber() throws {
         let old = try #require(ViewerWorkspaceCatalog(state: message()))

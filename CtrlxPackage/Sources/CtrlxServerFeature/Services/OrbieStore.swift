@@ -27,11 +27,7 @@ struct OrbieRecord: Codable, Equatable, Sendable {
 
     func currentInstance(in instances: [AgentWorkflowInstance]) -> AgentWorkflowInstance? {
         guard let target else { return nil }
-        // Follow a live pane move before falling back to the persisted target.
-        if let binding, let moved = instances.first(where: { binding.matchesProcess($0) }) {
-            return moved
-        }
-        return instances.first { $0.target == target }
+        return target.agentID.resolve(in: instances, identity: { $0.agentID }).value
     }
 }
 

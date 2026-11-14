@@ -110,14 +110,18 @@ final public class ConnectedViewerManager {
         }
         if
             let reconnecting = connections.values.first(where: {
-                if case .reconnecting = $0.state { return true }
+                if case .reconnecting = $0.state {
+                    return true
+                }
                 return false
             }) {
             return reconnecting.state
         }
         if
             let error = connections.values.first(where: {
-                if case .error = $0.state { return true }
+                if case .error = $0.state {
+                    return true
+                }
                 return false
             }) {
             return error.state
@@ -282,7 +286,8 @@ final public class ConnectedViewerManager {
         body: String,
         paneId: String?,
         action: NotificationActionContext? = nil,
-        isQuestion: Bool? = nil
+        isQuestion: Bool? = nil,
+        agentID: AgentID? = nil
     ) async {
         await withTaskGroup(of: Void.self) { group in
             for connection in connections.values where connection.state.isConnected {
@@ -293,7 +298,8 @@ final public class ConnectedViewerManager {
                         body: body,
                         paneId: paneId,
                         action: action,
-                        isQuestion: isQuestion
+                        isQuestion: isQuestion,
+                        agentID: agentID
                     )
                 }
             }

@@ -9,6 +9,7 @@ struct PluginResponseContextTests {
     private func pane() -> PaneState {
         var pane = PaneState(paneId: "%7", agentSession: .init(paneId: "%7", pluginID: "echo", state: .awaitingPermission(.init(title: "Test", description: "Test"), requestID: "request")), workspaceIdentity: .init(serverID: "100:1", sessionID: UUID(), windowID: UUID(), paneID: UUID()))
         pane.claudeSessionID = "conversation"
+        pane.agentSession?.processRuntimeID = "original"
         return pane
     }
 
@@ -20,13 +21,14 @@ struct PluginResponseContextTests {
         moved.workspaceIdentity?.sessionID = UUID()
         moved.workspaceIdentity?.windowID = UUID()
         try context.validate(pluginID: "echo", paneID: "%7", pane: moved)
-        for mutation in 0..<5 {
+        for mutation in 0..<6 {
             var retired = original
             switch mutation {
             case 0: retired.workspaceIdentity?.serverID = "200:2"
             case 1: retired.workspaceIdentity?.paneID = UUID()
             case 2: retired.claudeSessionID = "another-conversation"
             case 3: retired.agentSession?.state = .working
+            case 4: retired.agentSession?.processRuntimeID = "replacement"
             default: retired.agentSession = nil
             }
             #expect(throws: (any Error).self) { try context.validate(pluginID: "echo", paneID: "%7", pane: retired) }

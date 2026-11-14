@@ -10,6 +10,8 @@ private let modelLogger = Logger(label: "com.jicezeng.ctrlx.agent-models")
 struct AgentModelRuntimeCache {
     let runtimeID: String
     let models: [AgentModelOption]
+    var pluginID: String?
+    var conversationID: String?
     var selection: AgentModelSelection?
     var inputGeneration: UInt64?
     var unavailableReason: String?
@@ -63,12 +65,21 @@ extension AppCoordinator {
         let captured = try await captureAgentBinding(paneID: paneID, detected: candidate)
         let pid = captured.binding.processID
         let runtime = captured.binding.runtimeID
+        guard let currentPane = windowManager.paneStates[paneID] else { throw AgentModelError("The Agent is not available.") }
+        let responseContext = try PluginResponseContext(pluginID: candidate.pluginID, pane: currentPane, requestID: nil, expectedWorkspacePane: request.workspacePane)
+        let validateConversation: @MainActor @Sendable () throws -> Void = { [self] in
+            try responseContext.validate(pluginID: candidate.pluginID, paneID: paneID, pane: windowManager.paneStates[paneID])
+            guard identityClient.runtimeID(pid) == runtime else { throw AgentModelError("The Agent process changed.") }
+        }
         recordAgentModelDiagnostic(paneID: paneID, phase: "identify", since: identifyStart)
         guard captured.binding.workspacePane.isSamePane(as: request.workspacePane) else { throw AgentModelError("The terminal changed. Reopen this tab's model controls.") }
         if request.selection != nil, request.runtimeID != runtime {
             throw AgentModelError("The Agent restarted. Refresh its model controls.")
         }
         var cache = agentModelCatalogs[paneID]
+        if cache?.pluginID != currentPane.agentSession?.pluginID || cache?.conversationID != currentPane.claudeSessionID {
+            cache = nil
+        }
         if cache?.runtimeID != runtime || request.refresh {
             let catalogStart = ContinuousClock.now
             do {
@@ -77,10 +88,10 @@ extension AppCoordinator {
                     if cache?.runtimeID == runtime, cache?.models.isEmpty == false {
                         throw AgentModelError(issue)
                     }
-                    cache = AgentModelRuntimeCache(runtimeID: runtime, models: [], unavailableReason: issue)
+                    cache = AgentModelRuntimeCache(runtimeID: runtime, models: [], pluginID: currentPane.agentSession?.pluginID, conversationID: currentPane.claudeSessionID, unavailableReason: issue)
                 } else {
                     let models = try await provider.modelOptions(context)
-                    cache = AgentModelRuntimeCache(runtimeID: runtime, models: models)
+                    cache = AgentModelRuntimeCache(runtimeID: runtime, models: models, pluginID: currentPane.agentSession?.pluginID, conversationID: currentPane.claudeSessionID)
                 }
             } catch is CancellationError {
                 throw CancellationError()
@@ -89,7 +100,7 @@ extension AppCoordinator {
                 cache?.catalogWarning = "Could not refresh models; using this session's previous list. \(error.localizedDescription)"
                 recordAgentModelDiagnostic(paneID: paneID, phase: "catalog-refresh-failed", since: catalogStart, failure: error.localizedDescription)
             }
-            guard identityClient.runtimeID(pid) == runtime else { throw AgentModelError("The Agent restarted during model discovery.") }
+            try validateConversation()
             // Keep a successful catalog even if the following terminal read fails.
             agentModelCatalogs = agentModelCatalogs.filter { windowManager.paneStates[$0.key] != nil }
             agentModelCatalogs[paneID] = cache
@@ -105,7 +116,7 @@ extension AppCoordinator {
         let models = cache.models
         let captureStart = ContinuousClock.now
         let screen = try await tmuxService.captureAgentTerminal(paneID: paneID, identity: request.workspacePane)
-        guard identityClient.runtimeID(pid) == runtime else { throw AgentModelError("The Agent restarted while reading its model selection.") }
+        try validateConversation()
         recordAgentModelDiagnostic(paneID: paneID, phase: "terminal", since: captureStart)
         let generation = tmuxService.workflowInputGate?.claim(paneID: paneID).generation
         if cache.inputGeneration != generation {
@@ -121,6 +132,7 @@ extension AppCoordinator {
             guard let gate = tmuxService.workflowInputGate else { throw AgentModelError("The terminal input queue is not ready.") }
             let change: @MainActor @Sendable (AgentWorkflowInputGate.Claim) async throws -> AgentModelSelection = { [self] claim in
                 let current = try await tmuxService.captureAgentTerminal(paneID: paneID, identity: request.workspacePane)
+                try validateConversation()
                 if let issue = agentModelInputIssue(paneID: paneID, screen: current, provider: provider, models: models) {
                     throw AgentModelError(issue)
                 }
@@ -134,34 +146,35 @@ extension AppCoordinator {
                     read: { [self] in
                         try await MainActor.run {
                             try gate.validate(claim)
-                            guard identityClient.runtimeID(pid) == runtime else { throw AgentModelError("The Agent process changed.") }
+                            try validateConversation()
                         }
                         return try await tmuxService.captureAgentTerminal(paneID: paneID, identity: request.workspacePane).plainLines
                     },
                     submit: { [self] command in
-                        try await submitAgentModelCommand(command, paneID: paneID, identity: request.workspacePane, processID: pid, runtimeID: runtime, provider: provider, models: models, gate: gate, claim: claim, workflowInput: workflowInput)
+                        try await submitAgentModelCommand(command, paneID: paneID, identity: request.workspacePane, processID: pid, runtimeID: runtime, provider: provider, models: models, gate: gate, claim: claim, workflowInput: workflowInput, validateConversation: validateConversation)
                     },
                     send: { [self] keys in
-                        try await sendAgentModelKeys(keys, paneID: paneID, identity: request.workspacePane, processID: pid, runtimeID: runtime, gate: gate, claim: claim, workflowInput: workflowInput)
+                        try await sendAgentModelKeys(keys, paneID: paneID, identity: request.workspacePane, processID: pid, runtimeID: runtime, gate: gate, claim: claim, workflowInput: workflowInput, validateConversation: validateConversation)
                     }
                 )
                 // Recheck the composer immediately before entering the sequence.
                 try gate.validate(claim)
-                guard identityClient.runtimeID(pid) == runtime else { throw AgentModelError("The Agent process changed.") }
+                try validateConversation()
                 do {
                     let confirmed = try await provider.selectModel(selection, models: models, terminal: terminal)
                     try gate.validate(claim)
+                    try validateConversation()
                     return confirmed
                 } catch {
                     // Human input is still waiting in the shared queue. Close
                     // only our recognized picker before releasing it, so a
                     // queued Return cannot save a global model default.
                     if
-                        identityClient.runtimeID(pid) == runtime,
+                        (try? validateConversation()) != nil,
                         let screen = try? await tmuxService.captureAgentTerminal(paneID: paneID, identity: request.workspacePane),
                         provider.isModelPicker(lines: screen.plainLines, models: models) {
                         _ = try await tmuxService.runWorkspaceCommand([["send-keys", "-t", paneID, "Escape"]], target: paneID, identity: request.workspacePane) { launch in
-                            guard identityClient.runtimeID(pid) == runtime else { throw AgentModelError("The Agent process changed.") }
+                            try validateConversation()
                             try launch()
                         }
                         try? await Task.sleep(for: .milliseconds(100))
@@ -178,6 +191,7 @@ extension AppCoordinator {
                 }
             }
         }
+        try validateConversation()
         cache.inputGeneration = tmuxService.workflowInputGate?.claim(paneID: paneID).generation
         agentModelCatalogs = agentModelCatalogs.filter { windowManager.paneStates[$0.key] != nil }
         agentModelCatalogs[paneID] = cache
@@ -187,7 +201,8 @@ extension AppCoordinator {
     private func submitAgentModelCommand(
         _ command: String, paneID: String, identity: WorkspacePaneIdentity,
         processID: String, runtimeID: String, provider: any AgentModelProviding, models: [AgentModelOption],
-        gate: AgentWorkflowInputGate, claim: AgentWorkflowInputGate.Claim, workflowInput: AgentWorkflowModelInput?
+        gate: AgentWorkflowInputGate, claim: AgentWorkflowInputGate.Claim, workflowInput: AgentWorkflowModelInput?,
+        validateConversation: @escaping @MainActor @Sendable () throws -> Void
     ) async throws {
         @Dependency(AgentSessionIdentityClient.self) var identities
         let identityClient = identities
@@ -198,6 +213,7 @@ extension AppCoordinator {
         let commands = try AgentModelTmuxSubmission.commands(command, paneID: paneID, capture: screen)
         let result = try await tmuxService.runWorkspaceCommand(commands, target: paneID, identity: identity) { launch in
             try gate.validate(claim)
+            try validateConversation()
             guard identityClient.runtimeID(processID) == runtimeID else { throw AgentModelError("The Agent process changed before input was sent.") }
             try gate.perform(claim) {
                 if let workflowInput {
@@ -237,13 +253,15 @@ extension AppCoordinator {
 
     private func sendAgentModelKeys(
         _ keys: [TmuxKey], paneID: String, identity: WorkspacePaneIdentity,
-        processID: String, runtimeID: String, gate: AgentWorkflowInputGate, claim: AgentWorkflowInputGate.Claim, workflowInput: AgentWorkflowModelInput?
+        processID: String, runtimeID: String, gate: AgentWorkflowInputGate, claim: AgentWorkflowInputGate.Claim, workflowInput: AgentWorkflowModelInput?,
+        validateConversation: @escaping @MainActor @Sendable () throws -> Void
     ) async throws {
         @Dependency(AgentSessionIdentityClient.self) var identities
         let identityClient = identities
         for key in keys {
             try Task.checkCancellation()
             try gate.validate(claim)
+            try validateConversation()
             guard identityClient.runtimeID(processID) == runtimeID else { throw AgentModelError("The Agent process changed.") }
             if case let .delay(milliseconds) = key {
                 try await Task.sleep(for: .milliseconds(milliseconds))
@@ -257,6 +275,7 @@ extension AppCoordinator {
             }
             _ = try await tmuxService.runWorkspaceCommand([arguments], target: paneID, identity: identity) { launch in
                 try gate.validate(claim)
+                try validateConversation()
                 guard identityClient.runtimeID(processID) == runtimeID else { throw AgentModelError("The Agent process changed before input was sent.") }
                 try gate.perform(claim) {
                     if let workflowInput {

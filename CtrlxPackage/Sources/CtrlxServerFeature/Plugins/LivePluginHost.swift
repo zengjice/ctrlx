@@ -1,7 +1,7 @@
 #if os(macOS)
     import CtrlxNetworking
-    import Foundation
     import CtrlxPluginProtocol
+    import Foundation
 
     /// The live `PluginHost` the runtime hands each core at `initialize` (spec §4).
     /// One instance per active plugin (it carries its own `pluginID`).
@@ -32,6 +32,7 @@
         private let onSendText: SendTextSink
         private let onSendKeys: SendKeysSink
         private let onAgentPanes: AgentPanesSink
+        private let captureOrigin: @Sendable (String) async -> PluginEventOrigin?
 
         public init(
             pluginID: String,
@@ -40,7 +41,8 @@
             onSetProjects: @escaping SetProjectsSink = { _, _ in },
             onSendText: @escaping SendTextSink = { _, _, _ in },
             onSendKeys: @escaping SendKeysSink = { _, _, _ in },
-            onAgentPanes: @escaping AgentPanesSink = { _ in nil }
+            onAgentPanes: @escaping AgentPanesSink = { _ in nil },
+            captureOrigin: @escaping @Sendable (String) async -> PluginEventOrigin? = { _ in nil }
         ) {
             self.pluginID = pluginID
             self.dispatcher = dispatcher
@@ -49,6 +51,7 @@
             self.onSendText = onSendText
             self.onSendKeys = onSendKeys
             self.onAgentPanes = onAgentPanes
+            self.captureOrigin = captureOrigin
         }
 
         // MARK: - PluginHost
@@ -59,6 +62,14 @@
 
         public func emit(_ event: PluginEvent) async {
             await dispatcher.dispatch(event)
+        }
+
+        public func emit(_ event: PluginEvent, origin: PluginEventOrigin?) async {
+            await dispatcher.dispatch(event, origin: origin)
+        }
+
+        public func eventOrigin(paneID: String) async -> PluginEventOrigin? {
+            await captureOrigin(paneID)
         }
 
         public func sendText(sessionID: String, _ text: String) async {

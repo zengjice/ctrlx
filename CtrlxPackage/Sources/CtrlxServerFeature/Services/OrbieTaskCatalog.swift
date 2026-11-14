@@ -26,7 +26,7 @@ enum OrbieTaskCatalog {
         tasks.map { task in
             let executions = task.runIDs.compactMap { id in runs.first { $0.id == id } }
             let last = executions.last
-            let current = instances.first { task.binding?.matchesProcess($0) == true }
+            let current = task.binding?.agentID.resolve(in: instances, identity: { $0.agentID }).value
             let state: String
             if task.archived {
                 state = "archived"
@@ -34,7 +34,7 @@ enum OrbieTaskCatalog {
                 state = "paused"
             } else if let last, !last.status.isTerminal {
                 state = "working"
-            } else if let bound = task.binding, let current, bound.matchesBinding(current) {
+            } else if let current {
                 state = current.readiness.rawValue
             } else {
                 state = "unavailable"

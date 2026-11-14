@@ -77,15 +77,21 @@ final class HostFileTabService {
             }
         }
         tabs.removeAll { tab in
-            tab.sourcePaneID == paneID && sourceIdentities[tab.id].map { !$0.isSamePane(as: pane.workspaceIdentity) } == true
+            tab.sourcePaneID == paneID && sourceIdentities[tab.id].map { $0.paneID != pane.workspaceIdentity?.paneID } == true
         }
         let retainedIDs = Set(tabs.map(\.id))
         sourceIdentities = sourceIdentities.filter { retainedIDs.contains($0.key) }
         // There is no await between lookup and insertion: simultaneous opens share one default.
-        if !new, let index = tabs.firstIndex(where: { $0.sourcePaneID == paneID && $0.group == .human && $0.isPrimary }) {
+        if
+            !new, let index = tabs.firstIndex(where: { tab in
+                (sourceIdentities[tab.id].map { $0.paneID == pane.workspaceIdentity?.paneID } ?? (tab.sourcePaneID == paneID)) && tab.group == .human && tab.isPrimary
+            }) {
             let previous = tabs[index]
-            tabs[index].sessionName = pane.sessionName
-            tabs[index].windowID = pane.stableWindowId
+            tabs[index] = HostFileTab(
+                id: previous.id, sessionName: pane.sessionName, windowID: pane.stableWindowId,
+                sourcePaneID: pane.paneId, isPrimary: previous.isPrimary,
+                initialDirectory: previous.initialDirectory
+            )
             sourceIdentities[previous.id] = pane.workspaceIdentity
             if previous != tabs[index] {
                 onChange?()
@@ -166,16 +172,24 @@ final class HostFileTabService {
             if tab.resourceSessionID != nil {
                 return tab
             }
-            // Linked-session ambiguity must not route a tab into an arbitrary session.
-            guard let source = tab.sourcePaneID, let matches = byPane[source], matches.count == 1, let pane = matches.first else { return nil }
-            if let identity = sourceIdentities[tab.id], !identity.isSamePane(as: pane.workspaceIdentity) {
-                return nil
+            let matches: [PaneInfo]
+            if let identity = sourceIdentities[tab.id] {
+                matches = panes.filter { $0.workspaceIdentity?.paneID == identity.paneID }
+            } else {
+                matches = tab.sourcePaneID.flatMap { byPane[$0] } ?? []
             }
+            // Multiple display routes need an explicit choice, never arbitrary ownership.
+            guard matches.count == 1, let pane = matches.first else { return nil }
             sourceIdentities[tab.id] = pane.workspaceIdentity
-            var routed = tab
-            routed.sessionName = pane.sessionName
-            routed.windowID = pane.stableWindowId
-            return routed
+            return HostFileTab(
+                id: tab.id,
+                sessionName: pane.sessionName,
+                windowID: pane.stableWindowId,
+                sourcePaneID: pane.paneId,
+                group: tab.group,
+                isPrimary: tab.isPrimary,
+                initialDirectory: tab.initialDirectory
+            )
         }
         let retainedIDs = Set(tabs.map(\.id))
         sourceIdentities = sourceIdentities.filter { retainedIDs.contains($0.key) }

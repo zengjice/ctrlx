@@ -31,6 +31,7 @@ public struct NotificationContent: Codable, Sendable, Equatable {
 
     /// The tmux pane ID for deep linking to the specific session
     public let paneId: String?
+    public let agentID: AgentID?
 
     /// When the event occurred
     public let timestamp: Date
@@ -50,6 +51,7 @@ public struct NotificationContent: Codable, Sendable, Equatable {
         eventType: String,
         pairId: String,
         paneId: String? = nil,
+        agentID: AgentID? = nil,
         timestamp: Date = Date(),
         action: NotificationActionContext? = nil
     ) {
@@ -59,8 +61,25 @@ public struct NotificationContent: Codable, Sendable, Equatable {
         self.eventType = eventType
         self.pairId = pairId
         self.paneId = paneId
+        self.agentID = agentID
         self.timestamp = timestamp
         self.action = action
+    }
+
+    /// Both APNs and the live Viewer alert use this negotiated target.
+    public func forPeer(supportsStableAgentNotifications supported: Bool) -> Self {
+        let target = supported ? agentID : nil
+        return Self(
+            title: title,
+            subtitle: subtitle,
+            body: body,
+            eventType: eventType,
+            pairId: pairId,
+            paneId: target == nil ? nil : paneId,
+            agentID: target,
+            timestamp: timestamp,
+            action: target != nil && action?.agent?.agentID == target ? action : nil
+        )
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -70,6 +89,7 @@ public struct NotificationContent: Codable, Sendable, Equatable {
         case eventType
         case pairId
         case paneId
+        case agentID
         case timestamp
         case action
     }
@@ -82,6 +102,7 @@ public struct NotificationContent: Codable, Sendable, Equatable {
         self.eventType = try container.decode(String.self, forKey: .eventType)
         self.pairId = try container.decode(String.self, forKey: .pairId)
         self.paneId = try container.decodeIfPresent(String.self, forKey: .paneId)
+        self.agentID = try container.decodeIfPresent(AgentID.self, forKey: .agentID)
         self.timestamp = try container.decode(Date.self, forKey: .timestamp)
         // Lenient on purpose (cross-host version skew): a future host may add
         // a `Form` case this build can't decode. A strict decode here would

@@ -1381,3 +1381,12 @@ This increment does not install the app, refresh the user's installed skill,
 commit, push or publish. Install the new app **and refresh the Agent Browser
 skill** for ordinary use; the previously cached skill still requires the old
 wrapper. No shell startup files or `codex` executable were modified.
+
+### Stable source association
+
+Browser sources resolve the persistent Host/pane identity to current placement.
+Rebuilt raw pane numbers do not create a new page or attach it to an unrelated
+terminal. The native owner key is AgentID + plugin + conversation, without the
+tmux server generation; current run tokens, process checks, revoked grants and
+human takeover remain independent. Simulator sources use the same persistent
+pane rule. See [Agent identity](agent-identity.md).

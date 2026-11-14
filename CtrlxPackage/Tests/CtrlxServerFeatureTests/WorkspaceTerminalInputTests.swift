@@ -832,6 +832,24 @@ struct WorkspaceTerminalInputTests {
         }
     }
 
+    @Test("A delayed response batch rechecks its original runtime before every launch")
+    func delayedResponseRevalidation() async throws {
+        try await withTmux { tmux, _, run in
+            let identity = try await setup(run, paneID: UUID())
+            var launches = 0
+            await #expect(throws: PluginResponseContext.Failure.self) {
+                try await tmux.sendKeystrokes("%0", keys: [.text("FIRST"), .delay(1), .text("STALE")], expectedWorkspacePane: identity) { launch in
+                    launches += 1
+                    guard launches == 1 else { throw PluginResponseContext.Failure.changed }
+                    try launch()
+                }
+            }
+            #expect(launches == 2)
+            let screen = try await run(["capture-pane", "-p", "-t", "%0"])
+            #expect(screen.stdoutString.contains("FIRST") && !screen.stdoutString.contains("STALE"))
+        }
+    }
+
     @Test("A suspended native plugin write cannot enter a reconstructed terminal")
     func retiredPluginResponse() async throws {
         try await withTmux { tmux, _, run in

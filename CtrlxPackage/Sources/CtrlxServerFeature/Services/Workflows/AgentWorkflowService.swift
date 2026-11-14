@@ -77,7 +77,7 @@ actor AgentWorkflowService {
                 run.status == .running,
                 run.invocations.contains(where: { invocation in
                     guard invocation.status == .pending, let bound = run.instance(for: invocation) else { return false }
-                    return run.instances.contains { $0.target == bound.target && $0.readiness != .unavailable }
+                    return run.instances.contains { $0.agentID == bound.agentID && $0.readiness != .unavailable }
                 }) {
                 await schedule(run.id)
             }

@@ -196,7 +196,7 @@ struct AgentWorkflowRecoveryTests {
         try JSONEncoder().encode(saved).write(to: file)
         let restored = try await AgentWorkflowStore(fileURL: file, hostID: saved.hostID).snapshot()
         let run = try #require(restored.runs.first)
-        #expect(restored.schemaVersion == 7)
+        #expect(restored.schemaVersion == 8)
         var expectedDefinitions = saved.definitions
         for index in expectedDefinitions.indices {
             expectedDefinitions[index].rememberTargets(from: saved.instances)
@@ -215,7 +215,7 @@ struct AgentWorkflowRecoveryTests {
         ))
         #expect(try JSONDecoder().decode(AgentWorkflowArchive.self, from: Data(contentsOf: file)) == restored)
         let reloaded = try await AgentWorkflowStore(fileURL: file, hostID: saved.hostID).snapshot()
-        #expect(reloaded.schemaVersion == 7)
+        #expect(reloaded.schemaVersion == 8)
         #expect(reloaded.definitions == restored.definitions)
         #expect(reloaded.runs[0].status == run.status)
         #expect(reloaded.runs[0].invocations == run.invocations)

@@ -1,7 +1,7 @@
 import Foundation
 
 public enum AgentWorkflowWire {
-    public static let version = 7
+    public static let version = 8
     public static let maximumEncodedBytes = 256 * 1_024
     public static let imageEncodedBytes = 576 * 1_024
     public static let maximumDefinitionBytes = 128 * 1_024
@@ -205,7 +205,7 @@ public struct AgentWorkflowRunState: Codable, Equatable, Sendable {
         self.finishRequest = run.finishRequest
         self.nodes = run.definition.nodes.map { node in
             let bound = run.definition.instance(for: node.agentInstanceID, in: run.instances)
-            let current = bound.flatMap { binding in currentInstances.first { binding.target == $0.target } }
+            let current = bound.flatMap { $0.agentID.resolve(in: currentInstances, identity: \.agentID).value }
             return Node(
                 id: node.id, kind: node.kind, name: node.name, instance: current ?? bound,
                 upstreamIDs: node.id == run.definition.entryNodeID(round: run.round) ? [] : run.definition.upstream(of: node.id).map(\.id),

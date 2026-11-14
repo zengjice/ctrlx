@@ -1,7 +1,7 @@
 #if os(macOS)
+    import ConcurrencyExtras
     import CtrlxCommon
     import CtrlxNetworking
-    import ConcurrencyExtras
     import Dependencies
     import Foundation
     import Testing
@@ -51,6 +51,26 @@
             ["%5": .init(path: path, pluginID: pluginID, processIDs: processIDs)]
         }
 
+        @Test("PID reuse cannot combine a fresh kernel runtime with old conversation state")
+        func bindingRequiresReconciledRuntime() throws {
+            let runtime = LockIsolated("old")
+            try withDependencies {
+                $0[AgentSessionIdentityClient.self].runtimeID = { _ in runtime.value }
+            } operation: {
+                let manager = makeWindowManager()
+                var pane = try #require(manager.paneStates["%5"])
+                pane.workspaceIdentity = .init(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+                manager.setPaneStatesForPreview([pane])
+                _ = manager.reconcileDetectedAgentSessions(detected())
+                #expect(manager.currentAgentBinding(forPane: "%5")?.runtimeID == "old")
+                runtime.setValue("new")
+                #expect(manager.currentAgentBinding(forPane: "%5") == nil)
+                #expect(manager.recordedAgentBinding(forPane: "%5")?.runtimeID == "old")
+                _ = manager.reconcileDetectedAgentSessions(detected())
+                #expect(manager.currentAgentBinding(forPane: "%5")?.runtimeID == "new")
+            }
+        }
+
         @Test("agent process reconciliation runs every ten seconds")
         func reconciliationInterval() {
             #expect(MirrorWindowManager.agentReconciliationInterval == .seconds(10))
@@ -96,22 +116,31 @@
             #expect(calls.value["ps"] == 1)
         }
 
-        @Test("Agent detection ignores nested helpers but keeps independent peers",
-              arguments: ["codex", "claude-code"], ["nested", "exec", "peers"])
+        @Test(
+            "Agent detection ignores nested helpers but keeps independent peers",
+            arguments: ["codex", "claude-code"],
+            ["nested", "exec", "peers"]
+        )
         func outermostAgentProcesses(pluginID: String, shape: String) async throws {
             let command = pluginID == "codex" ? "codex" : "claude"
             let mainPID = shape == "exec" ? "100" : "101"
             var rows = shape == "exec" ? "100 1 \(command)\n" : "100 1 zsh\n101 100 \(command)\n"
             rows += "201 \(mainPID) node_repl\n202 201 /tools/\(command)\n303 202 \(command)\n"
-            if shape == "peers" { rows += "501 100 zsh\n502 501 \(command)\n503 502 \(command)\n" }
+            if shape == "peers" {
+                rows += "501 100 zsh\n502 501 \(command)\n503 502 \(command)\n"
+            }
             // Process listing order must not choose the nested process first.
             let output = rows.split(separator: "\n").reversed().joined(separator: "\n")
             try await withDependencies {
                 $0[ProcessRunner.self].run = { executable, arguments, _, _ in
                     let stdout: String
-                    if executable == "/bin/ps" { stdout = output }
-                    else if arguments.contains("list-panes") { stdout = "%5\(PaneInfo.fieldSeparator)100\(PaneInfo.fieldSeparator)/repo\n" }
-                    else { throw AgentForkError("Unexpected process request") }
+                    if executable == "/bin/ps" {
+                        stdout = output
+                    } else if arguments.contains("list-panes") {
+                        stdout = "%5\(PaneInfo.fieldSeparator)100\(PaneInfo.fieldSeparator)/repo\n"
+                    } else {
+                        throw AgentForkError("Unexpected process request")
+                    }
                     return .init(exitCode: 0, stdout: Data(stdout.utf8), stderr: Data())
                 }
             } operation: {
@@ -161,6 +190,34 @@
             #expect(manager.paneStates["%5"]?.agentSession?.detectedProjectPath == "/tmp/hook-project")
         }
 
+        @Test(
+            "A verified successor replaces hook-owned state, including a reused PID",
+            arguments: ["plugin", "pid", "start"]
+        )
+        func verifiedSuccessorClearsOldState(change: String) {
+            let epoch = LockIsolated("first")
+            withDependencies {
+                var client = AgentSessionIdentityClient.previewValue
+                client.runtimeID = { "\($0):\(epoch.value)" }
+                $0[AgentSessionIdentityClient.self] = client
+            } operation: {
+                let manager = makeWindowManager()
+                manager.reconcileDetectedAgentSessions(detected())
+                manager.applyState(pluginID: "codex", sessionID: "old-conversation", state: .working, tmuxPane: "%5", projectPath: "/old")
+                if change == "start" {
+                    epoch.setValue("second")
+                }
+                let plugin = change == "plugin" ? "claude-code" : "codex"
+                let pid = change == "pid" ? "202" : "101"
+                manager.reconcileDetectedAgentSessions(detected(pluginID: plugin, processIDs: [pid]))
+                #expect(manager.paneStates["%5"]?.agentSession?.pluginID == plugin)
+                #expect(manager.paneStates["%5"]?.agentSession?.processRuntimeID == "\(pid):\(epoch.value)")
+                #expect(manager.paneStates["%5"]?.agentSession?.state == .idle)
+                #expect(manager.paneStates["%5"]?.claudeSessionID == nil)
+                #expect(manager.paneStates["%5"]?.telemetry == nil)
+            }
+        }
+
         @Test("session end suppresses detection until the old process disappears")
         func endedSessionIsNotResurrected() {
             let manager = makeWindowManager()
@@ -184,8 +241,10 @@
             #expect(manager.paneStates["%5"]?.agentSession != nil)
         }
 
-        @Test("A new process in the same pane releases suppression without an absent scan",
-              arguments: [Set(["202"]), Set(["101", "202"])])
+        @Test(
+            "A new process in the same pane releases suppression without an absent scan",
+            arguments: [Set(["202"]), Set(["101", "202"])]
+        )
         func quickResume(processIDs: Set<String>) {
             let manager = makeWindowManager()
             manager.reconcileDetectedAgentSessions(detected())
@@ -199,16 +258,23 @@
         @Test("An end before the first process scan cannot suppress an unknown future process")
         func endWithoutObservedProcess() {
             let manager = makeWindowManager()
-            manager.applyState(pluginID: "codex", sessionID: "old", state: .idle,
-                               tmuxPane: "%5", projectPath: "/tmp/project")
+            manager.applyState(
+                pluginID: "codex",
+                sessionID: "old",
+                state: .idle,
+                tmuxPane: "%5",
+                projectPath: "/tmp/project"
+            )
             #expect(manager.endAgentSession(forPane: "%5"))
             #expect(manager.reconcileDetectedAgentSessions(detected(processIDs: ["202"])))
             #expect(manager.paneStates["%5"]?.agentSession?.pluginID == "codex")
         }
 
-        @Test("A fresh command-panel probe bypasses an old cached snapshot",
-              arguments: [false, true])
-        func freshProcessSnapshot(replacesShell: Bool) async throws {
+        @Test(
+            "A fresh command-panel probe bypasses an old cached snapshot",
+            arguments: [false, true]
+        )
+        func freshProcessSnapshot(replacesShell: Bool) async {
             let rows = LockIsolated("100 1 zsh\n101 100 codex\n")
             await withDependencies {
                 $0[ProcessRunner.self].run = { @Sendable executable, arguments, _, _ in
@@ -244,7 +310,7 @@
         func onDemandReconciliation() async {
             let available = LockIsolated(false)
             await withDependencies {
-                $0[ProcessRunner.self].run = { @Sendable executable, arguments, _, _ in
+                $0[ProcessRunner.self].run = { @Sendable executable, _, _, _ in
                     guard available.value else {
                         return ProcessResult(exitCode: 1, stdout: Data(), stderr: Data())
                     }
@@ -289,7 +355,7 @@
                 release.continuation.finish()
             }
             await withDependencies {
-                $0[ProcessRunner.self].run = { @Sendable executable, arguments, _, _ in
+                $0[ProcessRunner.self].run = { @Sendable executable, _, _, _ in
                     if executable == "/bin/ps" {
                         let call = calls.withValue { value in
                             value += 1
@@ -297,21 +363,31 @@
                         }
                         if call == 1 {
                             started.continuation.yield(())
-                            for await _ in release.stream { break }
+                            for await _ in release.stream {
+                                break
+                            }
                         }
                         let pid = call == 1 ? "101" : "202"
-                        return ProcessResult(exitCode: 0,
-                                             stdout: Data("100 1 zsh\n\(pid) 100 codex\n".utf8), stderr: Data())
+                        return ProcessResult(
+                            exitCode: 0,
+                            stdout: Data("100 1 zsh\n\(pid) 100 codex\n".utf8),
+                            stderr: Data()
+                        )
                     }
                     let separator = String(PaneInfo.fieldSeparator)
-                    return ProcessResult(exitCode: 0,
-                                         stdout: Data("%5\(separator)100\(separator)/tmp/project\n".utf8), stderr: Data())
+                    return ProcessResult(
+                        exitCode: 0,
+                        stdout: Data("%5\(separator)100\(separator)/tmp/project\n".utf8),
+                        stderr: Data()
+                    )
                 }
             } operation: {
                 let tmux = TmuxService(tmuxPath: "/usr/bin/tmux")
                 let names = ["codex": ["codex"]]
                 let older = Task { await tmux.detectAgentPanesIfAvailable(processNamesByPlugin: names) }
-                for await _ in started.stream { break }
+                for await _ in started.stream {
+                    break
+                }
                 let fresh = await tmux.detectAgentPanesIfAvailable(processNamesByPlugin: names, refreshSnapshot: true)
                 #expect(fresh?["%5"]?.processIDs == ["202"])
                 release.continuation.yield(())

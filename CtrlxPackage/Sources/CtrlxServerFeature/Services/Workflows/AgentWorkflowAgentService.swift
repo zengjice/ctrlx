@@ -55,7 +55,7 @@ actor AgentWorkflowAgentService {
                 let invocation = run.invocations.first(where: { $0.id == invocationID }),
                 let bound = run.instance(for: invocation),
                 var instance = archive.instances.first(where: {
-                    $0.matchesProcess(bound) || ($0.target == bound.target && $0.pluginID == bound.pluginID)
+                    $0.matchesProcess(bound) || ($0.agentID == bound.agentID && $0.pluginID == bound.pluginID)
                 }),
                 peer.contains(processID: instance.processID, runtimeID: instance.processRuntimeID) else {
                 return denied(request.id, "This caller does not own the workflow invocation.")
@@ -118,7 +118,7 @@ actor AgentWorkflowAgentService {
                 let invocation = run.invocations.first(where: { $0.id == invocationID }),
                 let bound = run.instance(for: invocation),
                 var instance = archive.instances.first(where: {
-                    $0.matchesProcess(bound) || ($0.target == bound.target && $0.pluginID == bound.pluginID)
+                    $0.matchesProcess(bound) || ($0.agentID == bound.agentID && $0.pluginID == bound.pluginID)
                 }),
                 peer.contains(processID: instance.processID, runtimeID: instance.processRuntimeID) else {
                 return denied(request.id, "This caller does not own the workflow invocation.")

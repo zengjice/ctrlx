@@ -4,6 +4,50 @@ import Testing
 @testable import CtrlxCommon
 
 struct AgentWorkflowEditingTests {
+    @Test(arguments: [false, true])
+    func readdingOriginalAgentAfterRebindingKeepsDistinctTargets(legacyParticipantID: Bool) throws {
+        let hostID = UUID()
+        let instances = ["A", "B"].enumerated().map { index, name in
+            AgentWorkflowInstance(hostID: hostID, pluginID: "codex", processID: Int32(index + 100), processRuntimeID: name, workspacePane: .init(serverID: "fixture", sessionID: UUID(), windowID: UUID(), paneID: UUID()), paneID: "%\(index)", conversationID: name, displayName: name, workingDirectory: "/fixture", capabilities: .init(maximumInputBytes: 100_000), readiness: .ready)
+        }
+        let a = instances[0], b = instances[1]
+        let originalID = legacyParticipantID ? a.id : UUID()
+        let node = AgentWorkflowNode(name: "Existing", agentInstanceID: originalID)
+        var draft = AgentWorkflowDefinition(name: "Rebound", hostID: hostID, nodes: [node], edges: [], entryNodeID: node.id, participants: [.init(agentInstanceID: originalID, name: "A")])
+        draft.agentTargets = [originalID: a.target]
+        // Rebinding keeps the participant and its steps, replacing only the target.
+        draft.agentTargets?[originalID] = b.target
+        #expect(draft.participantID(for: a, in: instances) == nil)
+        let addedID = draft.addAgent(a, in: instances)
+        #expect(addedID != originalID && addedID != a.id)
+        #expect(draft.agents.map(\.id) == [originalID, addedID])
+        #expect(draft.instance(for: originalID, in: instances)?.id == b.id)
+        #expect(draft.instance(for: addedID, in: instances)?.id == a.id)
+        try AgentWorkflowWire.validate(draft)
+
+        // Refresh and round-trip while the added participant has no step and is offline.
+        draft = draft.resolvingAgents(in: [b])
+        draft = try JSONDecoder().decode(AgentWorkflowDefinition.self, from: JSONEncoder().encode(draft))
+        let restarted = AgentWorkflowInstance(hostID: hostID, pluginID: a.pluginID, processID: 200, processRuntimeID: "new", workspacePane: a.workspacePane, paneID: a.paneID, conversationID: "resumed", displayName: "Restarted A", workingDirectory: a.workingDirectory, capabilities: a.capabilities, readiness: .ready)
+        let live = [restarted, b]
+        draft = draft.resolvingAgents(in: live)
+        draft.updateAgentNames(from: live)
+        let reusedID = draft.addAgent(restarted, in: live)
+        #expect(reusedID == addedID && draft.agents.count == 2)
+        #expect(draft.agentTargets == [originalID: b.target, addedID: a.target])
+        #expect(draft.agents.last?.name == restarted.displayName)
+        draft.appendStep(.init(name: "New step", agentInstanceID: reusedID))
+        try AgentWorkflowWire.validate(draft)
+        #expect(draft.nodes.map(\.agentInstanceID) == [originalID, addedID])
+
+        draft.nodes.removeLast()
+        draft.edges.removeAll()
+        draft.participants?.removeAll { $0.id == addedID }
+        draft.rememberTargets(from: live)
+        #expect(draft.agentTargets == [originalID: b.target])
+        try AgentWorkflowWire.validate(draft)
+    }
+
     @Test(arguments: ["Develop and review", String(repeating: "图", count: 85)])
     func duplicateKeepsPresetsAndStructureWithoutTaskImagesOrAgents(name: String) throws {
         let developer = UUID(), reviewer = UUID(), hostID = UUID()
