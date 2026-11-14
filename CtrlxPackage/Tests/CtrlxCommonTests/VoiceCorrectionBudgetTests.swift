@@ -4,9 +4,10 @@ import Testing
 
 @Suite("Voice correction budgets and evidence")
 struct VoiceCorrectionBudgetTests {
-    @Test("Provider budgets reserve bounded room for lightweight reasoning without changing on-device budgets")
-    func providerReasoningBudget() {
-        #expect(VoiceCorrectionBudget.providerResponseTokens(for: "V二版本") == 4_096)
+    @Test("Provider output budgets scale with the transcript without a reasoning reserve")
+    func providerOutputBudget() {
+        #expect(VoiceCorrectionBudget.providerResponseTokens(for: "V二版本") == 512)
+        #expect(VoiceCorrectionBudget.providerResponseTokens(for: String(repeating: "x", count: 1_000)) == 2_064)
         #expect(VoiceCorrectionBudget.providerResponseTokens(for: String(repeating: "x", count: 3_000)) == 6_064)
         #expect(VoiceCorrectionBudget.providerResponseTokens(for: String(repeating: "x", count: 4_064)) == 8_192)
         #expect(VoiceCorrectionBudget.providerResponseTokens(for: String(repeating: "x", count: 4_065)) == nil)

@@ -211,8 +211,8 @@ struct VoiceCorrectionProviderClientTests {
         #expect(models == ["doubao-a", "doubao-b"])
     }
 
-    @Test("Uses the OpenAI-compatible Responses API")
-    func correctTranscript() async throws {
+    @Test("Voice correction explicitly disables thinking for the selected model", arguments: ["deepseek-v4-1-flash-261017", "doubao-seed-2-0-lite-260215"])
+    func correctTranscript(modelID: String) async throws {
         let client = VoiceCorrectionProviderClient { request in
             #expect(request.url?.absoluteString == "https://ark.cn-beijing.volces.com/api/v3/responses")
             #expect(request.httpMethod == "POST")
@@ -223,11 +223,11 @@ struct VoiceCorrectionProviderClientTests {
             let json = try #require(
                 JSONSerialization.jsonObject(with: body) as? [String: Any]
             )
-            #expect(json["model"] as? String == "doubao-seed")
+            #expect(json["model"] as? String == modelID)
             #expect(json["store"] as? Bool == false)
-            #expect(json["max_output_tokens"] as? Int == 4_096)
-            #expect(json["thinking"] == nil)
-            #expect((json["reasoning"] as? [String: String])?["effort"] == "low")
+            #expect(json["max_output_tokens"] as? Int == 512)
+            #expect((json["thinking"] as? [String: String])?["type"] == "disabled")
+            #expect(json["reasoning"] == nil)
             #expect(json["instructions"] as? String == VoiceTranscriptCorrectionPrompt.instructions(localeIdentifier: "zh-Hans-CN", contextualTerms: ["CtrlX", "Voice"]))
             #expect((json["instructions"] as? String)?.contains("CTRS 的语音输入") == false)
             #expect((json["input"] as? String)?.contains("Known terms are canonical spellings") == false)
@@ -239,7 +239,7 @@ struct VoiceCorrectionProviderClientTests {
             return (data, Self.response(for: request, statusCode: 200))
         }
         let selection = try #require(
-            VoiceCorrectionSelection(provider: .volcengineArk, modelID: "doubao-seed")
+            VoiceCorrectionSelection(provider: .volcengineArk, modelID: modelID)
         )
 
         let result = try await client.correct(
