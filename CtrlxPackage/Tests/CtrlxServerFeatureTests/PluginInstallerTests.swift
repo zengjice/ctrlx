@@ -1,7 +1,7 @@
 #if os(macOS)
     import CryptoKit
-    import Foundation
     import CtrlxPluginProtocol
+    import Foundation
     import Testing
     @testable import CtrlxServerFeature
 
@@ -40,9 +40,7 @@
     }
 
     /// Build a zip archive containing a SYMLINK entry whose target is outside the
-    /// extraction root. macOS `unzip` materializes symlinks (unlike `../` path
-    /// entries, which it silently strips), so this drives the enumerator's
-    /// `resolvingSymlinksInPath()` containment branch end-to-end.
+    /// extraction root. Archive preflight must reject it before any extraction.
     ///
     /// The resulting zip contains a single entry named `evil` with
     /// `external_attr = S_IFLNK | 0o777` and contents `/tmp` (the link target).
@@ -306,11 +304,8 @@
 
         // MARK: - unpackAndValidate: symlink-escape throws .zipSlip specifically
 
-        /// This test drives the enumerator's `resolvingSymlinksInPath()` containment
-        /// branch end-to-end. macOS `unzip` materializes symlinks (unlike `../` path
-        /// entries, which it silently strips), so `<staging>/evil -> /tmp` is created
-        /// on disk, the enumerator resolves it to `/private/tmp`, containment fails,
-        /// and `InstallError.zipSlip` must be thrown.
+        /// Archive preflight must reject the link before extraction, independent
+        /// of whether the system unzip permits creating absolute symlinks.
         @Test("zipSlip: symlink entry pointing outside staging throws .zipSlip specifically")
         func zipSlipSymlinkEscape() throws {
             let staging = try makeTempDir()
@@ -320,24 +315,6 @@
             defer { try? FileManager.default.removeItem(at: evilZip) }
 
             let manifest = PluginManifest.fixtureSidecar(executable: "bin/sidecar")
-
-            // Verify unzip actually materialized the symlink before we invoke the
-            // containment check. This proves the enumerator branch will be exercised.
-            // (We call unzip here explicitly to inspect the staging dir before the
-            // full unpackAndValidate run.)
-            let verifyStaging = try makeTempDir()
-            defer { try? FileManager.default.removeItem(at: verifyStaging) }
-            let verifyUnzip = Process()
-            verifyUnzip.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
-            verifyUnzip.arguments = ["-o", "-q", evilZip.path, "-d", verifyStaging.path]
-            verifyUnzip.environment = [:]
-            try verifyUnzip.run()
-            verifyUnzip.waitUntilExit()
-            let symlinkURL = verifyStaging.appendingPathComponent("evil")
-            #expect(
-                (try? symlinkURL.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true,
-                "pre-condition: unzip must have materialized 'evil' as a symlink in staging"
-            )
 
             // Now assert that unpackAndValidate throws .zipSlip specifically.
             // A catch-all or a different error case would not count.
@@ -357,6 +334,7 @@
                 Issue.record("Expected InstallError.zipSlip but got: \(error)")
             }
             #expect(caughtZipSlip, "unpackAndValidate must throw .zipSlip for a symlink-escape zip")
+            #expect(try FileManager.default.contentsOfDirectory(atPath: staging.path).isEmpty)
         }
 
         // MARK: - Happy path: valid bundle installs atomically and is executable

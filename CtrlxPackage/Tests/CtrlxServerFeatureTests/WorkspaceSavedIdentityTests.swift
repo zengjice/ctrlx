@@ -25,16 +25,16 @@ struct WorkspaceSavedIdentityTests {
         let client = AgentSessionIdentityClient.diskBacked(stateRoot: directory)
         #expect(await client.load("%new") == nil)
         #expect(try await client.recoverySource([workspace.sessionID], workspace.windowID, workspace.paneID) == saved.source)
-        #expect(try await client.recoverySource([UUID()], workspace.windowID, workspace.paneID) == nil)
-        #expect(try await client.recoverySource([workspace.sessionID], UUID(), workspace.paneID) == nil)
+        #expect(try await client.recoverySource([UUID()], workspace.windowID, workspace.paneID) == saved.source)
+        #expect(try await client.recoverySource([workspace.sessionID], UUID(), workspace.paneID) == saved.source)
         #expect(try await client.recoverySource([workspace.sessionID], workspace.windowID, UUID()) == nil)
-        // A linked session is eligible, but process-instance validation stays strict.
+        // Placement is not recovery identity; live process validation stays strict.
         #expect(try await client.recoverySource([UUID(), workspace.sessionID], workspace.windowID, workspace.paneID) == saved.source)
         let current = PaneState(paneId: "%old", sessionName: "old-name", tmuxWindowId: "@old")
         #expect(!saved.matches(pane: current, detected: .init(path: "/old-project", pluginID: "codex", processIDs: ["old-pid"]), runtimeID: "new-process"))
     }
 
-    @Test("Legacy identities are ignored and multiple matching records never choose a conversation")
+    @Test("New saves replace a pane's old identity; ambiguous legacy records never choose a conversation")
     func ambiguousLookup() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-ambiguous-identity-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -42,10 +42,18 @@ struct WorkspaceSavedIdentityTests {
         let client = AgentSessionIdentityClient.diskBacked(stateRoot: directory)
         #expect(try await client.save(identity(nil)))
         #expect(try await client.recoverySource([workspace.sessionID], workspace.windowID, workspace.paneID) == nil)
-        #expect(try await client.save(identity(workspace)))
-        #expect(try await client.save(identity(workspace, runtime: "%another")))
+        let original = try identity(workspace)
+        let replacement = try identity(workspace, runtime: "%another")
+        #expect(await client.save(original))
+        #expect(await client.save(replacement))
+        #expect(try await client.recoverySource([workspace.sessionID], workspace.windowID, workspace.paneID) == replacement.source)
+
+        // Existing archives can contain duplicates even though new saves deduplicate.
+        let file = directory.appendingPathComponent("agent-session-identities.json")
+        try JSONEncoder().encode([original.source.paneID: original, replacement.source.paneID: replacement]).write(to: file, options: .atomic)
+        let restarted = AgentSessionIdentityClient.diskBacked(stateRoot: directory)
         await #expect(throws: WorkspaceRecoveryError.self) {
-            try await client.recoverySource([workspace.sessionID], workspace.windowID, workspace.paneID)
+            try await restarted.recoverySource([workspace.sessionID], workspace.windowID, workspace.paneID)
         }
     }
 
