@@ -58,6 +58,60 @@ final class AgentWorkflowTerminalTransport {
         )
     }
 
+    func resumeStep(_ invocation: AgentWorkflowInvocation, instance: AgentWorkflowInstance) async throws {
+        let text = """
+        Continue the current workflow step using its existing task and instructions. If the task is already complete, do not repeat the work: run ctrlx workflow complete-step --invocation \(invocation.id.uuidString), then provide the final result. Otherwise continue the remaining work, respecting any outstanding questions or required approvals.
+
+        [CtrlX workflow invocation: \(invocation.id.uuidString)]
+        """
+        guard let limit = instance.capabilities?.maximumInputBytes, text.utf8.count <= limit else {
+            throw AgentWorkflowError("The continuation exceeds this Agent's input limit. Nothing was sent.")
+        }
+        let claim = gate.claim(paneID: instance.paneID)
+        let file = try await files.create(text)
+        var authorization: AgentWorkflowWriteAuthorization?
+        var written = false
+        var failure: (any Error)?
+        do {
+            try await gate.workflow(claim) {
+                let live = try await self.inspect(instance)
+                guard live.matchesBinding(instance) else {
+                    throw AgentWorkflowError("The Agent changed. No continuation was sent.")
+                }
+                guard live.readiness == .ready else { return }
+                guard let permit = try await self.store.authorizeContinuation(invocation, instance: live) else { return }
+                authorization = permit
+                try await self.submit(live, file, [], { launch in
+                    try Task.checkCancellation()
+                    try self.gate.validate(claim)
+                    try permit.perform {
+                        written = true
+                        try launch()
+                    }
+                }, { _ in })
+            }
+        } catch let error as AgentWorkflowInputNotWritten {
+            written = false
+            failure = error
+        } catch {
+            failure = error
+        }
+        if let authorization {
+            do { try await store.finishContinuation(invocation, authorization: authorization, written: written) }
+            catch {
+                failure = error
+                onFailure("Could not save the workflow continuation outcome: \(error.localizedDescription)")
+            }
+        }
+        do { try await files.remove(file) }
+        catch {
+            onFailure("Could not remove a workflow continuation input: \(error.localizedDescription)")
+        }
+        if let failure {
+            throw failure
+        }
+    }
+
     private func prepare(_ invocation: AgentWorkflowInvocation, instance: AgentWorkflowInstance) async throws {
         guard prepared[invocation.id] == nil else { throw AgentWorkflowError("This input is already prepared.") }
         let claim = gate.claim(paneID: instance.paneID)

@@ -86,7 +86,7 @@ extension AppCoordinator {
             agentWorkflowService = AgentWorkflowService(store: store, scan: { [weak self] previous in
                 guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
                 return try await scanWorkflowInstances(previous: previous, hostID: hostID)
-            }, schedule: { await runner.schedule(runID: $0) }, models: { [weak self] instance, refresh in
+            }, schedule: { await runner.schedule(runID: $0) }, resumeStep: { try await delivery.resumeStep($0, instance: $1) }, models: { [weak self] instance, refresh in
                 guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
                 _ = try await inspectWorkflowInstance(instance)
                 let snapshot = try await handleAgentModels(.init(workspacePane: instance.workspacePane, refresh: refresh), paneID: instance.paneID)

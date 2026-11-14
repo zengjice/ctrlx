@@ -83,6 +83,7 @@ actor AgentWorkflowStore {
     private let hostID: UUID
     private var archive: AgentWorkflowArchive?
     private var writeAuthorizations: [UUID: AgentWorkflowWriteAuthorization] = [:]
+    private var continuationAuthorizations: [UUID: (turnID: String, instance: AgentWorkflowInstance, authorization: AgentWorkflowWriteAuthorization)] = [:]
     let attachmentUploads = HostFileUploads()
     var pendingAttachments: [UUID: PendingAttachment] = [:]
     var busyAttachmentUploads: Set<UUID> = []
@@ -278,6 +279,37 @@ actor AgentWorkflowStore {
         return node.modelSelection
     }
 
+    func authorizeContinuation(_ invocation: AgentWorkflowInvocation, instance: AgentWorkflowInstance) throws -> AgentWorkflowWriteAuthorization? {
+        let archive = try load()
+        if
+            let current = archive.runs.first(where: { $0.id == invocation.delivery.runID })?.invocations.first(where: { $0.id == invocation.id }),
+            let turnID = invocation.stepTurn?.id, current.continuationTurnID == turnID {
+            return nil
+        }
+        guard archive.instances.contains(where: { $0.matchesBinding(instance) && $0.readiness == .ready }) else {
+            throw AgentWorkflowError("The Agent is no longer ready for a continuation.")
+        }
+        guard let turn = invocation.stepTurn, continuationAuthorizations[invocation.id] == nil else {
+            throw AgentWorkflowError("This step already has a continuation in flight.")
+        }
+        let run = try update(runID: invocation.delivery.runID) {
+            try $0.beginContinuation(invocation, instance: instance, now: Date())
+        }
+        let authorization = AgentWorkflowWriteAuthorization(expiresAt: run.authorizationExpiresAt)
+        continuationAuthorizations[invocation.id] = (turn.id, instance, authorization)
+        return authorization
+    }
+
+    func finishContinuation(_ invocation: AgentWorkflowInvocation, authorization: AgentWorkflowWriteAuthorization, written: Bool) throws {
+        authorization.revoke()
+        if continuationAuthorizations[invocation.id]?.authorization === authorization {
+            continuationAuthorizations.removeValue(forKey: invocation.id)
+        }
+        if !written {
+            try update(runID: invocation.delivery.runID) { try $0.continuationNotWritten(invocation) }
+        }
+    }
+
     func isStagingInput(for instance: AgentWorkflowInstance) throws -> Bool {
         try load().runs.contains { run in
             guard run.status == .running else { return false }
@@ -427,6 +459,20 @@ actor AgentWorkflowStore {
         for (id, authorization) in writeAuthorizations where !writable.contains(id) {
             authorization.revoke()
             writeAuthorizations.removeValue(forKey: id)
+        }
+        for (id, pending) in continuationAuthorizations {
+            let valid = updated.runs.contains { run in
+                run.status == .running && run.instances.contains { $0.matchesBinding(pending.instance) }
+                    && updated.instances.contains { $0.matchesBinding(pending.instance) && $0.readiness == .ready }
+                    && run.invocations.contains {
+                        $0.id == id && $0.status == .running && $0.stepTurn?.id == pending.turnID
+                            && $0.stepTurn?.completionRequested == false && $0.continuationTurnID == pending.turnID
+                    }
+            }
+            if !valid {
+                pending.authorization.revoke()
+                continuationAuthorizations.removeValue(forKey: id)
+            }
         }
     }
 }

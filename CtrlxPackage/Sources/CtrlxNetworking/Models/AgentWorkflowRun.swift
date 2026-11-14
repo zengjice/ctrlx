@@ -115,6 +115,9 @@ public struct AgentWorkflowInvocation: Codable, Equatable, Identifiable, Sendabl
     public var nativeTurnID: String?
     public var nativeTranscriptPath: String?
     public var stepTurn: AgentWorkflowStepTurn?
+    /// A Continue reminder was attempted for this turn. Keep it across Host
+    /// restarts so an unconfirmed terminal write is not automatically repeated.
+    public var continuationTurnID: String?
 
     public var resultTurnID: String? {
         stepTurn?.id ?? nativeTurnID

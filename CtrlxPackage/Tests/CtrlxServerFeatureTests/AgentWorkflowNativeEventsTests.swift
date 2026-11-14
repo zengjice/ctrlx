@@ -77,8 +77,39 @@ struct AgentWorkflowNativeEventsTests {
         // A new writer cannot select the old turn before its own receipt arrives.
         #expect(await !service.handle(request, peer: peer).ok)
 
+        let inputs = LockIsolated<[String]>([])
+        let delivery = await AgentWorkflowTerminalTransport(
+            store: f.store, gate: .init(), temporaryDirectory: f.directory.appendingPathComponent("input"),
+            inspect: { $0 }, submit: { target, file, images, validate, _ in
+                #expect(target.matchesBinding(live))
+                #expect(images.isEmpty)
+                let text = try String(contentsOf: file, encoding: .utf8)
+                try validate { inputs.withValue { $0.append(text) } }
+            }, onFailure: { Issue.record(Comment(rawValue: $0)) }
+        )
+        let management = AgentWorkflowService(
+            store: f.store,
+            scan: { _ in [AgentWorkflowObservation(live)] },
+            schedule: { _ in },
+            resumeStep: { try await delivery.resumeStep($0, instance: $1) }
+        )
+        for _ in 0..<2 {
+            let current = try await f.store.snapshot().runs[0]
+            let paused = try await management.pause(runID: current.id, expectedRevision: current.revision)
+            let resumed = try await management.resume(runID: paused.id, expectedRevision: paused.revision)
+            #expect(resumed.status == .running)
+            #expect(resumed.invocations[0].continuationTurnID == "turn")
+        }
+        let prompt = try #require(inputs.value.first)
+        #expect(inputs.value.count == 1)
+        #expect(prompt.contains("complete-step --invocation \(f.invocation.id.uuidString)"))
+        #expect(!prompt.contains("Initial task:"))
+        let saved = try JSONDecoder().decode(AgentWorkflowArchive.self, from: Data(contentsOf: f.directory.appendingPathComponent("ledger.json")))
+        #expect(saved.runs[0].invocations[0].continuationTurnID == "turn")
+        let restored = try AgentWorkflowExecution(restoring: saved.runs[0])
+        #expect(restored.run.invocations[0].continuationTurnID == "turn")
         let submitted = PluginEvent(pluginID: plugin, sessionID: live.conversationID, tmuxPane: live.paneID, workflow: .init(
-            kind: .submitted, nativeTurnID: "after-login", transcriptPath: f.transcript.path, text: "Continue the task"
+            kind: .submitted, nativeTurnID: "after-login", transcriptPath: f.transcript.path, text: prompt
         ))
         _ = try await f.router.receive(submitted, peer: peer)
         try #require(await service.handle(request, peer: peer).ok)
@@ -320,6 +351,229 @@ struct AgentWorkflowNativeEventsTests {
         await router.shutdown()
         await f.router.shutdown()
         await f.runner.shutdown()
+    }
+
+    @Test(arguments: ["codex", "claude-code"], ["ready", "busy", "draft", "question", "unavailable", "confirmed", "replyEnded"])
+    @MainActor
+    func continueOnlyNudgesReadyUnconfirmedStep(plugin: String, state: String) async throws {
+        let f = try await fixture(plugin: plugin, completion: state == "replyEnded" ? .replyEnded : .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, plugin: plugin), peer: f.peer)
+        if state == "confirmed" {
+            try await f.store.update(runID: f.run.id) {
+                try $0.requestStepCompletion(invocationID: f.invocation.id, instance: f.instance, turnID: "turn", now: Date())
+            }
+        }
+        let readiness: AgentWorkflowReadiness = switch state {
+        case "busy": .busy
+        case "draft": .draft
+        case "question": .awaitingHuman
+        case "unavailable": .unavailable
+        default: .ready
+        }
+        var observation = AgentWorkflowObservation(f.instance)
+        observation.readiness = readiness
+        let observed = observation
+        let sent = LockIsolated(0)
+        let delivery = AgentWorkflowTerminalTransport(store: f.store, gate: .init(), temporaryDirectory: f.directory.appendingPathComponent("input"), inspect: { $0 }, submit: { _, _, images, validate, _ in
+            #expect(images.isEmpty)
+            try validate { sent.withValue { $0 += 1 } }
+        }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let service = AgentWorkflowService(store: f.store, scan: { _ in [observed] }, schedule: { _ in }, resumeStep: { try await delivery.resumeStep($0, instance: $1) })
+        let current = try await f.store.snapshot().runs[0]
+        let paused = try await service.pause(runID: current.id, expectedRevision: current.revision)
+        let resumed = try await service.resume(runID: paused.id, expectedRevision: paused.revision)
+        #expect(resumed.status == .running)
+        #expect(sent.value == (state == "ready" ? 1 : 0))
+        #expect(resumed.invocations.count == 1)
+        #expect(resumed.invocations[0].nativeTurnID == "turn")
+        #expect(resumed.invocations[0].delivery == f.invocation.delivery)
+        #expect(resumed.invocations[0].result == nil)
+        if state == "ready" {
+            var execution = try AgentWorkflowExecution(validating: resumed)
+            #expect(throws: AgentWorkflowError.self) {
+                try execution.requestStepCompletion(invocationID: f.invocation.id, instance: f.instance, turnID: "turn", now: Date())
+            }
+            // A Host restart retains the attempted marker; Continue cannot resend it.
+            let recovered = AgentWorkflowStore(fileURL: f.directory.appendingPathComponent("ledger.json"), hostID: f.instance.hostID)
+            let restored = try await recovered.snapshot().runs[0]
+            let retry = AgentWorkflowService(store: recovered, scan: { _ in [observed] }, schedule: { _ in }, resumeStep: { _, _ in Issue.record("A persisted reminder must not be repeated") })
+            _ = try await retry.resume(runID: restored.id, expectedRevision: restored.revision)
+        }
+    }
+
+    @Test(arguments: ["codex", "claude-code"])
+    @MainActor
+    func continuationAcceptsStopArrivingDuringReadinessCheck(plugin: String) async throws {
+        let f = try await fixture(plugin: plugin, completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, plugin: plugin), peer: f.peer)
+        let writes = LockIsolated(0)
+        let delivery = AgentWorkflowTerminalTransport(store: f.store, gate: .init(), temporaryDirectory: f.directory.appendingPathComponent("input"), inspect: { instance in
+            _ = try await f.router.receive(f.event(.stopCandidate, text: "Proposal awaiting confirmation", plugin: plugin), peer: f.peer)
+            return instance
+        }, submit: { _, _, _, validate, _ in
+            try validate { writes.withValue { $0 += 1 } }
+        }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let service = AgentWorkflowService(store: f.store, scan: { _ in [AgentWorkflowObservation(f.instance)] }, schedule: { _ in }, resumeStep: { try await delivery.resumeStep($0, instance: $1) })
+        let current = try await f.store.snapshot().runs[0]
+        let paused = try await service.pause(runID: current.id, expectedRevision: current.revision)
+        let resumed = try await service.resume(runID: paused.id, expectedRevision: paused.revision)
+        #expect(writes.value == 1)
+        #expect(resumed.invocations[0].stepTurn?.stopped == true)
+        #expect(resumed.invocations[0].continuationTurnID == "turn")
+        #expect(resumed.invocations[0].result == nil)
+        #expect(resumed.status == .running)
+    }
+
+    @Test(arguments: [AgentWorkflowReadiness.busy, .draft, .awaitingHuman, .unavailable])
+    @MainActor
+    func continuationRechecksReadinessWithoutPausing(readiness: AgentWorkflowReadiness) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        let delivery = AgentWorkflowTerminalTransport(store: f.store, gate: .init(), temporaryDirectory: f.directory.appendingPathComponent("input"), inspect: {
+            var live = $0
+            live.readiness = readiness
+            return live
+        }, submit: { _, _, _, _, _ in Issue.record("The input is no longer ready") }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let service = AgentWorkflowService(store: f.store, scan: { _ in [AgentWorkflowObservation(f.instance)] }, schedule: { _ in }, resumeStep: { try await delivery.resumeStep($0, instance: $1) })
+        let current = try await f.store.snapshot().runs[0]
+        let paused = try await service.pause(runID: current.id, expectedRevision: current.revision)
+        let resumed = try await service.resume(runID: paused.id, expectedRevision: paused.revision)
+        #expect(resumed.status == .running)
+        #expect(resumed.invocations[0].continuationTurnID == nil)
+    }
+
+    @Test
+    @MainActor
+    func concurrentContinuationsShareOneAttemptWithoutReplayingImagesOrModels() async throws {
+        let f = try await fixture(imageCount: 1, completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.submissionText(pluginID: "codex")), peer: f.peer)
+        let invocation = try await f.store.snapshot().runs[0].invocations[0]
+        let writes = LockIsolated(0)
+        let delivery = AgentWorkflowTerminalTransport(
+            store: f.store,
+            gate: .init(),
+            temporaryDirectory: f.directory.appendingPathComponent("input"),
+            inspect: { $0 },
+            loadModels: { _ in Issue.record("Continue must preserve the current model") },
+            configureModel: { _, _, _ in Issue.record("Continue must preserve the current model") },
+            submit: { _, file, images, validate, _ in
+                #expect(images.isEmpty)
+                let text = try String(contentsOf: file, encoding: .utf8)
+                #expect(!text.contains("[Image #"))
+                try validate { writes.withValue { $0 += 1 } }
+            },
+            onFailure: { Issue.record(Comment(rawValue: $0)) }
+        )
+        async let first: Void = delivery.resumeStep(invocation, instance: f.instance)
+        async let second: Void = delivery.resumeStep(invocation, instance: f.instance)
+        _ = try await (first, second)
+        #expect(writes.value == 1)
+        #expect(try await f.store.snapshot().runs[0].status == .running)
+        #expect(try await f.store.snapshot().runs[0].invocations[0].nativeImageNumbers == [3])
+    }
+
+    @Test(arguments: ["codex", "claude-code"], [false, true])
+    @MainActor
+    func continuationRetriesOnlyConfirmedRejection(plugin: String, rejected: Bool) async throws {
+        let f = try await fixture(plugin: plugin, completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, plugin: plugin), peer: f.peer)
+        let launches = LockIsolated(0)
+        let inputs = LockIsolated<[String]>([])
+        let delivery = AgentWorkflowTerminalTransport(store: f.store, gate: .init(), temporaryDirectory: f.directory.appendingPathComponent("input"), inspect: { $0 }, submit: { _, file, _, validate, _ in
+            try validate { launches.withValue { $0 += 1 } }
+            if launches.value == 1 {
+                if rejected {
+                    throw AgentWorkflowInputNotWritten(reason: "tmux rejected the changed cursor before paste")
+                }
+                throw AgentWorkflowError("Lost tmux response; the input may have been written")
+            }
+            let text = try String(contentsOf: file, encoding: .utf8)
+            inputs.withValue { $0.append(text) }
+        }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let service = AgentWorkflowService(store: f.store, scan: { _ in [AgentWorkflowObservation(f.instance)] }, schedule: { _ in }, resumeStep: { try await delivery.resumeStep($0, instance: $1) })
+        let current = try await f.store.snapshot().runs[0]
+        let paused = try await service.pause(runID: current.id, expectedRevision: current.revision)
+        let failed = try await service.resume(runID: paused.id, expectedRevision: paused.revision)
+        #expect(failed.status == .paused)
+        #expect(launches.value == 1)
+        #expect(failed.invocations[0].continuationTurnID == (rejected ? nil : "turn"))
+        if rejected {
+            #expect(failed.invocations[0].issue == nil)
+        }
+        let retried = try await service.resume(runID: failed.id, expectedRevision: failed.revision)
+        #expect(retried.status == .running)
+        #expect(launches.value == (rejected ? 2 : 1))
+        #expect(inputs.value.count == (rejected ? 1 : 0))
+        #expect(retried.invocations.count == 1)
+        #expect(retried.invocations[0].nativeTurnID == "turn")
+        if rejected, let text = inputs.value.first {
+            _ = try await f.router.receive(f.event(.submitted, text: text, turn: "continued", plugin: plugin), peer: f.peer)
+            let completed = try await f.store.update(runID: f.run.id) {
+                try $0.requestStepCompletion(invocationID: f.invocation.id, instance: f.instance, turnID: "continued", now: Date())
+            }
+            #expect(completed.invocations[0].stepTurn?.completionRequested == true)
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: f.directory.appendingPathComponent("input").path).isEmpty)
+    }
+
+    @Test(arguments: ["pause", "end", "human", "turn", "completion", "replacement", "beforeWrite", "afterWrite"])
+    @MainActor
+    func continuationChecksFinalWriteBoundary(change: String) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        let invocation = try await f.store.snapshot().runs[0].invocations[0]
+        let gate = AgentWorkflowInputGate()
+        let writes = LockIsolated(0)
+        var human: Task<Void, Error>?
+        let delivery = AgentWorkflowTerminalTransport(store: f.store, gate: gate, temporaryDirectory: f.directory.appendingPathComponent("input"), inspect: { $0 }, submit: { _, _, _, validate, _ in
+            switch change {
+            case "pause",
+                 "end":
+                try await f.store.update(runID: f.run.id) {
+                    if change == "pause" {
+                        $0.pause(reason: "operator")
+                    } else {
+                        $0.end()
+                    }
+                }
+            case "human":
+                let before = gate.claim(paneID: f.instance.paneID)
+                human = Task { try await gate.human(paneID: f.instance.paneID) { } }
+                while (try? gate.validate(before)) != nil {
+                    await Task.yield()
+                }
+            case "turn":
+                _ = try await f.router.receive(f.event(.submitted, text: "Human continuation", turn: "human"), peer: f.peer)
+            case "completion":
+                try await f.store.update(runID: f.run.id) {
+                    try $0.requestStepCompletion(invocationID: f.invocation.id, instance: f.instance, turnID: "turn", now: Date())
+                }
+            case "replacement":
+                var observation = AgentWorkflowObservation(f.instance)
+                observation.processRuntimeID = "new-process"
+                _ = try await f.store.reconcile([observation])
+            case "beforeWrite":
+                throw AgentWorkflowInputNotWritten(reason: "capture failed")
+            default: break
+            }
+            try validate { writes.withValue { $0 += 1 } }
+            if change == "afterWrite" {
+                throw AgentWorkflowError("Lost reply after paste")
+            }
+        }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        await #expect(throws: (any Error).self) { try await delivery.resumeStep(invocation, instance: f.instance) }
+        try await human?.value
+        let updated = try await f.store.snapshot().runs[0]
+        #expect(writes.value == (change == "afterWrite" ? 1 : 0))
+        #expect(updated.invocations[0].continuationTurnID == (change == "afterWrite" ? "turn" : nil))
+        #expect(updated.invocations[0].nativeTurnID == "turn")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: f.directory.appendingPathComponent("input").path).isEmpty)
     }
 
     private struct Fixture: Sendable {

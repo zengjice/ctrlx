@@ -445,6 +445,34 @@ struct AgentWorkflowExecution: Sendable {
             run.invocations[index].instance = instance
         }
         run.invocations[index].delivery.toAgentID = instance.id
+        run.invocations[index].issue = nil
+        changed()
+    }
+
+    mutating func beginContinuation(_ expected: AgentWorkflowInvocation, instance: AgentWorkflowInstance, now: Date) throws {
+        try requireScheduling(now: now)
+        let index = try index(of: expected.id)
+        let invocation = run.invocations[index]
+        guard
+            invocation.status == .running, invocation.round == run.round,
+            let turn = invocation.stepTurn, turn.id == expected.stepTurn?.id,
+            turn.transcriptPath == expected.stepTurn?.transcriptPath, !turn.completionRequested,
+            invocation.continuationTurnID != turn.id,
+            let node = run.definition.nodes.first(where: { $0.id == invocation.nodeID }), node.completion == .explicit,
+            let current = run.definition.instance(for: node.agentInstanceID, in: run.instances),
+            current.matchesBinding(instance), instance.readiness == .ready else {
+            throw AgentWorkflowError("The step changed or a continuation was already sent. Check the Agent tab before continuing again.")
+        }
+        run.invocations[index].continuationTurnID = turn.id
+        run.invocations[index].issue = "Continuation requested. Waiting for the Agent to accept it; the original task will not be resent."
+        changed()
+    }
+
+    mutating func continuationNotWritten(_ expected: AgentWorkflowInvocation) throws {
+        let index = try index(of: expected.id)
+        guard run.invocations[index].continuationTurnID == expected.stepTurn?.id else { return }
+        run.invocations[index].continuationTurnID = nil
+        run.invocations[index].issue = nil
         changed()
     }
 
@@ -465,6 +493,7 @@ struct AgentWorkflowExecution: Sendable {
             run.instance(for: invocation)?.matchesBinding(instance) == true,
             run.definition.nodes.first(where: { $0.id == invocation.nodeID })?.completion == .explicit,
             let turn = invocation.stepTurn, turn.id == turnID,
+            invocation.continuationTurnID != turn.id,
             !turn.stopped || turn.completionRequested else {
             throw AgentWorkflowError("This step needs a current accepted Agent turn before it can be completed.")
         }

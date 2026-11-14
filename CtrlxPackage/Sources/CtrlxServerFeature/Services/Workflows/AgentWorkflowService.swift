@@ -7,6 +7,7 @@ actor AgentWorkflowService {
     private let store: AgentWorkflowStore
     private let scan: @Sendable ([AgentWorkflowInstance]) async throws -> [AgentWorkflowObservation]
     private let schedule: @Sendable (UUID) async -> Void
+    private let resumeStep: @Sendable (AgentWorkflowInvocation, AgentWorkflowInstance) async throws -> Void
     private let now: @Sendable () -> Date
     private let onFailure: @Sendable (String) -> Void
     let models: @Sendable (AgentWorkflowInstance, Bool) async throws -> AgentModelSnapshot
@@ -19,6 +20,7 @@ actor AgentWorkflowService {
         store: AgentWorkflowStore,
         scan: @escaping @Sendable ([AgentWorkflowInstance]) async throws -> [AgentWorkflowObservation],
         schedule: @escaping @Sendable (UUID) async -> Void,
+        resumeStep: @escaping @Sendable (AgentWorkflowInvocation, AgentWorkflowInstance) async throws -> Void = { _, _ in throw AgentWorkflowError("Workflow continuation input is unavailable.") },
         models: @escaping @Sendable (AgentWorkflowInstance, Bool) async throws -> AgentModelSnapshot = { _, _ in throw AgentWorkflowError("This Agent does not support model selection.") },
         now: @escaping @Sendable () -> Date = { Date() },
         onFailure: @escaping @Sendable (String) -> Void = { _ in }
@@ -26,6 +28,7 @@ actor AgentWorkflowService {
         self.store = store
         self.scan = scan
         self.schedule = schedule
+        self.resumeStep = resumeStep
         self.models = models
         self.now = now
         self.onFailure = onFailure
@@ -188,8 +191,29 @@ actor AgentWorkflowService {
         let run = try await store.update(runID: runID, expectedRevision: expectedRevision) {
             try $0.resume(instances: instances, roundLimit: roundLimit, now: timestamp)
         }
+        for invocation in run.invocations where invocation.status == .running && invocation.round == run.round {
+            guard
+                run.status == .running,
+                let turn = invocation.stepTurn, !turn.completionRequested,
+                invocation.continuationTurnID != turn.id,
+                let node = run.definition.nodes.first(where: { $0.id == invocation.nodeID }), node.completion == .explicit,
+                let instance = run.definition.instance(for: node.agentInstanceID, in: instances), instance.readiness == .ready else { continue }
+            do { try await resumeStep(invocation, instance) }
+            catch {
+                try await store.update(runID: runID) {
+                    guard
+                        $0.run.status == .running,
+                        let current = $0.run.invocations.first(where: { $0.id == invocation.id }),
+                        current.status == .running, current.stepTurn?.id == turn.id,
+                        current.stepTurn?.transcriptPath == turn.transcriptPath,
+                        current.stepTurn?.completionRequested == false else { return }
+                    $0.pause(reason: "Could not confirm the continuation for \(instance.displayName). Check its terminal: \(error.localizedDescription)")
+                }
+                break
+            }
+        }
         await schedule(run.id)
-        return run
+        return try await store.snapshot().runs.first(where: { $0.id == runID }) ?? run
     }
 
     func end(runID: UUID, expectedRevision: Int) async throws -> AgentWorkflowRun {
