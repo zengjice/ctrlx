@@ -7,6 +7,40 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.165 — Orbie assistant and Orbiter tasks
+
+- Add a local Mac Orbie assistant with explicit Codex/Claude setup, a persistent
+  conversation and a lightweight floating panel from the toolbar or menu bar.
+  Send through the existing workflow ledger, preserve drafts on close and avoid
+  creating or resending Agents during refresh or restart.
+- Add Orbiter tasks using a new Agent, native Fork or explicit association.
+  Preserve task/material identity across follow-ups, track verified workflow
+  reports and allow up to two active task executions. Archive retains the Agent
+  and history; handing a report to Orbie appends to its draft without sending.
+- Add an initially unbound global shortcut, supporting a letter/digit/Space with
+  any single or combined modifier. Hide the panel on Esc/focus loss, retain
+  ordinary task navigation while busy and never raise it for background results.
+  Add bounded saved-task lookup through the local CLI with OS-peer and native
+  conversation checks; stale or same-name replacement tabs cannot inherit a task.
+- Accept Claude Stop summaries that differ from their native transcript only in
+  outer whitespace, retaining internal-text, turn and ancestry verification.
+  See [Orbie and Orbiter](docs/services-reference.md#orbie-on-the-local-mac).
+  Sources: `370ef5bf`, `13875cb3`.
+
+- Validation: focused Swift suites reported 430 tests and passed serially;
+  four AppKit panel tests also passed on rerun. Fresh isolated Codex 0.169.0 and
+  Claude Code 2.1.319 Orbie conversation acceptance passed with loopback model
+  fixtures. Lint for 46 Swift files, both boundary checks and diff checks passed.
+- Reused evidence: earlier successful isolated signed-App task creation/Fork,
+  restart, global panel focus, CLI lookup and navigation reports were preserved
+  and reviewed. Fresh offscreen panel snapshots omitted SwiftUI content, so they
+  are not visual acceptance; a historical visible signed-App capture was checked.
+  A fresh complete stage2/3 App GUI run, real public-model behavior, physical
+  multi-display/Spaces interaction, iPhone UI, full E2E and Apple Intelligence
+  evaluations were not run. The opt-in two-Agent review-loop test remains skipped.
+  Native browser code and codec SDK are unchanged; prior media acceptance is
+  reused after checking SDK hash/UUID. This release packages macOS only.
+
 ## 3.0.164 — Continue idle workflow steps
 
 - On an explicit user Continue, send a bounded continuation reminder to an idle
