@@ -142,8 +142,15 @@ struct AgentWorkflowNativeReviewLoopTests {
         } operation: { try await runNativeSample() }
     }
 
-    private func runNativeSample() async throws {
-        let manifest = try URL(fileURLWithPath: #require(ProcessInfo.processInfo.environment["CTRLX_WORKFLOW_NATIVE_FIXTURE"]))
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CTRLX_ORBIE_NATIVE_FIXTURE"] != nil))
+    func nativeOrbieFirstAndNextMessages() async throws {
+        try await withDependencies {
+            $0[PluginIngressPeerClient.self] = .liveValue
+        } operation: { try await runNativeSample(orbie: true) }
+    }
+
+    private func runNativeSample(orbie: Bool = false) async throws {
+        let manifest = try URL(fileURLWithPath: #require(ProcessInfo.processInfo.environment[orbie ? "CTRLX_ORBIE_NATIVE_FIXTURE" : "CTRLX_WORKFLOW_NATIVE_FIXTURE"]))
         let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: manifest))
         let freshCodex = ProcessInfo.processInfo.environment["CTRLX_WORKFLOW_NATIVE_FRESH"] == "1"
         let root = URL(fileURLWithPath: fixture.root)
@@ -277,6 +284,15 @@ struct AgentWorkflowNativeReviewLoopTests {
                 try await Task.sleep(for: .milliseconds(100))
             }
             try #require(ready, "Native hooks did not become ready.")
+            if orbie {
+                try await verifyOrbie(fixture: fixture, hostID: hostID, store: store, runner: runner, inspect: inspect)
+                await runner.shutdown()
+                await router.shutdown()
+                await monitor.shutdown()
+                await ingress.stop()
+                await api.stop()
+                return
+            }
             let clearsConversation = ProcessInfo.processInfo.environment["CTRLX_WORKFLOW_NATIVE_CLEAR"] == "1"
             if clearsConversation {
                 let codex = try #require(instances.first { $0.pluginID == "codex" })
@@ -355,5 +371,99 @@ struct AgentWorkflowNativeReviewLoopTests {
         await monitor.shutdown()
         await ingress.stop()
         await api.stop()
+    }
+
+    private func verifyOrbie(
+        fixture: Fixture, hostID: UUID, store: AgentWorkflowStore, runner: AgentWorkflowRunner,
+        inspect: @escaping @MainActor @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance
+    ) async throws {
+        let workflows = AgentWorkflowService(store: store, scan: { previous in
+            var observations: [AgentWorkflowObservation] = []
+            for instance in previous {
+                try observations.append(AgentWorkflowObservation(await inspect(instance)))
+            }
+            return observations
+        }, schedule: { await runner.schedule(runID: $0) })
+        for agent in fixture.agents {
+            let instance = try #require(await store.snapshot().instances.first { $0.pluginID == agent.pluginID })
+            let paths = CtrlxPaths(stateRootOverride: URL(fileURLWithPath: fixture.root).appendingPathComponent("orbie-\(agent.pluginID)/state"))
+            let storage = OrbieStore(paths: paths, hostID: hostID)
+            let orbie = OrbieService(store: storage, workflows: workflows, launch: { _ in instance.workspacePane }, locateCreation: { _ in instance.workspacePane })
+            await orbie.refresh()
+            try await orbie.create(pluginID: agent.pluginID, providerID: "loopback-fixture")
+            for question in ["First Orbie question", "Next Orbie question"] {
+                orbie.draft = question
+                await orbie.send()
+                try #require(orbie.issue == nil, Comment(rawValue: orbie.issue ?? ""))
+                let id = try #require(orbie.record?.runIDs.last)
+                var finished = false
+                for _ in 0..<300 {
+                    await orbie.refresh(inspect: false)
+                    let run = try #require(orbie.runs.first { $0.id == id })
+                    if run.status == .completed {
+                        #expect(run.invocations.count == 1)
+                        #expect(run.invocations[0].result?.text == "RECOVERY_IDLE_FIXTURE")
+                        finished = true
+                        break
+                    }
+                    try #require(run.status != .paused, Comment(rawValue: run.issue ?? "Paused"))
+                    try await Task.sleep(for: .milliseconds(100))
+                }
+                try #require(finished, "Orbie did not receive a verified native result")
+            }
+            let count = try await store.snapshot().runs.count
+            let reopened = OrbieService(store: storage, workflows: workflows, launch: { _ in
+                Issue.record("Reopening must not create another Agent")
+                return instance.workspacePane
+            }, locateCreation: { _ in instance.workspacePane })
+            await reopened.refresh()
+            #expect(reopened.record?.binding == orbie.record?.binding)
+            #expect(reopened.runs.count == 2)
+            #expect(try await store.snapshot().runs.count == count)
+
+            // Human input is entered only into this fixture's private pane.
+            _ = try tmux(fixture, ["send-keys", "-t", instance.paneID, "-l", "human draft"])
+            try await Task.sleep(for: .milliseconds(200))
+            reopened.draft = "Keep panel draft"
+            await reopened.send()
+            #expect(reopened.draft == "Keep panel draft")
+            #expect(reopened.issue != nil)
+            #expect(try await store.snapshot().runs.count == count)
+            #expect(try capture(fixture, instance).plainLines.contains { $0.contains("human draft") })
+            _ = try tmux(fixture, ["send-keys", "-t", instance.paneID, "C-u"])
+            try await Task.sleep(for: .milliseconds(200))
+
+            let approval = URL(fileURLWithPath: fixture.root).appendingPathComponent("approval-\(agent.pluginID)")
+            try Data().write(to: approval)
+            for _ in 0..<100 where !FileManager.default.fileExists(atPath: approval.appendingPathExtension("ready").path) {
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            try #require(FileManager.default.fileExists(atPath: approval.appendingPathExtension("ready").path))
+            reopened.draft = "Request fixture approval"
+            await reopened.send()
+            try #require(reopened.issue == nil, Comment(rawValue: reopened.issue ?? ""))
+            var waitingForApproval = false
+            for _ in 0..<300 {
+                let text = try capture(fixture, instance).plainLines.joined(separator: "\n")
+                if ["Would you like to run", "Do you want to proceed", "Allow this"].contains(where: { text.contains($0) }) {
+                    waitingForApproval = true
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            try #require(waitingForApproval, "Native approval UI did not appear")
+            reopened.draft = "Retained while waiting for approval"
+            await reopened.send()
+            #expect(reopened.draft == "Retained while waiting for approval")
+            #expect(try await store.snapshot().runs.count == count + 1)
+            #expect(!FileManager.default.fileExists(atPath: URL(fileURLWithPath: fixture.root).appendingPathComponent("\(agent.pluginID)-marker").path))
+            let active = try #require(reopened.runs.last)
+            await reopened.endMessage(active)
+            #expect(reopened.runs.last?.status == .ended)
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let archive = try await store.snapshot()
+        try encoder.encode(archive).write(to: URL(fileURLWithPath: fixture.root).appendingPathComponent("orbie-native-ledger.json"))
     }
 }

@@ -2662,6 +2662,11 @@ public struct MainView: View {
 
     @ToolbarContentBuilder private var toolbarContent: some ToolbarContent {
         if detachedWorkspace == nil {
+            ToolbarItem(id: "ctrlx.toolbar.orbie", placement: .automatic) {
+                Button { coordinator.presentOrbiePanel(openWindow: openWindow) } label: { Label("Orbie", symbol: .sparkles) }
+                    .help("Open Orbie on this Mac")
+                    .accessibilityIdentifier("orbie-open")
+            }
             ToolbarItem(id: "ctrlx.toolbar.workflows", placement: .automatic) {
                 Button { openWindow(id: "workflows") } label: { Label("Workflows", symbol: .flowchart) }
                     .help("Agent Workflows")

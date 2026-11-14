@@ -527,6 +527,21 @@ struct TmuxPaneMirrorApp: App {
         .defaultSize(width: 720, height: 760)
         .defaultLaunchBehavior(.suppressed)
 
+        Window("Orbie", id: "orbie") {
+            MacOrbieView().environment(coordinator)
+        }
+        .defaultSize(width: 640, height: 680)
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+
+        Window("Orbie Panel", id: "orbie-panel") {
+            MacOrbiePanelView().environment(coordinator)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 640, height: 600)
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+
         Window("Workflows", id: "workflows") {
             MacWorkflowsView().environment(coordinator)
         }
@@ -582,6 +597,7 @@ struct TmuxPaneMirrorApp: App {
                 dashboard: coordinator.dashboardStore
             )
             .handleIPAFileRequests(ipaFiles)
+            .orbiePanelIntegration(coordinator: coordinator)
             .task { await coordinator.cliInstaller.setupAutomatically() }
             .task {
                 coordinator.settings.applyAppearance()

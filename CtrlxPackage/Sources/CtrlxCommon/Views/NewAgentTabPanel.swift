@@ -20,11 +20,12 @@ public struct NewAgentTabConfiguration: Identifiable {
     let agents: [SessionLaunchAgent]
     let directorySource: SessionDirectorySource
     let unavailableReason: String?
+    let allowsDirectorySelection: Bool
     let start: @MainActor (CreateTmuxWindow) async throws -> Void
 
     public init(
         id: Destination, initialDirectory: String, agents: [SessionLaunchAgent],
-        directorySource: SessionDirectorySource, unavailableReason: String?,
+        directorySource: SessionDirectorySource, unavailableReason: String?, allowsDirectorySelection: Bool = true,
         start: @escaping @MainActor (CreateTmuxWindow) async throws -> Void
     ) {
         self.id = id
@@ -32,6 +33,7 @@ public struct NewAgentTabConfiguration: Identifiable {
         self.agents = agents
         self.directorySource = directorySource
         self.unavailableReason = unavailableReason
+        self.allowsDirectorySelection = allowsDirectorySelection
         self.start = start
     }
 
@@ -113,6 +115,7 @@ public struct NewAgentTabPanel: View {
                         AgentTabLaunchCard(
                             agent: agent,
                             initialDirectory: configuration.initialDirectory,
+                            allowsDirectorySelection: configuration.allowsDirectorySelection,
                             directorySource: configuration.directorySource,
                             isDisabled: launchingAgentID != nil || configuration.unavailableReason != nil,
                             isLaunching: launchingAgentID == agent.id,
@@ -161,6 +164,7 @@ public struct NewAgentTabPanel: View {
 @MainActor
 private struct AgentTabLaunchCard: View {
     let agent: SessionLaunchAgent
+    let allowsDirectorySelection: Bool
     let directorySource: SessionDirectorySource
     let isDisabled: Bool
     let isLaunching: Bool
@@ -173,12 +177,14 @@ private struct AgentTabLaunchCard: View {
     init(
         agent: SessionLaunchAgent,
         initialDirectory: String,
+        allowsDirectorySelection: Bool,
         directorySource: SessionDirectorySource,
         isDisabled: Bool,
         isLaunching: Bool,
         onStart: @escaping (String, String?) -> Void
     ) {
         self.agent = agent
+        self.allowsDirectorySelection = allowsDirectorySelection
         self.directorySource = directorySource
         self.isDisabled = isDisabled
         self.isLaunching = isLaunching
@@ -191,14 +197,18 @@ private struct AgentTabLaunchCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label(agent.name, symbol: .sparkles).font(.headline)
-            TextField("Directory on Host", text: $directory)
-                .textFieldStyle(.roundedBorder)
-                .autocorrectionDisabled()
-            #if os(iOS)
-                .textInputAutocapitalization(.never)
-            #endif
-                .accessibilityLabel("\(agent.name) directory on Host")
-                .accessibilityIdentifier("new-agent-directory-\(agent.id)")
+            if allowsDirectorySelection {
+                TextField("Directory on Host", text: $directory)
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+                #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                #endif
+                    .accessibilityLabel("\(agent.name) directory on Host")
+                    .accessibilityIdentifier("new-agent-directory-\(agent.id)")
+            } else {
+                Text(directory).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+            }
             if !agent.providers.isEmpty {
                 Picker("Provider", selection: $providerID) {
                     ForEach(agent.providers) { provider in
@@ -209,10 +219,12 @@ private struct AgentTabLaunchCard: View {
                 .pickerStyle(.menu)
                 .accessibilityIdentifier("new-agent-provider-\(agent.id)")
             }
-            DisclosureGroup("Choose Directory…", isExpanded: $showsDirectories) {
-                if showsDirectories {
-                    SessionDirectoryBrowser(path: $directory, source: directorySource, isCreatingDirectory: $isCreatingDirectory)
-                        .padding(.top, 8)
+            if allowsDirectorySelection {
+                DisclosureGroup("Choose Directory…", isExpanded: $showsDirectories) {
+                    if showsDirectories {
+                        SessionDirectoryBrowser(path: $directory, source: directorySource, isCreatingDirectory: $isCreatingDirectory)
+                            .padding(.top, 8)
+                    }
                 }
             }
             HStack {

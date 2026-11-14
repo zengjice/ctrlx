@@ -4,6 +4,7 @@ import SwiftUI
 /// Stable anchors shared by the local search catalog and settings sections.
 enum SettingsSection: String {
     case diskAccess
+    case orbie
     case ipaAssociation
     case terminal
     case behavior
@@ -64,6 +65,7 @@ struct SettingsSearchItem: Identifiable {
     }
 
     static let all: [Self] = [
+        .init(title: "Orbie Global Shortcut", tab: .general, section: .orbie, keywords: "hotkey global panel keyboard 全局 快捷键 助理"),
         .init(title: "Terminal App & Scrollback", tab: .general, section: .terminal, keywords: "terminal path history lines 终端 历史"),
         .init(title: "Launch at login", tab: .general, section: .behavior, keywords: "startup 登录 启动"),
         .init(title: "Open sessions window on launch", tab: .general, section: .behavior),

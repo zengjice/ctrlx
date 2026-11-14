@@ -36,6 +36,8 @@
         "browser.start",
         "workflow.finish",
         "workflow.attachments",
+        "orbie.tasks.list",
+        "orbie.tasks.show",
         "system.set_env",
         "session.list",
         "session.create",

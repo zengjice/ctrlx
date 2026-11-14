@@ -1,10 +1,10 @@
 # Orbie 实施计划
 
-日期：2026-11-13。源码基线：`dddc4b0c`（CtrlX 3.0.162）。依据：[Orbie 设计方案](../../global-agent-design.md)。状态：**计划已编写，开发与运行验收均未开始**。
+日期：2026-11-13。源码基线：`dddc4b0c`（CtrlX 3.0.162）。依据：[Orbie 设计方案](../../global-agent-design.md)。状态：**阶段 1–3 已实现并通过定向单测、Mac 编译及本机隔离验收；阶段 4–6 未开始**。具体完成项、命令与未测边界见 [STAGE1_TODO.md](STAGE1_TODO.md)、[STAGE2_TODO.md](STAGE2_TODO.md) 和 [STAGE3_TODO.md](STAGE3_TODO.md)。
 
 先完成「唤醒 Orbie → 创建任务分身 → 保存结果 → 找回并继续任务」，再增加文件记忆。六个阶段依次交付，每阶段保留可运行、可验证的成果；词库、自动 Dreaming 和自主分派另行推进。
 
-本目录沿用仓库的版本化计划组织方式；`v3.1.0` 不是发版承诺。第一阶段清单见 [STAGE1_TODO.md](STAGE1_TODO.md)，假设与待决策项见 [ISSUES.md](ISSUES.md)。后续阶段开始时再增加对应 TODO，避免提前维护大量重复清单。
+本目录沿用仓库的版本化计划组织方式；`v3.1.0` 不是发版承诺。已完成阶段的清单见 [STAGE1_TODO.md](STAGE1_TODO.md)、[STAGE2_TODO.md](STAGE2_TODO.md)、[STAGE3_TODO.md](STAGE3_TODO.md)，假设与待决策项见 [ISSUES.md](ISSUES.md)。后续阶段开始时再增加对应 TODO，避免提前维护大量重复清单。
 
 ## 1. 首版边界与建议默认值
 
@@ -150,4 +150,4 @@ Orbie 忙碌不影响任务查找、显式导航及新建独立任务。普通 A
 
 代码阶段执行定向 `./scripts/unit-tests.sh -- --filter '<套件过滤表达式>'`、修改文件的 SwiftFormat lint、两项仓库边界检查与 `git diff --check`。Mac 构建遵循 [仓库构建顺序](../../../AGENTS.md#building--testing)；iOS 仅在确实修改目标时做设备 SDK 编译，不额外构建 Simulator。运行验收遵循[隔离 E2E 约定](../../e2e-testing.md)，不把用户的活跃任务当作夹具。
 
-每阶段 TODO 记录源码范围、实际命令／结果、证据路径和未测项。本次仅核对源码和编写计划，没有运行上述测试、创建 Agent、安装 App 或变更用户工作区运行状态。
+每阶段 TODO 记录源码范围、实际命令／结果、证据路径和未测项。阶段 1–3 的实际命令、隔离原生运行证据及未测项见各自 TODO；未安装或发布 App，也未将用户活跃任务用作夹具。

@@ -9,8 +9,10 @@ extension AppCoordinator {
         localAgentLaunchAgents().map(\.id).filter { pluginRegistry?.core($0) is any AgentWorkflowProviding }
     }
 
-    func workflowAgentCreation(hostID: UUID) async throws -> AgentWorkflowAgentCreation {
-        _ = try await localWorkflowEndpoint().request(.catalog(offset: 0), hostID: hostID)
+    func workflowAgentCreation(hostID: UUID, creationID: UUID? = nil, firstWindowName: String? = nil) async throws -> AgentWorkflowAgentCreation {
+        guard try await agentWorkflowService?.snapshot().hostID == hostID else {
+            throw AgentWorkflowError(agentWorkflowStartupError ?? "The workflow Host is unavailable or changed. Reload before creating an Agent.")
+        }
         var seen: Set<UUID> = []
         let sessions = tmuxService.panes.compactMap { pane -> AgentWorkflowAgentCreation.Session? in
             guard let identity = pane.workspaceIdentity, seen.insert(identity.sessionID).inserted else { return nil }
@@ -32,7 +34,10 @@ extension AppCoordinator {
                 let core = pluginRegistry?.core(pluginID), core is any AgentWorkflowProviding else {
                 throw AgentWorkflowError("The workflow Agent plugin is no longer available.")
             }
-            _ = try await localWorkflowEndpoint().request(.catalog(offset: 0), hostID: hostID)
+            guard try await agentWorkflowService?.snapshot().hostID == hostID else {
+                throw AgentWorkflowError("The workflow Host is unavailable or changed. Reload before creating an Agent.")
+            }
+            let shortcutDefaults = newAgentModelShortcuts(pluginID: pluginID, providerID: request.providerID)
             let paneID: String
             let serverID: String
             if let session {
@@ -50,12 +55,17 @@ extension AppCoordinator {
                     baseName: request.sessionName, width: 120, height: 40,
                     workingDirectory: prepared.workingDirectory,
                     runCommand: launch?.command, launchPayload: launch?.payload,
-                    firstWindowName: pluginRegistry?.manifest(pluginID)?.shortName ?? pluginID
+                    firstWindowName: firstWindowName ?? (creationID == nil ? (pluginRegistry?.manifest(pluginID)?.shortName ?? pluginID) : "Orbie"),
+                    creationID: creationID
                 )
                 paneID = created.paneId
                 serverID = created.serverID
             }
             _ = await tmuxService.refreshPanes()
+            if let captured = try? await tmuxService.captureWorkspacePane(target: paneID), captured.identity.serverID == serverID {
+                agentModelPreferences.initialize(.init(pane: captured.identity, defaults: shortcutDefaults), hostID: "local")
+                await connectedViewerManager?.pushSessionStateToAll()
+            }
             return .init(paneID: paneID, scope: .init(hostID: hostID, serverID: serverID), pluginID: pluginID)
         }
     }

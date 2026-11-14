@@ -974,3 +974,32 @@ Methods follow a `domain.action` convention:
 | `validation_error` | `layout.apply` config failed schema validation (CLI maps to exit 2) |
 | `session_exists` | `layout.apply` was called with `require_create` and the session already exists (CLI maps to exit 3) |
 | `internal_error` | An unexpected error occurred inside the app |
+
+
+## Local Orbie task lookup
+
+The enabled Main Orbie Agent can read explicitly saved local tasks. These commands
+use the Host's existing API socket (`CTRLX_SOCKET` in its Agent environment) and
+validate the OS socket peer's process ancestry/runtime against the current Orbie
+binding and verified native conversation. A task UUID, JSON PID or pane override
+does not grant access. Ordinary shells and other Agents are rejected.
+
+```bash
+ctrlx orbie tasks list --query 'audio' --limit 8
+ctrlx orbie tasks list --since 2026-11-12T00:00:00+08:00 --include-archived
+ctrlx orbie tasks show TASK_UUID
+```
+
+Both commands return JSON. List accepts up to 256 UTF-8 bytes of keywords and
+1–12 tasks (default 8), sorted by the latest recorded execution/report time. Show
+requires an exact saved task UUID. Summaries include bounded title, project, goal,
+source, current state and the latest verified Agent reply's run/invocation IDs;
+show also includes the derived materials directory. Reports are Agent reports,
+not independent verification of a goal. Unsent drafts, selected material contents
+and full native transcripts are excluded. Busy or human-blocked Orbie instances
+can still read these records; no command submits, resumes or opens a task.
+
+The panel accepts explicit `[CtrlX task: UUID]` markers only from the existing
+verified final-reply ledger. It displays saved candidates for user selection and
+re-reads the task association/current durable pane identity before opening its
+ordinary Agent tab. Missing originals never fall back to a similarly named tab.

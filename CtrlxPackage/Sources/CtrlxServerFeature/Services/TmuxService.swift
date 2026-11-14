@@ -2694,7 +2694,8 @@ final public class TmuxService {
         forceLoginShell: Bool = false,
         expectedWorkspacePane: WorkspacePaneIdentity? = nil,
         expectedSourcePaneID: String? = nil,
-        resourceSessionID: UUID? = nil
+        resourceSessionID: UUID? = nil,
+        creationID: UUID? = nil
     ) async throws -> String {
         let identity = expectedWorkspacePane ?? panes.first { $0.sessionName == sessionName }?.workspaceIdentity
         if let resourceSessionID {
@@ -2758,6 +2759,11 @@ final public class TmuxService {
 
         // Remove legacy NO_COLOR only while the originating session still exists.
         var commands = [["set-environment", "-u", "-t", target, "NO_COLOR"], args]
+        if let creationID {
+            // A separate command preserves the new-window target through the
+            // workspace guard; an embedded semicolon would become shell argv.
+            commands.append(["set-option", "-p", "@ctrlx-creation-id", creationID.uuidString])
+        }
         if let expectedSourcePaneID {
             guard let identity = expectedWorkspacePane else { throw TmuxError.commandFailed(message: "The source terminal identity is unavailable. Reopen Fork.") }
             commands = try [WorkspaceTerminalInputGuard.arguments(target: expectedSourcePaneID, identity: identity, commands: commands)]
@@ -3517,7 +3523,8 @@ final public class TmuxService {
         extraEnvironment: [String] = [],
         launchPayload: String? = nil,
         firstWindowName: String = "terminal 1",
-        resourceSessionID: UUID? = nil
+        resourceSessionID: UUID? = nil,
+        creationID: UUID? = nil
     ) async throws -> CreatedSession {
         // Get existing session names
         let existingNames = await getExistingSessionNames()
@@ -3577,6 +3584,9 @@ final public class TmuxService {
                 throw TmuxError.commandFailed(message: "The resource session closed while preparing the terminal.")
             }
             args += [";", "set-option", "-t", Self.sessionTarget(sessionName), WorkspaceTmuxRecovery.sessionKey, resourceSessionID.uuidString]
+        }
+        if let creationID {
+            args += [";", "set-option", "-p", "-t", Self.sessionTarget(sessionName), "@ctrlx-creation-id", creationID.uuidString]
         }
         // Create the session with specified dimensions
         let result = try await runTmuxCommand(args)
