@@ -66,6 +66,13 @@ Host binding and delivery, task continuity, global entry, selection delegation,
 file memory and acceptance. Its stage checklists and decision register
 separate implemented behavior, proposed later-stage defaults and actual acceptance evidence.
 
+The [Agent identity unification plan](v3.1.0/agent-identity/IMPLEMENTATION_PLAN.md)
+proposes one durable Host/pane identity, with window placement, current process,
+native conversation and execution authority kept explicit. It covers event validation,
+Orbie/Orbiter and workflow continuity, recovery, notification routing, resources,
+model state, data migration and acceptance. This is a pending proposal; the current
+Host/window/pane workflow target and other existing contracts have not been changed.
+
 The [multi-agent collaboration design](multi-agent-design.md) separates fixed Agent
 participants from execution steps. Ordered steps can reuse one Agent, dependencies
 can wait without forwarding output, and a loop can restart at review after one-time
