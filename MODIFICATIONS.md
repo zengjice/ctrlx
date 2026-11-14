@@ -7,6 +7,46 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.166 — Durable Agent identity and mixed-language voice correction
+
+- Keep Orbie, Orbiter, workflow participants and resource associations tied to
+  the persistent Host/pane across process restarts and workspace moves. Preserve
+  current-process, native-conversation and request checks for input, completion,
+  resource authorization and notification answers; stale events cannot replace
+  the current Agent. Fix participant rebinding and workflow conflict lookup.
+  Sources: `db45d8c0`, `361bd2b5`.
+- Restore workflow input on tmux 3.6a when paste-mode metadata is unavailable,
+  retain Agent-tab navigation during inspection and remove manual Orbie reconnect.
+  Source: `db45d8c0`.
+- Improve Chinese/English voice correction, technical-name reconstruction and
+  equivalent spoken version digits while preserving commands, literal paths and
+  user intent. Give provider reasoning sufficient output budget and reject
+  incomplete responses. Source: `bb28c34c`.
+- Compatibility: workflow schema/wire version 8 and native-conversation cache
+  schema 2 preserve backups before migration. Older workflow mutation commands
+  are rejected; old Viewers retain basic navigation without precise notification
+  targeting or answer actions. Rollback requires the corresponding schema backups,
+  not only an older App. pi 0.1.1, omp 0.1.2 and OpenCode 0.2.3 bridge changes are
+  included in source; existing installations need a plugin update and Agent
+  restart/reload to obtain sequenced events. See [Agent identity](docs/agent-identity.md).
+
+- Validation: 183 focused Swift tests passed after aligning two legacy recovery
+  assertions with persistent pane identity and removing an obsolete system-unzip
+  precondition; archive rejection still requires the exact zip-slip error before
+  extraction. The earlier wider run's failures and interrupted broad run remain
+  recorded, not counted as passing suites. pi/omp/OpenCode sidecars passed
+  34/51/58 tests, and the distributed installer's 34 process/flow tests passed.
+  The separate local shell-wrapper argument-forwarding test still fails and is
+  outside the distributed installer. Sources: `3765601f` and the commits above.
+- Fresh isolated Codex 0.169.0 and Claude Code 2.1.319 Orbie acceptance passed
+  under tmux 3.6a using loopback models, including first/follow-up input guards.
+  Reused the reviewed same-day signed-App Browser/Simulator resource-identity
+  evidence after comparing production source, and prior codec acceptance after
+  verifying the unchanged CEF framework hash/UUID. Format, boundary and diff
+  checks passed. No full unfiltered suite, full E2E, physical cross-device UI,
+  real-account login switching or Apple Intelligence evaluation was run for this
+  publication. This release packages macOS only.
+
 ## 3.0.165 — Orbie assistant and Orbiter tasks
 
 - Add a local Mac Orbie assistant with explicit Codex/Claude setup, a persistent
