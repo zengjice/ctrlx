@@ -90,6 +90,24 @@ struct OrbieTests {
     }
 
     @Test
+    func transientInputHintIsShownWithoutRevokingCapability() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        try await f.service.create(pluginID: "codex", providerID: nil)
+        f.backend.observations[0].readiness = .unavailable
+        f.backend.observations[0].inputIssue = "Exit tmux copy mode."
+        await f.service.refresh()
+        #expect(f.service.availability == "Exit tmux copy mode.")
+        #expect(f.service.instance?.capabilityIssue == nil)
+        #expect(f.service.instance?.capabilities != nil)
+        f.backend.observations[0].readiness = .ready
+        f.backend.observations[0].inputIssue = nil
+        await f.service.refresh()
+        #expect(f.service.availability == nil)
+        #expect(f.backend.schedules.isEmpty)
+    }
+
+    @Test
     func taskLookupInstructionsUseTheExistingWorkflowAndKeepTheOriginalMessage() async throws {
         let f = try await fixture(queryCommand: "'/private/fixture/CtrlXCLI'")
         defer { try? FileManager.default.removeItem(at: f.root) }
@@ -222,16 +240,13 @@ struct OrbieTests {
         #expect(try await f.ledger.snapshot().runs.isEmpty)
     }
 
-    @Test(arguments: ["process", "conversation", "pane", "server", "same-name"])
-    func replacementCannotInheritSubmissionAuthority(change: String) async throws {
+    @Test(arguments: ["pane", "same-name"])
+    func anotherTargetCannotInheritOrbie(change: String) async throws {
         let f = try await fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
         try await f.service.create(pluginID: "codex", providerID: nil)
         switch change {
-        case "process": f.backend.observations[0].processRuntimeID = "new-process"
-        case "conversation": f.backend.observations[0].conversationID = "another-conversation"
         case "pane": f.backend.observations[0].workspacePane.paneID = UUID()
-        case "server": f.backend.observations[0].workspacePane.serverID = "restarted-server"
         default:
             f.backend.observations[0].workspacePane.windowID = UUID()
             f.backend.observations[0].workspacePane.paneID = UUID()
@@ -242,6 +257,82 @@ struct OrbieTests {
         #expect(f.service.draft == "Never send to replacement")
         #expect(f.backend.schedules.isEmpty)
         #expect(try await f.ledger.snapshot().runs.isEmpty)
+    }
+
+    @Test(arguments: ["codex", "claude-code"], ["process", "conversation", "recovery", "plugin"])
+    func sameTargetAutomaticallyUsesCurrentRuntime(plugin: String, change: String) async throws {
+        let f = try await fixture(plugin: plugin)
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        try await f.service.create(pluginID: plugin, providerID: nil)
+        let original = try #require(f.service.record?.binding)
+        switch change {
+        case "process": f.backend.observations[0].processRuntimeID = "new-process"
+        case "conversation": f.backend.observations[0].conversationID = "another-conversation"
+        case "recovery":
+            f.backend.observations[0].processID = 200
+            f.backend.observations[0].processRuntimeID = "recovered-process"
+            f.backend.observations[0].workspacePane.serverID = "restarted-server"
+            f.backend.observations[0].workspacePane.sessionID = UUID()
+            f.backend.observations[0].paneID = "%9"
+        default:
+            f.backend.observations[0].pluginID = plugin == "codex" ? "claude-code" : "codex"
+            f.backend.observations[0].processRuntimeID = "switched-agent"
+            f.backend.observations[0].conversationID = "switched-conversation"
+        }
+        f.service.draft = "Keep until explicitly sent"
+        await f.service.saveDraft()
+        let reopened = f.freshService()
+        await reopened.refresh()
+        let current = try #require(reopened.instance)
+        #expect(current.target == original.target && !current.matchesBinding(original))
+        #expect(reopened.record?.binding?.matchesBinding(current) == true)
+        #expect(try await f.storage.load().target == original.target)
+        #expect(reopened.availability == nil && reopened.draft == "Keep until explicitly sent")
+        #expect(f.backend.schedules.isEmpty && f.backend.launches.count == 1)
+        await reopened.send()
+        let run = try #require(try await f.ledger.snapshot().runs.first)
+        #expect(run.instances.first?.matchesBinding(current) == true)
+        #expect(reopened.issue == nil && f.backend.schedules == [run.id])
+    }
+
+    @Test
+    func runtimeRefreshDoesNotReassignAnAcceptedMessage() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        try await f.service.create(pluginID: "codex", providerID: nil)
+        f.service.draft = "Old request"
+        await f.service.send()
+        let started = try #require(try await f.ledger.snapshot().runs.first)
+        let original = try #require(started.instances.first)
+        let accepted = try await f.ledger.update(runID: started.id) { execution in
+            let invocation = try execution.prepareInvocation(nodeID: started.definition.entryNodeID, now: Date())
+            try execution.beginWriting(invocationID: invocation.id, instance: original, now: Date())
+            try execution.accept(invocationID: invocation.id, instance: original, nativeTurnID: "old-turn")
+        }
+        let invocation = try #require(accepted.invocations.first)
+        f.backend.observations[0].processRuntimeID = "after-login"
+        f.backend.observations[0].conversationID = "new-conversation"
+        await f.service.refresh()
+        let current = try #require(f.service.instance)
+        #expect(f.service.record?.binding?.matchesBinding(current) == true)
+        #expect(try await f.ledger.snapshot().runs[0].invocations.first == invocation)
+        #expect(f.backend.schedules == [started.id])
+        f.service.draft = "Next request"
+        await f.service.send()
+        #expect(f.service.draft == "Next request" && f.backend.schedules.count == 1)
+        await #expect(throws: AgentWorkflowError.self) {
+            try await f.ledger.update(runID: started.id) {
+                try $0.succeed(.init(invocationID: invocation.id, nativeTurnID: "old-turn", text: "Wrong reply", completedAt: Date()), instance: current, now: Date())
+            }
+        }
+        let oldRun = try #require(f.service.runs.first)
+        await f.service.endMessage(oldRun)
+        await f.service.send()
+        let runs = try await f.ledger.snapshot().runs
+        #expect(runs.count == 2 && f.backend.schedules.count == 2)
+        #expect(runs[0].invocations.first?.instance?.matchesBinding(original) == true)
+        #expect(runs[0].invocations.first?.result == nil)
+        #expect(runs[1].instances.first?.matchesBinding(current) == true)
     }
 
     @Test
@@ -294,28 +385,20 @@ struct OrbieTests {
     }
 
     @Test
-    func movedPaneStillRequiresReconnectForAChangedConversation() async throws {
+    func movedLivePaneFollowsTheCurrentConversation() async throws {
         let f = try await fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
         try await f.service.create(pluginID: "codex", providerID: nil)
-        let original = try #require(f.service.record?.binding)
         f.backend.observations[0].workspacePane.windowID = UUID()
         f.backend.observations[0].conversationID = "changed-conversation"
         let movedPane = f.backend.observations[0].workspacePane
 
         await f.service.refresh()
         #expect(f.service.instance?.conversationID == "changed-conversation")
-        #expect(f.service.record?.binding?.conversationID == original.conversationID)
-        #expect(f.service.record?.binding?.workspacePane == movedPane)
-        f.service.draft = "Keep until explicitly reconnected"
-        await f.service.send()
-        #expect(f.service.draft == "Keep until explicitly reconnected")
-        #expect(f.backend.schedules.isEmpty)
-
-        await f.service.reconnect()
-        #expect(f.service.issue == nil)
         #expect(f.service.record?.binding?.conversationID == "changed-conversation")
         #expect(f.service.record?.binding?.workspacePane == movedPane)
+        #expect(f.service.availability == nil && f.backend.schedules.isEmpty)
+        f.service.draft = "Continue in the moved tab"
         await f.service.send()
         #expect(f.service.issue == nil && f.backend.schedules.count == 1)
     }
@@ -335,7 +418,7 @@ struct OrbieTests {
         }
         f.service.draft = "Do not send to a moved replacement"
         await f.service.send()
-        await f.service.reconnect()
+        await f.service.refresh()
         #expect(f.service.instance == nil)
         #expect(f.service.record?.binding == original)
         #expect(f.service.draft == "Do not send to a moved replacement")
@@ -406,8 +489,8 @@ struct OrbieTests {
         #expect(f.service.record?.binding?.conversationID == "first-confirmed-conversation")
         f.backend.observations[0].conversationID = "replacement-conversation"
         await f.service.refresh()
-        #expect(f.service.record?.binding?.conversationID == "first-confirmed-conversation")
-        #expect(f.service.availability != nil)
+        #expect(f.service.record?.binding?.conversationID == "replacement-conversation")
+        #expect(f.service.availability == nil)
     }
 
     @Test

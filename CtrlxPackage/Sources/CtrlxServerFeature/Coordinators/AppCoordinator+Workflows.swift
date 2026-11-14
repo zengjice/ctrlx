@@ -184,6 +184,7 @@ extension AppCoordinator {
 
     func inspectWorkflowInput(_ instance: AgentWorkflowInstance) async throws -> AgentWorkflowInstance {
         var live = try await inspectWorkflowInstance(instance)
+        live.inputIssue = nil
         guard live.capabilityIssue == nil else { return live }
         guard
             let pane = windowManager.paneStates[instance.paneID],
@@ -210,8 +211,8 @@ extension AppCoordinator {
                 live.capabilityIssue = issue
                 return live
             }
-            live.readiness = try AgentWorkflowComposerInspection.readiness(
-                await tmuxService.captureWorkflowTerminal(instance, composer: provider.workflowComposer), composer: provider.workflowComposer
+            try AgentWorkflowComposerInspection.apply(
+                await tmuxService.captureWorkflowTerminal(instance, composer: provider.workflowComposer), composer: provider.workflowComposer, to: &live
             )
         }
         return live

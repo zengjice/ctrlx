@@ -21,6 +21,7 @@ from native_agent_model import ModelFixture
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--tmux", type=Path, help="Use this tmux executable for the private server and tests")
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -29,7 +30,7 @@ def main():
     project.mkdir()
     home = root / "private-home"
     home.mkdir()
-    tmux = shutil.which("tmux")
+    tmux = str(args.tmux.resolve()) if args.tmux else shutil.which("tmux")
     if not tmux:
         raise RuntimeError("tmux is required")
     servers = []
@@ -121,7 +122,8 @@ trust_level = "trusted"
                 raise RuntimeError(f"{plugin} did not reach its input prompt: {text}")
             print(f"Ready: {plugin} {version}", flush=True)
         manifest = root / "fixture.json"
-        manifest.write_text(json.dumps({"root": str(root), "tmux": str(root / "tmux.sock"), "agents": agents}))
+        report["tmux_version"] = mux("display-message", "-p", "#{version}").strip()
+        manifest.write_text(json.dumps({"root": str(root), "tmux": str(root / "tmux.sock"), "tmuxExecutable": tmux, "agents": agents}))
         environment = dict(os.environ, CTRLX_ORBIE_NATIVE_FIXTURE=str(manifest), CTRLX_WORKFLOW_NATIVE_FRESH="1")
         with (output / "native-tests.log").open("w") as log:
             subprocess.run([str(REPO / "scripts/unit-tests.sh"), "--", "--no-parallel", "--filter", "AgentWorkflowNativeReviewLoopTests.nativeOrbieFirstAndNextMessages"], cwd=REPO, env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=600, check=True)

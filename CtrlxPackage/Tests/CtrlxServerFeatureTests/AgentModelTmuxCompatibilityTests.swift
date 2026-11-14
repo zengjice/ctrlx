@@ -45,8 +45,7 @@ struct AgentModelTmuxCompatibilityTests {
             } else {
                 #expect(issue == nil)
             }
-            // Automatic workflows still require a known mode.
-            #expect(AgentWorkflowComposerInspection.readiness(screen, composer: core.modelComposer) == (paste == "1" ? .ready : .unavailable))
+            #expect(AgentWorkflowComposerInspection.readiness(screen, composer: core.modelComposer) == (paste == "0" ? .unavailable : .ready))
             if paste.isEmpty {
                 #expect(coordinator.hookTrustInputIssue(paneID: "%1", screen: screen, composer: core.modelComposer) == nil)
             }
@@ -147,7 +146,7 @@ struct AgentModelTmuxCompatibilityTests {
             }
             #expect(screen.bracketedPaste == (unknown ? nil : pasteEnabled))
             #expect(CodexPluginCore().modelSelection(lines: screen.plainLines, models: models) == .init(model: "test-model", effort: "low"))
-            #expect(AgentWorkflowComposerInspection.readiness(screen, composer: CodexPluginCore().modelComposer) == (!unknown && pasteEnabled ? .ready : .unavailable))
+            #expect(AgentWorkflowComposerInspection.readiness(screen, composer: CodexPluginCore().modelComposer) == (unknown || pasteEnabled ? .ready : .unavailable))
             if !unknown, !pasteEnabled {
                 #expect(throws: AgentModelError.self) { try AgentModelTmuxSubmission.commands("/model", paneID: pane.info.paneId, capture: screen) }
                 #expect(try Data(contentsOf: received).isEmpty)

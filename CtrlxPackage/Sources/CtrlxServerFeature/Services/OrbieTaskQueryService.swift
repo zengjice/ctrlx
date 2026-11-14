@@ -29,12 +29,12 @@ actor OrbieTaskQueryService {
         guard let peer else { return denied(request.id) }
         do {
             let record = try await orbie.load()
-            guard record.enabled, let bound = record.binding, peer.contains(processID: bound.processID, runtimeID: bound.processRuntimeID) else { return denied(request.id) }
+            guard record.enabled, record.target != nil else { return denied(request.id) }
             let archive = try await workflows.snapshot(refreshInstances: true)
             guard
                 archive.hostID == record.hostID,
-                let current = archive.instances.first(where: { bound.matchesProcess($0) }),
-                bound.conversationID.isEmpty || bound.matchesBinding(current) else { return denied(request.id) }
+                let current = record.currentInstance(in: archive.instances),
+                peer.contains(processID: current.processID, runtimeID: current.processRuntimeID) else { return denied(request.id) }
             let verified = try await inspect(current)
             guard current.matchesBinding(verified), UUID(uuidString: verified.conversationID) != nil else { return denied(request.id) }
             let index = try await tasks.load()
@@ -73,6 +73,6 @@ actor OrbieTaskQueryService {
     }
 
     private func denied(_ id: String) -> JSONRPCResponse {
-        .init(id: id, error: .init(code: "orbie_denied", message: "Only the verified, enabled Orbie Agent on this Host may query saved tasks. Open Orbie and reconnect if its process or conversation changed."))
+        .init(id: id, error: .init(code: "orbie_denied", message: "Only the verified, enabled Agent in this Host's Orbie tab may query saved tasks. Open its terminal and check startup or recovery."))
     }
 }

@@ -21,12 +21,22 @@ struct OrbieTaskQueryTests {
             observations[0].readiness = value
         }
 
-        func replaceProcess() {
-            observations[0].processRuntimeID = "replacement"
+        func replaceProcess(runtime: String = "replacement") {
+            observations[0].processRuntimeID = runtime
         }
 
         func changeConversation() {
             observations[0].conversationID = UUID().uuidString
+        }
+
+        func replaceTarget() {
+            observations[0].workspacePane.paneID = UUID()
+        }
+
+        func recoverWorkspace() {
+            observations[0].workspacePane.serverID = "new-server"
+            observations[0].workspacePane.sessionID = UUID()
+            observations[0].paneID = "%9"
         }
 
         func changeInspection() {
@@ -116,7 +126,7 @@ struct OrbieTaskQueryTests {
         #expect(try Data(contentsOf: f.paths.orbieBinding) == originalOrbie)
     }
 
-    @Test(arguments: ["missing-peer", "reused-pid", "disabled", "new-process", "new-conversation", "inspection-mismatch"])
+    @Test(arguments: ["missing-peer", "reused-pid", "disabled", "new-process", "new-target", "inspection-mismatch"])
     func callerAuthorityCannotBeGuessedOrInherited(kind: String) async throws {
         let f = try await fixture()
         defer { try? FileManager.default.removeItem(at: f.root) }
@@ -128,11 +138,33 @@ struct OrbieTaskQueryTests {
             record.enabled = false
             try await f.orbie.save(record)
         case "new-process": await f.backend.replaceProcess()
-        case "new-conversation": await f.backend.changeConversation()
+        case "new-target": await f.backend.replaceTarget()
         default: await f.backend.changeInspection()
         }
         let response = await f.service.handle(.init(id: "query", method: "orbie.tasks.list", params: [:]), peer: caller)
         #expect(!response.ok && response.result == nil)
+    }
+
+    @Test(arguments: ["process", "conversation", "recovery"])
+    func currentTargetCanQueryAfterRestartWithoutOpeningOrbie(change: String) async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let saved = try Data(contentsOf: f.paths.orbieBinding)
+        var caller = f.caller
+        if change == "conversation" {
+            await f.backend.changeConversation()
+        } else {
+            caller = try peer(start: 101)
+            let runtime = try #require(caller.processes.first { $0.processID == 42 }?.runtimeID)
+            await f.backend.replaceProcess(runtime: runtime)
+            if change == "recovery" {
+                await f.backend.recoverWorkspace()
+            }
+            #expect(!(await list(f)).ok)
+        }
+        let response = await f.service.handle(.init(id: "query", method: "orbie.tasks.list", params: [:]), peer: caller)
+        #expect(response.ok)
+        #expect(try Data(contentsOf: f.paths.orbieBinding) == saved)
     }
 
     @Test(arguments: [AgentWorkflowReadiness.busy, .draft, .awaitingHuman])

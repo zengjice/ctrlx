@@ -57,6 +57,7 @@ extension AppCoordinator {
                 if let known {
                     var observation = AgentWorkflowObservation(known)
                     observation.readiness = .unavailable
+                    observation.inputIssue = nil
                     observations.append(observation)
                 }
                 continue

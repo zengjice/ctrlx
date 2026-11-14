@@ -9,7 +9,7 @@ struct AgentWorkflowComposerTests {
     private let codex = AgentWorkflowComposer(prompt: "› ", dimPlaceholder: "Ask Codex to do anything", pendingInputHints: ["Queued follow-up inputs"])
     private let claude = AgentWorkflowComposer(prompt: "❯ ", enclosedByRules: true, drawsInverseCursor: true)
 
-    private func capture(_ rows: [String], cursor: Int, x: Int = 2, width: Int = 80, paste: Bool = true, copyMode: Bool = false, visible: Bool = true) -> AgentWorkflowTerminalCapture {
+    private func capture(_ rows: [String], cursor: Int, x: Int = 2, width: Int = 80, paste: Bool? = true, copyMode: Bool = false, visible: Bool = true) -> AgentWorkflowTerminalCapture {
         .init(
             ansi: rows.joined(separator: "\n") + "\n",
             width: width,
@@ -42,6 +42,45 @@ struct AgentWorkflowComposerTests {
         #expect(AgentWorkflowComposerInspection.imageNumbers(repeated, composer: composer) == nil)
         let copying = capture([prefix + "[Image #1] [Image #2]", ""], cursor: 0, copyMode: true)
         #expect(!AgentWorkflowComposerInspection.hasImages(copying, composer: composer, count: 2))
+    }
+
+    @Test
+    func legacyModeKeepsComposerChecksAndDoesNotRetryReadyInput() async throws {
+        let empty = capture(["› \u{1b}[2mAsk Codex to do anything\u{1b}[0m", ""], cursor: 0, paste: nil)
+        var reads = 0
+        let settled = try await AgentWorkflowComposerInspection.settledCapture(composer: codex) {
+            reads += 1
+            return empty
+        }
+        #expect(reads == 1)
+        #expect(AgentWorkflowComposerInspection.inspect(settled, composer: codex).readiness == .ready)
+        #expect(AgentWorkflowComposerInspection.inspect(settled, composer: codex).issue == nil)
+        let draft = capture(["› unsent text", ""], cursor: 0, paste: nil)
+        #expect(AgentWorkflowComposerInspection.readiness(draft, composer: codex) == .draft)
+        let rule = String(repeating: "─", count: 80)
+        let claudeEmpty = capture([rule, "❯ \u{1b}[7m \u{1b}[0m", rule], cursor: 1, paste: nil, visible: false)
+        #expect(AgentWorkflowComposerInspection.readiness(claudeEmpty, composer: claude) == .ready)
+        let images = capture(["› [Image #1] [Image #2]", ""], cursor: 0, x: 24, paste: nil)
+        #expect(AgentWorkflowComposerInspection.hasImages(images, composer: codex, count: 2))
+        let wrongImages = capture(["› [Image #1] other draft", ""], cursor: 0, x: 24, paste: nil)
+        #expect(!AgentWorkflowComposerInspection.hasImages(wrongImages, composer: codex, count: 1))
+    }
+
+    @Test
+    func unavailableInputExplainsTheFailedCheck() {
+        let rows = ["› \u{1b}[2mAsk Codex to do anything\u{1b}[0m", ""]
+        let cases: [(AgentWorkflowTerminalCapture, String)] = [
+            (capture(rows, cursor: 0, copyMode: true), "copy mode"),
+            (capture(rows, cursor: 0, paste: false), "paste mode"),
+            (capture(rows, cursor: 0, x: 5, paste: nil), "start of the Agent input"),
+            (capture(rows, cursor: 0, paste: nil, visible: false), "cursor is not visible"),
+            (capture(["$ ", ""], cursor: 0, paste: nil), "prompt was not recognized"),
+        ]
+        for (terminal, reason) in cases {
+            let inspection = AgentWorkflowComposerInspection.inspect(terminal, composer: codex)
+            #expect(inspection.readiness == .unavailable)
+            #expect(inspection.issue?.contains(reason) == true)
+        }
     }
 
     @Test

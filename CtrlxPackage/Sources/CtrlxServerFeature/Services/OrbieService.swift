@@ -43,11 +43,11 @@ final class OrbieService {
         guard let record else { return "Loading Orbie…" }
         guard record.enabled else { return "Orbie is disabled on this Mac. Its Agent and saved data are retained." }
         guard record.creation != nil else { return "Create Orbie on this Mac to begin." }
-        guard let binding = record.binding, let instance else {
+        guard let target = record.target, let instance else {
             return "Waiting for the Orbie Agent. Open its terminal to finish startup, or check the existing workspace recovery controls."
         }
-        guard binding.matchesBinding(instance) else {
-            return "The Orbie process or conversation changed. Open its terminal and explicitly reconnect before sending."
+        guard target == instance.target else {
+            return "The Orbie tab changed. Refresh Orbie to locate its current terminal."
         }
         if let issue = instance.capabilityIssue {
             return issue
@@ -61,7 +61,7 @@ final class OrbieService {
         case .busy: "Orbie is working. Your draft will be kept."
         case .draft: "Orbie has unsent terminal input. Send or clear it in the Agent tab; your panel draft will be kept."
         case .awaitingHuman: "Orbie needs an answer or approval. Continue in its Agent tab."
-        case .unavailable: "Orbie’s input cannot be verified. Open its Agent tab and check startup or recovery."
+        case .unavailable: instance.inputIssue ?? "Orbie’s input cannot be verified. Open its Agent tab and check startup or recovery."
         }
     }
 
@@ -172,26 +172,6 @@ final class OrbieService {
         draft = combined
     }
 
-    /// Explicitly accepts a newly inspected process at the same durable target,
-    /// after the operator has used the ordinary terminal/recovery UI.
-    func reconnect() async {
-        guard !isBusy else { return }
-        isBusy = true
-        defer { finishOperation() }
-        do {
-            try await reconcile(inspect: true)
-            guard
-                var updated = record, !hasActiveRun, updated.pendingRunID == nil,
-                let current = instance, current.capabilities != nil,
-                current.pluginID == updated.creation?.pluginID else {
-                throw AgentWorkflowError("Review unfinished messages and the current Agent before reconnecting.")
-            }
-            updated.binding = current
-            try await persist(updated)
-            issue = nil
-        } catch { issue = error.localizedDescription }
-    }
-
     func reviewUnstartedRequest() async {
         guard !isBusy else { return }
         isBusy = true
@@ -234,24 +214,11 @@ final class OrbieService {
         let archive = try await workflows.snapshot(refreshInstances: inspect && updated.enabled)
         guard archive.hostID == updated.hostID else { throw AgentWorkflowError("The Orbie Host changed.") }
         runs = updated.runIDs.compactMap { id in archive.runs.first { $0.id == id } }
-        let target = updated.binding?.target ?? updated.creation?.pane.map {
-            AgentWorkflowTarget(hostID: updated.hostID, windowID: $0.windowID, paneID: $0.paneID)
-        }
-        instance = updated.binding.flatMap { binding in
-            archive.instances.first { binding.matchesProcess($0) }
-        } ?? archive.instances.first { $0.target == target && $0.pluginID == updated.creation?.pluginID }
-        if let instance {
-            if updated.binding == nil {
-                updated.binding = instance
-            } else if let binding = updated.binding, binding.matchesProcess(instance) {
-                if binding.conversationID.isEmpty {
-                    // Only the workflow channel may establish the first native ID.
-                    updated.binding = instance
-                } else {
-                    // A live pane can move without granting a new conversation authority.
-                    updated.binding?.workspacePane = instance.workspacePane
-                }
-            }
+        instance = updated.currentInstance(in: archive.instances)
+        if let instance, updated.binding?.matchesBinding(instance) != true || updated.binding?.workspacePane != instance.workspacePane {
+            // This is the current runtime of the saved target, not authority
+            // for an older invocation. Its evidence remains in the workflow.
+            updated.binding = instance
         }
         if let id = updated.pendingRunID, let run = runs.first(where: { $0.id == id }) {
             if draft == run.definition.initialInput.text {

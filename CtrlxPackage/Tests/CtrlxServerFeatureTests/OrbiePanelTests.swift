@@ -10,6 +10,80 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct OrbiePanelTests {
+    private actor ScanGate {
+        var started = false
+        private var released = false
+        private var continuation: CheckedContinuation<Void, Never>?
+
+        func wait() async {
+            guard !released else { return }
+            started = true
+            await withCheckedContinuation { continuation = $0 }
+        }
+
+        func release() {
+            released = true
+            continuation?.resume()
+            continuation = nil
+        }
+    }
+
+    @Test
+    func openAgentTabRemainsEnabledDuringSlowInspection() async throws {
+        try await withDependencies {
+            $0[PreferencesService.self] = .inMemory()
+            $0[SecretsService.self] = .inMemory()
+            $0[SimulatorSystemClient.self] = SimulatorSystemClient()
+        } operation: {
+            _ = NSApplication.shared
+            NSApp.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-orbie-refresh-ui-\(UUID())")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let hostID = UUID()
+            let store = OrbieStore(paths: .init(stateRootOverride: root.appendingPathComponent("state")), hostID: hostID)
+            var record = OrbieRecord(hostID: hostID)
+            record.enabled = true
+            record.creation = .init(id: UUID(), pluginID: "codex", providerID: nil, directory: root.path, pane: .init(serverID: "private", sessionID: UUID(), windowID: UUID(), paneID: UUID()))
+            try await store.save(record)
+            let gate = ScanGate()
+            let workflows = AgentWorkflowService(store: .init(fileURL: root.appendingPathComponent("ledger.json"), hostID: hostID), scan: { _ in
+                await gate.wait()
+                return []
+            }, schedule: { _ in Issue.record("Inspection must not submit work") })
+            let orbie = OrbieService(store: store, workflows: workflows, launch: { _ in throw CancellationError() }, locateCreation: { _ in nil })
+            await orbie.refresh(inspect: false)
+            let refreshing = Task { await orbie.refresh() }
+            defer { Task { await gate.release()
+                await refreshing.value
+            } }
+            for _ in 0..<100 {
+                if await gate.started {
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(await gate.started)
+            let coordinator = AppCoordinator()
+            coordinator.orbie = orbie
+            let window = NSWindow(contentRect: .init(x: -10_000, y: -10_000, width: 640, height: 680), styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let hosting = NSHostingView(rootView: MacOrbieView().environment(coordinator))
+            window.contentView = hosting
+            window.orderBack(nil)
+            defer { window.close() }
+            try await Task.sleep(for: .milliseconds(200))
+            hosting.layoutSubtreeIfNeeded()
+            #expect(orbie.isBusy)
+            let button = try #require(find("orbie-open-agent", in: hosting))
+            let selector = NSSelectorFromString("isAccessibilityEnabled")
+            let implementation = try #require(button.method(for: selector))
+            #expect(unsafeBitCast(implementation, to: (@convention(c) (AnyObject, Selector) -> Bool).self)(button, selector))
+            await gate.release()
+            await refreshing.value
+            #expect(try await workflows.snapshot().runs.isEmpty)
+        }
+    }
+
     @Test
     func creationFormChecksHostIdentityWithoutRequiringAnExistingTmuxServer() async throws {
         try await withDependencies {

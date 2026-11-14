@@ -202,14 +202,15 @@ struct MacOrbiterTasksView: View {
     }
 
     private var associationForm: some View {
-        VStack(alignment: .leading) {
+        let orbie = coordinator.orbie?.record?.currentInstance(in: service.instances)
+        return VStack(alignment: .leading) {
             HStack {
                 Text("Associate Existing Agent").font(.headline)
                 Spacer()
                 Button { showsAssociation = false } label: { Label("Close", symbol: .xmark) }.labelStyle(.iconOnly)
             }
             Text("Choose the exact Agent. This records a binding; it does not send the task or resume a process.")
-            List(service.instances.filter { $0.capabilities != nil && coordinator.orbie?.record?.binding?.matchesProcess($0) != true }) { instance in
+            List(service.instances.filter { $0.capabilities != nil && $0.id != orbie?.id }) { instance in
                 Button {
                     perform {
                         selectedID = try await service.associate(instance, with: selectedID)

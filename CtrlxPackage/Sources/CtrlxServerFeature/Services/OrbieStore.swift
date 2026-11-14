@@ -18,6 +18,21 @@ struct OrbieRecord: Codable, Equatable, Sendable {
     var runIDs: [UUID] = []
     var pendingRunID: UUID?
     var draft = ""
+
+    var target: AgentWorkflowTarget? {
+        binding?.target ?? creation?.pane.map {
+            AgentWorkflowTarget(hostID: hostID, windowID: $0.windowID, paneID: $0.paneID)
+        }
+    }
+
+    func currentInstance(in instances: [AgentWorkflowInstance]) -> AgentWorkflowInstance? {
+        guard let target else { return nil }
+        // Follow a live pane move before falling back to the persisted target.
+        if let binding, let moved = instances.first(where: { binding.matchesProcess($0) }) {
+            return moved
+        }
+        return instances.first { $0.target == target }
+    }
 }
 
 /// Product associations only. Delivery, acceptance and results belong to the
@@ -69,7 +84,7 @@ actor OrbieStore {
     private func validate(_ record: OrbieRecord) throws {
         guard
             record.schemaVersion == 1, record.hostID == hostID,
-            record.binding.map({ $0.hostID == hostID && $0.pluginID == record.creation?.pluginID }) ?? true,
+            record.binding.map({ $0.hostID == hostID && record.creation != nil }) ?? true,
             Set(record.runIDs).count == record.runIDs.count,
             record.pendingRunID.map({ record.runIDs.contains($0) }) ?? true else {
             throw AgentWorkflowError("The Orbie binding is invalid or belongs to another Host. Its saved data has been preserved.")

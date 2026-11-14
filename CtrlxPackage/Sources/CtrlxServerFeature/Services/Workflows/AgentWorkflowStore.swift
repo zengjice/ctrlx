@@ -13,6 +13,7 @@ struct AgentWorkflowObservation: Sendable {
     var capabilities: AgentWorkflowCapabilities?
     var readiness: AgentWorkflowReadiness
     var capabilityIssue: String? = nil
+    var inputIssue: String? = nil
 
     func matchesProcess(_ instance: AgentWorkflowInstance) -> Bool {
         pluginID == instance.pluginID && processID == instance.processID
@@ -34,7 +35,8 @@ struct AgentWorkflowObservation: Sendable {
             workingDirectory: workingDirectory,
             capabilities: capabilities,
             readiness: readiness,
-            capabilityIssue: capabilityIssue
+            capabilityIssue: capabilityIssue,
+            inputIssue: inputIssue
         )
     }
 }
@@ -52,6 +54,7 @@ extension AgentWorkflowObservation {
         self.capabilities = instance.capabilities
         self.readiness = instance.readiness
         self.capabilityIssue = instance.capabilityIssue
+        self.inputIssue = instance.inputIssue
     }
 }
 
@@ -429,6 +432,7 @@ actor AgentWorkflowStore {
         for index in loaded.instances.indices {
             guard loaded.instances[index].hostID == hostID else { throw AgentWorkflowError("A saved Agent belongs to another Host.") }
             loaded.instances[index].readiness = .unavailable
+            loaded.instances[index].inputIssue = nil
         }
         for index in loaded.runs.indices {
             guard loaded.runs[index].definition.hostID == hostID else { throw AgentWorkflowError("A saved run belongs to another Host.") }

@@ -66,7 +66,7 @@ enum AgentWorkflowComposerInspection {
 
     static func imageNumbers(_ capture: AgentWorkflowTerminalCapture, composer: AgentWorkflowComposer) -> [Int]? {
         guard
-            capture.bracketedPaste == true, !capture.inCopyMode,
+            capture.bracketedPaste != false, !capture.inCopyMode,
             capture.cursorY >= 0, capture.cursorY < capture.height else { return nil }
         let lines = capture.plainLines
         guard
@@ -81,16 +81,36 @@ enum AgentWorkflowComposerInspection {
         return numbers
     }
 
-    static func readiness(_ capture: AgentWorkflowTerminalCapture, composer: AgentWorkflowComposer, allowUnknownBracketedPaste: Bool = false) -> AgentWorkflowReadiness {
+    static func readiness(_ capture: AgentWorkflowTerminalCapture, composer: AgentWorkflowComposer, allowUnknownBracketedPaste: Bool = true) -> AgentWorkflowReadiness {
+        inspect(capture, composer: composer, allowUnknownBracketedPaste: allowUnknownBracketedPaste).readiness
+    }
+
+    static func apply(_ capture: AgentWorkflowTerminalCapture, composer: AgentWorkflowComposer, to instance: inout AgentWorkflowInstance) {
+        let inspection = inspect(capture, composer: composer)
+        instance.readiness = inspection.readiness
+        instance.inputIssue = inspection.issue
+    }
+
+    static func inspect(_ capture: AgentWorkflowTerminalCapture, composer: AgentWorkflowComposer, allowUnknownBracketedPaste: Bool = true) -> (readiness: AgentWorkflowReadiness, issue: String?) {
+        if capture.inCopyMode {
+            return (.unavailable, "The terminal is in tmux copy mode. Exit copy mode in the Agent tab, then try again.")
+        }
+        guard capture.bracketedPaste == true || (allowUnknownBracketedPaste && capture.bracketedPaste == nil) else {
+            return (.unavailable, "The Agent's paste mode could not be verified. Finish startup in its terminal, then try again.")
+        }
         guard
             capture.width >= 20, capture.width <= 4_096,
             capture.height > 0, capture.height <= 512,
-            capture.cursorY >= 0, capture.cursorY < capture.height,
-            capture.cursorX == composer.prompt.count,
-            capture.bracketedPaste == true || (allowUnknownBracketedPaste && capture.bracketedPaste == nil),
-            !capture.inCopyMode else { return .unavailable }
+            capture.cursorY >= 0, capture.cursorY < capture.height else {
+            return (.unavailable, "The terminal snapshot has invalid dimensions or cursor coordinates. Open the Agent tab and try again.")
+        }
+        guard capture.cursorX == composer.prompt.count else {
+            return (.unavailable, "The cursor is not at the start of the Agent input. Check its tab for an unsent draft or an open dialog.")
+        }
         let rows = capture.ansi.components(separatedBy: "\n")
-        guard rows.count >= capture.height else { return .unavailable }
+        guard rows.count >= capture.height else {
+            return (.unavailable, "The terminal snapshot is incomplete. Open the Agent tab and try again.")
+        }
         let delegate = Delegate()
         defer { withExtendedLifetime(delegate) { } }
         let terminal = Terminal(delegate: delegate, options: .init(cols: capture.width, rows: capture.height))
@@ -114,12 +134,16 @@ enum AgentWorkflowComposerInspection {
                 composer.drawsInverseCursor, let cells = terminal.getLine(row: row),
                 capture.cursorX < capture.width,
                 terminal.getCharacter(for: cells[capture.cursorX]) == " ",
-                cells[capture.cursorX].attribute.style.contains(.inverse) else { return .unavailable }
+                cells[capture.cursorX].attribute.style.contains(.inverse) else {
+                return (.unavailable, "The Agent's input cursor is not visible. Check its tab for startup or an open dialog.")
+            }
         }
-        guard line == composer.prompt.trimmingCharacters(in: .whitespaces) || line.hasPrefix(composer.prompt) else { return .unavailable }
+        guard line == composer.prompt.trimmingCharacters(in: .whitespaces) || line.hasPrefix(composer.prompt) else {
+            return (.unavailable, "The Agent's input prompt was not recognized. Open its tab to finish login, setup or any open dialog.")
+        }
         for index in max(0, row - 8)..<row {
             if composer.pendingInputHints.contains(where: { text(index).contains($0) }) {
-                return .awaitingHuman
+                return (.awaitingHuman, nil)
             }
         }
         if composer.enclosedByRules {
@@ -128,16 +152,16 @@ enum AgentWorkflowComposerInspection {
                 let value = text(index)
                 return value.count >= capture.width - 1 && value.allSatisfy { $0 == "─" }
             }
-            guard isRule(row - 1), isRule(row + 1) else { return .draft }
+            guard isRule(row - 1), isRule(row + 1) else { return (.draft, nil) }
         }
         let body = String(line.dropFirst(composer.prompt.count)).trimmingCharacters(in: .whitespaces)
         if let placeholder = composer.dimPlaceholder {
-            guard body == placeholder, let cells = terminal.getLine(row: row) else { return .draft }
+            guard body == placeholder, let cells = terminal.getLine(row: row) else { return (.draft, nil) }
             for column in capture.cursorX..<(capture.cursorX + placeholder.count) {
-                guard column < capture.width, cells[column].attribute.style.contains(.dim) else { return .draft }
+                guard column < capture.width, cells[column].attribute.style.contains(.dim) else { return (.draft, nil) }
             }
-            return .ready
+            return (.ready, nil)
         }
-        return body.isEmpty ? .ready : .draft
+        return (body.isEmpty ? .ready : .draft, nil)
     }
 }

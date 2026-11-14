@@ -1,5 +1,6 @@
 import ConcurrencyExtras
 import CtrlxNetworking
+import CtrlxPluginProtocol
 import Foundation
 import Testing
 @testable import CtrlxServerFeature
@@ -388,5 +389,45 @@ struct AgentWorkflowServiceTests {
         #expect(try await f.store.snapshot().runs[0].status == .running)
         #expect(try await f.store.snapshot().runs[0].issue == nil)
         #expect(f.backend.scheduled.count == 1)
+    }
+
+    @Test(arguments: [false, true])
+    func temporaryComposerIssueWaitsAndReschedulesWithoutContinue(copyMode: Bool) async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let run = try await start(f)
+        _ = try await f.store.update(runID: run.id) { execution in
+            _ = try execution.prepareInvocation(nodeID: run.definition.entryNodeID, now: now)
+        }
+        f.backend.scheduled.removeAll()
+        var live = run.instances[0]
+        let composer = AgentWorkflowComposer(prompt: "› ", dimPlaceholder: "Ask Codex to do anything")
+        let blocked = AgentWorkflowTerminalCapture(
+            ansi: "› unsent draft\n\n", width: 80, height: 2, cursorX: 14, cursorY: 0,
+            cursorVisible: true, bracketedPaste: nil, inCopyMode: copyMode, foregroundCommand: "codex"
+        )
+        AgentWorkflowComposerInspection.apply(blocked, composer: composer, to: &live)
+        #expect(live.readiness == .unavailable && live.capabilityIssue == nil)
+        #expect(live.inputIssue?.contains(copyMode ? "copy mode" : "start of the Agent input") == true)
+        f.backend.observations[0] = AgentWorkflowObservation(live)
+        try await f.service.checkActiveRuns()
+        let waiting = try await f.store.snapshot()
+        #expect(waiting.instances[0].inputIssue == live.inputIssue)
+        #expect(waiting.runs[0].status == .running && waiting.runs[0].issue?.contains("Waiting for Agent") == true)
+        #expect(try #require(waiting.runs[0].invocations.first).status == .pending)
+        #expect(f.backend.scheduled.isEmpty)
+
+        let ready = AgentWorkflowTerminalCapture(
+            ansi: "› \u{1b}[2mAsk Codex to do anything\u{1b}[0m\n\n", width: 80, height: 2, cursorX: 2, cursorY: 0,
+            cursorVisible: true, bracketedPaste: nil, inCopyMode: false, foregroundCommand: "codex"
+        )
+        AgentWorkflowComposerInspection.apply(ready, composer: composer, to: &live)
+        #expect(live.readiness == .ready && live.inputIssue == nil && live.capabilityIssue == nil)
+        f.backend.observations[0] = AgentWorkflowObservation(live)
+        try await f.service.checkActiveRuns()
+        let recovered = try await f.store.snapshot()
+        #expect(recovered.instances[0].inputIssue == nil)
+        #expect(recovered.runs[0].status == .running && recovered.runs[0].issue == nil)
+        #expect(f.backend.scheduled == [run.id])
     }
 }

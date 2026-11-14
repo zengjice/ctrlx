@@ -164,7 +164,7 @@ actor AgentWorkflowRunner {
                 return
             }
             if live.readiness == .unavailable {
-                try await store.update(runID: runID) { $0.waitForAgent(binding, reason: live.capabilityIssue ?? "Its input is not available yet.") }
+                try await store.update(runID: runID) { $0.waitForAgent(binding, reason: live.capabilityIssue ?? live.inputIssue ?? "Its input is not available yet.") }
                 return
             }
             do {
@@ -173,7 +173,7 @@ actor AgentWorkflowRunner {
                     case .busy: "The Agent is still working."
                     case .draft: "The Agent has an unsent draft."
                     case .awaitingHuman: "A question or permission request needs a response."
-                    case .unavailable: live.capabilityIssue ?? "The terminal's empty input could not be verified after refresh."
+                    case .unavailable: live.capabilityIssue ?? live.inputIssue ?? "The terminal's empty input could not be verified after refresh."
                     case .ready: "The Agent is ready."
                     }
                     throw AgentWorkflowError("\(binding.displayName): \(reason) Nothing was sent.")

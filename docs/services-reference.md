@@ -1858,14 +1858,32 @@ are kept. Read/write failures remain visible and do not authorize a fresh launch
 The creation intent is durable before tmux changes, and `new-session` attaches
 `@ctrlx-creation-id` before launching the Agent. A lost reply is reconciled using
 that token and persistent workspace identity, never the title or current focus.
+Orbie's identity is the persistent Host/window/pane target. The saved `binding`
+is its last observed runtime, not a pin to that process or native conversation.
+After account switching, Resume or workspace recovery, the verified catalog at
+the same target supplies the current Agent, including a changed supported plugin.
+The creation record describes the original launch, not the current runtime.
 
 Each Send creates a one-Agent, one-step, one-round workflow. Orbie stores its run
 reference before starting it, while the workflow ledger owns writing intent,
 acceptance, invocation identity and verified native results. The optional
-`expectedInstances` start guard prevents the catalog refresh from rebinding this
-explicitly pinned conversation to a replacement process in the same tab. Normal
+`expectedInstances` start guard pins that send's inspected runtime so a change
+during submission cannot redirect it to another process or conversation. Normal
 workflow input-generation and composer checks still run immediately before the
 terminal write; Orbie never clears terminal input or answers prompts on its own.
+
+Workflow input supports tmux 3.6a as well as newer servers. When the server
+cannot report `bracket_paste_flag`, CtrlX still verifies the native empty composer,
+process identity and input ownership. The guarded queue uses `paste-buffer -p`
+with tmux's actual paste mode, followed by Return. Reported disabled paste, copy
+mode and changed foreground/cursor/geometry are rejected. Image staging also accepts missing mode
+metadata but still requires the exact visible attachment sequence. Failed input
+inspection reports its cause, such as copy mode, a hidden cursor or an unrecognized
+prompt, instead of only showing a generic unavailable message.
+These transient diagnostics use `inputIssue` for display alongside `readiness`;
+they do not set `capabilityIssue` or turn a background input check into a workflow
+pause. Input recovery resumes the existing automatic waiting path. CLI/plugin
+capability or identity failures retain their existing blocking behavior.
 
 While its window is open, Orbie rechecks startup or blocked input until ready;
 in-flight answers read the existing ledger. Closing the window keeps its draft
@@ -1875,9 +1893,14 @@ Stop Further Delivery ends only the workflow's future handoffs. A restart reads
 existing runs without starting/resuming them. If an unconfirmed request has no
 run, the operator can keep its draft and clear that request; a recorded run must
 be reviewed instead. A moved pane is located by its verified process binding and updates its window
-route without accepting a changed conversation. Open Agent Tab refreshes the
-ordinary pane layout and binding before navigating. Replaced processes require
-an explicit Reconnect after ordinary terminal/recovery checks. Set Up Again detaches the old binding without
+route and current runtime without rewriting older invocation evidence. Open Agent Tab stays enabled
+during background inspection and refreshes only the ordinary pane layout before
+navigating to the saved target, including a live pane moved to another window.
+It does not wait for a full Agent scan. A verified replacement at the same durable
+target is adopted without a Reconnect action and without sending any message.
+Existing unfinished or unconfirmed messages still require review; runtime refresh
+does not rewrite invocation evidence, replay input or accept a different conversation's
+result. Set Up Again detaches the old binding without
 closing the old Agent or deleting messages/files. Global shortcuts and task lookup
 are described in stage 3 below; persistent shared memory remains a later stage.
 
@@ -1935,12 +1958,15 @@ Background results never invoke panel presentation or App activation.
 and uses the existing workflow ledger for verified replies; closing the panel
 does not cancel runs. A direct recent-task/search list and Open Tab work without
 a model round trip, including when Orbie is busy. Full Conversation retains setup,
-reconnect and task creation controls. Natural-language lookup instructions use
+message review and task creation controls. Natural-language lookup instructions use
 the bundled CLI's actual path, not an assumed installed `ctrlx` version.
 
 `OrbieTaskQueryService` serves only `orbie.tasks.list/show` through the existing
 local API socket. The socket captures non-serializable OS peer/ancestry evidence;
-the query rechecks the enabled Main's durable binding, runtime and native writer.
+the query resolves the enabled Main's durable target from a fresh catalog, then
+checks the caller against its current runtime and native writer. The old saved
+process cannot retain query authority after replacement, and the new verified
+process does not require opening the panel to reconnect.
 It reads the tracked-task index and bounded workflow reports on I/O actors,
 without introducing a Host/Viewer wire API or blocking terminal keyboard routing.
 The initial empty native ID is accepted only after the same current process is

@@ -10,7 +10,6 @@
         @State private var creation: NewAgentTabConfiguration?
         @State private var error: String?
         @State private var confirmsRebuild = false
-        @State private var confirmsReconnect = false
         @State private var showsTasks = false
 
         public init() { }
@@ -57,9 +56,6 @@
             .confirmationDialog("Detach the old Orbie binding?", isPresented: $confirmsRebuild) {
                 Button("Set Up Orbie Again") { Task { await coordinator.orbie?.resetBinding() } }
             } message: { Text("The existing Agent, messages and files will be kept. You can explicitly create a new Orbie afterward.") }
-            .confirmationDialog("Use the current Agent as Orbie?", isPresented: $confirmsReconnect) {
-                Button("Reconnect") { Task { await coordinator.orbie?.reconnect() } }
-            } message: { Text("Confirm the conversation in its terminal first. Reconnecting does not resend any previous message.") }
         }
 
         private func content(_ orbie: OrbieService) -> some View {
@@ -89,11 +85,7 @@
                             .accessibilityIdentifier("orbie-create")
                     } else {
                         Button("Open Agent Tab") { Task { await openTerminal(orbie) } }
-                            .disabled(orbie.isBusy)
                             .accessibilityIdentifier("orbie-open-agent")
-                        if let instance = orbie.instance, orbie.record?.binding?.matchesBinding(instance) == false {
-                            Button("Reconnect…") { confirmsReconnect = true }.disabled(orbie.hasActiveRun || orbie.isBusy)
-                        }
                         Menu("More") {
                             Button("Set Up Again…") { confirmsRebuild = true }
                                 .disabled(orbie.isBusy || orbie.hasActiveRun || orbie.record?.pendingRunID != nil)
@@ -160,15 +152,13 @@
         private func openTerminal(_ orbie: OrbieService) async {
             let panes = await coordinator.tmuxService.refreshPanes()
             coordinator.windowManager.updatePaneStates(from: panes)
-            await orbie.refresh()
             guard let record = orbie.record else { return }
-            let target = record.binding?.target ?? record.creation?.pane.map {
-                AgentWorkflowTarget(hostID: record.hostID, windowID: $0.windowID, paneID: $0.paneID)
-            }
             guard
-                let target,
+                let target = record.target,
                 let pane = coordinator.windowManager.paneStates.values.first(where: {
-                    $0.workspaceIdentity?.paneID == target.paneID && $0.workspaceIdentity?.windowID == target.windowID
+                    guard let identity = $0.workspaceIdentity else { return false }
+                    return (identity.paneID == target.paneID && identity.windowID == target.windowID)
+                        || record.binding?.workspacePane.isSamePane(as: identity) == true
                 }) else {
                 error = "Orbie’s terminal is unavailable. Open the workspace and use its existing recovery controls, or explicitly set up Orbie again."
                 return

@@ -23,20 +23,24 @@ struct AgentWorkflowWireTests {
         #expect(old.startRejection == nil && old.run == nil && old.version == response.version)
     }
 
-    @Test
-    func runtimeIssueRoundTripsAndOlderInstancesStillDecode() throws {
+    @Test(arguments: [false, true])
+    func runtimeIssueRoundTripsAndOlderInstancesStillDecode(temporary: Bool) throws {
         let instance = AgentWorkflowInstance(
             hostID: UUID(), pluginID: "codex", processID: 42, processRuntimeID: "runtime",
             workspacePane: .init(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID()),
             paneID: "%1", conversationID: "native", displayName: "Developer", workingDirectory: "/work",
-            capabilities: nil, readiness: .unavailable, capabilityIssue: "CLI version is not verified."
+            capabilities: temporary ? .init(maximumInputBytes: 100_000) : nil, readiness: .unavailable,
+            capabilityIssue: temporary ? nil : "CLI version is not verified.",
+            inputIssue: temporary ? "Exit tmux copy mode." : nil
         )
         let data = try JSONEncoder().encode(instance)
         #expect(try JSONDecoder().decode(AgentWorkflowInstance.self, from: data) == instance)
         var legacy = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         legacy.removeValue(forKey: "capabilityIssue")
+        legacy.removeValue(forKey: "inputIssue")
         let decoded = try JSONDecoder().decode(AgentWorkflowInstance.self, from: JSONSerialization.data(withJSONObject: legacy))
         #expect(decoded.id == instance.id && decoded.capabilityIssue == nil)
+        #expect(decoded.inputIssue == nil && decoded.capabilities == instance.capabilities)
     }
 
     @Test(arguments: [1, AgentWorkflowWire.version])

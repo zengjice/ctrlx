@@ -90,12 +90,13 @@ struct AgentWorkflowNativeReviewLoopTests {
 
         let root: String
         let tmux: String
+        let tmuxExecutable: String?
         let agents: [Agent]
     }
 
     private nonisolated func tmux(_ fixture: Fixture, _ arguments: [String]) throws -> String {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/tmux")
+        process.executableURL = URL(fileURLWithPath: fixture.tmuxExecutable ?? "/opt/homebrew/bin/tmux")
         process.arguments = ["-S", fixture.tmux] + arguments
         let pipe = Pipe()
         process.standardInput = FileHandle.nullDevice
@@ -117,22 +118,9 @@ struct AgentWorkflowNativeReviewLoopTests {
 
     private nonisolated func capture(_ fixture: Fixture, _ instance: AgentWorkflowInstance) throws -> AgentWorkflowTerminalCapture {
         let keys = ["pane_width", "pane_height", "cursor_x", "cursor_y", "cursor_flag", "bracket_paste_flag", "pane_in_mode", "pane_current_command"]
-        let metadata = try tmux(fixture, ["display-message", "-p", "-t", instance.paneID, keys.map { "#{\($0)}" }.joined(separator: "|")])
-            .trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "|")
-        guard metadata.count == 8, let width = Int(metadata[0]), let height = Int(metadata[1]), let x = Int(metadata[2]), let y = Int(metadata[3]) else {
-            throw AgentWorkflowError("Incomplete private tmux metadata.")
-        }
-        return try .init(
-            ansi: tmux(fixture, ["capture-pane", "-e", "-p", "-t", instance.paneID]),
-            width: width,
-            height: height,
-            cursorX: x,
-            cursorY: y,
-            cursorVisible: metadata[4] == "1",
-            bracketedPaste: metadata[5] == "1",
-            inCopyMode: metadata[6] != "0",
-            foregroundCommand: metadata[7]
-        )
+        let metadata = try tmux(fixture, ["display-message", "-p", "-t", instance.paneID, keys.map { "#{\($0)}" }.joined(separator: "\u{1f}")])
+        let screen = try tmux(fixture, ["capture-pane", "-e", "-p", "-N", "-t", instance.paneID])
+        return try AgentWorkflowTerminalCapture.parse(metadata + screen)
     }
 
     @Test(.enabled(if: ProcessInfo.processInfo.environment["CTRLX_WORKFLOW_NATIVE_FIXTURE"] != nil))

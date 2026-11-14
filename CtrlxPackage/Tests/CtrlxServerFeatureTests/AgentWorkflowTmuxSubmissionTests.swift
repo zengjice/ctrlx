@@ -4,7 +4,7 @@ import Testing
 @testable import CtrlxServerFeature
 
 struct AgentWorkflowTmuxSubmissionTests {
-    private let tmux = "/opt/homebrew/bin/tmux"
+    private let tmux = ProcessInfo.processInfo.environment["CTRLX_TMUX_COMPAT_EXECUTABLE"] ?? "/opt/homebrew/bin/tmux"
 
     private func run(_ executable: String, _ arguments: [String]) throws -> String {
         let process = Process()
@@ -49,14 +49,15 @@ struct AgentWorkflowTmuxSubmissionTests {
         defer { _ = try? run(tmux, ["-S", socket, "kill-server"]) }
         var metadata: [String] = []
         for _ in 0..<100 {
-            metadata = try run(tmux, ["-S", socket, "display-message", "-p", "-t", "test", "#{pane_id}|#{pane_current_command}|#{bracket_paste_flag}"])
+            metadata = try run(tmux, ["-S", socket, "display-message", "-p", "-t", "test", "#{pane_id}|#{pane_current_command}|#{bracket_paste_flag}|#{cursor_x}|#{cursor_y}"])
                 .trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "|")
-            if metadata.count == 3, metadata[2] == "1", FileManager.default.fileExists(atPath: received.path) {
+            if metadata.count == 5, metadata[3] == "2", metadata[4] == "1", FileManager.default.fileExists(atPath: received.path) {
                 break
             }
             try await Task.sleep(for: .milliseconds(20))
         }
-        #expect(metadata.count == 3 && metadata[2] == "1")
+        let unknown = ProcessInfo.processInfo.environment["CTRLX_TMUX_COMPAT_EXPECT_UNKNOWN"] == "1"
+        try #require(metadata.count == 5 && metadata[2] == (unknown ? "" : "1") && metadata[3] == "2" && metadata[4] == "1")
         let instance = AgentWorkflowInstance(
             hostID: UUID(),
             pluginID: "test",
@@ -80,12 +81,12 @@ struct AgentWorkflowTmuxSubmissionTests {
             cursorX: 2,
             cursorY: 1,
             cursorVisible: true,
-            bracketedPaste: true,
+            bracketedPaste: unknown ? nil : true,
             inCopyMode: false,
             foregroundCommand: metadata[1]
         )
         let commands = try AgentWorkflowTmuxSubmission.commands(instance: instance, file: file, capture: capture)
-        _ = try run(tmux, ["-S", socket] + commands.flatMap { $0 })
+        #expect(try !(run(tmux, ["-S", socket] + commands.flatMap { $0 }).contains(AgentWorkflowTmuxSubmission.rejection)))
         let expected = Data("\u{1b}[200~\(input)\u{1b}[201~\r".utf8)
         for _ in 0..<100 {
             if try Data(contentsOf: received).count >= expected.count {
@@ -94,19 +95,27 @@ struct AgentWorkflowTmuxSubmissionTests {
             try await Task.sleep(for: .milliseconds(20))
         }
         #expect(try Data(contentsOf: received) == expected)
-        let changed = AgentWorkflowTerminalCapture(
-            ansi: "",
-            width: 80,
-            height: 20,
-            cursorX: 2,
-            cursorY: 1,
-            cursorVisible: true,
-            bracketedPaste: true,
-            inCopyMode: false,
-            foregroundCommand: "exited-agent"
-        )
-        let denied = try AgentWorkflowTmuxSubmission.commands(instance: instance, file: file, capture: changed)
-        #expect(try run(tmux, ["-S", socket] + denied.flatMap { $0 }).trimmingCharacters(in: .whitespacesAndNewlines) == AgentWorkflowTmuxSubmission.rejection)
+        for field in ["command", "cursor", "size", "paste", "copy"] {
+            let changed = AgentWorkflowTerminalCapture(
+                ansi: "",
+                width: field == "size" ? 81 : 80,
+                height: 20,
+                cursorX: field == "cursor" ? 3 : 2,
+                cursorY: 1,
+                cursorVisible: true,
+                bracketedPaste: field == "paste" ? false : capture.bracketedPaste,
+                inCopyMode: field == "copy",
+                foregroundCommand: field == "command" ? "exited-agent" : capture.foregroundCommand
+            )
+            if field == "paste" || field == "copy" {
+                #expect(throws: AgentWorkflowError.self) { try AgentWorkflowTmuxSubmission.commands(instance: instance, file: file, capture: changed) }
+            } else {
+                let denied = try AgentWorkflowTmuxSubmission.commands(instance: instance, file: file, capture: changed)
+                #expect(try run(tmux, ["-S", socket] + denied.flatMap { $0 }).trimmingCharacters(in: .whitespacesAndNewlines) == AgentWorkflowTmuxSubmission.rejection)
+            }
+        }
+        _ = try run(tmux, ["-S", socket, "copy-mode", "-t", instance.paneID])
+        #expect(try run(tmux, ["-S", socket] + commands.flatMap { $0 }).trimmingCharacters(in: .whitespacesAndNewlines) == AgentWorkflowTmuxSubmission.rejection)
         #expect(try Data(contentsOf: received) == expected)
     }
 }

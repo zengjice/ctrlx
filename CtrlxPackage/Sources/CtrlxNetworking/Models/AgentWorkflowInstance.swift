@@ -51,6 +51,8 @@ public struct AgentWorkflowInstance: Codable, Equatable, Identifiable, Sendable 
     public var capabilities: AgentWorkflowCapabilities?
     public var readiness: AgentWorkflowReadiness
     public var capabilityIssue: String?
+    /// Transient input feedback for display; it does not revoke workflow capability.
+    public var inputIssue: String?
 
     public init(
         id: UUID = UUID(),
@@ -65,7 +67,8 @@ public struct AgentWorkflowInstance: Codable, Equatable, Identifiable, Sendable 
         workingDirectory: String,
         capabilities: AgentWorkflowCapabilities?,
         readiness: AgentWorkflowReadiness,
-        capabilityIssue: String? = nil
+        capabilityIssue: String? = nil,
+        inputIssue: String? = nil
     ) {
         self.id = id
         self.hostID = hostID
@@ -80,6 +83,7 @@ public struct AgentWorkflowInstance: Codable, Equatable, Identifiable, Sendable 
         self.capabilities = capabilities
         self.readiness = readiness
         self.capabilityIssue = capabilityIssue
+        self.inputIssue = inputIssue
     }
 
     /// Moving a live pane preserves identity; a reused PID, pane or new
