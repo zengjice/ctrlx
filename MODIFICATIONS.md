@@ -7,6 +7,41 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.169 — Reliable recovery of stopped Orbie Agents
+
+- Preserve the role's last verified native conversation when an Orbie/Orbiter
+  exits normally to its shell. Explicit recovery can rebuild a missing legacy
+  descriptor from the exact saved conversation and verified native history;
+  confirmed replacement, missing history or an unavailable plugin cannot silently
+  select another conversation.
+- Resume in the existing idle terminal after user confirmation, keeping its
+  AgentID; restore a closed tab through the existing new-tab path. Reject busy
+  or replaced terminals and preserve role drafts, message history and historical
+  Workflow targets. Launch intents and pane tokens prevent duplicate starts
+  after an uncertain reply.
+- Settle an in-place recovery intent only after fresh workspace or role-directory
+  evidence confirms the original native conversation is running. Avoid restoring
+  settled intent during a concurrent request, so a subsequent normal exit can be
+  resumed again. Explicit tmux guard rejection permits a fresh retry; timeouts
+  and other unknown launch results retain their intent. See
+  [role recovery](docs/services-reference.md#role-storage-migration-and-explicit-recovery).
+  Source: `5961ca4b`.
+
+- Validation: focused Swift suites reported 140 tests and passed serially,
+  including isolated real-tmux shell respawn, persistent identity, busy-process
+  and process/pane race guards, intent completion, repeat exit/resume, retained
+  drafts and offscreen recovery controls/actions. Distributed-installer
+  process/flow regressions passed all 34 checks. Lint for 17 Swift files, both
+  boundary checks and diff checks passed.
+- Fresh isolated Codex 0.169.0 and Claude Code 2.1.319 acceptance passed under
+  tmux 3.6a with loopback models, including conversation continuation and closing
+  private tabs before resuming the exact original native conversations. These
+  checks do not replace full installed-App in-place recovery with real accounts.
+  Prior codec acceptance was reused after checking the unchanged CEF framework
+  hash and native engine source. Remote Mac/iPhone UI, public-provider/account
+  switching, full E2E, the unfiltered unit suite and Apple Intelligence evaluations
+  were not run. This release builds macOS only.
+
 ## 3.0.168 — Independent Orbie conversations and explicit Agent recovery
 
 - Send ordinary Orbie/Orbiter messages without creating Workflow definitions,
