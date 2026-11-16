@@ -134,8 +134,8 @@ struct MacOrbitersView: View {
                 Text(reason).foregroundStyle(.secondary)
             }
             HStack {
-                if let agentID = record.agentID, service.closedAgents.contains(agentID) {
-                    Button("Restore Original Conversation") { perform { try await service.restoreOriginalConversation(record.id)
+                if let agentID = record.agentID, service.currentInstance(record) == nil {
+                    AgentRoleResumeButton(tabClosed: service.closedAgents.contains(agentID)) { perform { try await service.restoreOriginalConversation(record.id)
                         selectedID = nil
                     } }.disabled(service.isBusy)
                     Button("New Agent Instead…") { selectedID = nil }

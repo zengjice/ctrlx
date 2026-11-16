@@ -184,14 +184,14 @@ extension AppCoordinator {
             }
         }
         do {
-            if let roleRecovery = agentRoleRecovery, let paths = ctrlxPaths, let hostID = await agentRuntimeCatalog?.hostID {
+            if let roleRecovery = agentRoleRecovery, let paths = ctrlxPaths, let hostID = agentRuntimeCatalog?.hostID {
                 let main = try await OrbieStore(paths: paths, hostID: hostID).load()
                 let orbiters = try await OrbiterStore(paths: paths, hostID: hostID).load()
                 let roles = Set(orbiters.agents.compactMap(\.agentID) + [main.target?.agentID].compactMap { $0 })
                 for pane in capturedPanes.values {
                     let id = AgentID(hostID: hostID, paneID: pane.id)
                     if roles.contains(id) {
-                        try await roleRecovery.capture(id, descriptor: pane.agent, identity: pane.agentIdentity, invalidated: pane.savedAgentIdentityInvalidated == true)
+                        try await roleRecovery.captureSnapshot(id, pane: pane, state: windowManager.paneStates[pane.runtimeID], detected: detected?[pane.runtimeID], scanAvailable: detected != nil, runtimeID: identities.runtimeID)
                     }
                 }
             }

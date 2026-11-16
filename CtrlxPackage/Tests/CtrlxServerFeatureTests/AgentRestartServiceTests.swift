@@ -31,13 +31,16 @@ struct AgentRestartServiceTests {
             let detected: [String: TmuxService.DetectedAgentPane] = ["%1": .init(path: "/repo", pluginID: "codex", processIDs: ["123"])]
             #expect(manager.reconcileDetectedAgentSessions(detected))
             #expect(manager.paneStates["%1"]?.agentSession?.processRuntimeID == "first")
+            #expect(manager.paneStates["%1"]?.agentSession?.isWorking == true)
             runtime.setValue("replacement")
             #expect(manager.reconcileDetectedAgentSessions(detected))
             #expect(manager.paneStates["%1"]?.agentSession?.processRuntimeID == "replacement")
             runtime.setValue(nil)
             #expect(!manager.reconcileDetectedAgentSessions(detected))
             #expect(manager.paneStates["%1"]?.agentSession?.processRuntimeID == "replacement")
-            #expect(manager.paneStates["%1"]?.agentSession?.isWorking == true)
+            // A verified successor keeps its identity through a scan miss,
+            // but does not inherit the previous process's working state.
+            #expect(manager.paneStates["%1"]?.agentSession?.isWorking == false)
         }
     }
 

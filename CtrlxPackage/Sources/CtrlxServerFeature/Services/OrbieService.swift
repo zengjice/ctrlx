@@ -45,6 +45,10 @@ final class OrbieService {
         messages.contains { $0.isPending && $0.agentID == record?.target?.agentID }
     }
 
+    var canRestore: Bool {
+        record?.target != nil && instance == nil && recovery != nil
+    }
+
     var legacyIssue: String? {
         record?.legacyRunIDs?.isEmpty == false ? "Some older records could not be migrated automatically. They remain in Workflows for review; their saved files are kept." : nil
     }
@@ -57,7 +61,7 @@ final class OrbieService {
             return "The Agent tab was closed. Restore its original conversation or explicitly create a new Orbie."
         }
         guard let target = record.target, let instance else {
-            return "Waiting for the Orbie Agent. Open its terminal to finish startup, or check the existing workspace recovery controls."
+            return "The Orbie Agent is not running or is still starting. Open its tab to check, or resume the saved conversation after it has exited."
         }
         guard target.agentID == instance.agentID else {
             return "The Orbie tab changed. Refresh Orbie to locate its current terminal."
@@ -240,6 +244,9 @@ final class OrbieService {
             latest
         }
         instance = updated.currentInstance(in: instances)
+        if inspect, updated.enabled, let instance {
+            try await recovery?.confirmResume(instance)
+        }
         if inspect, let id = updated.target?.agentID, let recovery {
             tabClosed = false
             tabClosed = try await recovery.isClosed(id)

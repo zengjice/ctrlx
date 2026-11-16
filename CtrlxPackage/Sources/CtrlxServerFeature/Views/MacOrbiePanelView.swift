@@ -81,8 +81,8 @@ public struct MacOrbiePanelView: View {
             if orbie.record?.enabled != true || orbie.record?.creation == nil {
                 Button("Set Up Orbie…") { openFull(tasks: false) }.accessibilityIdentifier("orbie-panel-setup")
             }
-            if orbie.tabClosed {
-                Button("Restore Original Conversation") { Task { await orbie.restoreOriginalConversation() } }.disabled(orbie.isBusy)
+            if orbie.canRestore {
+                AgentRoleResumeButton(tabClosed: orbie.tabClosed) { Task { await orbie.restoreOriginalConversation() } }.disabled(orbie.isBusy)
             }
             if let availability = orbie.availability {
                 Text(availability).font(.caption).foregroundStyle(.secondary)

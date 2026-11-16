@@ -84,8 +84,8 @@
                         Button("Create Orbie…") { prepareCreation(orbie) }.disabled(orbie.record == nil || orbie.isBusy)
                             .accessibilityIdentifier("orbie-create")
                     } else {
-                        if orbie.tabClosed {
-                            Button("Restore Original Conversation") { Task { await orbie.restoreOriginalConversation() } }.disabled(orbie.isBusy)
+                        if orbie.canRestore {
+                            AgentRoleResumeButton(tabClosed: orbie.tabClosed) { Task { await orbie.restoreOriginalConversation() } }.disabled(orbie.isBusy)
                         }
                         Button("Open Agent Tab") { Task { await openTerminal(orbie) } }.disabled(orbie.tabClosed)
                             .accessibilityIdentifier("orbie-open-agent")

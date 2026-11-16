@@ -1941,15 +1941,38 @@ never rewritten. Unsent or unconfirmed content does not authorize a new send.
 
 `AgentRoleRecovery` retains previously verified `AgentResumeDescriptor` values at
 `<stateRoot>/orbie/resume.json`, separately from the workspace snapshot that an
-explicit tab close removes. Closing the panel does not close the tab. If the pane
-still exists, ordinary Resume/Use Shell remains authoritative. A confirmed missing
-pane exposes Restore Original Conversation; failed scans do not mean closed.
+explicit tab close removes. A confirmed normal exit clears workspace automatic
+resume state but retains the role's last verified conversation for explicit Resume.
+A replacement Agent/conversation invalidates that evidence until the new native
+conversation is verified. The retained role evidence is also checked when the
+workspace snapshot has already become a plain shell.
+
+Closing the panel does not close the tab. A stopped Agent with a surviving pane
+exposes Resume Original Conversation. The user confirms replacing the idle shell
+(including its unsubmitted input); the shared input queue and current process/
+workspace guards reject an occupied or replaced terminal. This keeps the AgentID.
+A confirmed missing pane exposes Restore Original Conversation; failed scans do not mean closed.
 Restoring is explicit and uses existing resume command/launch preparation. The
-new pane gets a new AgentID; the role changes only after the exact plugin/native
-conversation is verified. Durable creation intent prevents duplicate tabs after
-lost replies. Known pre-launch rejection is retryable. Old messages and Workflow
+new pane gets a new AgentID only when the old one was closed; the role changes only
+after the exact plugin/native conversation is verified. Durable launch intent and
+an in-place tmux launch token prevent duplicate launches after lost replies.
+Fresh workspace capture or role-directory inspection settles a pending in-place
+intent once the exact native conversation is running, including delayed startup.
+An overlapping restore must not write that settled intent back. Cached bindings
+alone do not confirm startup; closed-tab creation intents retain their deduplication record.
+Known pre-launch failures and explicit tmux process/workspace guard rejection are
+retryable because no launch ran. After dispatch, timeout, disconnect and other
+unknown results retain the pending intent.
+Old messages and Workflow
 targets remain frozen and are never replayed or rebound by role recovery. Missing
 native history produces a visible error and permits an explicitly new Agent.
+
+For records missing a descriptor, including those erased by the old normal-exit
+bug, explicit recovery can rebuild it from the saved role/native conversation ID
+through the plugin's native history validation. It never picks the most recent
+conversation or matches by folder/title. New confirmed-replacement tombstones
+block this repair path. Ambiguous/missing native history and unavailable plugins
+fail visibly without launching or changing the role binding.
 
 ### Panel, queries and navigation
 

@@ -20,7 +20,7 @@ and resource lease remain separate evidence.
 
 | Consumer | Long-term association | Operation or historical check |
 | --- | --- | --- |
-| Orbie / Orbiter | AgentID extracted from existing target/binding; no Task identity | Current plugin/input evidence; messages stay frozen. Explicit closed-tab Resume verifies the original conversation before moving the role to a new AgentID |
+| Orbie / Orbiter | AgentID extracted from existing target/binding; no Task identity | Current plugin/input evidence; messages stay frozen. Explicit Resume preserves the surviving pane's AgentID; closed-tab recovery verifies the original conversation before moving the role to a new AgentID |
 | Workflow | Participant IDs stay stable; participant targets resolve by AgentID | Delivery/turn evidence and process binding; occupancy includes unfinished calls to the same AgentID |
 | Notification navigation | AgentID plus authenticated pairing | Current catalog; missing/old targets open the session list |
 | Notification answer | AgentID locates the current pane | Original plugin, native conversation, process incarnation and request must all match |

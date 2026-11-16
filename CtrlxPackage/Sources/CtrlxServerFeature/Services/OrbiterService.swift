@@ -236,6 +236,9 @@ final class OrbiterService {
                 }
             }
             if let current = currentInstance(record) {
+                if inspect {
+                    try await recovery?.confirmResume(current)
+                }
                 record.binding = current
                 record.pane = current.workspacePane
                 occupancy[current.agentID] = try await interaction.availability(current.agentID)

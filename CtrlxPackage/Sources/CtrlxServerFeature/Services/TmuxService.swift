@@ -396,6 +396,48 @@ final public class TmuxService {
         }
     }
 
+    /// Called after explicit confirmation to replace a stopped Agent's shell.
+    /// Uses the same identity guard, launch payload and input queue as Exit and Resume.
+    func resumeStoppedRole(_ pane: PaneInfo, directory: String, command: AgentForkLaunch, intentID: UUID) async throws {
+        guard let identity = pane.workspaceIdentity, let gate = workflowInputGate else {
+            throw AgentRoleRecovery.NotLaunched(reason: "The terminal identity or input queue is unavailable.")
+        }
+        try await gate.human(paneID: pane.paneId) {
+            let arguments: [String]
+            do {
+                @Dependency(SessionDirectoryClient.self) var directories
+                let directory = try await directories.resolve(directory)
+                guard let launch = try self.agentLaunch(.init(workingDirectory: directory, fork: command)) else {
+                    throw AgentRestartError("The Agent returned no Resume command.")
+                }
+                let shell = await self.recoveryShell()
+                let result = try await self.runWorkspaceCommand([
+                    ["display-message", "-p", "-t", pane.paneId, AgentRestartTerminal.format],
+                    ["show-options", "-p", "-q", "-t", pane.paneId, "remain-on-exit"],
+                ], target: pane.paneId, identity: identity)
+                let snapshot = try AgentRestartTerminal.Snapshot(output: result.stdoutString)
+                let occupants = try await self.processRunner.run(executable: "/bin/ps", arguments: ["-t", snapshot.tty, "-o", "pid="], environment: nil, timeout: 5)
+                try AgentRestartTerminal.validateStopped(snapshot, occupants: occupants)
+                let process = AgentRestartTerminal.process(loginShell: self.loginShellPath, invocation: launch.command, prefix: self.overrideCommandPrefix(), shellCommand: shell.command)
+                let commands = try AgentRestartTerminal.launchCommands(paneID: pane.paneId, original: snapshot, ready: snapshot, directory: directory, process: process, environment: shell.environment, payload: launch.payload, roleResumeID: intentID)
+                arguments = try WorkspaceTerminalInputGuard.arguments(target: pane.paneId, identity: identity, commands: commands)
+            } catch { throw AgentRoleRecovery.NotLaunched(reason: error.localizedDescription) }
+            var input = ["source-file", "-"]
+            if let socketPath = self.socketPath {
+                input = ["-S", socketPath] + input
+            }
+            let script = arguments.map(\.posixSingleQuoted).joined(separator: " ") + "\n"
+            let result = try await self.processRunner.runWithInput(executable: self.tmuxPath, arguments: input, environment: ["TMUX": "", "TMUX_PANE": ""], timeout: nil, input: Data(script.utf8))
+            let output = result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
+            if result.isSuccess, [AgentRestartTerminal.rejection, WorkspaceTerminalInputGuard.rejection].contains(output) {
+                throw AgentRoleRecovery.NotLaunched(reason: "The terminal changed before Resume could start. Check its tab and try again.")
+            }
+            guard result.isSuccess, output == AgentRestartTerminal.success else {
+                throw AgentRestartError("Resume was not confirmed. Check the original tab before retrying. \(result.stderrString)")
+            }
+        }
+    }
+
     private func restartTerminal(_ source: AgentForkSource) async throws -> AgentRestartTerminal.Snapshot {
         let result = try await runWorkspaceCommand([
             ["display-message", "-p", "-t", source.paneID, AgentRestartTerminal.format],

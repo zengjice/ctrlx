@@ -3,6 +3,18 @@ import CtrlxPluginProtocol
 
 /// A failed observation is not evidence that the saved conversation ended.
 enum WorkspaceAgentCapture {
+    enum Invalidation { case ended, replaced }
+
+    static func invalidation(
+        _ pane: WorkspaceRecoveryPane, state: PaneState,
+        detected: TmuxService.DetectedAgentPane?, scanAvailable: Bool,
+        runtimeID: (String) -> String?
+    ) -> Invalidation? {
+        var copy = pane
+        guard invalidateChangedAgent(&copy, state: state, detected: detected, scanAvailable: scanAvailable, runtimeID: runtimeID) else { return nil }
+        return scanAvailable && detected == nil && state.agentSession == nil ? .ended : .replaced
+    }
+
     static func invalidateChangedAgent(
         _ pane: inout WorkspaceRecoveryPane, state: PaneState,
         detected: TmuxService.DetectedAgentPane?, scanAvailable: Bool,

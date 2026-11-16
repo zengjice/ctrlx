@@ -53,7 +53,7 @@ enum AgentRestartTerminal {
         return [["if-shell", "-F", "-t", paneID, condition, body, "display-message -p \(rejection)"]]
     }
 
-    static func launchCommands(paneID: String, original: Snapshot, ready: Snapshot, directory: String, process: [String], environment: [String], payload: String?) throws -> [[String]] {
+    static func launchCommands(paneID: String, original: Snapshot, ready: Snapshot, directory: String, process: [String], environment: [String], payload: String?, roleResumeID: UUID? = nil) throws -> [[String]] {
         guard
             original.processID == ready.processID, original.tty == ready.tty,
             ready.isDead || TmuxService.knownShells.contains(ready.command),
@@ -65,8 +65,21 @@ enum AgentRestartTerminal {
             commands.append(["set-option", "-p", "-t", paneID, SessionLaunchPreparation.launchPayloadOption, payload])
         }
         commands.append(["respawn-pane", "-k", "-t", paneID, "-c", directory] + environment.flatMap { ["-e", $0] } + process)
+        if let roleResumeID {
+            commands.append(["set-option", "-p", "-t", paneID, AgentRoleRecovery.launchTokenOption, roleResumeID.uuidString])
+        }
         commands += restoreCommands(paneID: paneID, snapshot: original)
         commands.append(["display-message", "-p", success])
         return guardedCommands(paneID: paneID, snapshot: ready, commands: commands)
+    }
+
+    static func validateStopped(_ snapshot: Snapshot, occupants: ProcessResult) throws {
+        let pids = Set(occupants.stdoutString.split(whereSeparator: \.isWhitespace).map(String.init))
+        guard occupants.isSuccess || (occupants.exitCode == 1 && pids.isEmpty) else {
+            throw AgentRestartError("Could not inspect the terminal processes. Nothing was restarted.")
+        }
+        guard snapshot.isDead ? pids.isEmpty : (pids == [snapshot.processID] && TmuxService.knownShells.contains(snapshot.command)) else {
+            throw AgentRestartError("A program is still using this terminal. Exit it before resuming the saved conversation.")
+        }
     }
 }

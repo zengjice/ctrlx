@@ -191,3 +191,19 @@ Orbie／Orbiter 界面与 Workflow 编排分别调用共用 Agent 交互能力�
 - [x] `scanWorkflowInstances` 对 tmux／ps 快照不可用抛出 `AgentWorkflowInspectionUnavailable`，进入已有重试路径；正常空快照保持成功，不将任意其他错误一并转为可重试。
 - 新增用例通过 `ProcessRunner` 模拟 tmux／ps 命令失败，调用生产扫描入口后接回消息监测，覆盖错误类型、无需面板／新 Hook 自动恢复、正常空快照和不重发输入。修复前 `.build-local/orbie-3fix-repair-3/before.log` 已复现两种命令故障导致监测提前退出；修复后 `after.log` 的 77 项消息、进程扫描及 Workflow 原生事件回归通过。
 - SwiftFormat（2 个文件）、两项仓库边界检查及 `git diff --check` 通过。本轮未重跑 App 整包构建或真实 CLI／人工 UI 验收；未提交、未安装、未发布。
+
+#### 正常退出到 shell 后的角色恢复修复
+
+- [x] 正常退出仍清理工作区自动恢复状态，但保留 Orbie／Orbiter 已核验的原对话描述；确认替换 Agent／原生会话时才使旧角色恢复证据失效。即使工作区快照已经变成 shell，也会检查独立保留的角色证据。
+- [x] 原标签存活时显示 Resume Original Conversation，经用户确认后复用现有输入队列、shell 启动及持久 pane／进程守卫恢复，AgentID 不变；原标签已关闭时通过现有创建路径恢复，核验同一原生对话后关联新 AgentID。终端仍有程序运行时拒绝重启；恢复意图和 pane token 防止丢回包后重复启动。
+- [x] 旧版本已清空描述的记录可在显式恢复时，通过角色保存的准确会话 ID 和原生插件历史校验重建描述；不按目录、标题或最近会话猜测。新记录明确标记的替换失效不走旧数据补救。缺少历史或插件时保留具体错误，不重发旧消息。
+- `.build-local/orbie-resume-fix/regression-4.log` 的 52 项定向测试通过，包含 Codex／Claude 退出到 shell 后关闭最后一个标签再恢复、旧记录修复、替换拒绝、同 pane 恢复、丢回包及原生历史缺失。隔离 tmux 覆盖实际 shell respawn、保持持久身份、忙碌进程保护和 pane 身份改变拒绝。离屏 UI 检查覆盖完整窗口／唤醒面板的两类入口，并实际触发关闭标签后的恢复动作、核对角色更新和草稿保留。
+- 扩展回归发现旧 `publishesProcessIncarnation` 断言仍要求新进程继承旧进程的 working 状态；单独运行同样失败。按既有身份规则修正测试，未修改对应生产状态逻辑。初期测试编译和夹具错误日志保留，以 `regression-4.log` 最终通过记录为准。
+- SwiftFormat（15 个 Swift 文件）、品牌边界、技术边界及差异检查通过；按顺序准备三个 native helper 后，Mac Debug workspace 编译通过（`mac-build.log`）。本轮未重跑真实 Codex／Claude CLI 对话或另一台 Mac 的用户数据恢复；隔离 tmux／离屏 UI 不能代替这些验收。未提交、未安装、未发布。
+
+#### 恢复意图结算与明确拒绝重试
+
+- [x] P1：复用工作区采集和 Orbie／Orbiter 主动目录刷新，在核验同 pane、同插件及同原生会话已运行后结算原地恢复意图。普通缓存读取不结算；并发 `restore()` 不再写回已结算意图，后续正常退出可以再次 Resume。已关闭标签的新建意图仍保留防重复创建记录。
+- [x] P2：仅 tmux 明确返回进程或持久身份守卫拒绝标记时归类为 `NotLaunched`，重置尝试状态并允许重新检查。超时、丢回包及其他无法确认是否执行的错误仍保留意图。
+- 证据位于 `.build-local/orbie-resume-review-fix/`：`before.log` 的新增回归复现两项问题；`after.log` 的 49 项定向测试通过。覆盖三种后续确认入口、仅有缓存不得确认、启动／检查期间并发结算、再次退出后第二次启动，以及真实隔离 tmux 在预检后改变进程／pane 身份、拒绝时未启动、重试成功。既有丢回包、关闭后恢复及恢复入口离屏 UI 回归也通过。
+- 本轮 6 个 Swift 文件的格式检查、品牌／技术边界及 `git diff --check` 通过；顺序准备 native helper 后，Mac Debug workspace 编译通过（`mac-build.log`）。未在已安装 App 或另一台 Mac 上进行人工恢复操作；未提交、未安装、未发布。
