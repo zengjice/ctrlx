@@ -7,6 +7,48 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.168 — Independent Orbie conversations and explicit Agent recovery
+
+- Send ordinary Orbie/Orbiter messages without creating Workflow definitions,
+  runs or completion instructions. Share guarded terminal input, authenticated
+  native receipts and reply verification with explicit Workflows; finishing a
+  Workflow leaves its Agents available for further conversation.
+- Replace the standalone Orbiter Task lifecycle and two-active-task limit with
+  ordinary Agent associations and a separate Workflow list. Add optional Workflow
+  tags, Agent/Workflow lookup and earlier/newer/latest conversation history pages
+  anchored to saved message IDs, retaining older replies and attachments.
+- Add explicit Restore Original Conversation for a confirmed closed role tab.
+  Resume the verified native conversation in a new tab before updating the role;
+  refresh/restart never resurrects tabs or replays old messages automatically.
+  Preserve pending delivery evidence and historical Workflow targets.
+- Keep ordinary messaging available when Workflow storage is damaged. Preserve
+  verified native failure reasons and retry temporary tmux/process scans within
+  the existing verification budget, without resending input. Refresh can recheck
+  uncertain receipts without creating another delivery.
+- Migration backs up original role files and the Workflow ledger before converting
+  verified internal records into schema-2 role associations and message history.
+  Preserve native histories, material folders, attachments, user-edited definitions
+  and unrelated runs. Old `orbie tasks` queries are replaced by `orbie agents`
+  and `orbie workflows`; callers must use the new CLI commands. Preserve the
+  pre-migration backups for rollback; replacing only the App does not restore
+  the old storage format. See
+  [Orbie and Orbiters](docs/services-reference.md#orbie-and-orbiters-on-the-local-mac)
+  and [Stage 3-Fix](docs/v3.1.0/orbie/STAGE3_FIX_TODO.md). Source: `0f8ad28f`.
+
+- Validation: focused Swift suites reported 393 tests and passed serially;
+  34 distributed-installer process/flow regressions passed. Fresh isolated Codex
+  0.169.0 and Claude Code 2.1.319 acceptance passed under tmux 3.6a with private
+  loopback models, including first/follow-up messages, protected drafts/approval
+  waits and closing private tabs before resuming the exact original conversations.
+  No ordinary-message Workflow definitions or runs were created by the fixture.
+- Lint for 60 Swift files, both boundary checks and diff checks passed. Reused
+  the scoped signed-App startup/unauthorized-query smoke evidence with normal and
+  damaged Workflow ledgers after source-impact review, plus prior codec acceptance
+  after checking the unchanged CEF framework hash. Fresh full Close Tab/Restore UI,
+  real-account/provider switching, remote Mac/iPhone UI, full E2E, the unfiltered
+  unit suite and Apple Intelligence evaluations were not run. This publication
+  builds macOS only and preserves unrelated working-tree README edits.
+
 ## 3.0.167 — Notification target persistence and faster voice correction
 
 - Preserve a Viewer's authenticated stable-notification capability across Host
