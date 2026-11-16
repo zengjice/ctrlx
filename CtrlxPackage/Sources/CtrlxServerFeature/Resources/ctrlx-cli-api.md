@@ -976,30 +976,34 @@ Methods follow a `domain.action` convention:
 | `internal_error` | An unexpected error occurred inside the app |
 
 
-## Local Orbie task lookup
+## Local Orbie Agent and Workflow lookup
 
-The enabled Main Orbie Agent can read explicitly saved local tasks. These commands
-use the Host's existing API socket (`CTRLX_SOCKET` in its Agent environment) and
-validate the OS socket peer's process ancestry/runtime against the current Orbie
-binding and verified native conversation. A task UUID, JSON PID or pane override
-does not grant access. Ordinary shells and other Agents are rejected.
+The enabled Orbie Agent can query associated Orbiters and Workflows. Commands use
+the local API socket, validate the OS peer's runtime and native conversation, and
+reject caller-supplied pane, Host or identity overrides. They are read-only and
+never create, start, resume, focus or send to an Agent or Workflow.
 
 ```bash
-ctrlx orbie tasks list --query 'audio' --limit 8
-ctrlx orbie tasks list --since 2026-11-12T00:00:00+08:00 --include-archived
-ctrlx orbie tasks show TASK_UUID
+ctrlx orbie agents list --query 'audio' --limit 8
+ctrlx orbie agents list --since 2026-11-12T00:00:00+08:00
+ctrlx orbie agents show HOST_UUID/PANE_UUID
+ctrlx orbie workflows list --query 'review' --tag research --limit 8
+ctrlx orbie workflows show WORKFLOW_UUID
 ```
 
-Both commands return JSON. List accepts up to 256 UTF-8 bytes of keywords and
-1–12 tasks (default 8), sorted by the latest recorded execution/report time. Show
-requires an exact saved task UUID. Summaries include bounded title, project, goal,
-source, current state and the latest verified Agent reply's run/invocation IDs;
-show also includes the derived materials directory. Reports are Agent reports,
-not independent verification of a goal. Unsent drafts, selected material contents
-and full native transcripts are excluded. Busy or human-blocked Orbie instances
-can still read these records; no command submits, resumes or opens a task.
+Wire methods: `orbie.agents.list/show`, `orbie.workflows.list/show`.
+List supports `query` (up to 256 UTF-8 bytes), `limit` (1–12, default 8),
+`since` (ISO-8601); Workflow lists also support `tag` (up to 32 UTF-8 bytes).
+`since` filters Agents by latest message time and Workflows by associated run
+creation time. Workflow tags are optional metadata; old configurations without
+tags remain valid. Show accepts only `id`, and it must belong to this caller's
+associated scope. Results have bounded names, paths, summaries and list counts;
+credentials and full native transcripts are excluded. Tags and names never grant
+authority or change execution targets.
 
-The panel accepts explicit `[CtrlX task: UUID]` markers only from the existing
-verified final-reply ledger. It displays saved candidates for user selection and
-re-reads the task association/current durable pane identity before opening its
-ordinary Agent tab. Missing originals never fall back to a similarly named tab.
+Only markers `[CtrlX Agent: HOST_UUID/PANE_UUID]` and
+`[CtrlX Workflow: WORKFLOW_UUID]` become suggested navigation buttons in verified
+Orbie replies. Clicking revalidates the saved association and current target.
+A missing target reports an error rather than selecting a same-name replacement.
+Legacy `orbie tasks` commands are removed; their old data is migrated once while
+preserving original backups, material directories and verified replies.

@@ -6,6 +6,7 @@ import Foundation
 actor AgentWorkflowService {
     private let store: AgentWorkflowStore
     private let scan: @Sendable ([AgentWorkflowInstance]) async throws -> [AgentWorkflowObservation]
+    private let checkInputOwner: @Sendable (AgentID) async throws -> Void
     private let schedule: @Sendable (UUID) async -> Void
     private let resumeStep: @Sendable (AgentWorkflowInvocation, AgentWorkflowInstance) async throws -> Void
     private let now: @Sendable () -> Date
@@ -20,6 +21,7 @@ actor AgentWorkflowService {
         store: AgentWorkflowStore,
         scan: @escaping @Sendable ([AgentWorkflowInstance]) async throws -> [AgentWorkflowObservation],
         schedule: @escaping @Sendable (UUID) async -> Void,
+        checkInputOwner: @escaping @Sendable (AgentID) async throws -> Void = { _ in },
         resumeStep: @escaping @Sendable (AgentWorkflowInvocation, AgentWorkflowInstance) async throws -> Void = { _, _ in throw AgentWorkflowError("Workflow continuation input is unavailable.") },
         models: @escaping @Sendable (AgentWorkflowInstance, Bool) async throws -> AgentModelSnapshot = { _, _ in throw AgentWorkflowError("This Agent does not support model selection.") },
         now: @escaping @Sendable () -> Date = { Date() },
@@ -28,6 +30,7 @@ actor AgentWorkflowService {
         self.store = store
         self.scan = scan
         self.schedule = schedule
+        self.checkInputOwner = checkInputOwner
         self.resumeStep = resumeStep
         self.models = models
         self.now = now
@@ -171,6 +174,14 @@ actor AgentWorkflowService {
         }
         if try await store.snapshot().definitions.first(where: { $0.id == definitionID })?.agentInstanceIDs.isEmpty == false {
             _ = try await refreshInstancesCatalog()
+        }
+        let snapshot = try await store.snapshot()
+        if let definition = snapshot.definitions.first(where: { $0.id == definitionID }) {
+            for participant in definition.agents {
+                if let instance = definition.instance(for: participant.id, in: snapshot.instances) {
+                    try await checkInputOwner(instance.agentID)
+                }
+            }
         }
         let attachments = try await store.definitionAttachments(id: definitionID, revision: expectedRevision, initialInput: initialInput)
         try await attachmentReader.validate(attachments)

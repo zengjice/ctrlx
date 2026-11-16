@@ -24,7 +24,8 @@ public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
 
     public var startMarkers: [String] {
         guard
-            let start = prompt.range(of: "[CtrlX workflow invocation: ", options: .backwards),
+            let start = prompt.range(of: "[CtrlX workflow invocation: ", options: .backwards)
+            ?? prompt.range(of: "[CtrlX message: ", options: .backwards),
             let end = prompt[start.lowerBound...].firstIndex(of: "]") else { return [nativeTurnID] }
         return [nativeTurnID, String(prompt[start.lowerBound...end])]
     }
@@ -61,7 +62,7 @@ public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
                 let submission = record["promptSubmitEnding"] as? [String: Any],
                 let ending = submission["ending"] as? [String: Any],
                 ending["kind"] as? String == "blocked_by_hook",
-                prompt.contains("[CtrlX workflow invocation: "),
+                prompt.contains("[CtrlX workflow invocation: ") || prompt.contains("[CtrlX message: "),
                 let content = record["content"] as? String,
                 content.hasPrefix("UserPromptSubmit operation blocked by hook:\n"),
                 content.hasSuffix("\nOriginal prompt: " + prompt) {

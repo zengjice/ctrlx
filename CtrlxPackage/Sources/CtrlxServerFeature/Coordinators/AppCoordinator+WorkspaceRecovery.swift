@@ -3,6 +3,7 @@ import CtrlxNetworking
 import CtrlxPluginProtocol
 import Dependencies
 import Foundation
+import Logging
 
 extension AppCoordinator {
     func setupWorkspaceRecovery() async {
@@ -63,7 +64,8 @@ extension AppCoordinator {
             recoveredWorkspaceDrafts.clearRemote(key, submittedText: submittedText)
             Task { await recovery?.checkpoint() }
         }
-        tmuxService.workspaceCloseHandler = { [weak recovery] operation in
+        tmuxService.workspaceCloseHandler = { [weak self, weak recovery] operation in
+            await self?.captureRolesBeforeClose()
             guard let recovery else {
                 _ = try await operation()
                 return
@@ -103,6 +105,11 @@ extension AppCoordinator {
             let savedPanes = Set(source.sessions.flatMap(\.windows).flatMap(\.panes).map(\.id))
             snapshot.fileTabs += source.fileTabs.filter { savedPanes.contains($0.paneID) && !livePanes.contains($0.paneID) }
         }
+        return try await captureAgentRecovery(snapshot)
+    }
+
+    private func captureAgentRecovery(_ source: WorkspaceRecoverySnapshot) async throws -> WorkspaceRecoverySnapshot {
+        var snapshot = source
         guard workspaceAgentDiscoveryComplete else { return snapshot }
         @Dependency(AgentSessionIdentityClient.self) var identities
         let processNames = pluginRegistry?.processNamesByPlugin ?? [:]
@@ -176,7 +183,47 @@ extension AppCoordinator {
                 }
             }
         }
+        do {
+            if let roleRecovery = agentRoleRecovery, let paths = ctrlxPaths, let hostID = await agentRuntimeCatalog?.hostID {
+                let main = try await OrbieStore(paths: paths, hostID: hostID).load()
+                let orbiters = try await OrbiterStore(paths: paths, hostID: hostID).load()
+                let roles = Set(orbiters.agents.compactMap(\.agentID) + [main.target?.agentID].compactMap { $0 })
+                for pane in capturedPanes.values {
+                    let id = AgentID(hostID: hostID, paneID: pane.id)
+                    if roles.contains(id) {
+                        try await roleRecovery.capture(id, descriptor: pane.agent, identity: pane.agentIdentity, invalidated: pane.savedAgentIdentityInvalidated == true)
+                    }
+                }
+            }
+        } catch { Logger(label: "com.jicezeng.ctrlx.orbie").error("Could not retain Agent role recovery evidence: \(error.localizedDescription)") }
         return snapshot
+    }
+
+    /// Explicit Close may occur with workspace recovery disabled. Keep role
+    /// evidence through the same capture path before the pane disappears.
+    private func captureRolesBeforeClose() async {
+        guard let roleRecovery = agentRoleRecovery, let paths = ctrlxPaths, let hostID = agentRuntimeCatalog?.hostID else { return }
+        do {
+            let main = try await OrbieStore(paths: paths, hostID: hostID).load()
+            let orbiters = try await OrbiterStore(paths: paths, hostID: hostID).load()
+            let roles = Set(orbiters.agents.compactMap(\.agentID) + [main.target?.agentID].compactMap { $0 })
+            guard !roles.isEmpty else { return }
+            let live = try await tmuxService.workspaceRecoveryClient().capture()
+            var source = WorkspaceRecoverySnapshot(hostID: hostID, bootID: "role-capture", serverID: live.serverID)
+            source.sessions = live.sessions
+            for si in source.sessions.indices {
+                for wi in source.sessions[si].windows.indices {
+                    source.sessions[si].windows[wi].panes.removeAll { !roles.contains(AgentID(hostID: hostID, paneID: $0.id)) }
+                    for pi in source.sessions[si].windows[wi].panes.indices {
+                        let id = AgentID(hostID: hostID, paneID: source.sessions[si].windows[wi].panes[pi].id)
+                        let retained = try await roleRecovery.entry(id)
+                        source.sessions[si].windows[wi].panes[pi].agent = retained?.descriptor
+                        source.sessions[si].windows[wi].panes[pi].agentIdentity = retained?.identity
+                    }
+                }
+            }
+            _ = try await captureAgentRecovery(source)
+        } catch { Logger(label: "com.jicezeng.ctrlx.orbie").error("Could not capture role evidence before closing: \(error.localizedDescription)") }
     }
 
     private func captureViewerWorkspace(_ source: WorkspaceRecoverySnapshot) -> WorkspaceRecoverySnapshot {

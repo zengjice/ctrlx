@@ -41,7 +41,7 @@
         let detachedWindows = DetachedTerminalWindows()
         let workflowNavigation = AgentWorkflowNavigation()
         @ObservationIgnored lazy var orbiePanel = OrbiePanelController(settings: settings) { [weak self] in self?.orbie?.record?.enabled == true }
-        var showsOrbieTasksRequested = false
+        var showsOrbitersRequested = false
 
         /// Owns the hosted-relay license status and trial-expiry alerting
         /// (Task 14).
@@ -158,6 +158,9 @@
         @ObservationIgnored let agentModelDisplayCache = AgentModelDisplayCache()
         let agentModelPreferences: AgentModelPreferences
 
+        @ObservationIgnored var agentRuntimeCatalog: AgentRuntimeCatalog?
+        @ObservationIgnored var agentRoleRecovery: AgentRoleRecovery?
+        @ObservationIgnored var agentMessages: AgentMessageService?
         @ObservationIgnored var agentWorkflowStore: AgentWorkflowStore?
 
         var agentWorkflowService: AgentWorkflowService?
@@ -166,7 +169,7 @@
 
         var orbie: OrbieService?
         var orbiters: OrbiterService?
-        @ObservationIgnored var orbieTaskQueries: OrbieTaskQueryService?
+        @ObservationIgnored var orbieQueries: OrbieQueryService?
 
         @ObservationIgnored var agentWorkflowAgentService: AgentWorkflowAgentService?
 
@@ -3233,8 +3236,8 @@
 
             // Set the router as the request handler on the socket server
             await apiSocketServer.setRequestHandler { [weak self, agentSimulator] request, peer in
-                if ["orbie.tasks.list", "orbie.tasks.show"].contains(request.method) {
-                    guard let service = await self?.orbieTaskQueries, let ingress = await self?.ingressSocketServer else { return .internalError(id: request.id, "Orbie is still starting on this Mac.") }
+                if ["orbie.agents.list", "orbie.agents.show", "orbie.workflows.list", "orbie.workflows.show"].contains(request.method) {
+                    guard let service = await self?.orbieQueries, let ingress = await self?.ingressSocketServer else { return .internalError(id: request.id, "Orbie is still starting on this Mac.") }
                     do { try await ingress.waitForPendingFrames() }
                     catch { return .internalError(id: request.id, "Could not verify pending Agent events. Try again after Orbie refreshes.") }
                     return await service.handle(request, peer: peer)

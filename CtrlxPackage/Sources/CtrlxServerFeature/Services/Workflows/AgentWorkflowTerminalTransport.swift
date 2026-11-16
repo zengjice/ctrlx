@@ -19,8 +19,10 @@ final class AgentWorkflowTerminalTransport {
     }
 
     private let store: AgentWorkflowStore
+    private let checkInputOwner: @Sendable (AgentID) async throws -> Void
+    private let writer: AgentInputWriter
     private let gate: AgentWorkflowInputGate
-    private let files: AgentWorkflowInputFiles
+    private let files: AgentInputFiles
     private let attachmentReader = AgentWorkflowAttachmentReader()
     private let inspect: @MainActor @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance
     private let submit: @MainActor @Sendable (AgentWorkflowInstance, URL, [URL], @escaping @MainActor @Sendable (@Sendable () throws -> Void) throws -> Void, @escaping @MainActor @Sendable ([Int]) async throws -> Void) async throws -> Void
@@ -34,14 +36,17 @@ final class AgentWorkflowTerminalTransport {
         gate: AgentWorkflowInputGate,
         temporaryDirectory: URL,
         inspect: @escaping @MainActor @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance,
+        checkInputOwner: @escaping @Sendable (AgentID) async throws -> Void = { _ in },
         loadModels: @escaping @MainActor @Sendable (AgentWorkflowInstance) async throws -> Void = { _ in },
         configureModel: @escaping @MainActor @Sendable (AgentWorkflowInstance, AgentModelSelection, AgentWorkflowModelInput) async throws -> Void = { _, _, _ in throw AgentWorkflowError("This Agent does not support step model selection.") },
         submit: @escaping @MainActor @Sendable (AgentWorkflowInstance, URL, [URL], @escaping @MainActor @Sendable (@Sendable () throws -> Void) throws -> Void, @escaping @MainActor @Sendable ([Int]) async throws -> Void) async throws -> Void,
         onFailure: @escaping @Sendable (String) -> Void
     ) {
         self.store = store
+        self.checkInputOwner = checkInputOwner
         self.gate = gate
-        self.files = AgentWorkflowInputFiles(directory: temporaryDirectory)
+        self.writer = AgentInputWriter(gate: gate, inspect: inspect, submit: submit)
+        self.files = AgentInputFiles(directory: temporaryDirectory)
         self.inspect = inspect
         self.configureModel = configureModel
         self.loadModels = loadModels
@@ -79,6 +84,7 @@ final class AgentWorkflowTerminalTransport {
                     throw AgentWorkflowError("The Agent changed. No continuation was sent.")
                 }
                 guard live.readiness == .ready else { return }
+                try await self.checkInputOwner(live.agentID)
                 guard let permit = try await self.store.authorizeContinuation(invocation, instance: live) else { return }
                 authorization = permit
                 try await self.submit(live, file, [], { launch in
@@ -121,12 +127,7 @@ final class AgentWorkflowTerminalTransport {
             try gate.validate(claim)
         }
         let text = invocation.delivery.input.text
-        guard
-            let limit = instance.capabilities?.maximumInputBytes, text.utf8.count <= limit,
-            !text.isEmpty,
-            text.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) || $0 == "\n" || $0 == "\t" }) else {
-            throw AgentWorkflowError("The task exceeds this Agent's input limit or contains terminal control characters. Nothing was sent.")
-        }
+        try AgentInputWriter.validate(text, instance: instance)
         var imageFiles: [URL] = []
         if !invocation.delivery.input.attachmentIDs.isEmpty {
             let attachments = try await store.invocationAttachments(invocation, instance: instance, status: .pending, now: Date())
@@ -162,52 +163,22 @@ final class AgentWorkflowTerminalTransport {
 
     private func write(_ invocation: AgentWorkflowInvocation, instance: AgentWorkflowInstance) async throws {
         guard let prepared = prepared[invocation.id] else { throw AgentWorkflowInputNotWritten(reason: "The workflow input was not prepared.") }
-        var committed = false
-        do {
-            try await gate.workflow(prepared.claim) {
-                let live = try await self.inspect(instance)
-                guard live.matchesBinding(instance), live.readiness == .ready else {
-                    throw AgentWorkflowError("The Agent changed or its input is no longer empty. Nothing was sent.")
-                }
-                let authorization = try await self.store.authorizeWrite(invocation, numberOfWrites: prepared.images.count + 1)
-                if let selection = prepared.modelSelection {
-                    try authorization.beginConfiguration()
-                    do {
-                        try await self.configureModel(live, selection, .init(claim: prepared.claim, authorization: authorization))
-                        authorization.endConfiguration()
-                    } catch {
-                        authorization.endConfiguration()
-                        throw error
-                    }
-                    let configured = try await self.inspect(instance)
-                    guard configured.matchesBinding(instance), configured.readiness == .ready else {
-                        throw AgentWorkflowError("The Agent changed or its input is no longer empty after switching models. Nothing was sent.")
-                    }
-                }
-                try Task.checkCancellation()
-                try self.gate.validate(prepared.claim)
-                try await self.submit(live, prepared.file, prepared.images, { launch in
-                    try Task.checkCancellation()
-                    try self.gate.validate(prepared.claim)
-                    try authorization.perform(launch)
-                    committed = true
-                }, { numbers in
-                    _ = try await self.store.update(runID: invocation.delivery.runID) {
-                        try $0.recordImageInput(invocationID: invocation.id, numbers: numbers, now: Date())
-                    }
-                })
+        let configure: (@MainActor @Sendable (AgentWorkflowInstance, AgentWorkflowWriteAuthorization) async throws -> Void)?
+        if let selection = prepared.modelSelection {
+            configure = { live, authorization in
+                try await self.configureModel(live, selection, .init(claim: prepared.claim, authorization: authorization))
             }
-        } catch {
-            if !committed {
-                throw AgentWorkflowInputNotWritten(reason: error.localizedDescription)
-            }
-            if !prepared.images.isEmpty, error is AgentWorkflowInputNotWritten {
-                // An earlier image paste already changed the draft. A later
-                // guarded rejection cannot make this whole input retryable.
-                throw AgentWorkflowError(error.localizedDescription)
-            }
-            throw error
+        } else {
+            configure = nil
         }
+        try await writer.write(instance: instance, file: prepared.file, images: prepared.images, claim: prepared.claim, authorize: {
+            try await self.checkInputOwner(instance.agentID)
+            return try await self.store.authorizeWrite(invocation, numberOfWrites: prepared.images.count + 1)
+        }, configure: configure, imagesReady: { numbers in
+            _ = try await self.store.update(runID: invocation.delivery.runID) {
+                try $0.recordImageInput(invocationID: invocation.id, numbers: numbers, now: Date())
+            }
+        })
     }
 
     private func discard(_ invocationID: UUID) async {
@@ -217,25 +188,5 @@ final class AgentWorkflowTerminalTransport {
                 try await files.remove(file)
             }
         } catch { onFailure("Could not remove a prepared workflow input: \(error.localizedDescription)") }
-    }
-}
-
-private actor AgentWorkflowInputFiles {
-    let directory: URL
-
-    init(directory: URL) {
-        self.directory = directory
-    }
-
-    func create(_ text: String) throws -> URL {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        let url = directory.appendingPathComponent(UUID().uuidString)
-        try Data(text.utf8).write(to: url, options: [.atomic])
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-        return url
-    }
-
-    func remove(_ url: URL) throws {
-        try FileManager.default.removeItem(at: url)
     }
 }

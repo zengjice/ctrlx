@@ -188,4 +188,28 @@ struct AgentWorkflowBridgeTests {
         await #expect(throws: (any Error).self) { try await f.record(f.event()) }
         #expect(try await f.store.bridgeIssue(for: f.instance) != nil)
     }
+
+    @Test
+    func sharedCatalogDoesNotPublishFailedWritesAndNeedsNoWorkflowLedger() async throws {
+        let f = try fixture()
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let parent = f.root.appendingPathComponent("interaction")
+        let file = parent.appendingPathComponent("bridges.json")
+        let catalog = AgentRuntimeCatalog(hostID: f.instance.hostID, bridgeFile: file) { _ in [] }
+        try Data("blocked".utf8).write(to: parent)
+        await #expect(throws: (any Error).self) {
+            try await catalog.recordBridge(f.event(), processID: f.instance.processID, runtimeID: f.instance.processRuntimeID, peer: f.peer)
+        }
+        #expect(await !catalog.hasBridgeObservation(f.event(), peer: f.peer))
+        #expect(await catalog.bridgeIssue(for: f.instance, allowsFirstSubmission: false) != nil)
+        try FileManager.default.removeItem(at: parent)
+        // The broken Workflow path is independent of the shared evidence file.
+        try Data("blocked workflow storage".utf8).write(to: f.root.appendingPathComponent("state"))
+        try await catalog.recordBridge(f.event(), processID: f.instance.processID, runtimeID: f.instance.processRuntimeID, peer: f.peer)
+        let restarted = AgentRuntimeCatalog(hostID: f.instance.hostID, bridgeFile: file) { _ in [] }
+        try await restarted.loadBridges()
+        #expect(await restarted.hasBridgeObservation(f.event(), peer: f.peer))
+        #expect(await restarted.bridgeIssue(for: f.instance, allowsFirstSubmission: false) == nil)
+        #expect(!FileManager.default.fileExists(atPath: f.root.appendingPathComponent("state/ledger.json").path))
+    }
 }

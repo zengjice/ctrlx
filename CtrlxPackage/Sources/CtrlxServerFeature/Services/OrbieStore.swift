@@ -10,14 +10,50 @@ struct OrbieRecord: Codable, Equatable, Sendable {
         var pane: WorkspacePaneIdentity?
     }
 
-    var schemaVersion = 1
+    var schemaVersion = 2
     let hostID: UUID
     var enabled = false
     var creation: Creation?
     var binding: AgentWorkflowInstance?
-    var runIDs: [UUID] = []
-    var pendingRunID: UUID?
+    var messageIDs: [UUID] = []
+    var legacyRunIDs: [UUID]?
+    var pendingMessageID: UUID?
+    var legacyPendingRunID: UUID?
     var draft = ""
+
+    init(hostID: UUID) {
+        self.hostID = hostID
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case hostID
+        case enabled
+        case creation
+        case binding
+        case messageIDs
+        case pendingMessageID
+        case draft
+        case legacyRunIDs
+        case legacyPendingRunID
+    }
+
+    private enum LegacyKeys: String, CodingKey { case runIDs, pendingRunID }
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let version = try values.decode(Int.self, forKey: .schemaVersion)
+        guard (1...2).contains(version) else { throw AgentWorkflowError("Unsupported Orbie data version.") }
+        self.hostID = try values.decode(UUID.self, forKey: .hostID)
+        self.enabled = try values.decode(Bool.self, forKey: .enabled)
+        self.creation = try values.decodeIfPresent(Creation.self, forKey: .creation)
+        self.binding = try values.decodeIfPresent(AgentWorkflowInstance.self, forKey: .binding)
+        self.draft = try values.decode(String.self, forKey: .draft)
+        self.messageIDs = try values.decodeIfPresent([UUID].self, forKey: .messageIDs) ?? []
+        self.pendingMessageID = try values.decodeIfPresent(UUID.self, forKey: .pendingMessageID)
+        let legacy = try decoder.container(keyedBy: LegacyKeys.self)
+        self.legacyRunIDs = try values.decodeIfPresent([UUID].self, forKey: .legacyRunIDs) ?? legacy.decodeIfPresent([UUID].self, forKey: .runIDs)
+        self.legacyPendingRunID = try values.decodeIfPresent(UUID.self, forKey: .legacyPendingRunID) ?? legacy.decodeIfPresent(UUID.self, forKey: .pendingRunID)
+    }
 
     var target: AgentWorkflowTarget? {
         binding?.target ?? creation?.pane.map {
@@ -32,7 +68,7 @@ struct OrbieRecord: Codable, Equatable, Sendable {
 }
 
 /// Product associations only. Delivery, acceptance and results belong to the
-/// workflow ledger, including after an interrupted Orbie operation.
+/// Agent message store, including after an interrupted operation.
 actor OrbieStore {
     let paths: CtrlxPaths
     private let hostID: UUID
@@ -54,6 +90,12 @@ actor OrbieStore {
     func save(_ record: OrbieRecord) throws {
         try validate(record)
         try FileManager.default.createDirectory(at: paths.orbieStateRoot, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        if FileManager.default.fileExists(atPath: paths.orbieBinding.path) {
+            let backup = paths.orbieBinding.appendingPathExtension("pre-3fix.backup")
+            if !FileManager.default.fileExists(atPath: backup.path) {
+                try FileManager.default.copyItem(at: paths.orbieBinding, to: backup)
+            }
+        }
         try JSONEncoder().encode(record).write(to: paths.orbieBinding, options: .atomic)
     }
 
@@ -79,10 +121,10 @@ actor OrbieStore {
 
     private func validate(_ record: OrbieRecord) throws {
         guard
-            record.schemaVersion == 1, record.hostID == hostID,
+            record.schemaVersion == 2, record.hostID == hostID,
             record.binding.map({ $0.hostID == hostID && record.creation != nil }) ?? true,
-            Set(record.runIDs).count == record.runIDs.count,
-            record.pendingRunID.map({ record.runIDs.contains($0) }) ?? true else {
+            Set(record.messageIDs).count == record.messageIDs.count,
+            record.pendingMessageID.map({ record.messageIDs.contains($0) }) ?? true else {
             throw AgentWorkflowError("The Orbie binding is invalid or belongs to another Host. Its saved data has been preserved.")
         }
     }

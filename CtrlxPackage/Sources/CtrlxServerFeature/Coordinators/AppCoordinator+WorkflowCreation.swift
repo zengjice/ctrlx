@@ -10,8 +10,8 @@ extension AppCoordinator {
     }
 
     func workflowAgentCreation(hostID: UUID, creationID: UUID? = nil, firstWindowName: String? = nil) async throws -> AgentWorkflowAgentCreation {
-        guard try await agentWorkflowService?.snapshot().hostID == hostID else {
-            throw AgentWorkflowError(agentWorkflowStartupError ?? "The workflow Host is unavailable or changed. Reload before creating an Agent.")
+        guard await agentRuntimeCatalog?.hostID == hostID else {
+            throw AgentWorkflowError(agentWorkflowStartupError ?? "The Host is unavailable or changed. Reload before creating an Agent.")
         }
         var seen: Set<UUID> = []
         let sessions = tmuxService.panes.compactMap { pane -> AgentWorkflowAgentCreation.Session? in
@@ -34,8 +34,8 @@ extension AppCoordinator {
                 let core = pluginRegistry?.core(pluginID), core is any AgentWorkflowProviding else {
                 throw AgentWorkflowError("The workflow Agent plugin is no longer available.")
             }
-            guard try await agentWorkflowService?.snapshot().hostID == hostID else {
-                throw AgentWorkflowError("The workflow Host is unavailable or changed. Reload before creating an Agent.")
+            guard await agentRuntimeCatalog?.hostID == hostID else {
+                throw AgentWorkflowError("The Host is unavailable or changed. Reload before creating an Agent.")
             }
             let shortcutDefaults = newAgentModelShortcuts(pluginID: pluginID, providerID: request.providerID)
             let paneID: String

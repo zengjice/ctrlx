@@ -182,7 +182,7 @@ struct AgentWorkflowNativeReviewLoopTests {
             return live
         }
         let gate = AgentWorkflowInputGate()
-        let transport = AgentWorkflowTerminalTransport(store: store, gate: gate, temporaryDirectory: root.appendingPathComponent("input"), inspect: inspect, submit: { instance, file, images, beforeWrite, imagesReady in
+        let submit: AgentInputWriter.Submit = { instance, file, images, beforeWrite, imagesReady in
             var terminal = try capture(fixture, instance)
             let core = try #require(cores[instance.pluginID])
             try #require(AgentWorkflowComposerInspection.readiness(terminal, composer: core.workflowComposer) == .ready)
@@ -209,7 +209,8 @@ struct AgentWorkflowNativeReviewLoopTests {
                 let result = try tmux(fixture, commands.flatMap { $0 })
                 guard !result.contains(AgentWorkflowTmuxSubmission.rejection) else { throw AgentWorkflowError("Private tmux rejected the submission.") }
             }
-        }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        }
+        let transport = AgentWorkflowTerminalTransport(store: store, gate: gate, temporaryDirectory: root.appendingPathComponent("input"), inspect: inspect, submit: submit, onFailure: { Issue.record(Comment(rawValue: $0)) })
         let runner = AgentWorkflowRunner(store: store, transport: transport.transport, onFailure: { Issue.record(Comment(rawValue: $0)) })
         let receiptReader = CodexProcessSessionReader()
         let inspectConversation: @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance = { instance in
@@ -224,11 +225,35 @@ struct AgentWorkflowNativeReviewLoopTests {
         }
         let router = AgentWorkflowEventRouter(store: store, runner: runner, inspect: inspectConversation)
         let monitor = AgentWorkflowCompletionMonitor(store: store, runner: runner, inspect: inspectConversation, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let catalog = AgentRuntimeCatalog(hostID: hostID) { previous in
+            var result: [AgentWorkflowObservation] = []
+            for original in instances {
+                let current = previous.first { $0.matchesProcess(original) } ?? original
+                try result.append(AgentWorkflowObservation(await inspect(current)))
+            }
+            return result
+        }
+        let interaction = AgentMessageService(
+            store: AgentMessageStore(directory: root.appendingPathComponent("messages")),
+            catalog: catalog,
+            writer: AgentInputWriter(gate: gate, inspect: inspect, submit: submit),
+            temporaryDirectory: root.appendingPathComponent("message-input"),
+            inspect: inspectConversation,
+            occupied: { _ in nil },
+            provider: { cores[$0] },
+            onFailure: { Issue.record(Comment(rawValue: $0)) }
+        )
+        if orbie {
+            try await interaction.start()
+        }
         let dispatcher = PluginEventDispatcher(onWorkflow: { event, peer in
             do {
                 if let instance = instances.first(where: { $0.paneID == event.tmuxPane && $0.pluginID == event.pluginID }) {
                     guard try processRuntime(instance.processID) == instance.processRuntimeID else { return }
                     try await store.recordBridge(event, processID: instance.processID, runtimeID: instance.processRuntimeID, peer: peer)
+                }
+                if orbie {
+                    try await interaction.receive(event, peer: peer)
                 }
                 if let context = try await router.receive(event, peer: peer), let core = cores[event.pluginID] {
                     await monitor.verify(context, provider: core)
@@ -273,7 +298,8 @@ struct AgentWorkflowNativeReviewLoopTests {
             }
             try #require(ready, "Native hooks did not become ready.")
             if orbie {
-                try await verifyOrbie(fixture: fixture, hostID: hostID, store: store, runner: runner, inspect: inspect)
+                try await verifyOrbie(fixture: fixture, hostID: hostID, store: store, interaction: interaction)
+                await interaction.shutdown()
                 await runner.shutdown()
                 await router.shutdown()
                 await monitor.shutdown()
@@ -347,6 +373,7 @@ struct AgentWorkflowNativeReviewLoopTests {
                 #expect(try processRuntime(instance.processID) == instance.processRuntimeID)
             }
         } catch {
+            await interaction.shutdown()
             await runner.shutdown()
             await router.shutdown()
             await monitor.shutdown()
@@ -362,51 +389,42 @@ struct AgentWorkflowNativeReviewLoopTests {
     }
 
     private func verifyOrbie(
-        fixture: Fixture, hostID: UUID, store: AgentWorkflowStore, runner: AgentWorkflowRunner,
-        inspect: @escaping @MainActor @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance
+        fixture: Fixture, hostID: UUID, store: AgentWorkflowStore, interaction: AgentMessageService
     ) async throws {
-        let workflows = AgentWorkflowService(store: store, scan: { previous in
-            var observations: [AgentWorkflowObservation] = []
-            for instance in previous {
-                try observations.append(AgentWorkflowObservation(await inspect(instance)))
-            }
-            return observations
-        }, schedule: { await runner.schedule(runID: $0) })
         for agent in fixture.agents {
             let instance = try #require(await store.snapshot().instances.first { $0.pluginID == agent.pluginID })
             let paths = CtrlxPaths(stateRootOverride: URL(fileURLWithPath: fixture.root).appendingPathComponent("orbie-\(agent.pluginID)/state"))
             let storage = OrbieStore(paths: paths, hostID: hostID)
-            let orbie = OrbieService(store: storage, workflows: workflows, launch: { _ in instance.workspacePane }, locateCreation: { _ in instance.workspacePane })
+            let orbie = OrbieService(store: storage, interaction: interaction, launch: { _ in instance.workspacePane }, locateCreation: { _ in instance.workspacePane })
             await orbie.refresh()
             try await orbie.create(pluginID: agent.pluginID, providerID: "loopback-fixture")
             for question in ["First Orbie question", "Next Orbie question"] {
                 orbie.draft = question
                 await orbie.send()
                 try #require(orbie.issue == nil, Comment(rawValue: orbie.issue ?? ""))
-                let id = try #require(orbie.record?.runIDs.last)
+                let id = try #require(orbie.record?.messageIDs.last)
                 var finished = false
                 for _ in 0..<300 {
                     await orbie.refresh(inspect: false)
-                    let run = try #require(orbie.runs.first { $0.id == id })
-                    if run.status == .completed {
-                        #expect(run.invocations.count == 1)
-                        #expect(run.invocations[0].result?.text == "RECOVERY_IDLE_FIXTURE")
+                    let run = try #require(orbie.messages.first { $0.id == id })
+                    if run.status == .succeeded {
+                        #expect(run.answer == "RECOVERY_IDLE_FIXTURE")
                         finished = true
                         break
                     }
-                    try #require(run.status != .paused, Comment(rawValue: run.issue ?? "Paused"))
+                    try #require(run.status != .failed && run.status != .uncertain, Comment(rawValue: run.issue ?? "Paused"))
                     try await Task.sleep(for: .milliseconds(100))
                 }
                 try #require(finished, "Orbie did not receive a verified native result")
             }
             let count = try await store.snapshot().runs.count
-            let reopened = OrbieService(store: storage, workflows: workflows, launch: { _ in
+            let reopened = OrbieService(store: storage, interaction: interaction, launch: { _ in
                 Issue.record("Reopening must not create another Agent")
                 return instance.workspacePane
             }, locateCreation: { _ in instance.workspacePane })
             await reopened.refresh()
             #expect(reopened.record?.binding == orbie.record?.binding)
-            #expect(reopened.runs.count == 2)
+            #expect(reopened.messages.count == 2)
             #expect(try await store.snapshot().runs.count == count)
 
             // Human input is entered only into this fixture's private pane.
@@ -443,15 +461,16 @@ struct AgentWorkflowNativeReviewLoopTests {
             reopened.draft = "Retained while waiting for approval"
             await reopened.send()
             #expect(reopened.draft == "Retained while waiting for approval")
-            #expect(try await store.snapshot().runs.count == count + 1)
+            #expect(try await store.snapshot().runs.count == count)
             #expect(!FileManager.default.fileExists(atPath: URL(fileURLWithPath: fixture.root).appendingPathComponent("\(agent.pluginID)-marker").path))
-            let active = try #require(reopened.runs.last)
+            let active = try #require(reopened.messages.last)
             await reopened.endMessage(active)
-            #expect(reopened.runs.last?.status == .ended)
+            #expect(reopened.messages.last?.status == .cancelled)
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let archive = try await store.snapshot()
+        #expect(archive.runs.isEmpty && archive.definitions.isEmpty)
         try encoder.encode(archive).write(to: URL(fileURLWithPath: fixture.root).appendingPathComponent("orbie-native-ledger.json"))
     }
 }

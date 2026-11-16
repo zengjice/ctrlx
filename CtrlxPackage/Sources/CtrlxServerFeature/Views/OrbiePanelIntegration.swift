@@ -28,8 +28,8 @@ extension AppCoordinator {
         orbiePanel.show()
     }
 
-    func openOrbiterTask(_ id: UUID, openWindow: OpenWindowAction) async throws {
-        let pane = try await resolveOrbiterTaskPane(id)
+    func openOrbiter(_ id: String, openWindow: OpenWindowAction) async throws {
+        let pane = try await resolveOrbiterPane(id)
         orbiePanel.dismiss(restoreFocus: false)
         NSApp.activate()
         detachedWindows.sourcePaneRequest = .init(hostID: nil, pane: pane)
@@ -43,14 +43,30 @@ extension AppCoordinator {
         }
     }
 
-    func resolveOrbiterTaskPane(_ id: UUID) async throws -> PaneState {
-        guard let orbiters else { throw AgentWorkflowError("Tasks are still starting on this Mac.") }
+    func openOrbieWorkflow(_ id: UUID, openWindow: OpenWindowAction) async throws {
+        guard let workflow = agentWorkflowService, let paths = ctrlxPaths, let hostID = agentRuntimeCatalog?.hostID else {
+            throw AgentWorkflowError("Workflows are unavailable.")
+        }
+        let main = try await OrbieStore(paths: paths, hostID: hostID).load()
+        let agents = try await OrbiterStore(paths: paths, hostID: hostID).load()
+        let archive = try await workflow.snapshot(refreshInstances: true)
+        let targets = Set(agents.agents.compactMap(\.agentID) + [main.target?.agentID].compactMap { $0 })
+        guard archive.hostID == hostID, OrbieAgentCatalog.associatedWorkflows(archive, targets: targets, instances: archive.instances).contains(where: { $0.id == id }) else {
+            throw AgentWorkflowError("This Workflow is no longer associated with Orbie or its Orbiters.")
+        }
+        orbiePanel.dismiss(restoreFocus: false)
+        workflowNavigation.path = [.host("local"), .configuration(route: "local", hostID: hostID, id: id)]
+        openWindow(id: "workflows")
+    }
+
+    func resolveOrbiterPane(_ id: String) async throws -> PaneState {
+        guard let orbiters else { throw AgentWorkflowError("Orbiters are still starting on this Mac.") }
         windowManager.updatePaneStates(from: await tmuxService.refreshPanes())
-        let task = try await orbiters.taskForNavigation(id)
+        let task = try await orbiters.recordForNavigation(id)
         guard
             let identity = task.binding?.workspacePane ?? task.pane,
             let pane = windowManager.paneStates.values.first(where: { $0.workspaceIdentity?.isSamePane(as: identity) == true }) else {
-            throw AgentWorkflowError("This task’s original terminal is unavailable. Open its saved details and use the existing Resume or Use Shell controls. No task was resent.")
+            throw AgentWorkflowError("This Agent’s original terminal is unavailable. Open its saved details and use the existing Resume or Use Shell controls. No message was resent.")
         }
         return pane
     }

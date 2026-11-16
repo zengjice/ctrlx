@@ -59,9 +59,9 @@ struct ClaudeWorkflowTranscriptTests {
         ].merging(extra) { _, value in value })
     }
 
-    @Test
-    func rejectedSubmissionRequiresNativeMetadataAndTheCompleteInvocationInput() throws {
-        let prompt = "$review-changes\nReview this task.\n[CtrlX workflow invocation: 6E81E042-A0E6-4C94-B718-41A79C17F1D8]"
+    @Test(arguments: ["workflow invocation", "message"])
+    func rejectedSubmissionRequiresNativeMetadataAndTheCompleteInvocationInput(marker: String) throws {
+        let prompt = "$review-changes\nReview this task.\n[CtrlX \(marker): 6E81E042-A0E6-4C94-B718-41A79C17F1D8]"
         let fields: [String: Any] = [
             "type": "system", "subtype": "informational", "preventContinuation": true,
             "content": "UserPromptSubmit operation blocked by hook:\n[fixture]: Not allowed.\n\n\nOriginal prompt: " + prompt,

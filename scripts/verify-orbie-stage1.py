@@ -37,7 +37,11 @@ def main():
     monitors = []
     stopping = threading.Event()
     agents = []
-    report = {"fixture_root": str(root), "provider": "synthetic loopback models; no user credentials", "passed": False}
+    launches = {}
+    report = {"fixture_root": str(root), "provider": "synthetic loopback models; no user credentials", "passed": False,
+              "hook_versions": {name: json.loads((REPO / manifest).read_text())["version"] for name, manifest in {
+                  "codex": "plugin/codex/ctrlx-hooks/.codex-plugin/plugin.json",
+                  "claude-code": "plugin/ctrlx-hooks/.claude-plugin/plugin.json"}.items()}}
     print(f"Private fixture: {root}", flush=True)
 
     def run(*arguments, env=None):
@@ -99,6 +103,7 @@ trust_level = "trusted"
                 (config / ".claude.json").write_text(json.dumps({"hasCompletedOnboarding": True, "theme": "dark", "projects": {str(project): {"hasTrustDialogAccepted": True}}}))
                 (config / "settings.json").write_text(json.dumps(hooks))
                 arguments = [cli, "--session-id", conversation, "--model", "claude-sonnet-4-5"]
+            launches[plugin] = (env.copy(), arguments.copy())
             version = run(cli, "--version", env=env).strip()
             command = 'exec /usr/bin/env -i TMUX_PANE="$TMUX_PANE" ' + shlex.join([f"{key}={value}" for key, value in env.items()] + arguments)
             pane = mux("new-session", "-d", "-P", "-F", "#{pane_id}", "-s", plugin, "-x", "120", "-y", "40", "-c", str(project), "/bin/sleep 300").strip()
@@ -128,6 +133,41 @@ trust_level = "trusted"
         with (output / "native-tests.log").open("w") as log:
             subprocess.run([str(REPO / "scripts/unit-tests.sh"), "--", "--no-parallel", "--filter", "AgentWorkflowNativeReviewLoopTests.nativeOrbieFirstAndNextMessages"], cwd=REPO, env=environment, stdout=log, stderr=subprocess.STDOUT, timeout=600, check=True)
         shutil.copyfile(root / "orbie-native-ledger.json", output / "native-ledger.json")
+        # Close the actual private tabs, then resume the exact native conversations.
+        # Ordinary message records retain the verified CID; never choose "latest".
+        messages = [json.loads(path.read_text()) for path in (root / "messages").glob("*.json")]
+        restored = []
+        for agent in agents:
+            plugin = agent["pluginID"]
+            message = next(item for item in messages if item["instance"]["pluginID"] == plugin and item["status"] == "succeeded")
+            conversation = message["instance"]["conversationID"]
+            if not conversation:
+                raise RuntimeError(f"{plugin} has no verified conversation")
+            env, arguments = launches[plugin]
+            if plugin == "codex":
+                arguments += ["resume", conversation]
+            else:
+                index = arguments.index("--session-id")
+                arguments[index:index + 2] = ["--resume", conversation]
+            original_pane = agent["paneID"]
+            mux("kill-window", "-t", original_pane)
+            command = 'exec /usr/bin/env -i TMUX_PANE="$TMUX_PANE" ' + shlex.join([f"{key}={value}" for key, value in env.items()] + arguments)
+            pane = mux("new-session", "-d", "-P", "-F", "#{pane_id}", "-s", plugin + "-restored", "-x", "120", "-y", "40", "-c", str(project), command).strip()
+            agent["paneID"] = pane
+            agent["processID"] = int(mux("display-message", "-p", "-t", pane, "#{pane_pid}").strip())
+            agent["conversationID"] = conversation
+            if pane == original_pane:
+                raise RuntimeError("Resume reused the closed pane")
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                text = mux("capture-pane", "-p", "-S", "-200", "-t", pane)
+                if "RECOVERY_IDLE_FIXTURE" in text:
+                    break
+                time.sleep(0.2)
+            else:
+                raise RuntimeError(f"{plugin} did not restore its saved reply: {text}")
+            restored.append({"plugin": plugin, "conversation": conversation, "oldPane": original_pane, "newPane": pane})
+        report["restored_conversations"] = restored
         report["passed"] = True
     finally:
         stopping.set()

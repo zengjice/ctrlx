@@ -182,6 +182,7 @@ public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendabl
     public var creationSession: AgentWorkflowSessionReference?
     public var participants: [AgentWorkflowParticipant]?
     public var agentTargets: [UUID: AgentWorkflowTarget]?
+    public var tags: [String]?
 
     public init(
         id: UUID = UUID(),

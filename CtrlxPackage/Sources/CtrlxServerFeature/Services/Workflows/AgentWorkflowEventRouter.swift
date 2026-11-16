@@ -85,8 +85,7 @@ actor AgentWorkflowEventRouter {
         guard
             !stopped,
             let process = archive.instances.first(where: {
-                $0.pluginID == event.pluginID && $0.paneID == event.tmuxPane
-                    && peer.contains(processID: $0.processID, runtimeID: $0.processRuntimeID)
+                AgentReplyEvidence.owns(event, instance: $0, peer: peer)
             }) else { return nil }
         var observed = process
         observed.conversationID = event.sessionID
@@ -147,8 +146,7 @@ actor AgentWorkflowEventRouter {
             case .submitted:
                 if
                     let invocation = invocations.first(where: {
-                        $0.submissionText(pluginID: instance.pluginID) == native.text
-                            && ($0.nativeTurnID == nil || $0.nativeTurnID == native.nativeTurnID)
+                        AgentReplyEvidence.submission(native, prompt: $0.submissionText(pluginID: instance.pluginID), acceptedTurnID: $0.nativeTurnID)
                             && [.writing, .awaitingAcceptance, .uncertain, .running, .succeeded, .failed].contains($0.status)
                     }) {
                     // A failed attempt is immutable; its duplicate receipt must not interrupt a retry.
@@ -192,7 +190,7 @@ actor AgentWorkflowEventRouter {
                  .stopCandidate:
                 guard
                     let invocation = invocations.first(where: {
-                        $0.resultTurnID == native.nativeTurnID && $0.resultTranscriptPath == native.transcriptPath
+                        AgentReplyEvidence.turn(native, id: $0.resultTurnID, path: $0.resultTranscriptPath)
                             && [.running, .uncertain].contains($0.status)
                     }) else { continue }
                 let live = native.kind == .failed ? try await inspect(instance) : instance

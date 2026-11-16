@@ -29,7 +29,7 @@
             }
         }
 
-        @Test(.timeLimit(.minutes(1)), arguments: ["workflow.finish", "workflow.completeStep", "workflow.attachments", "orbie.tasks.list", "orbie.tasks.show"])
+        @Test(.timeLimit(.minutes(1)), arguments: ["workflow.finish", "workflow.completeStep", "workflow.attachments", "orbie.agents.list", "orbie.agents.show", "orbie.workflows.list", "orbie.workflows.show"])
         func socketSuppliesKernelIdentitySeparatelyFromClaimedJSON(method: String) async throws {
             try await withDependencies {
                 $0[PluginIngressPeerClient.self] = .liveValue

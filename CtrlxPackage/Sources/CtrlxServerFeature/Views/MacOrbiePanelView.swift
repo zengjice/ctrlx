@@ -17,7 +17,7 @@ public struct MacOrbiePanelView: View {
             HStack {
                 Label("Orbie", symbol: .sparkles).font(.title2.bold())
                 Spacer()
-                Button("All Tasks…") { openFull(tasks: true) }.accessibilityIdentifier("orbie-panel-tasks")
+                Button("Orbiters…") { openFull(tasks: true) }.accessibilityIdentifier("orbie-panel-tasks")
                 Button { coordinator.orbiePanel.dismiss(restoreFocus: true) } label: { Label("Close", symbol: .xmark) }
                     .labelStyle(.iconOnly).accessibilityIdentifier("orbie-panel-close")
             }
@@ -31,16 +31,16 @@ public struct MacOrbiePanelView: View {
             }
             Divider()
             HStack {
-                TextField("Find saved tasks by name or project", text: $query).textFieldStyle(.roundedBorder).accessibilityIdentifier("orbie-panel-search")
+                TextField("Find Orbiters by name or project", text: $query).textFieldStyle(.roundedBorder).accessibilityIdentifier("orbie-panel-search")
                 Button { Task { await coordinator.orbiters?.refresh() } } label: { Label("Refresh", symbol: .arrowClockwise) }.labelStyle(.iconOnly)
             }
             if let orbiters = coordinator.orbiters {
-                let catalog = OrbieTaskCatalog.summaries(tasks: orbiters.tasks, runs: orbiters.runs, instances: orbiters.instances)
-                let recent = OrbieTaskCatalog.search(catalog, query: query, limit: 5)
+                let catalog = OrbieAgentCatalog.summaries(agents: orbiters.agents, messages: orbiters.messages, instances: orbiters.instances)
+                let recent = OrbieAgentCatalog.search(catalog, query: query, limit: 5)
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 8) {
                         if recent.isEmpty {
-                            Text("No saved tasks match. Only tasks created here or explicitly associated are listed.").foregroundStyle(.secondary)
+                            Text("No Orbiters match. Only Agents created here or explicitly associated are listed.").foregroundStyle(.secondary)
                         }
                         ForEach(recent) { task in taskRow(task) }
                     }
@@ -81,21 +81,33 @@ public struct MacOrbiePanelView: View {
             if orbie.record?.enabled != true || orbie.record?.creation == nil {
                 Button("Set Up Orbie…") { openFull(tasks: false) }.accessibilityIdentifier("orbie-panel-setup")
             }
+            if orbie.tabClosed {
+                Button("Restore Original Conversation") { Task { await orbie.restoreOriginalConversation() } }.disabled(orbie.isBusy)
+            }
             if let availability = orbie.availability {
                 Text(availability).font(.caption).foregroundStyle(.secondary)
             }
-            if let result = orbie.runs.last?.invocations.last?.result {
+            if let answer = orbie.messages.last?.answer {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(OrbieTaskCatalog.displayAnswer(OrbieTaskCatalog.bounded(result.text, bytes: 8_000))).textSelection(.enabled)
-                        let ids = OrbieTaskCatalog.candidates(in: result.text)
+                        Text(OrbieAgentCatalog.displayAnswer(OrbieAgentCatalog.bounded(answer, bytes: 8_000))).textSelection(.enabled)
+                        let ids = OrbieAgentCatalog.candidates(in: answer)
                         ForEach(ids, id: \.self) { id in
                             if
                                 let orbiters = coordinator.orbiters,
-                                let task = OrbieTaskCatalog.summaries(tasks: orbiters.tasks, runs: orbiters.runs, instances: orbiters.instances).first(where: { $0.id == id }) {
+                                let task = OrbieAgentCatalog.summaries(agents: orbiters.agents, messages: orbiters.messages, instances: orbiters.instances).first(where: { $0.id == id }) {
                                 taskRow(task)
                             } else {
-                                Text("A suggested task is no longer available in the saved task list.").foregroundStyle(.secondary)
+                                Text("A suggested Agent is no longer in the Orbiter list.").foregroundStyle(.secondary)
+                            }
+                        }
+                        ForEach(OrbieAgentCatalog.workflowCandidates(in: answer), id: \.self) { id in
+                            Button("Open Suggested Workflow") {
+                                Task {
+                                    do { try await coordinator.openOrbieWorkflow(id, openWindow: openWindow)
+                                        notice = nil
+                                    } catch { notice = error.localizedDescription }
+                                }
                             }
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)
@@ -114,7 +126,7 @@ public struct MacOrbiePanelView: View {
         }
     }
 
-    private func taskRow(_ task: OrbieTaskSummary) -> some View {
+    private func taskRow(_ task: OrbieAgentSummary) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(task.title).font(.headline)
@@ -124,17 +136,17 @@ public struct MacOrbiePanelView: View {
             Text(task.state.replacingOccurrences(of: "_", with: " ")).font(.caption).foregroundStyle(.secondary)
             Button("Open Tab") {
                 Task {
-                    do { try await coordinator.openOrbiterTask(task.id, openWindow: openWindow)
+                    do { try await coordinator.openOrbiter(task.id, openWindow: openWindow)
                         notice = nil
                     } catch { notice = error.localizedDescription }
                 }
-            }.accessibilityIdentifier("orbie-task-open-\(task.id.uuidString)")
+            }.accessibilityIdentifier("orbie-task-open-\(task.id)")
         }.frame(maxWidth: .infinity)
     }
 
     private func openFull(tasks: Bool) {
         coordinator.orbiePanel.dismiss(restoreFocus: false)
-        coordinator.showsOrbieTasksRequested = tasks
+        coordinator.showsOrbitersRequested = tasks
         openWindow(id: "orbie")
     }
 }

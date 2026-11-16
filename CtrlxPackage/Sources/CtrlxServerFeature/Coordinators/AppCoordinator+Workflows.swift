@@ -31,10 +31,16 @@ extension AppCoordinator {
         do {
             @Dependency(HostIdentityClient.self) var identity
             let hostID = try await identity.load()
+            let gate = AgentWorkflowInputGate()
+            try await setupAgentInteraction(hostID: hostID, paths: paths, gate: gate)
             let store = AgentWorkflowStore(
                 fileURL: paths.stateRoot.appendingPathComponent("Workflows/ledger.json"), hostID: hostID
             )
-            _ = try await store.snapshot()
+            let original = try await store.snapshot()
+            try await agentRuntimeCatalog?.seedBridges(original.bridgeEvidence ?? [])
+            if let messages = agentMessages {
+                try await OrbieInteractionMigration.migrate(orbie: OrbieStore(paths: paths, hostID: hostID), orbiters: OrbiterStore(paths: paths, hostID: hostID), workflows: store, messages: messages.store)
+            }
             try await store.recoverAttachmentStorage()
             agentWorkflowStore = store
             agentWorkflowAgentService = AgentWorkflowAgentService(store: store, inspect: { [weak self] instance in
@@ -47,7 +53,6 @@ extension AppCoordinator {
                 guard let service = await self?.agentWorkflowService else { throw AgentWorkflowError("The Host's workflow service is unavailable.") }
                 _ = try await service.refreshInstancesCatalog()
             })
-            let gate = AgentWorkflowInputGate()
             let delivery = AgentWorkflowTerminalTransport(
                 store: store, gate: gate,
                 temporaryDirectory: paths.stateRoot.appendingPathComponent("Workflows/input"),
@@ -55,6 +60,7 @@ extension AppCoordinator {
                     guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
                     return try await inspectWorkflowInput(instance)
                 },
+                checkInputOwner: { [weak self] id in try await self?.checkAgentMessageOccupancy(id) },
                 loadModels: { [weak self] instance in
                     guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
                     _ = try await inspectWorkflowInstance(instance)
@@ -83,10 +89,11 @@ extension AppCoordinator {
             )
             let runner = AgentWorkflowRunner(store: store, transport: delivery.transport, onFailure: { workflowLogger.error("\($0)") })
             agentWorkflowRunner = runner
-            agentWorkflowService = AgentWorkflowService(store: store, scan: { [weak self] previous in
+            agentWorkflowService = AgentWorkflowService(store: store, scan: { [weak self] _ in
                 guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
-                return try await scanWorkflowInstances(previous: previous, hostID: hostID)
-            }, schedule: { await runner.schedule(runID: $0) }, resumeStep: { try await delivery.resumeStep($0, instance: $1) }, models: { [weak self] instance, refresh in
+                guard let catalog = await self.agentRuntimeCatalog else { throw AgentWorkflowError("The Agent directory is unavailable.") }
+                return try await catalog.snapshot(refresh: true).map(AgentWorkflowObservation.init)
+            }, schedule: { await runner.schedule(runID: $0) }, checkInputOwner: { [weak self] id in try await self?.checkAgentMessageOccupancy(id) }, resumeStep: { try await delivery.resumeStep($0, instance: $1) }, models: { [weak self] instance, refresh in
                 guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
                 _ = try await inspectWorkflowInstance(instance)
                 let snapshot = try await handleAgentModels(.init(workspacePane: instance.workspacePane, refresh: refresh), paneID: instance.paneID)
@@ -106,27 +113,25 @@ extension AppCoordinator {
             }, onFailure: { workflowLogger.error("\($0)") })
             tmuxService.workflowInputGate = gate
             controlClientManager.workflowInputGate = gate
-            if let agentWorkflowService {
-                setupOrbie(hostID: hostID, paths: paths, workflows: agentWorkflowService)
-                setupOrbiters(hostID: hostID, paths: paths, workflows: agentWorkflowService)
-                orbieTaskQueries = OrbieTaskQueryService(
-                    orbie: OrbieStore(paths: paths, hostID: hostID), tasks: OrbiterStore(paths: paths, hostID: hostID), workflows: agentWorkflowService
-                ) { [weak self] instance in
-                    guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
-                    return try await inspectWorkflowInstance(instance, verifyNativeWriter: true)
-                }
-                await orbie?.refresh(inspect: false)
-            }
+
         } catch {
             agentWorkflowStartupError = "Could not load workflows on this Mac: \(error.localizedDescription)"
             workflowLogger.error("Could not load workflow storage: \(error)")
         }
+        if let messages = agentMessages, let hostID = await agentRuntimeCatalog?.hostID {
+            do { try await activateAgentInteraction(hostID: hostID, paths: paths, messages: messages) }
+            catch { workflowLogger.error("Could not load Agent conversations: \(error)") }
+        }
     }
 
     func stopAgentWorkflows() async {
+        await agentMessages?.shutdown()
+        agentMessages = nil
+        agentRuntimeCatalog = nil
+        agentRoleRecovery = nil
         await orbiters?.shutdown()
         orbiters = nil
-        orbieTaskQueries = nil
+        orbieQueries = nil
         await orbie?.saveDraft()
         orbie = nil
         await agentWorkflowService?.shutdown()
@@ -146,6 +151,7 @@ extension AppCoordinator {
     func handleAgentWorkflowEvent(_ event: PluginEvent, peer: PluginIngressPeer) async {
         do {
             try await recordWorkflowBridge(event, peer: peer)
+            try await agentMessages?.receive(event, peer: peer)
             if
                 event.workflow != nil, let store = agentWorkflowStore,
                 try await !store.snapshot().instances.contains(where: {
@@ -203,7 +209,8 @@ extension AppCoordinator {
             live.readiness = .draft
         } else {
             @Dependency(AgentSessionIdentityClient.self) var identities
-            let allowsInitialBinding = try await agentWorkflowStore?.allowsInitialConversationBinding(for: live) == true
+            let workflowAllowsBinding = try await agentWorkflowStore?.allowsInitialConversationBinding(for: live) == true
+            let allowsInitialBinding = live.pluginID == "codex" && live.conversationID.isEmpty || workflowAllowsBinding
             let issue = await identities.workflowInputIssue(for: live, allowsInitialBinding: allowsInitialBinding)
             try Task.checkCancellation()
             if let issue {
@@ -276,8 +283,8 @@ extension AppCoordinator {
             live.capabilityIssue = "Cannot inspect this Agent's CLI: \(error.localizedDescription)"
         }
         if live.capabilityIssue == nil {
-            guard let store = agentWorkflowStore else { throw AgentWorkflowError("Workflow storage is not ready.") }
-            live.capabilityIssue = try await store.bridgeIssue(for: live, allowsFirstSubmission: !verifyNativeWriter)
+            guard let catalog = await agentRuntimeCatalog else { throw AgentWorkflowError("The Agent directory is not ready.") }
+            live.capabilityIssue = await catalog.bridgeIssue(for: live, allowsFirstSubmission: !verifyNativeWriter)
         }
         live.capabilities = live.capabilityIssue == nil ? provider.workflowCapabilities : nil
         if live.capabilityIssue != nil {

@@ -4,8 +4,8 @@ import Dependencies
 import Foundation
 
 extension AppCoordinator {
-    func setupOrbiters(hostID: UUID, paths: CtrlxPaths, workflows: AgentWorkflowService) {
-        orbiters = OrbiterService(store: OrbiterStore(paths: paths, hostID: hostID), workflows: workflows, enabled: { [weak self] in
+    func setupOrbiters(hostID: UUID, paths: CtrlxPaths, interaction: AgentMessageService) {
+        orbiters = OrbiterService(store: OrbiterStore(paths: paths, hostID: hostID), interaction: interaction, recovery: agentRoleRecovery, enabled: { [weak self] in
             self?.orbie?.record?.enabled == true
         }, forkSource: { [weak self] in
             guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
@@ -13,7 +13,7 @@ extension AppCoordinator {
         }, launch: { [weak self] task in
             guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
             let created: AgentWorkflowCreatedAgent
-            if task.origin == .fork {
+            if task.forkSource != nil {
                 let current = try await readyOrbieForkSource()
                 guard
                     task.forkSource?.matchesBinding(current) == true,
@@ -43,7 +43,6 @@ extension AppCoordinator {
             guard result.isSuccess else { throw AgentWorkflowError(result.stderrString) }
             return try OrbieCreationEvidence.locate(id, output: result.stdoutString)
         })
-        orbiters?.startObserving()
     }
 
     static func orbiterCreatedPane(_ created: AgentWorkflowCreatedAgent, panes: [PaneInfo]) throws -> WorkspacePaneIdentity {
@@ -59,7 +58,7 @@ extension AppCoordinator {
     func validateOrbiterFork(_ creationID: UUID, source: AgentForkSource) async throws {
         let current = try await readyOrbieForkSource()
         guard
-            let expected = orbiters?.tasks.first(where: { $0.id == creationID })?.forkSource,
+            let expected = orbiters?.agents.first(where: { $0.creation?.id == creationID })?.creation?.forkSource,
             expected.matchesBinding(current), current.paneID == source.paneID,
             current.conversationID == source.sessionID, current.workspacePane == source.workspaceIdentity else {
             throw AgentWorkflowError("The Orbie process or conversation changed before Fork. The task draft is kept.")

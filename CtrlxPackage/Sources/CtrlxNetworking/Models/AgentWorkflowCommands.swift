@@ -26,6 +26,12 @@ public enum AgentWorkflowWire {
 
     public static func validate(_ definition: AgentWorkflowDefinition) throws {
         try definition.validate()
+        let tags = definition.tags ?? []
+        guard
+            tags.count <= 8, Set(tags.map { $0.lowercased() }).count == tags.count,
+            tags.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 32 && $0 == $0.trimmingCharacters(in: .whitespacesAndNewlines) && !$0.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) }) else {
+            throw AgentWorkflowError("Use up to 8 distinct tags, each up to 32 UTF-8 bytes, without blank tags or control characters.")
+        }
         guard
             definition.nodes.count <= maximumNodes,
             definition.agents.count <= maximumNodes,
@@ -120,12 +126,14 @@ public struct AgentWorkflowDefinitionSummary: Codable, Equatable, Identifiable, 
     public let name: String
     public let revision: Int
     public let nodeCount: Int
+    public let tags: [String]?
 
     public init(_ definition: AgentWorkflowDefinition) {
         self.id = definition.id
         self.name = definition.name
         self.revision = definition.revision
         self.nodeCount = definition.nodes.count
+        self.tags = definition.tags
     }
 }
 

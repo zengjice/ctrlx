@@ -8,9 +8,9 @@ extension AppCoordinator {
         @Dependency(AgentSessionIdentityClient.self) var identities
         guard
             event.workflowBridgeVersion != nil, let paneID = event.tmuxPane,
-            let store = agentWorkflowStore, let registry = pluginRegistry,
+            let catalog = agentRuntimeCatalog, let registry = pluginRegistry,
             registry.core(event.pluginID) is any AgentWorkflowProviding else { return }
-        guard try await !store.hasBridgeObservation(event, peer: peer) else { return }
+        guard await !catalog.hasBridgeObservation(event, peer: peer) else { return }
         guard
             let detected = await tmuxService.detectAgentPanesIfAvailable(
                 processNamesByPlugin: registry.processNamesByPlugin, refreshSnapshot: true
@@ -19,7 +19,7 @@ extension AppCoordinator {
             candidate.processIDs.count == 1,
             let process = candidate.processIDs.first, let pid = Int32(process),
             let runtime = identities.runtimeID(process) else { return }
-        try await store.recordBridge(event, processID: pid, runtimeID: runtime, peer: peer)
+        try await catalog.recordBridge(event, processID: pid, runtimeID: runtime, peer: peer)
     }
 
     func scanWorkflowInstances(previous: [AgentWorkflowInstance], hostID: UUID) async throws -> [AgentWorkflowObservation] {
@@ -29,7 +29,7 @@ extension AppCoordinator {
         guard
             let detected = await tmuxService.detectAgentPanesIfAvailable(
                 processNamesByPlugin: registry.processNamesByPlugin, refreshSnapshot: true
-            ) else { throw AgentWorkflowError("Cannot inspect Agent processes. The previous catalog was retained.") }
+            ) else { throw AgentWorkflowInspectionUnavailable() }
 
         var observations: [AgentWorkflowObservation] = []
         for paneID in detected.keys.sorted() {

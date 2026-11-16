@@ -640,6 +640,10 @@ final public class TmuxService {
         return !FileManager.default.fileExists(atPath: path)
     }
 
+    func confirmedNoServer(_ result: ProcessResult) -> Bool {
+        !result.isSuccess && (isNoServerError(result.stderrString) || (isConnectionError(result.stderrString) && isServerSocketMissing))
+    }
+
     // MARK: - tmux Commands
 
     /// Refreshes the list of available panes across all sessions.

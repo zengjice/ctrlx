@@ -1,41 +1,46 @@
 # Orbie 实施计划
 
-日期：2026-11-13。源码基线：`dddc4b0c`（CtrlX 3.0.162）。依据：[Orbie 设计方案](../../global-agent-design.md)。状态：**阶段 1–3 已实现并通过定向单测、Mac 编译及本机隔离验收；阶段 4–6 未开始**。具体完成项、命令与未测边界见 [STAGE1_TODO.md](STAGE1_TODO.md)、[STAGE2_TODO.md](STAGE2_TODO.md) 和 [STAGE3_TODO.md](STAGE3_TODO.md)。
+初版日期：2026-11-13，源码基线：`dddc4b0c`（CtrlX 3.0.162）。阶段 3-Fix 修订：2026-11-14，源码基线：`7d2737e1`。依据：[Orbie 设计方案](../../global-agent-design.md)及本轮已确认的 Agent／Workflow 职责调整。状态：**阶段 1–3 已实现并通过当时的定向单测、Mac 编译及本机隔离验收；阶段 3-Fix 源码已落地，自动化／真实 CLI／隔离启动及 Mac、iOS device 编译通过；实机 UI 边界见执行清单；阶段 4–6 未开始**。历史完成项、命令与未测边界见 [STAGE1_TODO.md](STAGE1_TODO.md)、[STAGE2_TODO.md](STAGE2_TODO.md) 和 [STAGE3_TODO.md](STAGE3_TODO.md)；新增执行清单见 [STAGE3_FIX_TODO.md](STAGE3_FIX_TODO.md)。
 
-先完成「唤醒 Orbie → 创建任务分身 → 保存结果 → 找回并继续任务」，再增加文件记忆。六个阶段依次交付，每阶段保留可运行、可验证的成果；词库、自动 Dreaming 和自主分派另行推进。
+先完成「唤醒 Orbie → 创建或 Fork Orbiter → 对话及可选流程 → 找回并继续」，再增加文件记忆。按 **1 → 2 → 3 → 3-Fix → 4 → 5 → 6** 推进；3-Fix 完成后才能进入阶段 4。每阶段保留可运行、可验证的成果；词库、自动 Dreaming 和自主分派另行推进。
 
-本目录沿用仓库的版本化计划组织方式；`v3.1.0` 不是发版承诺。已完成阶段的清单见 [STAGE1_TODO.md](STAGE1_TODO.md)、[STAGE2_TODO.md](STAGE2_TODO.md)、[STAGE3_TODO.md](STAGE3_TODO.md)，假设与待决策项见 [ISSUES.md](ISSUES.md)。后续阶段开始时再增加对应 TODO，避免提前维护大量重复清单。
+2026-11-16 补充：**误关闭 Orbie／Orbiter 的 Agent 标签后的显式恢复**纳入 3-Fix 的生命周期、界面和验收范围；实现与验证见 3-Fix 清单。关闭浮动面板、Agent 退出但标签存活、主动关闭标签三种情况分别处理。
 
-## 1. 首版边界与建议默认值
+本目录沿用仓库的版本化计划组织方式；`v3.1.0` 不是发版承诺。阶段 1–3 的正文及 TODO 保留历史实现与验收事实；其中的单步 Workflow 投递、独立 Task 索引、归档及双任务上限由 3-Fix 替换，不再作为后续实现要求。下述首版边界、数据职责和阶段 4–6 已按新方向调整，当前完成范围与未测边界以 3-Fix 清单为准。决策记录见 [ISSUES.md](ISSUES.md)。
 
-以下是用于安排实施顺序的建议，涉及尚未确认的产品选择时，以待决策表为准。
+## 1. 阶段 3-Fix 起采用的产品边界
+
+产品保留 Agent 与 Workflow：Orbie、Orbiter 都是普通 Agent 的角色；一个 Workflow 可由一个或多个 Orbiter 执行，同一 Orbiter 可持续对话并先后参与不同 Workflow。不增加独立 Task 实体或任务状态机。
 
 | 项目 | 首版安排 |
 | --- | --- |
 | 承载位置 | 先在一台指定 Mac 的 Host 本地实现，显式启用；不自动在其他设备创建第二个 Orbie |
 | Agent 类型 | 先用 Codex 验证首条链路，再通过相同能力接口验收 Claude Code；用户选择 Agent／Provider，不改其全局默认设置 |
 | 运行方式 | Orbie 和 Orbiters 都是普通 tmux Agent 标签，使用现有 New Agent、Fork、Resume 和 shell 集成 |
-| 标签命名 | 主标签为 Orbie；任务分身使用短任务名，同名追加序号，展示名不参与身份验证 |
-| 任务创建 | 用户明确选择 New Agent 或原生 Fork；不同 Agent 类型使用 New Agent 交接材料，不转换原生历史 |
-| 全局面板 | 输入、简短结果、任务查找和打开标签；完整终端及权限／提问交互使用既有页面 |
-| 并发 | Orbie 同时处理一条面板消息；建议试用时最多两个活跃 Orbiter 任务，达到上限保留草稿，不另建自动等待队列 |
+| 标签命名 | 主标签为 Orbie；Orbiter 使用便于识别的短名称，复用标签重命名；展示名不参与身份验证 |
+| Agent 创建 | 用户明确选择 New Agent 或原生 Fork；不同 Agent 类型使用 New Agent 交接材料，不转换原生历史 |
+| 标签误关闭 | 不自动复活已关闭标签；用户选择「恢复原对话」后，复用原生 Resume 在新标签恢复，核验成功再更新角色绑定；历史不足时明确提供新建 |
+| 全局面板 | 输入、简短回复、Agent／Workflow 查找和显式导航；完整终端及权限／提问交互使用既有页面 |
+| 普通对话 | 通过共用 Agent 交互能力投递，不生成 Workflow Definition／Run／Node |
+| Workflow | 只有明确创建流程时才保存配置；简单标签仅用于分类、筛选和检索 |
+| 并发 | 每个 Agent 保留输入互斥，Workflow 保留参与者占用规则；取消两个活跃 Orbiter 任务的产品上限，不新增自动等待队列 |
 | Viewer | 已配对 Mac／iOS 继续查看和操作普通 Agent 标签；首版不增加远端 Orbie 专用面板、跨 Host 调度或记忆同步 |
-| 数据与清理 | 使用已有状态根和文件目录；先提供手动归档，不自动删除会话或产物，不另存完整原生聊天历史 |
+| 数据与清理 | 使用已有状态根和文件目录；保存必要的 Agent 关联、投递与回复记录；不另存完整原生聊天历史，不自动删除会话或产物 |
 
-Orbie 忙碌不影响任务查找、显式导航及新建独立任务。普通 Agent 标签不受 Orbie 的并发限制。关闭面板不终止任务；停止后续投递与中断／退出 Agent 是不同操作，沿用现有语义。
+Orbie 忙碌不影响查找、显式导航及新建 Orbiter。关闭面板不停止 Agent 或 Workflow；消息取消、流程停止后续投递与中断／退出 Agent 继续分别表达。Workflow 完成不结束或归档其参与 Agent。
 
 ## 2. 实现落点：只增加产品需要的状态
 
 | 关注点 | 已核对的入口 | 计划新增或调整 |
 | --- | --- | --- |
-| 启动、Provider 与目录 | [SessionLaunchPreparation](../../../CtrlxPackage/Sources/CtrlxServerFeature/Services/SessionLaunchPreparation.swift)、[工作流创建入口](../../../CtrlxPackage/Sources/CtrlxServerFeature/Coordinators/AppCoordinator+WorkflowCreation.swift) | 从同一路径创建／绑定 Orbie 和 Orbiter，不拼装另一套启动命令 |
+| 启动、Provider 与目录 | [SessionLaunchPreparation](../../../CtrlxPackage/Sources/CtrlxServerFeature/Services/SessionLaunchPreparation.swift)、[工作流创建入口](../../../CtrlxPackage/Sources/CtrlxServerFeature/Coordinators/AppCoordinator+WorkflowCreation.swift) | 提取必要的共用创建入口，移除普通 Agent 创建对 Workflow 服务初始化的依赖；不拼装另一套启动命令 |
 | Fork | [AgentForkService](../../../CtrlxPackage/Sources/CtrlxServerFeature/Services/AgentForkService.swift) | 绑定用户确认的源对话和目标目录；保留当前 Provider 默认模型／effort 与快捷按钮行为 |
-| 身份与恢复 | [AgentWorkflowInstance](../../../CtrlxPackage/Sources/CtrlxNetworking/Models/AgentWorkflowInstance.swift)、[AgentSessionIdentityClient](../../../CtrlxPackage/Sources/CtrlxServerFeature/Services/AgentSessionIdentityClient.swift)、[恢复契约](../../workspace-recovery-design.md) | 持久目标与当前进程／原生对话分开；恢复后重新核验，不增加平行恢复引擎 |
-| 投递与结果 | [AgentWorkflowService](../../../CtrlxPackage/Sources/CtrlxServerFeature/Services/Workflows/AgentWorkflowService.swift)、[Runner](../../../CtrlxPackage/Sources/CtrlxServerFeature/Services/Workflows/AgentWorkflowRunner.swift)、[InputGate](../../../CtrlxPackage/Sources/CtrlxServerFeature/Services/Workflows/AgentWorkflowInputGate.swift) | 先以单参与者、单步骤、单轮工作流承载一次面板投递，沿用其账本、输入检查和完成核验 |
-| 状态与路径 | [AgentWorkflowStore](../../../CtrlxPackage/Sources/CtrlxServerFeature/Services/Workflows/AgentWorkflowStore.swift)、[CtrlxPaths](../../../CtrlxPackage/Sources/CtrlxServerFeature/Plugins/CtrlxPaths.swift) | 增加 Orbie 绑定与任务索引；目录通过 CtrlxPaths 派生，使隔离测试能重定向全部数据 |
+| 身份与恢复 | [身份契约](../../agent-identity.md)、[AgentSessionIdentityClient](../../../CtrlxPackage/Sources/CtrlxServerFeature/Services/AgentSessionIdentityClient.swift)、[恢复契约](../../workspace-recovery-design.md) | 沿用 AgentID(hostID, persistentPaneID)；window 是位置，进程／原生对话是操作证据，不增加身份注册表或平行恢复引擎 |
+| 投递与结果 | [AgentWorkflowService](../../../CtrlxPackage/Sources/CtrlxServerFeature/Services/Workflows/AgentWorkflowService.swift)、[Runner](../../../CtrlxPackage/Sources/CtrlxServerFeature/Services/Workflows/AgentWorkflowRunner.swift)、[InputGate](../../../CtrlxPackage/Sources/CtrlxServerFeature/Services/Workflows/AgentWorkflowInputGate.swift) | 从现有实现提取共用 Agent 交互能力；Orbie／Orbiter 与 Workflow 共用运行目录、输入保护、回执和原生回复核验，图编排留在 Workflow |
+| 状态与路径 | [OrbieStore](../../../CtrlxPackage/Sources/CtrlxServerFeature/Services/OrbieStore.swift)、[OrbiterStore](../../../CtrlxPackage/Sources/CtrlxServerFeature/Services/OrbiterStore.swift)、[CtrlxPaths](../../../CtrlxPackage/Sources/CtrlxServerFeature/Plugins/CtrlxPaths.swift) | 移除 Task 层，收敛为 Agent 角色／来源关联、创建意图和必要消息记录；目录保留，迁移不改名或删除材料 |
 | 选区与图片 | [InteractiveTerminalView](../../../CtrlxPackage/Sources/CtrlxServerFeature/Views/InteractiveTerminalView.swift)、[Files](../../../CtrlxPackage/Sources/CtrlxCommon/UI/WorkspaceFileBrowserView.swift)、[Browser](../../../CtrlxPackage/Sources/CtrlxCommon/UI/RemoteBrowserView.swift)、[Simulator](../../../CtrlxPackage/Sources/CtrlxCommon/UI/RemoteSimulatorView.swift) | 在已有文本选择、截图和标注上增加 Orbie 入口，触发时固定来源 |
 
-单步工作流是内部投递方式，用户无需配置流程图。任务索引引用已有 run／invocation 记录，不再维护一套「已发送、已接收、轮次结束」状态机。第一阶段必须验证这条复用路径可用于日常对话、提问及人为接管；若有缺口，只在原通道补齐必要接口，不先抽象通用 Agent 调度框架。
+依赖方向为：Orbie／Orbiter 界面和 Workflow 编排分别调用共用 Agent 交互能力，后者使用现有 tmux、插件事件及会话状态。只保留一份投递与回复事实；技术上的消息／请求 ID 不成为新的产品 Task。Workflow 的节点、边、循环和显式步骤完成继续由原编排层负责。普通对话不得通过隐藏、重命名或复用单个 Workflow 模板实现脱钩。
 
 新增代码主要在 `CtrlxServerFeature`：协调入口和 UI 使用主 actor，持久 I/O 使用 actor 或现有依赖客户端；不增加 ViewModel。确有两端消费者后再下沉到 `CtrlxCommon`，不为尚未开发的 Viewer 提前增加协议。
 
@@ -43,15 +48,17 @@ Orbie 忙碌不影响任务查找、显式导航及新建独立任务。普通 A
 
 | 数据 | 内容与约束 |
 | --- | --- |
-| Orbie 绑定 | 指定 Host、持久 window／pane 目标、Agent／Provider 选择；当前会话事实从现有实例目录读取 |
-| 任务记录 | taskID、标题、创建时间、目标、来源、实际工作目录、New／Fork 来源、目标绑定、执行记录引用、结果／产物链接及归档状态 |
-| 创建意图 | 创建前保存 taskID 和请求关联；回包丢失先核对已有证据，无法确认时显示待核对，不因超时再启动一个标签 |
-| `TASK.md`／`RESULT.md` | 人和 Agent 可读的任务材料与简短结果；轮次／投递状态仍以工作流账本为准，不靠文件出现判定成功 |
+| Agent 关联 | Orbie 指定的 AgentID、Orbiter 的必要角色／来源关联；名称、目录及运行状态从已有 Agent 数据读取，不另分配 Orbiter 身份 |
+| 创建意图 | 创建前保存请求关联；回包丢失先核对已有证据，确认后关联 AgentID；无法确认时不重复启动 |
+| 原对话恢复依据 | 复用最近核验的恢复描述，保留 Agent 类型、原生会话及必要启动上下文；主动关闭后仍可供显式恢复使用，不以名称／目录推断，不保存登录凭据或完整聊天副本 |
+| 消息记录 | 发送时的文本／附件、目标、运行态证据、确认状态和原生轮次／回复引用；结果不明不重发，不复制完整原生聊天历史 |
+| Workflow | 用户显式创建的配置、参与者、运行与结果；可有简单分类标签，标签不参与权限、身份或完成判定 |
+| 材料与产物 | 继续作为普通文件由 Files 打开；旧 `TASK.md`／`RESULT.md` 保留但停止自动维护，文件出现不代表执行成功 |
 | 长期记忆 | 全局偏好、对应项目的规则、带来源与验证时间的方法；不保存实时忙碌状态或拿旧结论代替当前查询 |
 
-建议产品状态位于 `<stateRoot>/orbie/`，工作材料位于 `<ctrlxRoot>/agents/main/` 和 `experts/<run_id>/`。这里的 run_id 指任务分身实例目录 ID，创建后固定；继续同一任务可以新增工作流执行记录，但不因每条消息创建新目录。名称与格式在第一阶段定稿，文件格式带版本，持久化失败时停止相关新操作并保留原数据。
+沿用已有状态根及 `agents/main/`、`agents/experts/` 下的材料目录；项目 Agent 继续使用实际项目／worktree。旧目录名不再解释为运行中的 Task 身份，迁移不强制重命名目录，后续消息不新建目录。文件格式带版本，持久化失败时停止相关新操作并保留原数据。
 
-任务可引用已有任务或标签，但首次仅收录本功能创建或用户明确关联的任务。不导入全部历史、不从同名标签猜原对话。孤立的创建记录由用户关联现有标签或明确重建，不自动接管不明进程。
+Orbie 只查询本功能创建或用户明确关联的 Agent／Workflow 范围，不因取消 Task 索引扩大读取权限。不导入全部历史、不从同名标签猜原对话。孤立的创建记录保留待核对，不自动接管不明进程。
 
 ## 3. 分阶段交付
 
@@ -60,9 +67,12 @@ Orbie 忙碌不影响任务查找、显式导航及新建独立任务。普通 A
 | 1. Orbie 绑定与投递 | 在 CtrlX 内打开固定 Orbie，完成一次有结果记录的对话 | 默认值与单步复用验证 |
 | 2. Orbiter 与任务接续 | 创建分身、查看结果、重启后找到并继续任务 | 阶段 1 |
 | 3. 全局唤醒与查找 | 在其他 App 中唤醒 Orbie，查询并打开正确任务 | 阶段 2 |
-| 4. 从选区派发 | 选中文字或标注图片，带原始来源建立任务 | 阶段 2、3 |
-| 5. 最小文件记忆 | 显式记住、按项目读取、手动整理候选 | 阶段 2、4 |
-| 6. 验收与试用 | 两条核心路径及恢复、资源边界通过验证 | 阶段 1–5 |
+| 3-Fix. Agent／Workflow 职责收敛 | 普通对话不创建 Workflow，取消 Task 层，保留 Agent／Workflow 查询及历史 | 阶段 1–3；清单 [STAGE3_FIX_TODO.md](STAGE3_FIX_TODO.md) |
+| 4. 从选区派发 | 选中文字或标注图片，带原始来源交给 Agent；明确选择时创建 Workflow | 阶段 3-Fix |
+| 5. 最小文件记忆 | 显式记住、按项目读取、手动整理候选 | 阶段 3-Fix、4 |
+| 6. 验收与试用 | 两条核心路径及恢复、资源边界通过验证 | 阶段 1–5，包含 3-Fix |
+
+以下阶段 1–3 是已完成的历史实施范围；其 Task／单步投递方案由阶段 3-Fix 替换，验收记录不追溯改写。
 
 ### 阶段 1：先证明普通 Agent 能承载 Orbie
 
@@ -95,20 +105,37 @@ Orbie 忙碌不影响任务查找、显式导航及新建独立任务。普通 A
 
 **验收门槛：** 切换 App、多个窗口／显示器、面板重复开关不重复启动或抢焦点；Orbie 忙碌时仍能查询及打开任务；自然语言候选能定位非首个标签，目标已删除时不误打开同名标签。查询和文件 I/O 不占用终端键盘消息接收链路。
 
+### 阶段 3-Fix：Agent／Workflow 职责收敛
+
+状态：**实施中；源码切换与回归验收正在进行**。本阶段覆盖本轮确认的八项优化；执行项、源码入口和验收矩阵见 [STAGE3_FIX_TODO.md](STAGE3_FIX_TODO.md)。先完成本阶段，再进入选区、记忆及后续自动化。
+
+1. **统一产品模型。** Orbie／Orbiter 都是普通 Agent；Workflow 可由一个或多个 Orbiter 执行，Agent 完成流程后仍可继续对话或参与其他流程。移除独立 Task 身份、完成与归档状态，不把 Task 改名后保留。
+2. **沿用身份与生命周期。** 复用稳定 AgentID、New Agent／Fork／Resume、Provider 默认值、shell 集成及现有目录；创建意图只用于防重复创建。进程与原生对话用于单次操作核验，不能成为新的长期关联键。误关闭 Agent 标签后提供显式「恢复原对话」：依据核验过的原生恢复信息在新标签 Resume，成功后更新 Orbie／Orbiter 的 AgentID 关联；历史请求不改绑、不重发，证据不足时明确提供新建。
+3. **提取共用交互。** 从现有 Workflow 实现迁出运行目录、输入检查、串行投递、回执和回复核验；普通消息不生成 Definition／Run／Node，Workflow 调用同一交互能力。启动及存储依赖分开，Workflow 加载失败不阻断 Orbie。
+4. **明确交互边界。** 普通消息使用原生轮次确认回复，提问／审批留在普通 Agent 交互中；Workflow 保留现有步骤完成规则。自动投递共享占用与输入保护，人工接管阻止过期写入，手动回复不会误算成流程结果，未确认消息不自动重发。
+5. **收敛界面与查询。** Tasks 入口改为 Orbiters，查询／候选使用 AgentID 或 Workflow ID；Workflow 列表支持简单标签。保持有界查询、调用方核验及显式导航；报告交接只追加 Orbie 草稿，不自动发送。
+6. **移除 Task 层并迁移。** 按保存的关联 ID 识别旧内部记录，迁移输入、回复、附件和 Agent 关联；保留未确认投递、创建意图、普通 Workflow 及文件材料。备份并校验后切换，失败保留原数据，不按名字批量删除。
+7. **控制资源和复杂度。** 复用一份运行目录和投递实现，只监测活跃消息，历史按需加载；取消双任务上限，保留每 Agent 输入互斥及 Workflow 占用。不新增 daemon、通用调度平台或完整聊天历史副本。
+8. **分步验收并交付。** 依次完成契约／测试、共用交互、Orbie／Orbiter 切换、迁移／界面／查询和故障验收；覆盖 Codex、Claude Code 及已有 Mac Viewer／iOS 终端、通知和 Workflow 入口。更新设计、服务契约、CLI 及本目录状态，源码与文档收敛后才标记完成。
+
+**验收门槛：** Orbie／Orbiter 连续普通对话不增加 Workflow 配置或执行；同一 Orbiter 能在自由对话、单 Agent／多 Agent Workflow 及之后的对话间接续；Workflow 存储故障不拖垮普通交互；新旧消息的身份、轮次和结果不串用；迁移中断、创建丢回包、账号切换和重启均不重发或丢历史。只有隐藏列表、增加内部 Workflow 类型或保留平行 Task 状态机不算完成。
+
+误关闭恢复必须覆盖 Orbie 和 Orbiter：仅关面板不新建，原标签存活时复用原恢复入口，标签已删除时不因刷新／重启自动重建；显式恢复原会话只创建一个新标签，保留旧消息及材料。无可核验历史时不自动切换到最新会话或新建；未结束／待确认消息不永久锁死恢复入口，也不因恢复而重放或重新授权。
+
 ### 阶段 4：选区与标注派发
 
-- 先接入 Mac Terminal 与 Files 中可选择的文本，再接入 Browser／Simulator 已有截图和标注。各入口复用同一任务草稿，不各造一套发送流程。
+- 先接入 Mac Terminal 与 Files 中可选择的文本，再接入 Browser／Simulator 已有截图和标注。各入口复用 Agent 消息草稿和共用交互能力，不各造一套发送流程。
 - 触发动作时冻结内容、Host、持久标签／资源身份、文件路径或 URL、采集时间。打开面板后即使切换标签，材料与来源仍保持原值。
-- 预览允许选择「交给任务分身」「询问 Orbie」；「记住」在阶段 5 可用。目标目录独立选择，其他 Host 的路径仅作为来源，不在本机解析为可用目录。
+- 预览允许选择「交给 Orbiter」「询问 Orbie」；只有用户明确选择流程时创建 Workflow，「记住」在阶段 5 可用。目标目录独立选择，其他 Host 的路径仅作为来源，不在本机解析为可用目录。
 - 外部 App 首先支持用户主动粘贴；只有显式 paste 才读取剪贴板。macOS Services 选区入口在同阶段后段验证，缺乏可靠来源时明确省略，不抓取任意 App 全文。
-- 媒体沿用工作流附件能力和类型／大小限制。图片画面使用截图，不许诺远端 Browser／Simulator 的任意文字都能直接选择。
+- 媒体使用 3-Fix 提取的共用附件能力及现有类型／大小限制。图片画面使用截图，不许诺远端 Browser／Simulator 的任意文字都能直接选择。
 
-**验收门槛：** 捕获后切换 Host／标签不会串材料；纯文本、文件来源、Browser 和 Simulator 图片均能送达所选分身；不支持的附件明确拒绝；取消面板不创建任务，结果通知不切换当前标签。
+**验收门槛：** 捕获后切换 Host／标签不会串材料；纯文本、文件来源、Browser 和 Simulator 图片均能送达所选 Agent；不支持的附件明确拒绝；取消派发不创建 Agent 或 Workflow，结果通知不切换当前标签。
 
 ### 阶段 5：最小文件记忆与手动整理
 
 - 按设计建立 `main/` 的角色说明、`MEMORY.md`、`projects/` 和 `inbox/`。只创建缺失文件，不覆盖用户已有内容；Codex／Claude 按各自支持的指令入口接入。
-- 显式「记住」可直接记录用户确认的条目、范围和来源。任务结果中的可复用经验先进入候选；普通日志与实时状态留在任务记录。
+- 显式「记住」可直接记录用户确认的条目、范围和来源。Agent 回复或 Workflow 结果中的可复用经验先进入候选；普通日志与实时状态留在各自既有记录。
 - New Agent 显式收到相关文件路径或经过选择的内容；不能依赖不在进程工作目录中的 `AGENTS.md` 自动生效。Fork 保留原生快照，但需要最新记忆时单独读取。
 - 提供查看、编辑、删除和手动整理入口。材料少时由 Orbie 整理，材料多时新建名为「整理记忆」的维护 Orbiter，只产出候选变更，由统一入口应用。
 - 应用前检查原文件是否被用户修改，冲突停止并保留候选；不静默覆盖。无需引入数据库、向量检索、自动周期任务或全面历史扫描。
@@ -119,9 +146,9 @@ Orbie 忙碌不影响任务查找、显式导航及新建独立任务。普通 A
 ### 阶段 6：故障恢复、资源与真实工作验收
 
 - 在隔离 Host 上验证应用重启、tmux 丢失后恢复、Agent 正常退出／更换、目录不存在、创建结果不明和消息写入不明。复用已有恢复策略，不自动重放无法确定是否执行的消息。
-- 从现有 Mac Viewer／iOS 查看同一任务标签并处理提问，检查普通标签导航与控制权无回归；不把这项验收当作已有专用 Orbie Viewer UI。
-- 验证并发上限、关闭面板、长期空闲和任务积累。记录相对当前空闲 Host 的 CPU／内存、任务列表打开耗时、索引与材料增长；不增加每个任务独立高频轮询。
-- 关闭功能时停止快捷键和新投递，保留普通 Agent 标签、运行中的会话、材料与记忆。移除单条任务关联不等于删除会话；不做自动清空或数据降级迁移。
+- 从现有 Mac Viewer／iOS 查看同一 Agent 标签并处理提问，检查普通标签导航与控制权无回归；不把这项验收当作已有专用 Orbie Viewer UI。
+- 验证每 Agent 输入互斥、Workflow 占用、关闭面板、长期空闲及历史积累。记录相对当前空闲 Host 的 CPU／内存、Agent／Workflow 列表打开耗时、记录与材料增长；不增加每个 Agent 独立高频轮询。
+- 关闭功能时停止快捷键和新投递，保留普通 Agent 标签、运行中的会话、材料与记忆。移除 Orbie／Orbiter 角色关联不删除会话；不做自动清空或数据降级迁移。
 - 完成功能验收后再建议连续试用一周：比较补充背景的次数、找回旧任务的时间及误定位、记忆的实际复用与错误引用。每条结论关联任务和证据，不预设收益百分比。
 
 **验收门槛：** 两条核心路径「昨天的任务今天继续」「选区派发后结果可找回」都通过，且无身份串用、重复投递或后台抢焦点。尚未验证的硬件／跨设备场景逐项列明，不用构建成功代替运行证据。
@@ -146,8 +173,8 @@ Orbie 忙碌不影响任务查找、显式导航及新建独立任务。普通 A
 | 现有回归 | `AgentForkServiceTests`、`AgentSessionIdentityTests`、`AgentWorkflowInputGateTests`、`AgentWorkflowRecoveryTests`，按阶段影响增加相关套件 |
 | 原生 Agent | 私有 tmux／状态根和隔离签名 App 中验证真实 Codex、Claude 的首轮、Fork、提问、完成与恢复；记录 CLI 版本 |
 | UI 与输入 | 全局唤醒、草稿、来源捕获、非首标签跳转、后台不抢焦点；分别记录离屏检查和实际操作 |
-| 性能与数据 | 空闲开销、任务积累、附件大小及列表分页；磁盘失败不能继续假装成功 |
+| 性能与数据 | 空闲开销、消息／Workflow 历史积累、附件大小及列表分页；磁盘失败不能继续假装成功 |
 
 代码阶段执行定向 `./scripts/unit-tests.sh -- --filter '<套件过滤表达式>'`、修改文件的 SwiftFormat lint、两项仓库边界检查与 `git diff --check`。Mac 构建遵循 [仓库构建顺序](../../../AGENTS.md#building--testing)；iOS 仅在确实修改目标时做设备 SDK 编译，不额外构建 Simulator。运行验收遵循[隔离 E2E 约定](../../e2e-testing.md)，不把用户的活跃任务当作夹具。
 
-每阶段 TODO 记录源码范围、实际命令／结果、证据路径和未测项。阶段 1–3 的实际命令、隔离原生运行证据及未测项见各自 TODO；未安装或发布 App，也未将用户活跃任务用作夹具。
+每阶段 TODO 记录源码范围、实际命令／结果、证据路径和未测项。阶段 1–3 的历史命令、隔离原生运行证据及未测项见各自 TODO，不能作为 3-Fix 的新验收结果。3-Fix 的当前实现与验证进度见阶段 TODO；未安装或发布 App。

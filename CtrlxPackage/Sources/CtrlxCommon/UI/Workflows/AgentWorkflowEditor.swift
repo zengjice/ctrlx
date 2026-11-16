@@ -53,6 +53,10 @@ struct AgentWorkflowEditor: View {
             Form {
                 Section("Workflow") {
                     TextField("Workflow name", text: $draft.name)
+                    TextField("Tags (comma separated)", text: Binding(get: { (draft.tags ?? []).joined(separator: ", ") }, set: { text in
+                        let tags = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+                        draft.tags = tags.isEmpty ? nil : tags
+                    }))
                     DisclosureGroup(isExpanded: expansion($showingInitialTask)) {
                         taskInput("Initial task", input: $draft.initialInput)
                         Text("Optional default task and attachments. You can also set the task when starting a run.")

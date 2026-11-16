@@ -16,69 +16,60 @@ struct OrbiterDraft: Codable, Equatable, Sendable {
             title.utf8.count <= 128, !title.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains),
             !goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             (goal + source + materials).utf8.count <= 32_000 else {
-            throw AgentWorkflowError("Enter a short task name and a goal. Selected task text must fit within 32 KB.")
+            throw AgentWorkflowError("Enter a short Agent name and an initial message. Selected text must fit within 32 KB.")
         }
         guard SessionDirectoryPath.isValid(directory) else { throw AgentWorkflowError("Choose an absolute project directory or ~/… on this Mac.") }
     }
 }
 
-struct OrbiterTask: Codable, Equatable, Sendable, Identifiable {
-    enum Origin: String, Codable, Sendable { case newAgent, fork, associated }
+struct OrbiterCreation: Codable, Equatable, Sendable {
     let id: UUID
     let title: String
-    let createdAt: Date
-    let goal: String
-    let source: String
-    let materials: String
-    var directory: String
-    let origin: Origin
+    let directory: String
     let pluginID: String
     let providerID: String?
     let forkSource: AgentWorkflowInstance?
-    var pane: WorkspacePaneIdentity?
-    var binding: AgentWorkflowInstance?
-    var runIDs: [UUID] = []
-    var pendingRunID: UUID?
-    var draft: String
-    var archived = false
+}
 
-    func agentID(hostID: UUID) -> AgentID? {
-        if let binding {
-            guard binding.hostID == hostID else { return nil }
-            return binding.agentID
+/// A role/source association with an existing Agent, or an unresolved creation
+/// intent. It has no independent identity, completion or archive lifecycle.
+struct OrbiterRecord: Codable, Equatable, Sendable, Identifiable {
+    var agentID: AgentID?
+    var creation: OrbiterCreation?
+    var binding: AgentWorkflowInstance?
+    var pane: WorkspacePaneIdentity?
+    var sourceAgentID: AgentID?
+    var materialsDirectories: [String] = []
+    var messageIDs: [UUID] = []
+    var legacyRunIDs: [UUID]? = nil
+    var draft = ""
+
+    var id: String {
+        if let agentID {
+            return "\(agentID.hostID.uuidString)/\(agentID.paneID.uuidString)"
         }
-        return pane.map { AgentID(hostID: hostID, paneID: $0.paneID) }
+        return "creation/\(creation?.id.uuidString ?? "missing")"
     }
 
-    var initialInput: String {
-        """
-        Goal:
-        \(goal)
+    var title: String {
+        binding?.displayName ?? creation?.title ?? "Unavailable Agent"
+    }
 
-        Source supplied by the user:
-        \(source.isEmpty ? "None" : source)
-
-        Selected materials:
-        \(materials.isEmpty ? "None" : materials)
-
-        Return a concise Agent report with Summary, Evidence, Artifacts and Next steps.
-        State incomplete work and uncertainty. A finished reply does not establish that the goal was verified.
-        """
+    var directory: String {
+        binding?.workingDirectory ?? creation?.directory ?? ""
     }
 }
 
 struct OrbiterIndex: Codable, Equatable, Sendable {
-    var schemaVersion = 1
+    var schemaVersion = 2
     let hostID: UUID
     var draft = OrbiterDraft()
-    var tasks: [OrbiterTask] = []
+    var agents: [OrbiterRecord] = []
 }
 
-/// Only product metadata lives here. Native turn and delivery truth stays in the workflow ledger.
 actor OrbiterStore {
     let paths: CtrlxPaths
     private let hostID: UUID
-
     init(paths: CtrlxPaths, hostID: UUID) {
         self.paths = paths
         self.hostID = hostID
@@ -86,7 +77,40 @@ actor OrbiterStore {
 
     func load() throws -> OrbiterIndex {
         guard FileManager.default.fileExists(atPath: paths.orbiterIndex.path) else { return .init(hostID: hostID) }
-        let index = try JSONDecoder().decode(OrbiterIndex.self, from: Data(contentsOf: paths.orbiterIndex))
+        let data = try Data(contentsOf: paths.orbiterIndex)
+        let version = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let index: OrbiterIndex
+        if version?["schemaVersion"] as? Int == 1 {
+            let old = try JSONDecoder().decode(LegacyOrbiterIndex.self, from: data)
+            guard old.hostID == hostID else { throw AgentWorkflowError("Orbiters belong to another Host.") }
+            var converted = OrbiterIndex(hostID: hostID, draft: old.draft)
+            for task in old.tasks {
+                let identity = task.agentID(hostID: hostID)
+                let record = OrbiterRecord(
+                    agentID: identity,
+                    creation: .init(id: task.id, title: task.title, directory: task.directory, pluginID: task.pluginID, providerID: task.providerID, forkSource: task.forkSource),
+                    binding: task.binding,
+                    pane: task.pane,
+                    sourceAgentID: task.forkSource?.agentID,
+                    materialsDirectories: [paths.orbiterDirectory(task.id).path],
+                    legacyRunIDs: task.runIDs + [task.pendingRunID].compactMap { $0 }.filter { !task.runIDs.contains($0) },
+                    draft: task.draft
+                )
+                if let identity, let i = converted.agents.firstIndex(where: { $0.agentID == identity }) {
+                    converted.agents[i].materialsDirectories += record.materialsDirectories
+                    let previous = converted.agents[i].legacyRunIDs ?? []
+                    converted.agents[i].legacyRunIDs = previous + (record.legacyRunIDs ?? []).filter { !previous.contains($0) }
+                    if !task.draft.isEmpty {
+                        converted.agents[i].draft += "\n\n" + task.draft
+                    }
+                } else {
+                    converted.agents.append(record)
+                }
+            }
+            index = converted
+        } else {
+            index = try JSONDecoder().decode(OrbiterIndex.self, from: data)
+        }
         try validate(index)
         return index
     }
@@ -94,68 +118,33 @@ actor OrbiterStore {
     func save(_ index: OrbiterIndex) throws {
         try validate(index)
         try FileManager.default.createDirectory(at: paths.orbieStateRoot, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        if FileManager.default.fileExists(atPath: paths.orbiterIndex.path) {
+            let backup = paths.orbiterIndex.appendingPathExtension("pre-3fix.backup")
+            if !FileManager.default.fileExists(atPath: backup.path) {
+                try FileManager.default.copyItem(at: paths.orbiterIndex, to: backup)
+            }
+        }
         try JSONEncoder().encode(index).write(to: paths.orbiterIndex, options: .atomic)
     }
 
-    func saveMaterials(_ task: OrbiterTask, runs: [AgentWorkflowRun]) throws {
-        let directory = paths.orbiterDirectory(task.id)
+    func prepareMaterials(_ creation: OrbiterCreation, text: String) throws -> String {
+        let directory = paths.orbiterDirectory(creation.id)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        let instructions = """
-        # \(task.title)
-
-        Task: \(task.id)
-        Created: \(task.createdAt.ISO8601Format())
-        Working directory: \(task.directory)
-        Context: \(task.origin.rawValue)
-        \(task.forkSource.map { "Fork source conversation: \($0.conversationID)" } ?? "")
-
-        \(task.initialInput)
-        """
-        try writeIfChanged(instructions, to: directory.appendingPathComponent("TASK.md"))
-        let reports = runs.flatMap { run in
-            Self.reports(in: run).map { invocation, result in
-                """
-                ## Agent report — \(result.completedAt.ISO8601Format())
-
-                Workflow: \(run.id)
-                Invocation: \(invocation.id)
-                Native turn: \(result.nativeTurnID ?? "")
-
-                \(result.text)
-                """
-            }
+        let file = directory.appendingPathComponent("CONTEXT.md")
+        if !FileManager.default.fileExists(atPath: file.path) {
+            try Data(text.utf8).write(to: file, options: .withoutOverwriting)
         }
-        if !reports.isEmpty {
-            try writeIfChanged("# Agent reports\n\nThese are Agent reports, not independent verification of the business goal.\n\n" + reports.joined(separator: "\n\n"), to: directory.appendingPathComponent("RESULT.md"))
-        }
-    }
-
-    static func reports(in run: AgentWorkflowRun) -> [(AgentWorkflowInvocation, AgentWorkflowResult)] {
-        run.invocations.compactMap { invocation in
-            guard
-                invocation.status == .succeeded, let result = invocation.result,
-                result.invocationID == invocation.id, let turn = result.nativeTurnID,
-                turn == invocation.nativeTurnID else { return nil }
-            return (invocation, result)
-        }
-    }
-
-    private func writeIfChanged(_ text: String, to url: URL) throws {
-        let data = Data(text.utf8)
-        if FileManager.default.fileExists(atPath: url.path), try Data(contentsOf: url) == data {
-            return
-        }
-        try data.write(to: url, options: .atomic)
+        return directory.path
     }
 
     private func validate(_ index: OrbiterIndex) throws {
         guard
-            index.schemaVersion == 1, index.hostID == hostID,
-            Set(index.tasks.map(\.id)).count == index.tasks.count,
-            index.tasks.allSatisfy({ task in
-                Set(task.runIDs).count == task.runIDs.count
-                    && (task.pendingRunID.map { task.runIDs.contains($0) } ?? true)
-                    && (task.binding.map { $0.hostID == hostID && $0.pluginID == task.pluginID } ?? true)
-            }) else { throw AgentWorkflowError("The Orbiter task index is invalid or belongs to another Host. Saved data was preserved.") }
+            index.schemaVersion == 2, index.hostID == hostID,
+            Set(index.agents.map(\.id)).count == index.agents.count,
+            index.agents.allSatisfy({ record in
+                (record.agentID != nil || record.creation != nil)
+                    && (record.agentID.map { $0.hostID == hostID } ?? true)
+                    && (record.binding.map { $0.agentID == record.agentID } ?? true)
+            }) else { throw AgentWorkflowError("The Orbiter index is invalid. Its data has been preserved.") }
     }
 }

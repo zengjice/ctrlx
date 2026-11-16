@@ -87,6 +87,7 @@ private struct AgentWorkflowHostView: View {
     @Environment(\.scenePhase) private var scenePhase
     let navigation: AgentWorkflowNavigation
     let openAgent: (AgentWorkflowInstance) -> Void
+    @State private var tagFilter = ""
     @State private var starting: AgentWorkflowDefinitionSummary?
     @State private var overview: AgentWorkflowOverview?
     @State private var editing: AgentWorkflowDefinition?
@@ -97,17 +98,31 @@ private struct AgentWorkflowHostView: View {
     @State private var deleting = false
     @State private var duplicating = false
 
+    private var filteredDefinitions: [AgentWorkflowDefinitionSummary] {
+        (overview?.definitions ?? []).filter { definition in
+            tagFilter.isEmpty || (definition.tags ?? []).contains { $0.localizedStandardContains(tagFilter) }
+        }
+    }
+
+    private func definitionLabel(_ definition: AgentWorkflowDefinitionSummary) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(definition.name)
+            Text("\(definition.nodeCount) steps").font(.caption).foregroundStyle(.secondary)
+            if let tags = definition.tags, !tags.isEmpty {
+                Text(tags.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
     var body: some View {
         List {
             if let overview {
                 Section("Configurations") {
-                    ForEach(overview.definitions) { definition in
+                    TextField("Filter by tag", text: $tagFilter)
+                    ForEach(filteredDefinitions) { definition in
                         HStack {
                             NavigationLink(value: AgentWorkflowNavigation.Destination.configuration(route: endpoint.id, hostID: overview.hostID, id: definition.id)) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(definition.name)
-                                    Text("\(definition.nodeCount) steps").font(.caption).foregroundStyle(.secondary)
-                                }
+                                definitionLabel(definition)
                             }
                             Button { starting = definition } label: { Label("Start workflow", symbol: .playFill).labelStyle(.iconOnly) }
                                 .buttonStyle(.borderless)

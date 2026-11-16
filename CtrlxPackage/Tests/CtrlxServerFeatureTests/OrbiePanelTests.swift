@@ -50,7 +50,7 @@ struct OrbiePanelTests {
                 await gate.wait()
                 return []
             }, schedule: { _ in Issue.record("Inspection must not submit work") })
-            let orbie = OrbieService(store: store, workflows: workflows, launch: { _ in throw CancellationError() }, locateCreation: { _ in nil })
+            let orbie = try OrbieService(store: store, interaction: await AgentInteractionTestSupport.readOnly(root: root, hostID: hostID, workflows: workflows), launch: { _ in throw CancellationError() }, locateCreation: { _ in nil })
             await orbie.refresh(inspect: false)
             let refreshing = Task { await orbie.refresh() }
             defer { Task { await gate.release()
@@ -101,10 +101,12 @@ struct OrbiePanelTests {
             }, schedule: { _ in })
             let coordinator = AppCoordinator()
             coordinator.agentWorkflowService = workflows
+            coordinator.agentRuntimeCatalog = AgentRuntimeCatalog(hostID: hostID) { _ in throw AgentWorkflowError("No scan needed") }
             let creation = try await coordinator.workflowAgentCreation(hostID: hostID)
             #expect(creation.hostID == hostID)
             await #expect(throws: AgentWorkflowError.self) { try await coordinator.workflowAgentCreation(hostID: UUID()) }
             coordinator.agentWorkflowService = nil
+            coordinator.agentRuntimeCatalog = nil
             await #expect(throws: AgentWorkflowError.self) { try await coordinator.workflowAgentCreation(hostID: hostID) }
         }
     }
@@ -124,7 +126,7 @@ struct OrbiePanelTests {
             let store = OrbieStore(paths: CtrlxPaths(stateRootOverride: root.appendingPathComponent("state")), hostID: hostID)
             let ledger = AgentWorkflowStore(fileURL: root.appendingPathComponent("ledger.json"), hostID: hostID)
             let workflows = AgentWorkflowService(store: ledger, scan: { _ in [] }, schedule: { _ in Issue.record("Opening the panel must not send") })
-            let orbie = OrbieService(store: store, workflows: workflows, launch: { _ in throw CancellationError() }, locateCreation: { _ in nil })
+            let orbie = try OrbieService(store: store, interaction: await AgentInteractionTestSupport.readOnly(root: root, hostID: hostID, workflows: workflows), launch: { _ in throw CancellationError() }, locateCreation: { _ in nil })
             await orbie.refresh()
             orbie.draft = "Unsent panel draft"
             let coordinator = AppCoordinator()
@@ -167,11 +169,11 @@ struct OrbiePanelTests {
             defer { try? FileManager.default.removeItem(at: root) }
             let hostID = UUID()
             let workflows = AgentWorkflowService(store: AgentWorkflowStore(fileURL: root.appendingPathComponent("ledger.json"), hostID: hostID), scan: { _ in [] }, schedule: { _ in Issue.record("Opening tasks must not send") })
-            let service = OrbiterService(store: OrbiterStore(paths: .init(stateRootOverride: root.appendingPathComponent("state")), hostID: hostID), workflows: workflows, enabled: { true }, forkSource: { throw CancellationError() }, launch: { _ in throw CancellationError() }, locateCreation: { _ in nil })
+            let service = try OrbiterService(store: OrbiterStore(paths: .init(stateRootOverride: root.appendingPathComponent("state")), hostID: hostID), interaction: await AgentInteractionTestSupport.readOnly(root: root, hostID: hostID, workflows: workflows), enabled: { true }, forkSource: { throw CancellationError() }, launch: { _ in throw CancellationError() }, locateCreation: { _ in nil })
             await service.refresh()
             let window = NSWindow(contentRect: CGRect(x: -10_000, y: -10_000, width: 740, height: 620), styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
-            let hosting = NSHostingView(rootView: MacOrbiterTasksView(service: service).environment(AppCoordinator()))
+            let hosting = NSHostingView(rootView: MacOrbitersView(service: service).environment(AppCoordinator()))
             window.contentView = hosting
             window.orderBack(nil)
             defer { window.close() }
@@ -184,7 +186,7 @@ struct OrbiePanelTests {
                 let frame = unsafeBitCast(implementation, to: (@convention(c) (AnyObject, Selector) -> CGRect).self)(control, selector)
                 #expect(frame.width > 0 && frame.height > 0 && window.frame.contains(frame))
             }
-            #expect(service.tasks.isEmpty)
+            #expect(service.agents.isEmpty)
         }
     }
 
@@ -201,7 +203,7 @@ struct OrbiePanelTests {
             defer { try? FileManager.default.removeItem(at: root) }
             let hostID = UUID()
             let workflows = AgentWorkflowService(store: AgentWorkflowStore(fileURL: root.appendingPathComponent("ledger.json"), hostID: hostID), scan: { _ in [] }, schedule: { _ in Issue.record("Showing a quick panel must not submit work") })
-            let orbie = OrbieService(store: .init(paths: .init(stateRootOverride: root.appendingPathComponent("state")), hostID: hostID), workflows: workflows, launch: { _ in throw CancellationError() }, locateCreation: { _ in nil })
+            let orbie = try OrbieService(store: .init(paths: .init(stateRootOverride: root.appendingPathComponent("state")), hostID: hostID), interaction: await AgentInteractionTestSupport.readOnly(root: root, hostID: hostID, workflows: workflows), launch: { _ in throw CancellationError() }, locateCreation: { _ in nil })
             await orbie.refresh()
             orbie.draft = "Keep this unsent message"
             let coordinator = AppCoordinator()

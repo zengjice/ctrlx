@@ -1855,145 +1855,124 @@ metadata remain Relay-visible. Push content is encrypted separately; the Relay
 can route it without decrypting it. Consult the current wire enum when adding a
 message rather than treating a historical list of cases as exhaustive.
 
-## Orbie on the local Mac
+## Orbie and Orbiters on the local Mac
 
-The toolbar and menu-bar Orbie actions summon one lightweight floating panel.
-Full Conversation opens the persistent conversation/setup window. Creating Orbie
-is explicit and reuses `NewAgentTabPanel`, `workflowAgentCreation` and
-`SessionLaunchPreparation`, including normal Provider defaults, shell integration
-and Codex `--no-daemon`. Stage 1 offers Codex and Claude Code. It does not change
-Agent-wide settings or create a dedicated Viewer protocol.
+Orbie and Orbiters are ordinary tmux Agents. The role association uses the existing
+`AgentID(hostID, persistentPaneID)`; window/session placement, processes and native
+conversations are current location or operation evidence. There is no separate
+Task identity, completion/archive lifecycle or two-active-task limit. Workflow is
+optional orchestration of one or more existing Agents. Finishing a Workflow does
+not finish, archive or close its participants.
 
-`OrbieStore` saves version-1 associations at `<stateRoot>/orbie/binding.json`;
-`CtrlxPaths` derives the working directory `<ctrlxRoot>/agents/main/`. Missing
-`AGENTS.md` / `CLAUDE.md` files receive a minimal role description; existing files
-are kept. Read/write failures remain visible and do not authorize a fresh launch.
-The creation intent is durable before tmux changes, and `new-session` attaches
-`@ctrlx-creation-id` before launching the Agent. A lost reply is reconciled using
-that token and persistent workspace identity, never the title or current focus.
-Orbie's identity is the persistent Host/window/pane target. The saved `binding`
-is its last observed runtime, not a pin to that process or native conversation.
-After account switching, Resume or workspace recovery, the verified catalog at
-the same target supplies the current Agent, including a changed supported plugin.
-The creation record describes the original launch, not the current runtime.
+Creating Orbie or an Orbiter explicitly reuses the existing New Agent/Fork paths,
+Provider defaults, model shortcuts, shell integration and Codex `--no-daemon`.
+Creation intent is durable before launch. The existing `@ctrlx-creation-id` token
+reconciles a lost creation reply; refresh never launches a replacement. Fork takes
+a verified snapshot of Orbie's native conversation. Subsequent conversations are
+independent. The editable project cwd is independent of the saved material folder.
+New Orbiter creation retains the initial message as a draft for explicit Send.
 
-Each Send creates a one-Agent, one-step, one-round workflow. Orbie stores its run
-reference before starting it, while the workflow ledger owns writing intent,
-acceptance, invocation identity and verified native results. The optional
-`expectedInstances` start guard pins that send's inspected runtime so a change
-during submission cannot redirect it to another process or conversation. Normal
-workflow input-generation and composer checks still run immediately before the
-terminal write; Orbie never clears terminal input or answers prompts on its own.
+### Ordinary messages and shared Agent interaction
 
-Workflow input supports tmux 3.6a as well as newer servers. When the server
-cannot report `bracket_paste_flag`, CtrlX still verifies the native empty composer,
-process identity and input ownership. The guarded queue uses `paste-buffer -p`
-with tmux's actual paste mode, followed by Return. Reported disabled paste, copy
-mode and changed foreground/cursor/geometry are rejected. Image staging also accepts missing mode
-metadata but still requires the exact visible attachment sequence. Failed input
-inspection reports its cause, such as copy mode, a hidden cursor or an unrecognized
-prompt, instead of only showing a generic unavailable message.
-These transient diagnostics use `inputIssue` for display alongside `readiness`;
-they do not set `capabilityIssue` or turn a background input check into a workflow
-pause. Input recovery resumes the existing automatic waiting path. CLI/plugin
-capability or identity failures retain their existing blocking behavior.
+`AgentRuntimeCatalog` coalesces the existing process/identity scan for both clients.
+`AgentInputWriter` owns the final guarded input boundary using the existing human
+input queue, native composer inspection and revocable write permit. It retains
+support for tmux 3.6a's missing paste metadata; copy mode, terminal drafts, changed
+foreground identity and human input still prevent the write. Temporary readiness
+failures use `inputIssue`, not a capability failure or a new Workflow pause.
 
-While its window is open, Orbie rechecks startup or blocked input until ready;
-in-flight answers read the existing ledger. Closing the window keeps its draft
-and stops this UI refresh without stopping the Agent. Disabling Orbie
-stops new panel submissions and preserves the binding, files and ordinary tab.
-Stop Further Delivery ends only the workflow's future handoffs. A restart reads
-existing runs without starting/resuming them. If an unconfirmed request has no
-run, the operator can keep its draft and clear that request; a recorded run must
-be reviewed instead. A moved pane is located by its verified process binding and updates its window
-route and current runtime without rewriting older invocation evidence. Open Agent Tab stays enabled
-during background inspection and refreshes only the ordinary pane layout before
-navigating to the saved target, including a live pane moved to another window.
-It does not wait for a full Agent scan. A verified replacement at the same durable
-target is adopted without a Reconnect action and without sending any message.
-Existing unfinished or unconfirmed messages still require review; runtime refresh
-does not rewrite invocation evidence, replay input or accept a different conversation's
-result. Set Up Again detaches the old binding without
-closing the old Agent or deleting messages/files. Global shortcuts and task lookup
-are described in stage 3 below; persistent shared memory remains a later stage.
+`AgentReplyEvidence` checks the authenticated runtime, exact submission text and
+native turn/transcript identity. `AgentReplyMonitor` follows the existing provider
+parsers and incremental transcript reader. A Stop is only a candidate: the native
+final answer and fresh process/conversation evidence must verify it. Ordinary
+messages and Workflow use those shared boundaries; Workflow retains graph,
+step completion, explicit continuation, loop and handoff rules in its adapters.
 
-### Orbiter tasks (stage 2)
+`AgentMessageService` writes ordinary message intent and evidence through
+`AgentMessageStore` in `<stateRoot>/AgentInteraction/messages/`.
+Hook evidence is persisted once by the shared runtime catalog, independently of
+the Workflow ledger, and becomes visible in memory only after a successful save. A message contains
+only its submitted text, captured Agent/runtime, native turn reference, verified
+reply and delivery status. It is a technical record, not a product Task. Ordinary
+Send creates no Workflow Definition/Run/Node and injects no completion command.
+Each message has one record; retries/restarts never replay an uncertain write.
+Repeated request IDs are rejected even after completion. Full Orbie/Orbiter
+conversations provide earlier/newer/latest history navigation, loading 100 records
+per page (200 hard maximum in the store). Page cursors stay anchored when new
+messages arrive; compact summaries and input availability continue using the
+latest records. Older replies and migrated attachment links remain accessible.
+Only pending deliveries are monitored. Their verifier refreshes the shared runtime
+directory ten seconds after the last successful scan, including after a cold start
+without any open panel or active Workflow. Temporary scan failures use the same
+200 ms retry interval and 60-second budget as process inspection; a failed scan
+does not permit reuse of the old directory. The production scanner reports an
+unavailable tmux/ps snapshot as `AgentWorkflowInspectionUnavailable`; a successful
+empty snapshot still means no Agents were found. Missing runtime verification times out and retains
+an unverified result; refreshing Orbie/Orbiters can retry saved evidence without
+resending input. A verified native failure ends the message immediately with its
+original reason, without waiting for a successful transcript. Workflow retains
+its existing wait policy.
 
-Tasks opens a local task list and details. New Agent sends only the supplied goal,
-source and selected text; native Fork uses a ready, verified Orbie conversation of
-the same Agent type. Both keep normal Provider launch and model shortcut defaults.
-The working directory is an editable project/worktree path, independent of the
-materials directory. Existing Agents are associated explicitly; names never grant
-ownership. Same-name tasks receive a numeric suffix.
+Workflow input and ordinary input exclude each other for the same AgentID. Human
+terminal input remains available and is never automatically cleared, approved or
+answered. Stop Waiting cancels local reply observation and revokes a pending write;
+it does not kill the Agent or retract bytes already written. Closing a panel only
+stops UI refresh. Background replies never activate a window. Corrupt Workflow
+storage is reported separately; ordinary Agent creation, navigation and messaging
+do not require that ledger to load successfully.
 
-`OrbiterStore` saves a version-1 index at `<stateRoot>/orbie/tasks.json` and derives
-`<ctrlxRoot>/agents/experts/<taskID>/TASK.md` and `RESULT.md`. The task ID and material
-directory remain unchanged across follow-ups. Creating saves the intent before
-launch; both new-session and Fork's new-window attach a creation token before
-starting the Agent. An unconfirmed creation is reconciled, never relaunched by
-refresh or restart. Association and reconnect do not send messages.
+### Role storage, migration and explicit recovery
 
-The live creation action waits briefly for a confirmed instance before submitting
-the first task. Incomplete startup or failed delivery keeps the task and draft for
-explicit review and Send. At most two task executions/starting Agents are active;
-there is no waiting queue, and ordinary Agents are unaffected. Subsequent sends
-use the existing workflow reservation, pinned-instance and input checks.
+`OrbieStore` writes schema 2 at `<stateRoot>/orbie/binding.json`. `OrbiterStore`
+writes schema 2 Agent associations at the existing `<stateRoot>/orbie/tasks.json`
+path; the filename is retained for migration, not an active Task API. Main's
+`agents/main/` and existing `agents/experts/` material directories stay in place.
+New materials use `CONTEXT.md`; old `TASK.md`/`RESULT.md` remain ordinary files and
+are no longer maintained as execution state. Same-Agent legacy associations merge
+without deleting their separate materials or drafts.
 
-The index references ordinary workflow runs. Retention is committed with each
-task run: deleting a referenced run is refused, while deleting its template leaves
-the run's definition snapshot and results intact. Archive hides a task and retains
-its Agent, materials and history. A single Host-owned ledger-change subscription
-persists verified final replies while the panel is closed; there is no per-task
-background poller or independent delivery ledger. Reports retain run/invocation
-and native-turn provenance, and are labelled Agent reports, not independent proof
-that the business goal succeeded.
+`OrbieInteractionMigration` backs up the original role files and Workflow ledger
+before switching. Saved run/pending IDs plus the generated single-reply structure
+identify internal records; names do not. Messages and attachment copies commit
+before detaching verified internal runs/templates. Interrupted migration is
+idempotent. Edited definitions, unrelated user runs and unknown structures remain
+in Workflows for inspection. Native chat histories and user-produced files are
+never rewritten. Unsent or unconfirmed content does not authorize a new send.
 
-Give to Orbie for Summary explicitly appends a bounded report and its full material
-path to the Orbie draft, preserving existing text. It does not automatically submit
-the draft, including while Orbie is working. Open Agent Tab resolves the current
-persistent pane and uses ordinary navigation/recovery; Resume/Use Shell and
-resending the task remain separate actions.
+`AgentRoleRecovery` retains previously verified `AgentResumeDescriptor` values at
+`<stateRoot>/orbie/resume.json`, separately from the workspace snapshot that an
+explicit tab close removes. Closing the panel does not close the tab. If the pane
+still exists, ordinary Resume/Use Shell remains authoritative. A confirmed missing
+pane exposes Restore Original Conversation; failed scans do not mean closed.
+Restoring is explicit and uses existing resume command/launch preparation. The
+new pane gets a new AgentID; the role changes only after the exact plugin/native
+conversation is verified. Durable creation intent prevents duplicate tabs after
+lost replies. Known pre-launch rejection is retryable. Old messages and Workflow
+targets remain frozen and are never replayed or rebound by role recovery. Missing
+native history produces a visible error and permits an explicitly new Agent.
 
+### Panel, queries and navigation
 
-### Global panel and saved-task lookup (stage 3)
+The existing configurable global shortcut, menu entry and singleton floating
+panel remain. Esc/focus loss hides the panel; direct Agent lookup and navigation
+remain usable while Orbie is busy. Orbiters opens a list of ordinary Agents and
+their conversations. Workflows has its own list; optional tags classify definitions
+without affecting execution or participant identity. Give to Orbie appends a
+bounded selected reply to its draft and requires explicit Send.
 
-General settings provides a shortcut recorder. The initial shortcut is unbound;
-record a letter, digit or Space with at least one modifier: Command, Control,
-Option or Shift. The dependency-injected Carbon registration exists only while Orbie is
-enabled, cancels on change/shutdown and reports conflicts without removing the
-menu entry. The singleton `orbie-panel` scene is placed inside the display under
-the pointer (or the main display), can appear across Spaces, and hides on Esc or
-focus loss. Esc restores the previous external App when the panel still owns
-focus. Opening a task/full conversation deliberately transfers focus to CtrlX.
-Background results never invoke panel presentation or App activation.
+`OrbieQueryService` exposes local read-only `orbie.agents.list/show` and
+`orbie.workflows.list/show`. OS peer ancestry/runtime plus the current enabled
+Orbie native conversation authorize access. Caller-supplied target/identity
+fields are rejected. Agent results are restricted to saved Orbiter associations;
+Workflow results must reference Orbie or those Agents. Output, text and list sizes
+are bounded. Actor I/O does not block Viewer keyboard reception. There is no
+additional Host/Viewer protocol or old Task query compatibility path.
 
-`OrbiePanelController` owns presentation only. `OrbieService` retains/saves drafts
-and uses the existing workflow ledger for verified replies; closing the panel
-does not cancel runs. A direct recent-task/search list and Open Tab work without
-a model round trip, including when Orbie is busy. Full Conversation retains setup,
-message review and task creation controls. Natural-language lookup instructions use
-the bundled CLI's actual path, not an assumed installed `ctrlx` version.
+Verified replies may suggest `[CtrlX Agent: HOST_UUID/PANE_UUID]` or
+`[CtrlX Workflow: WORKFLOW_UUID]`. On click, the program re-reads associations and
+current targets before navigating. Names, arbitrary paths and model-supplied
+commands do not authorize navigation or input. Full CLI details live in the
+bundled [API resource](../CtrlxPackage/Sources/CtrlxServerFeature/Resources/ctrlx-cli-api.md).
 
-`OrbieTaskQueryService` serves only `orbie.tasks.list/show` through the existing
-local API socket. The socket captures non-serializable OS peer/ancestry evidence;
-the query resolves the enabled Main's durable target from a fresh catalog, then
-checks the caller against its current runtime and native writer. The old saved
-process cannot retain query authority after replacement, and the new verified
-process does not require opening the panel to reconnect.
-It reads the tracked-task index and bounded workflow reports on I/O actors,
-without introducing a Host/Viewer wire API or blocking terminal keyboard routing.
-The initial empty native ID is accepted only after the same current process is
-verified with a real native conversation. Client-supplied identity/target fields
-are rejected. See the maintained CLI API resource for field/filter limits.
-
-Only explicit UUID task markers in a verified final reply become candidates.
-Candidate/recent-task clicks share the ordinary navigation path: refresh panes,
-re-read the task index and match server plus persistent pane UUID. Window/session
-moves preserve navigation; a removed association or missing original yields a
-visible error and never opens another same-name Agent. This path sends no input.
-
-Claude's native Stop may trim outer whitespace that remains in its JSONL answer.
-The Claude transcript verifier normalizes only leading/trailing whitespace on
-both representations; internal text must still match. Session/turn ancestry,
-`end_turn` and the unblocked durable Stop summary remain required. This also
-applies to a Stop candidate arriving after the transcript has been read.
+Implementation acceptance and actual untested boundaries are tracked in
+[Stage 3-Fix](v3.1.0/orbie/STAGE3_FIX_TODO.md); earlier stage counts are historical.

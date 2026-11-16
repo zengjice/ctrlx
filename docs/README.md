@@ -48,24 +48,29 @@ separates focused tests and isolated runtime evidence from remaining acceptance,
 including follow-up review fixes. No production deployment has occurred.
 
 The [Orbie global Agent design](global-agent-design.md) prioritizes finding and
-continuing tasks, selection-based delegation and a Mac global entry point. Orbie
-is the persistent Main; task-scoped Orbiters (任务分身) use short task names for
-their tabs. Both reuse tmux Agent lifecycles; Orbiters use New Agent or native Fork
-as needed. Live state, task records and scoped file memory stay separate, while
-explicit navigation bypasses the model. Vocabulary is a separate small experiment;
-automatic Dreaming and autonomous delegation follow evidence from real use.
+continuing work, selection-based delegation and a Mac global entry point. Orbie
+and Orbiters reuse ordinary tmux Agent lifecycles, New Agent and native Fork.
+Vocabulary is a separate small experiment; automatic Dreaming and autonomous
+delegation follow evidence from real use.
 Stage 1 implements explicit local-Host creation, pinned delivery and verified replies;
 its checklist records isolated runtime evidence and limits. Stage 2 adds explicit
 New/Fork tasks, verified reports, lookup/archive and continuation after restarting
 the App; [its checklist](v3.1.0/orbie/STAGE2_TODO.md) records isolated Codex/Claude
 acceptance and remaining limits. Stage 3 adds the global panel and read-only saved-task
 lookup with isolated Codex/Claude acceptance; [its checklist](v3.1.0/orbie/STAGE3_TODO.md)
-records commands, evidence and untested physical multi-display limits. Stages 4–6 remain
-designs; this does not establish cross-device session transfer.
-The [Orbie implementation plan](v3.1.0/orbie/IMPLEMENTATION_PLAN.md) sequences
-Host binding and delivery, task continuity, global entry, selection delegation,
-file memory and acceptance. Its stage checklists and decision register
-separate implemented behavior, proposed later-stage defaults and actual acceptance evidence.
+records commands, evidence and untested physical multi-display limits.
+The [stage 3-Fix checklist](v3.1.0/orbie/STAGE3_FIX_TODO.md) records the current
+implementation and verification: ordinary Orbie/Orbiter messages no longer create
+workflows, the independent Task model has been removed, and both conversation and
+workflow execution use shared Agent interaction capabilities. Explicit recovery
+can restore a closed role tab to its verified native conversation in a fresh pane;
+legacy records migrate with backups and retained materials. Workflows remain
+explicit orchestration for one or more Agents, with simple classification labels.
+The checklist covers identity, human input, UI/query changes, data migration,
+resource limits and acceptance; stages 1–3 retain their historical evidence.
+The [implementation plan](v3.1.0/orbie/IMPLEMENTATION_PLAN.md) now requires
+3-Fix before stages 4–6 (selection delegation, file memory and acceptance).
+Those later stages remain designs; this does not establish cross-device session transfer.
 
 The [Agent identity unification plan](v3.1.0/agent-identity/IMPLEMENTATION_PLAN.md)
 proposes one durable Host/pane identity, with window placement, current process,

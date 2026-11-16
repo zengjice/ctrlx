@@ -101,6 +101,10 @@ extension AgentWorkflowStore {
         }
     }
 
+    func interactionMigrationAttachments(_ ids: Set<UUID>) throws -> [AgentWorkflowAttachmentFile] {
+        try attachmentFiles(Array(ids), instance: nil)
+    }
+
     private func attachmentFiles(_ ids: [UUID], instance: AgentWorkflowInstance?) throws -> [AgentWorkflowAttachmentFile] {
         try attachmentMetadata(ids).map { attachment in
             guard let ext = Self.fileExtension(for: attachment.mediaType) else {

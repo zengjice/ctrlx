@@ -32,11 +32,13 @@ extension AgentWorkflowDefinition {
             step.input.attachmentIDs = []
             return step
         }
-        return Self(
+        var copy = Self(
             name: AgentWorkflowWire.boundedName("Copy of \(name)"), hostID: hostID,
             nodes: steps, edges: edges, entryNodeID: entryNodeID,
             loop: loop, participants: []
         )
+        copy.tags = tags
+        return copy
     }
 
     var terminalSteps: [AgentWorkflowNode] {

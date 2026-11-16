@@ -25,7 +25,7 @@
                                 // While this window is open, startup and human-owned
                                 // input can become ready without a manual refresh.
                                 // In-flight answers only read the existing ledger.
-                                await orbie.refresh(inspect: orbie.record?.creation != nil && !orbie.hasActiveRun && orbie.availability != nil)
+                                await orbie.refresh(inspect: orbie.record?.creation != nil && !orbie.hasPendingMessage && orbie.availability != nil)
                             }
                         }
                 } else {
@@ -37,13 +37,13 @@
             .sheet(item: $creation) { NewAgentTabPanel(configuration: $0, destinationDescription: "Create Orbie on this Mac. Its Agent and Provider use the normal launch settings.") }
             .sheet(isPresented: $showsTasks) {
                 if let orbiters = coordinator.orbiters {
-                    MacOrbiterTasksView(service: orbiters)
+                    MacOrbitersView(service: orbiters)
                 }
             }
-            .onChange(of: coordinator.showsOrbieTasksRequested, initial: true) { _, requested in
+            .onChange(of: coordinator.showsOrbitersRequested, initial: true) { _, requested in
                 if requested {
                     showsTasks = true
-                    coordinator.showsOrbieTasksRequested = false
+                    coordinator.showsOrbitersRequested = false
                 }
             }
             .alert("Could not open Orbie", isPresented: Binding(get: { error != nil }, set: {
@@ -64,7 +64,7 @@
                 HStack {
                     Label("Orbie", symbol: .sparkles).font(.title2.bold())
                     Spacer()
-                    Button("Tasks…") { showsTasks = true }
+                    Button("Orbiters…") { showsTasks = true }
                         .disabled(coordinator.orbiters == nil).accessibilityIdentifier("orbie-tasks")
                     if let record = orbie.record {
                         Toggle("Enabled on this Mac", isOn: Binding(get: { record.enabled }, set: { value in Task { await orbie.setEnabled(value) } }))
@@ -84,14 +84,17 @@
                         Button("Create Orbie…") { prepareCreation(orbie) }.disabled(orbie.record == nil || orbie.isBusy)
                             .accessibilityIdentifier("orbie-create")
                     } else {
-                        Button("Open Agent Tab") { Task { await openTerminal(orbie) } }
+                        if orbie.tabClosed {
+                            Button("Restore Original Conversation") { Task { await orbie.restoreOriginalConversation() } }.disabled(orbie.isBusy)
+                        }
+                        Button("Open Agent Tab") { Task { await openTerminal(orbie) } }.disabled(orbie.tabClosed)
                             .accessibilityIdentifier("orbie-open-agent")
                         Menu("More") {
                             Button("Set Up Again…") { confirmsRebuild = true }
-                                .disabled(orbie.isBusy || orbie.hasActiveRun || orbie.record?.pendingRunID != nil)
+                                .disabled(orbie.isBusy)
                         }
                     }
-                    if orbie.record?.pendingRunID != nil {
+                    if orbie.record?.pendingMessageID != nil {
                         Button("Keep Draft and Clear Unstarted Request") { Task { await orbie.reviewUnstartedRequest() } }
                             .disabled(orbie.isBusy)
                     }
@@ -99,17 +102,33 @@
                 Divider()
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 16) {
-                        ForEach(orbie.runs) { run in
+                        if let legacyIssue = orbie.legacyIssue {
+                            Text(legacyIssue).foregroundStyle(.secondary)
+                        }
+                        HStack {
+                            if let older = orbie.historyPage.olderPageEndID {
+                                Button("Earlier Messages") { Task { await orbie.loadHistory(endingAt: older) } }
+                            }
+                            Spacer()
+                            if let newer = orbie.historyPage.newerPageEndID {
+                                Button("Newer Messages") { Task { await orbie.loadHistory(endingAt: newer) } }
+                                Button("Latest Messages") { Task { await orbie.loadHistory(endingAt: nil) } }
+                            }
+                        }.disabled(orbie.isBusy)
+                        ForEach(orbie.historyPage.messages) { message in
                             VStack(alignment: .leading, spacing: 6) {
-                                Text(run.definition.initialInput.text).font(.headline)
-                                if let result = run.invocations.last?.result {
-                                    Text(result.text).textSelection(.enabled)
+                                Text(message.text).font(.headline)
+                                if let answer = message.answer {
+                                    Text(answer).textSelection(.enabled)
                                 } else {
-                                    Text(run.issue ?? (run.status == .ended ? "Stopped. Check the Agent tab for any work already in progress." : "Waiting for a verified reply…"))
+                                    Text(message.issue ?? (message.status == .cancelled ? "Stopped. Check the Agent tab for any work already in progress." : "Waiting for a verified reply…"))
                                         .foregroundStyle(.secondary).textSelection(.enabled)
                                 }
-                                if !run.status.isTerminal {
-                                    Button("Stop Further Delivery") { Task { await orbie.endMessage(run) } }.disabled(orbie.isBusy)
+                                if let attachments = message.attachments, !attachments.isEmpty {
+                                    Button("Show Saved Attachments") { NSWorkspace.shared.activateFileViewerSelecting(attachments.map { URL(fileURLWithPath: $0.path) }) }
+                                }
+                                if message.isPending {
+                                    Button("Stop Waiting") { Task { await orbie.endMessage(message) } }.disabled(orbie.isBusy)
                                 }
                             }.frame(maxWidth: .infinity, alignment: .leading)
                         }

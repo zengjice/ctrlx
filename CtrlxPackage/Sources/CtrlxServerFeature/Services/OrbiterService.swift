@@ -7,293 +7,205 @@ import Observation
 final class OrbiterService {
     private(set) var index: OrbiterIndex?
     private(set) var instances: [AgentWorkflowInstance] = []
-    private(set) var runs: [AgentWorkflowRun] = []
+    private(set) var messages: [AgentMessage] = []
+    private(set) var historyPage = AgentMessagePage()
+    @ObservationIgnored private var historyEndID: UUID?
     private(set) var isBusy = false
-    private(set) var isOperating = false
+    private(set) var closedAgents = Set<AgentID>()
     private(set) var issue: String?
+    private(set) var occupancy: [AgentID: String] = [:]
     var draft = OrbiterDraft()
-    var taskDrafts: [UUID: String] = [:]
+    var drafts: [String: String] = [:]
 
     @ObservationIgnored private let store: OrbiterStore
-    @ObservationIgnored private let workflows: AgentWorkflowService
+    @ObservationIgnored private let recovery: AgentRoleRecovery?
+    @ObservationIgnored private let interaction: AgentMessageService
     @ObservationIgnored private let enabled: () -> Bool
     @ObservationIgnored private let forkSource: () async throws -> AgentWorkflowInstance
-    @ObservationIgnored private let launch: (OrbiterTask) async throws -> WorkspacePaneIdentity
+    @ObservationIgnored private let launch: (OrbiterCreation) async throws -> WorkspacePaneIdentity
     @ObservationIgnored private let locateCreation: (UUID) async throws -> WorkspacePaneIdentity?
-    @ObservationIgnored private var observation: Task<Void, Never>?
-    @ObservationIgnored private var refreshRequested = false
 
     init(
-        store: OrbiterStore, workflows: AgentWorkflowService, enabled: @escaping () -> Bool,
+        store: OrbiterStore,
+        interaction: AgentMessageService,
+        recovery: AgentRoleRecovery? = nil,
+        enabled: @escaping () -> Bool,
         forkSource: @escaping () async throws -> AgentWorkflowInstance,
-        launch: @escaping (OrbiterTask) async throws -> WorkspacePaneIdentity,
+        launch: @escaping (OrbiterCreation) async throws -> WorkspacePaneIdentity,
         locateCreation: @escaping (UUID) async throws -> WorkspacePaneIdentity?
     ) {
         self.store = store
-        self.workflows = workflows
+        self.interaction = interaction
         self.enabled = enabled
+        self.recovery = recovery
         self.forkSource = forkSource
         self.launch = launch
         self.locateCreation = locateCreation
     }
 
-    func startObserving() {
-        guard observation == nil else { return }
-        observation = Task { [weak self, workflows] in
-            for await _ in await workflows.changes() {
-                guard !Task.isCancelled else { return }
-                await self?.refresh(inspect: false)
-            }
+    var agents: [OrbiterRecord] {
+        index?.agents ?? []
+    }
+
+    func currentInstance(_ record: OrbiterRecord) -> AgentWorkflowInstance? {
+        record.agentID?.resolve(in: instances, identity: { $0.agentID }).value
+    }
+
+    func history(_ record: OrbiterRecord) -> [AgentMessage] {
+        if historyAgentID == record.id {
+            return historyPage.messages
         }
+        return record.messageIDs.compactMap { id in messages.first { $0.id == id } }
     }
 
-    func shutdown() async {
-        observation?.cancel()
-        observation = nil
-        await saveDrafts()
+    func loadHistory(endingAt id: UUID?) async {
+        guard !isBusy, let record = agents.first(where: { $0.id == historyAgentID }) else { return }
+        historyEndID = id == record.messageIDs.last ? nil : id
+        await refresh(inspect: false)
     }
 
-    var tasks: [OrbiterTask] {
-        index?.tasks ?? []
-    }
-
-    func executions(_ task: OrbiterTask) -> [AgentWorkflowRun] {
-        task.runIDs.compactMap { id in runs.first { $0.id == id } }
-    }
-
-    func currentInstance(_ task: OrbiterTask) -> AgentWorkflowInstance? {
-        guard let hostID = index?.hostID else { return nil }
-        return task.agentID(hostID: hostID)?.resolve(in: instances, identity: { $0.agentID }).value
-    }
-
-    func availability(_ task: OrbiterTask) -> String? {
-        guard enabled() else { return "Enable Orbie on this Mac before delivering tasks." }
-        guard !task.archived else { return "Unarchive this task to continue." }
-        guard let current = currentInstance(task) else {
-            return "Waiting for the existing Agent. Open its tab and use Resume or Use Shell if recovery is needed. No task will be resent automatically."
+    func availability(_ record: OrbiterRecord) -> String? {
+        guard enabled() else { return "Enable Orbie on this Mac before sending messages." }
+        guard let current = currentInstance(record) else { return "The Agent is unavailable. Open its tab to check startup or recovery." }
+        if let issue = current.capabilityIssue {
+            return issue
         }
-        if let reason = current.capabilityIssue {
-            return reason
+        if let issue = occupancy[current.agentID] {
+            return issue
         }
-        guard task.pendingRunID == nil else { return "The last submission is unconfirmed. Review its execution before sending again." }
-        guard !executions(task).contains(where: { !$0.status.isTerminal }) else { return "This task has an unfinished execution. Questions, approvals and recovery stay in the Agent tab." }
         switch current.readiness {
         case .ready: return nil
         case .busy: return "The Agent is working. Your draft is kept."
         case .draft: return "The Agent has unsent terminal input. Your draft is kept."
         case .awaitingHuman: return "Continue the question or approval in the Agent tab."
-        case .unavailable: return "The Agent input cannot be verified. Check its tab."
+        case .unavailable: return current.inputIssue ?? "The Agent input cannot be verified. Check its tab."
         }
     }
 
-    var activeCount: Int {
-        tasks.filter { !$0.archived }.filter { task in
-            task.pendingRunID != nil || executions(task).contains { !$0.status.isTerminal }
-                || (task.origin != .associated && task.binding == nil)
-                || currentInstance(task)?.readiness == .busy
-        }.count
-    }
-
-    func materialDirectory(_ task: OrbiterTask) -> URL {
-        store.paths.orbiterDirectory(task.id)
-    }
-
-    func taskForNavigation(_ id: UUID) async throws -> OrbiterTask {
-        guard let task = try await store.load().tasks.first(where: { $0.id == id }) else {
-            throw AgentWorkflowError("This task is no longer in the saved task index.")
-        }
-        return task
+    func recordForNavigation(_ id: String) async throws -> OrbiterRecord {
+        guard let record = try await store.load().agents.first(where: { $0.id == id }) else { throw AgentWorkflowError("This Agent is no longer associated with Orbie.") }
+        return record
     }
 
     func refresh(inspect: Bool = true) async {
-        guard !isBusy else { refreshRequested = true
-            return
-        }
+        guard !isBusy else { return }
         isBusy = true
-        defer { finishOperation() }
+        defer { isBusy = false }
         do { try await reconcile(inspect: inspect)
+            if inspect {
+                try await interaction.resumePendingReplies()
+            }
             issue = nil
         } catch { issue = error.localizedDescription }
     }
 
     func saveDrafts() async {
-        guard !isBusy, let index else { refreshRequested = true
-            return
-        }
-        isBusy = true
-        defer { finishOperation() }
+        guard !isBusy, let index else { return }
         do { try await persist(index) } catch { issue = error.localizedDescription }
     }
 
-    /// A creation intent is never retried implicitly, including after an App restart.
+    func shutdown() async {
+        await saveDrafts()
+    }
+
     @discardableResult
-    func create(pluginID: String, providerID: String?, fork: Bool = false) async throws -> UUID {
+    func create(pluginID: String, providerID: String?, fork: Bool = false) async throws -> String {
         try begin()
-        defer { finishOperation() }
+        defer { isBusy = false }
         try await reconcile(inspect: true)
         try draft.validate()
-        guard enabled(), activeCount < 2, var updated = index else { throw AgentWorkflowError("At most two Orbiter tasks can be active. The draft is kept; nothing is queued.") }
-        guard !updated.tasks.contains(where: { $0.id == draft.id }) else { throw AgentWorkflowError("This task already has a creation record. Check its tab instead of creating another.") }
+        guard enabled(), var updated = index else { throw AgentWorkflowError("Enable Orbie before creating an Orbiter.") }
+        guard !agents.contains(where: { $0.creation?.id == draft.id }) else { throw AgentWorkflowError("This creation is already recorded. Check the existing Agent before retrying.") }
         let source = fork ? try await forkSource() : nil
         guard source == nil || (source?.pluginID == pluginID && source?.readiness == .ready && UUID(uuidString: source?.conversationID ?? "") != nil) else {
-            throw AgentWorkflowError("Fork requires a ready, verified Orbie conversation of the same Agent type. Choose New Agent for a different type.")
+            throw AgentWorkflowError("Fork requires a ready, verified Orbie conversation of the same Agent type. Choose New Agent for another type.")
         }
-        let title = uniqueTitle(draft.title)
-        var task = OrbiterTask(
-            id: draft.id, title: title, createdAt: Date(), goal: draft.goal, source: draft.source,
-            materials: draft.materials, directory: draft.directory, origin: fork ? .fork : .newAgent,
-            pluginID: pluginID, providerID: providerID, forkSource: source, draft: ""
-        )
-        task.draft = task.initialInput
-        taskDrafts[task.id] = task.draft
-        updated.tasks.append(task)
+        let creation = OrbiterCreation(id: draft.id, title: draft.title, directory: draft.directory, pluginID: pluginID, providerID: providerID, forkSource: source)
+        let text = [draft.goal, draft.source, draft.materials].filter { !$0.isEmpty }.joined(separator: "\n\n")
+        var record = OrbiterRecord(creation: creation, sourceAgentID: source?.agentID, draft: text)
+        record.materialsDirectories = try [await store.prepareMaterials(creation, text: text)]
+        updated.agents.append(record)
+        drafts[record.id] = text
         try await persist(updated)
-        try await store.saveMaterials(task, runs: [])
         do {
-            task.pane = try await launch(task)
-            try await replace(task)
+            let oldKey = record.id
+            record.pane = try await launch(creation)
+            record.agentID = record.pane.map { AgentID(hostID: updated.hostID, paneID: $0.paneID) }
+            drafts[record.id] = drafts.removeValue(forKey: oldKey)
+            try await replace(record, previousID: oldKey)
             draft = OrbiterDraft()
             if let index {
                 try await persist(index)
             }
-            // Only the live user action may perform this initial delivery.
-            // Refresh and reopening never execute a saved draft.
-            for _ in 0..<20 {
-                try await reconcile(inspect: true)
-                guard let confirmed = tasks.first(where: { $0.id == task.id }) else { break }
-                if availability(confirmed) == nil {
-                    try await deliver(confirmed)
-                    return task.id
-                }
-                if confirmed.binding != nil {
-                    break
-                }
-                try await Task.sleep(for: .milliseconds(500))
-            }
-            issue = "Agent created. Finish startup in its tab, then explicitly send the saved task."
-            return task.id
+            // The creation action opens the Agent with the captured material in
+            // its draft. It never schedules hidden work or retries a lost write.
+            try await reconcile(inspect: true)
+            return record.id
         } catch {
-            issue = "Creation or initial delivery was not fully confirmed: \(error.localizedDescription) The task, draft and any created tab are kept. Check the existing task before retrying."
-            throw AgentWorkflowError(issue ?? error.localizedDescription)
+            issue = "Creation was not fully confirmed: \(error.localizedDescription) The draft and any created tab are kept."
+            throw error
         }
     }
 
-    func associate(_ candidate: AgentWorkflowInstance, with taskID: UUID? = nil) async throws -> UUID {
+    func associate(_ candidate: AgentWorkflowInstance) async throws -> String {
         try begin()
-        defer { finishOperation() }
+        defer { isBusy = false }
         try await reconcile(inspect: true)
         guard
             enabled(), var updated = index, candidate.hostID == updated.hostID,
-            let current = instances.first(where: { candidate.matchesBinding($0) }), current.capabilities != nil,
-            !tasks.contains(where: { $0.id != taskID && $0.agentID(hostID: updated.hostID) == current.agentID }) else {
-            throw AgentWorkflowError("Choose an unassociated, verified Agent on this Host.")
-        }
-        if let taskID {
-            guard
-                var task = tasks.first(where: { $0.id == taskID }), task.pluginID == current.pluginID,
-                task.pendingRunID == nil, !executions(task).contains(where: { !$0.status.isTerminal }) else {
-                throw AgentWorkflowError("Review unfinished executions before associating another Agent of the same type.")
-            }
-            task.pane = current.workspacePane
-            task.binding = current
-            task.directory = current.workingDirectory
-            try await replace(task)
-            return taskID
-        }
-        try draft.validate()
-        guard !updated.tasks.contains(where: { $0.id == draft.id }) else { throw AgentWorkflowError("This task already exists.") }
-        var task = OrbiterTask(id: draft.id, title: uniqueTitle(draft.title), createdAt: Date(), goal: draft.goal, source: draft.source, materials: draft.materials, directory: current.workingDirectory, origin: .associated, pluginID: current.pluginID, providerID: nil, forkSource: nil, pane: current.workspacePane, binding: current, draft: "")
-        task.draft = task.initialInput
-        updated.tasks.append(task)
-        taskDrafts[task.id] = task.draft
+            let current = instances.first(where: { $0.matchesBinding(candidate) }),
+            !agents.contains(where: { $0.agentID == current.agentID }) else { throw AgentWorkflowError("Choose an unassociated, verified Agent on this Host.") }
+        let record = OrbiterRecord(agentID: current.agentID, binding: current, pane: current.workspacePane)
+        updated.agents.append(record)
         try await persist(updated)
-        try await store.saveMaterials(task, runs: [])
-        draft = OrbiterDraft()
-        if let index {
-            try await persist(index)
+        return record.id
+    }
+
+    func send(_ id: String) async throws {
+        try begin()
+        defer { isBusy = false }
+        let text = drafts[id] ?? ""
+        try await reconcile(inspect: true)
+        guard var record = agents.first(where: { $0.id == id }), let current = currentInstance(record) else { throw AgentWorkflowError("Agent not found.") }
+        if let issue = availability(record) {
+            throw AgentWorkflowError(issue)
         }
-        return task.id
-    }
-
-    func send(_ id: UUID) async throws {
-        try begin()
-        defer { finishOperation() }
-        try await reconcile(inspect: true)
-        guard let task = tasks.first(where: { $0.id == id }) else { throw AgentWorkflowError("Task not found.") }
-        try await deliver(task)
-    }
-
-    func reconnect(_ id: UUID) async throws {
-        try begin()
-        defer { finishOperation() }
-        try await reconcile(inspect: true)
-        guard
-            var task = tasks.first(where: { $0.id == id }), task.pendingRunID == nil,
-            !executions(task).contains(where: { !$0.status.isTerminal }),
-            let current = currentInstance(task), current.capabilities != nil else { throw AgentWorkflowError("Review unfinished executions and recover the Agent in its tab first.") }
-        task.binding = current
-        task.pane = current.workspacePane
-        try await replace(task)
-    }
-
-    func setArchived(_ id: UUID, _ archived: Bool) async throws {
-        try begin()
-        defer { finishOperation() }
-        guard
-            var task = tasks.first(where: { $0.id == id }), task.pendingRunID == nil,
-            !executions(task).contains(where: { !$0.status.isTerminal }),
-            currentInstance(task)?.readiness != .busy else { throw AgentWorkflowError("End the task execution before archiving.") }
-        task.archived = archived
-        try await replace(task)
-    }
-
-    func end(_ run: AgentWorkflowRun) async throws {
-        try begin()
-        defer { finishOperation() }
-        guard tasks.contains(where: { $0.runIDs.contains(run.id) }) else { throw AgentWorkflowError("Execution not associated with a task.") }
-        _ = try await workflows.end(runID: run.id, expectedRevision: run.revision)
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let message = AgentMessage(instance: current, text: text)
+        record.messageIDs.append(message.id)
+        try await replace(record)
+        try await interaction.send(message)
+        if try await interaction.store.message(message.id)?.status != .failed, drafts[id] == text {
+            drafts[id] = ""
+        }
         try await reconcile(inspect: false)
     }
 
-    func clearUnstartedRequest(_ id: UUID) async throws {
-        try begin()
-        defer { finishOperation() }
-        try await reconcile(inspect: false)
-        guard var task = tasks.first(where: { $0.id == id }), let pending = task.pendingRunID else { return }
-        guard !runs.contains(where: { $0.id == pending }) else { throw AgentWorkflowError("Review the existing execution; it cannot be resent as an unstarted request.") }
-        task.pendingRunID = nil
-        task.runIDs.removeAll { $0 == pending }
-        try await replace(task)
+    func stopWaiting(_ message: AgentMessage) async throws {
+        guard agents.contains(where: { $0.messageIDs.contains(message.id) }) else { throw AgentWorkflowError("Message not found.") }
+        try await interaction.stopWaiting(message.id)
+        await refresh(inspect: false)
     }
 
-    private func deliver(_ task: OrbiterTask) async throws {
-        if let reason = availability(task) {
-            throw AgentWorkflowError(reason)
-        }
-        guard activeCount < 2, let current = currentInstance(task), let index else { throw AgentWorkflowError("Two Orbiter tasks are active. Your draft is kept; nothing is queued.") }
-        let text = taskDrafts[task.id] ?? task.draft
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw AgentWorkflowError("Enter a follow-up message.") }
-        let id = UUID()
-        let node = AgentWorkflowNode(name: "Task", agentInstanceID: current.id)
-        let definition = try await workflows.save(.init(id: id, name: "Orbiter: \(task.title)", hostID: index.hostID, nodes: [node], edges: [], entryNodeID: node.id, initialInput: .init(text: text)), expectedRevision: nil)
-        var updated = task
-        updated.runIDs.append(id)
-        updated.pendingRunID = id
-        try await replace(updated)
-        do {
-            _ = try await workflows.start(definitionID: definition.id, expectedRevision: definition.revision, requestID: id, authorizationExpiresAt: Date().addingTimeInterval(3_600), expectedInstances: [current], retain: true)
-            try await reconcile(inspect: false)
-            issue = nil
-        } catch {
-            if error is AgentWorkflowStartRejection {
-                let archive = try await workflows.snapshot()
-                if !archive.runs.contains(where: { $0.id == id }) {
-                    updated.pendingRunID = nil
-                    updated.runIDs.removeAll { $0 == id }
-                    try await replace(updated)
-                }
+    func restoreOriginalConversation(_ id: String) async throws {
+        try begin()
+        defer { isBusy = false }
+        guard var record = agents.first(where: { $0.id == id }), let agentID = record.agentID, let recovery else { throw AgentWorkflowError("No recovery target is available.") }
+        let restored = try await recovery.restore(agentID)
+        record.agentID = restored.agentID
+        record.binding = restored
+        record.pane = restored.workspacePane
+        drafts[record.id] = drafts.removeValue(forKey: id)
+        try await replace(record, previousID: id)
+        try await reconcile(inspect: true)
+    }
+
+    var historyAgentID: String? {
+        didSet {
+            if historyAgentID != oldValue {
+                historyEndID = nil
+                historyPage = AgentMessagePage()
             }
-            throw error
         }
     }
 
@@ -301,46 +213,56 @@ final class OrbiterService {
         if index == nil {
             index = try await store.load()
             draft = index?.draft ?? .init()
-            taskDrafts = Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0.draft) })
+            drafts = Dictionary(uniqueKeysWithValues: agents.map { ($0.id, $0.draft) })
         }
         guard var updated = index else { return }
-        let archive = try await workflows.snapshot(refreshInstances: inspect)
-        guard archive.hostID == updated.hostID else { throw AgentWorkflowError("The Orbiter Host changed.") }
-        instances = archive.instances
-        runs = archive.runs.filter { run in updated.tasks.contains { $0.runIDs.contains(run.id) } }
-        for i in updated.tasks.indices {
-            var task = updated.tasks[i]
-            if inspect, task.pane == nil, task.origin != .associated {
-                task.pane = try await locateCreation(task.id)
-            }
-            if let current = currentInstance(task) {
-                task.binding = current
-                task.pane = current.workspacePane
-                task.directory = current.workingDirectory
-            }
-            if let pending = task.pendingRunID, let run = runs.first(where: { $0.id == pending }) {
-                task.pendingRunID = nil
-                if (taskDrafts[task.id] ?? task.draft) == run.definition.initialInput.text {
-                    taskDrafts[task.id] = ""
+        instances = try await interaction.catalog.snapshot(refresh: inspect)
+        occupancy = [:]
+        messages = []
+        for i in updated.agents.indices {
+            var record = updated.agents[i]
+            let oldKey = record.id
+            if inspect, record.pane == nil, let creation = record.creation {
+                record.pane = try await locateCreation(creation.id)
+                record.agentID = record.pane.map { AgentID(hostID: updated.hostID, paneID: $0.paneID) }
+                if record.id != oldKey {
+                    drafts[record.id] = drafts.removeValue(forKey: oldKey)
                 }
             }
-            try await store.saveMaterials(task, runs: executions(task))
-            updated.tasks[i] = task
+            if inspect, let id = record.agentID, let recovery {
+                closedAgents.remove(id)
+                if try await recovery.isClosed(id) {
+                    closedAgents.insert(id)
+                }
+            }
+            if let current = currentInstance(record) {
+                record.binding = current
+                record.pane = current.workspacePane
+                occupancy[current.agentID] = try await interaction.availability(current.agentID)
+            }
+            messages += try await interaction.store.messages(record.messageIDs, limit: 1)
+            if historyAgentID == record.id {
+                let page = try await interaction.store.page(record.messageIDs, endingAt: historyEndID)
+                if historyAgentID == record.id {
+                    historyPage = page
+                }
+            }
+            updated.agents[i] = record
         }
         try await persist(updated)
     }
 
-    private func replace(_ task: OrbiterTask) async throws {
-        guard var updated = index, let position = updated.tasks.firstIndex(where: { $0.id == task.id }) else { throw AgentWorkflowError("Task not found.") }
-        updated.tasks[position] = task
+    private func replace(_ record: OrbiterRecord, previousID: String? = nil) async throws {
+        guard var updated = index, let i = updated.agents.firstIndex(where: { $0.id == (previousID ?? record.id) }) else { throw AgentWorkflowError("Agent association not found.") }
+        updated.agents[i] = record
         try await persist(updated)
     }
 
     private func persist(_ value: OrbiterIndex) async throws {
         var updated = value
         updated.draft = draft
-        for i in updated.tasks.indices {
-            updated.tasks[i].draft = taskDrafts[updated.tasks[i].id] ?? updated.tasks[i].draft
+        for i in updated.agents.indices {
+            updated.agents[i].draft = drafts[updated.agents[i].id] ?? updated.agents[i].draft
         }
         if updated != index {
             try await store.save(updated)
@@ -348,29 +270,8 @@ final class OrbiterService {
         }
     }
 
-    private func uniqueTitle(_ raw: String) -> String {
-        let base = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        var title = base
-        var suffix = 2
-        while tasks.contains(where: { $0.title == title }) {
-            title = "\(base) \(suffix)"
-            suffix += 1
-        }
-        return title
-    }
-
     private func begin() throws {
-        guard !isBusy else { throw AgentWorkflowError("A task operation is already in progress.") }
+        guard !isBusy else { throw AgentWorkflowError("An Agent operation is already in progress.") }
         isBusy = true
-        isOperating = true
-    }
-
-    private func finishOperation() {
-        isBusy = false
-        isOperating = false
-        if refreshRequested {
-            refreshRequested = false
-            Task { [weak self] in await self?.refresh(inspect: false) }
-        }
     }
 }
