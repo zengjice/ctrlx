@@ -7,6 +7,31 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.167 — Notification target persistence and faster voice correction
+
+- Preserve a Viewer's authenticated stable-notification capability across Host
+  restart, same-key refresh and device rename, keeping offline push targets and
+  answer actions available. Clear it on key replacement, unpairing or an
+  authenticated legacy Hello; late evidence for an old key cannot restore it.
+  Source: `78227c4f`.
+- Include iOS source that waits for a fresh target-Host workspace snapshot before
+  resolving a notification, handling cold starts and reconnects without guessing
+  from stale state. Distinguish connection/directory timeouts from a missing
+  Agent and cancel pending navigation when superseded. This Mac publication
+  does not package or install the iOS App. Source: `78227c4f`.
+- Disable provider thinking for interactive voice correction and lower the
+  response budget to the corrected text's needs, reducing reasoning delay while
+  retaining output-completeness and literal/intent checks. Source: `aacbe5c8`.
+
+- Validation: 109 focused Swift tests and 34 distributed-installer process/flow
+  tests passed. Lint for 16 Swift files, both boundary checks and diff checks
+  passed. Reused prior isolated native Orbie/Browser/Simulator acceptance after
+  checking source impact, and codec acceptance after verifying the unchanged CEF
+  framework hash. No fresh native UI, production APNs delivery, live-provider
+  latency benchmark, physical iPhone, full E2E, unfiltered unit suite or Apple
+  Intelligence evaluation was run. This release builds macOS only; its iOS
+  notification navigation changes remain source-only in this publication.
+
 ## 3.0.166 — Durable Agent identity and mixed-language voice correction
 
 - Keep Orbie, Orbiter, workflow participants and resource associations tied to
