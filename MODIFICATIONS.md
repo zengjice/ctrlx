@@ -7,6 +7,36 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.170 — Orbie quick conversation panel
+
+- Keep the latest three exchanges above one native composer in the global Mac
+  panel. Switch between Orbie and associated Orbiters, open the Agent terminal or
+  full history, and access creation/Fork through the existing forms. Drafts and
+  undo history stay separate for each Agent; Return sends, Shift-Return inserts a
+  line, and IME composition keeps its own Return. Source: `e1214117`.
+- Distinguish delivery confirmation, work, reply verification, human input,
+  uncertain results and recovery using existing evidence. Recheck never resends
+  input. Show startup failures with an explicit retry that preserves an already
+  running Workflow service. Keep replies visible during refresh, clear stale undo
+  after draft replacement, follow new content only when reading at the bottom,
+  and validate the selected Orbiter's native identity before Fork.
+- Automatically finish a previously requested recovery when the original native
+  conversation becomes verifiable after delayed startup, restart or a lost reply.
+  Refresh does not create another terminal or resend input; a single Orbiter's
+  inspection failure does not block healthy Agents. Source: `6faff356`.
+
+- Validation: 60 focused tests in 15 suites passed serially, including isolated
+  AppKit/SwiftUI controls, light/dark and narrow layouts, Agent switching, drafts,
+  native undo, composition handling, scrolling, startup retry, Fork guards and
+  recovery. All 34 distributed-installer process/flow checks, lint for 21 Swift
+  files, both boundary checks and diff checks passed. The additional local shell
+  wrapper check still fails because the user's existing wrapper drops arguments;
+  it is not part of the distributed installer and was left unchanged.
+- This release builds macOS only. Installed-App global hotkey/multi-display use,
+  physical IME switching, real-account Fork, full E2E, the unfiltered unit suite
+  and Apple Intelligence evaluations were not run. Unrelated README edits remain
+  uncommitted.
+
 ## 3.0.169 — Reliable recovery of stopped Orbie Agents
 
 - Preserve the role's last verified native conversation when an Orbie/Orbiter
