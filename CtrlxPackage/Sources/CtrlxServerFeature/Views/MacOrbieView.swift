@@ -25,7 +25,7 @@
                                 // While this window is open, startup and human-owned
                                 // input can become ready without a manual refresh.
                                 // In-flight answers only read the existing ledger.
-                                await orbie.refresh(inspect: orbie.record?.creation != nil && !orbie.hasPendingMessage && orbie.availability != nil)
+                                await orbie.refresh(inspect: orbie.canRestore || orbie.isRestoring || (orbie.record?.creation != nil && !orbie.hasPendingMessage && orbie.availability != nil))
                             }
                         }
                 } else {

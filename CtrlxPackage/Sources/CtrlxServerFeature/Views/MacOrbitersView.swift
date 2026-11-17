@@ -35,7 +35,7 @@ struct MacOrbitersView: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(record.title).font(.headline)
                                 Text(record.directory).font(.caption).lineLimit(1).truncationMode(.middle)
-                                Text(service.currentInstance(record)?.readiness.rawValue ?? "Unavailable").font(.caption).foregroundStyle(.secondary)
+                                Text(record.agentID.map { service.restoringAgents.contains($0) } == true ? "Restoring…" : service.currentInstance(record)?.readiness.rawValue ?? "Unavailable").font(.caption).foregroundStyle(.secondary)
                             }.tag(record.id)
                         }
                     }
@@ -68,6 +68,7 @@ struct MacOrbitersView: View {
                 service.historyAgentID = selectedID
                 await service.refresh(inspect: false)
             }
+            .onChange(of: service.historyAgentID) { _, id in selectedID = id }
             .task(id: service.draft) { await saveDraftAfterEditing() }
             .task(id: service.drafts) { await saveDraftAfterEditing() }
             .onDisappear { Task { await service.saveDrafts() } }
@@ -135,9 +136,9 @@ struct MacOrbitersView: View {
             }
             HStack {
                 if let agentID = record.agentID, service.currentInstance(record) == nil {
-                    AgentRoleResumeButton(tabClosed: service.closedAgents.contains(agentID)) { perform { try await service.restoreOriginalConversation(record.id)
-                        selectedID = nil
-                    } }.disabled(service.isBusy)
+                    if !service.restoringAgents.contains(agentID) {
+                        AgentRoleResumeButton(tabClosed: service.closedAgents.contains(agentID)) { perform { try await service.restoreOriginalConversation(record.id) } }.disabled(service.isBusy)
+                    }
                     Button("New Agent Instead…") { selectedID = nil }
                 }
                 Button("Open Agent Tab") { perform { try await coordinator.openOrbiter(record.id, openWindow: openWindow) } }.disabled(record.agentID.map { service.closedAgents.contains($0) } ?? true)

@@ -28,7 +28,7 @@ struct AgentRoleResumeCompletionTests {
         let descriptor = descriptor(live)
         let proof = try proof(live)
         try await recovery.capture(live.agentID, descriptor: descriptor, identity: proof.identity, invalidated: false)
-        await #expect(throws: AgentWorkflowError.self) { try await recovery.restore(live.agentID) }
+        await #expect(throws: AgentRoleRecovery.Starting.self) { try await recovery.restore(live.agentID) }
         let firstIntent = try #require(try await recovery.entry(live.agentID)?.intent)
         #expect(firstIntent.attempted && launches.value == 1)
 
@@ -57,7 +57,7 @@ struct AgentRoleResumeCompletionTests {
         var shell = proof.state
         shell.agentSession = nil
         try await recovery.captureSnapshot(live.agentID, pane: .init(id: live.agentID.paneID, runtimeID: live.paneID, directory: f.root.path), state: shell, detected: nil, scanAvailable: true, runtimeID: { _ in nil })
-        await #expect(throws: AgentWorkflowError.self) { try await recovery.restore(live.agentID) }
+        await #expect(throws: AgentRoleRecovery.Starting.self) { try await recovery.restore(live.agentID) }
         #expect(launches.value == 2)
         #expect(try await recovery.entry(live.agentID)?.intent?.id != firstIntent.id)
         #expect(f.writes.isEmpty)
@@ -86,7 +86,7 @@ struct AgentRoleResumeCompletionTests {
         reference.setValue(recovery)
         try await recovery.capture(live.agentID, descriptor: descriptor(live), invalidated: false)
         for expectedCount in 1...2 {
-            await #expect(throws: AgentWorkflowError.self) { try await recovery.restore(live.agentID) }
+            await #expect(throws: AgentRoleRecovery.Starting.self) { try await recovery.restore(live.agentID) }
             #expect(try await recovery.entry(live.agentID)?.intent == nil)
             #expect(launches.value == expectedCount)
         }

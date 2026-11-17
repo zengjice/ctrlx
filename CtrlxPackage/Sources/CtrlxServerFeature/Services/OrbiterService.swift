@@ -12,6 +12,8 @@ final class OrbiterService {
     @ObservationIgnored private var historyEndID: UUID?
     private(set) var isBusy = false
     private(set) var closedAgents = Set<AgentID>()
+    private(set) var restoringAgents = Set<AgentID>()
+    private(set) var recoveryIssues: [AgentID: String] = [:]
     private(set) var issue: String?
     private(set) var occupancy: [AgentID: String] = [:]
     var draft = OrbiterDraft()
@@ -48,7 +50,10 @@ final class OrbiterService {
     }
 
     func currentInstance(_ record: OrbiterRecord) -> AgentWorkflowInstance? {
-        record.agentID?.resolve(in: instances, identity: { $0.agentID }).value
+        if let id = record.agentID, restoringAgents.contains(id) || recoveryIssues[id] != nil {
+            return nil
+        }
+        return record.agentID?.resolve(in: instances, identity: { $0.agentID }).value
     }
 
     func history(_ record: OrbiterRecord) -> [AgentMessage] {
@@ -66,6 +71,12 @@ final class OrbiterService {
 
     func availability(_ record: OrbiterRecord) -> String? {
         guard enabled() else { return "Enable Orbie on this Mac before sending messages." }
+        if let id = record.agentID, let issue = recoveryIssues[id] {
+            return issue
+        }
+        if let id = record.agentID, restoringAgents.contains(id) {
+            return "Restoring the original conversation…"
+        }
         guard let current = currentInstance(record) else { return "The Agent is unavailable. Open its tab to check startup or recovery." }
         if let issue = current.capabilityIssue {
             return issue
@@ -166,10 +177,11 @@ final class OrbiterService {
         defer { isBusy = false }
         let text = drafts[id] ?? ""
         try await reconcile(inspect: true)
-        guard var record = agents.first(where: { $0.id == id }), let current = currentInstance(record) else { throw AgentWorkflowError("Agent not found.") }
+        guard var record = agents.first(where: { $0.id == id }) else { throw AgentWorkflowError("Agent not found.") }
         if let issue = availability(record) {
             throw AgentWorkflowError(issue)
         }
+        guard let current = currentInstance(record) else { throw AgentWorkflowError("Agent not found.") }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let message = AgentMessage(instance: current, text: text)
         record.messageIDs.append(message.id)
@@ -191,13 +203,30 @@ final class OrbiterService {
         try begin()
         defer { isBusy = false }
         guard var record = agents.first(where: { $0.id == id }), let agentID = record.agentID, let recovery else { throw AgentWorkflowError("No recovery target is available.") }
-        let restored = try await recovery.restore(agentID)
+        let restored: AgentWorkflowInstance
+        do { restored = try await recovery.restore(agentID) } catch is AgentRoleRecovery.Starting {
+            restoringAgents.insert(agentID)
+            return
+        }
         record.agentID = restored.agentID
         record.binding = restored
         record.pane = restored.workspacePane
-        drafts[record.id] = drafts.removeValue(forKey: id)
+        record.draft = drafts[id] ?? record.draft
         try await replace(record, previousID: id)
+        remapRestoredAgent(from: agentID, to: record)
         try await reconcile(inspect: true)
+    }
+
+    private func remapRestoredAgent(from old: AgentID, to record: OrbiterRecord) {
+        closedAgents.remove(old)
+        restoringAgents.remove(old)
+        recoveryIssues[old] = nil
+        let oldKey = OrbiterRecord(agentID: old).id
+        guard record.id != oldKey else { return }
+        drafts[record.id] = drafts.removeValue(forKey: oldKey) ?? record.draft
+        if historyAgentID == oldKey {
+            historyAgentID = record.id
+        }
     }
 
     var historyAgentID: String? {
@@ -216,7 +245,7 @@ final class OrbiterService {
             drafts = Dictionary(uniqueKeysWithValues: agents.map { ($0.id, $0.draft) })
         }
         guard var updated = index else { return }
-        instances = try await interaction.catalog.snapshot(refresh: inspect)
+        var restoredAgents: [(AgentID, OrbiterRecord)] = []
         occupancy = [:]
         messages = []
         for i in updated.agents.indices {
@@ -230,11 +259,37 @@ final class OrbiterService {
                 }
             }
             if inspect, let id = record.agentID, let recovery {
+                restoringAgents.remove(id)
+                recoveryIssues[id] = nil
                 closedAgents.remove(id)
-                if try await recovery.isClosed(id) {
-                    closedAgents.insert(id)
+                do {
+                    if try await recovery.isClosed(id) {
+                        closedAgents.insert(id)
+                    }
+                    if let restored = try await recovery.checkPendingRestore(id) {
+                        record.agentID = restored.agentID
+                        record.binding = restored
+                        record.pane = restored.workspacePane
+                        record.draft = drafts[oldKey] ?? record.draft
+                        restoredAgents.append((id, record))
+                    }
+                } catch is AgentRoleRecovery.Starting {
+                    restoringAgents.insert(id)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    recoveryIssues[id] = error.localizedDescription
                 }
             }
+            updated.agents[i] = record
+        }
+        try await persist(updated)
+        for (id, record) in restoredAgents {
+            remapRestoredAgent(from: id, to: record)
+        }
+        instances = try await interaction.catalog.snapshot(refresh: inspect)
+        for i in updated.agents.indices {
+            var record = updated.agents[i]
             if let current = currentInstance(record) {
                 if inspect {
                     try await recovery?.confirmResume(current)

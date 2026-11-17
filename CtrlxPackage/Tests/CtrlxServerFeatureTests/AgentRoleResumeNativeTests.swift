@@ -95,7 +95,7 @@ struct AgentRoleResumeNativeTests {
                         try #require(try await run(["set-option", "-p", "-t", pane.paneId, WorkspaceTmuxRecovery.paneKey, identity.paneID.uuidString]).isSuccess)
                     }
                     // The process may now start; inspection still waits for its native conversation.
-                    await #expect(throws: AgentWorkflowError.self) { try await recovery.restore(id) }
+                    await #expect(throws: AgentRoleRecovery.Starting.self) { try await recovery.restore(id) }
                     for _ in 0..<100 where !FileManager.default.fileExists(atPath: marker.path) {
                         try await Task.sleep(for: .milliseconds(25))
                     }

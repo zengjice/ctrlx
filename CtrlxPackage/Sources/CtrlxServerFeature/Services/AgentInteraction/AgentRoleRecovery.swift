@@ -6,6 +6,7 @@ import Foundation
 /// launches anything. Explicit Resume reuses a stopped terminal or creates a new pane.
 actor AgentRoleRecovery {
     struct NotLaunched: Error { let reason: String }
+    struct Starting: Error { }
     static let launchTokenOption = "@ctrlx-role-resume-id"
 
     struct Entry: Codable, Equatable, Sendable {
@@ -61,6 +62,23 @@ actor AgentRoleRecovery {
 
     func isClosed(_ id: AgentID) async throws -> Bool {
         try await !paneExists(id)
+    }
+
+    /// Observe an explicitly requested launch. Refresh never launches or retries input.
+    func checkPendingRestore(_ id: AgentID) async throws -> AgentWorkflowInstance? {
+        guard var record = try entry(id), var intent = record.intent, intent.attempted else { return nil }
+        guard busy.insert(id).inserted else { throw Starting() }
+        defer { busy.remove(id) }
+        guard record.invalidated != true, let descriptor = record.descriptor else {
+            throw AgentWorkflowError(record.issue ?? "The saved conversation changed during recovery. Check its terminal.")
+        }
+        if intent.pane == nil {
+            intent.pane = try await locate(intent.id)
+            guard try entry(id) == record else { throw AgentWorkflowError("The recovery request changed. Check its terminal.") }
+            record.intent = intent
+            try save(record)
+        }
+        return try await verifyRestore(id, intent: intent, descriptor: descriptor)
     }
 
     func captureSnapshot(_ id: AgentID, pane: WorkspaceRecoveryPane, state: PaneState?, detected: TmuxService.DetectedAgentPane?, scanAvailable: Bool, runtimeID: @Sendable (String) -> String?) throws {
@@ -188,25 +206,30 @@ actor AgentRoleRecovery {
         }
         // A concurrent live capture may already have settled this intent.
         // Keep it cleared even if this call's inspection is still inconclusive.
+        return try await verifyRestore(id, intent: intent, descriptor: descriptor)
+    }
+
+    private func verifyRestore(_ id: AgentID, intent: Intent, descriptor: AgentResumeDescriptor) async throws -> AgentWorkflowInstance {
         guard let pane = intent.pane else {
             throw AgentWorkflowError("Recovery creation could not be confirmed. Check the terminal list; no second tab was created.")
         }
         guard (pane.paneID == id.paneID) == (intent.inPlace == true) else { throw AgentWorkflowError("The recovery terminal identity does not match the requested destination.") }
+        guard let live = try await inspect(pane, descriptor), !live.conversationID.isEmpty else { throw Starting() }
         guard
-            let live = try await inspect(pane, descriptor), live.hostID == id.hostID,
+            live.hostID == id.hostID,
             live.workspacePane.isSamePane(as: pane), live.pluginID == descriptor.pluginID,
             live.conversationID == descriptor.sessionID else {
-            throw AgentWorkflowError("The recovery tab is starting. Check it, then choose Restore Original Conversation again to verify it. No duplicate tab will be created.")
+            throw AgentWorkflowError("The recovery terminal is running a different conversation. Check its Agent tab.")
+        }
+        guard
+            let latest = try entry(id), latest.invalidated != true,
+            latest.descriptor?.sessionID == live.conversationID, latest.descriptor?.pluginID == live.pluginID,
+            latest.intent?.id == intent.id || (intent.inPlace == true && latest.intent == nil) else {
+            throw AgentWorkflowError("The saved conversation changed during recovery. Check its terminal.")
         }
         if intent.inPlace == true {
             // A later normal exit may be explicitly resumed again in this pane.
-            if
-                let latest = try entry(id), latest.intent == nil || latest.intent?.id == intent.id, latest.invalidated != true,
-                latest.descriptor?.sessionID == live.conversationID, latest.descriptor?.pluginID == live.pluginID {
-                try confirmResume(live)
-            } else {
-                throw AgentWorkflowError("The saved conversation changed during recovery. Check its terminal.")
-            }
+            try confirmResume(live)
         }
         return live
     }

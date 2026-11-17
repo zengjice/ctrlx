@@ -129,16 +129,16 @@ final class AgentInteractionTestSupport {
         return pane
     }
 
-    func orbie() async -> OrbieService {
-        let service = OrbieService(store: .init(paths: paths, hostID: hostID), interaction: interaction, queryCommand: "ctrlx", launch: { [self] creation in
+    func orbie(recovery: AgentRoleRecovery? = nil) async -> OrbieService {
+        let service = OrbieService(store: .init(paths: paths, hostID: hostID), interaction: interaction, recovery: recovery, queryCommand: "ctrlx", launch: { [self] creation in
             try create(creation.id, pluginID: creation.pluginID, title: "Orbie", directory: creation.directory)
         }, locateCreation: { [self] in launches[$0] })
         await service.refresh()
         return service
     }
 
-    func orbiters(source: AgentWorkflowInstance? = nil) async -> OrbiterService {
-        let service = OrbiterService(store: .init(paths: paths, hostID: hostID), interaction: interaction, enabled: { true }, forkSource: {
+    func orbiters(source: AgentWorkflowInstance? = nil, recovery: AgentRoleRecovery? = nil) async -> OrbiterService {
+        let service = OrbiterService(store: .init(paths: paths, hostID: hostID), interaction: interaction, recovery: recovery, enabled: { true }, forkSource: {
             guard let source else { throw AgentWorkflowError("Orbie is unavailable") }
             return source
         }, launch: { [self] creation in

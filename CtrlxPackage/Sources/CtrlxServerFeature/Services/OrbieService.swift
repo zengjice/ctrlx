@@ -10,6 +10,7 @@ final class OrbieService {
     private(set) var messages: [AgentMessage] = []
     private(set) var historyPage = AgentMessagePage()
     private(set) var isBusy = false
+    private(set) var isRestoring = false
     private(set) var issue: String?
     private(set) var tabClosed = false
     private(set) var occupancyIssue: String?
@@ -46,7 +47,7 @@ final class OrbieService {
     }
 
     var canRestore: Bool {
-        record?.target != nil && instance == nil && recovery != nil
+        record?.target != nil && instance == nil && recovery != nil && !isRestoring
     }
 
     var legacyIssue: String? {
@@ -57,6 +58,9 @@ final class OrbieService {
         guard let record else { return "Loading Orbie…" }
         guard record.enabled else { return "Orbie is disabled on this Mac. Its Agent and saved data are retained." }
         guard record.creation != nil else { return "Create Orbie on this Mac to begin." }
+        if isRestoring {
+            return "Restoring the original conversation…"
+        }
         if tabClosed {
             return "The Agent tab was closed. Restore its original conversation or explicitly create a new Orbie."
         }
@@ -210,6 +214,7 @@ final class OrbieService {
         updated.binding = nil
         do { try await persist(updated)
             instance = nil
+            isRestoring = false
             issue = nil
         } catch { issue = error.localizedDescription }
     }
@@ -224,8 +229,12 @@ final class OrbieService {
             updated.creation?.pane = restored.workspacePane
             updated.pendingMessageID = nil
             try await persist(updated)
+            isRestoring = false
             tabClosed = false
             try await reconcile(inspect: true)
+            issue = nil
+        } catch is AgentRoleRecovery.Starting {
+            isRestoring = true
             issue = nil
         } catch { issue = error.localizedDescription }
     }
@@ -235,6 +244,19 @@ final class OrbieService {
         if inspect, let creation = updated.creation, creation.pane == nil {
             updated.creation?.pane = try await locateCreation(creation.id)
         }
+        if inspect, updated.enabled, let id = updated.target?.agentID, let recovery {
+            isRestoring = false
+            do {
+                if let restored = try await recovery.checkPendingRestore(id) {
+                    updated.binding = restored
+                    updated.creation?.pane = restored.workspacePane
+                    updated.pendingMessageID = nil
+                    try await persist(updated)
+                }
+            } catch is AgentRoleRecovery.Starting {
+                isRestoring = true
+            }
+        }
         let instances = try await interaction.catalog.snapshot(refresh: inspect && updated.enabled)
         let latest = try await interaction.store.page(updated.messageIDs)
         messages = latest.messages
@@ -243,7 +265,7 @@ final class OrbieService {
         } else {
             latest
         }
-        instance = updated.currentInstance(in: instances)
+        instance = isRestoring ? nil : updated.currentInstance(in: instances)
         if inspect, updated.enabled, let instance {
             try await recovery?.confirmResume(instance)
         }

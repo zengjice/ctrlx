@@ -1960,6 +1960,18 @@ Fresh workspace capture or role-directory inspection settles a pending in-place
 intent once the exact native conversation is running, including delayed startup.
 An overlapping restore must not write that settled intent back. Cached bindings
 alone do not confirm startup; closed-tab creation intents retain their deduplication record.
+Orbie and Orbiter refresh also inspect pending closed-tab recovery intents. While
+the native conversation is starting, the UI shows a normal restoring state. Once
+the recorded destination, Host, plugin and original native conversation match,
+the role is rebound automatically, preserving drafts, history and materials.
+This observation survives App restart and can locate a created pane after a lost
+launch reply; it never starts a process or resends input. Missing/changed terminals
+and inspection failures remain visible errors. Orbiter recovery errors belong to
+the affected Agent and block only its input; other Agents can still refresh, send,
+be created or associated. A fresh successful check clears that Agent's error;
+cached-only refresh preserves it. Shared catalog/storage failures still propagate.
+Refresh without runtime inspection
+does not confirm recovery from cached instances.
 Known pre-launch failures and explicit tmux process/workspace guard rejection are
 retryable because no launch ran. After dispatch, timeout, disconnect and other
 unknown results retain the pending intent.
