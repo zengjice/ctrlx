@@ -19,6 +19,25 @@ private struct OrbiePanelSceneIntegration: ViewModifier {
 }
 
 extension AppCoordinator {
+    func openOrbieTerminal(openWindow: OpenWindowAction) async throws {
+        windowManager.updatePaneStates(from: await tmuxService.refreshPanes())
+        guard
+            let record = orbie?.record, let target = record.target,
+            let pane = windowManager.paneStates.values.first(where: { $0.workspaceIdentity?.paneID == target.paneID }) else {
+            throw AgentWorkflowError("Orbie’s terminal is unavailable. Restore the original conversation or explicitly set up Orbie again.")
+        }
+        orbiePanel.dismiss(restoreFocus: false)
+        detachedWindows.sourcePaneRequest = .init(hostID: nil, pane: pane)
+        let owner = detachedWindows.owner(hostID: nil, windowID: pane.stableWindowId)
+        if !detachedWindows.focusNativeWindow(workspaceID: owner) {
+            if let owner {
+                openWindow(id: "detached-terminal", value: owner)
+            } else {
+                openWindow(id: "panes")
+            }
+        }
+    }
+
     func configureOrbiePanel(openWindow: OpenWindowAction) {
         orbiePanel.start { openWindow(id: "orbie-panel") }
     }
@@ -74,11 +93,15 @@ extension AppCoordinator {
 
 struct OrbiePanelWindowAttachment: NSViewRepresentable {
     let controller: OrbiePanelController
+    var preferredHeight: CGFloat = 590
     func makeNSView(context: Context) -> Anchor {
         Anchor(controller: controller)
     }
 
-    func updateNSView(_ view: Anchor, context: Context) { }
+    func updateNSView(_ view: Anchor, context: Context) {
+        controller.resizeContent(height: preferredHeight)
+    }
+
     static func dismantleNSView(_ view: Anchor, coordinator: ()) {
         NotificationCenter.default.removeObserver(view)
     }

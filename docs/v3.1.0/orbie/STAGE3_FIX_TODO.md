@@ -221,3 +221,14 @@ Orbie／Orbiter 界面与 Workflow 编排分别调用共用 Agent 交互能力�
 - [x] P1：Orbiter 将单个终端检查／恢复核验错误保存在对应 AgentID 下，详情页保留原因，仅阻止该 Agent 的输入；继续处理其他 Agent 的刷新、发送、新建和关联。缓存读取不清除错误，重新核验成功后清除；取消仍向外传播，共享目录／存储错误仍按原路径报告。
 - [x] P2：原生恢复测试中，守卫拒绝后的第二次启动已执行但尚待原生会话核验，预期改为 `AgentRoleRecovery.Starting`；首次明确拒绝仍预期原错误并检查未启动。
 - `.build-local/orbie-restore-review-fix/tests.log`：32 项测试／8 个套件通过，包括单 Agent 终端关闭、会话不符、终端检查失败时健康 Agent 的三类操作与后续恢复，及隔离 tmux 的 shell／busy／changed／process-race／identity-race 五个场景。3 个本轮 Swift 文件格式、两项边界和差异检查通过。本轮未重复 App 构建；未提交、未安装，未向用户运行中的终端发送测试输入。
+
+
+### 2026-11-17：全局浮窗交互重设计
+
+- [x] 按已确认的 [浮窗方案](PANEL_REDESIGN.md) 实现原生标题切换器、最近三轮对话、底部输入及操作菜单；窗口按有界内容调整，完整历史继续使用原有分页。
+- [x] 根据现有消息证据和 readiness 显示阻塞原因，直接打开终端／重新检查／明确结束等待；发送、恢复和工作流占用规则继续由原 Service 执行。
+- [x] Orbie／Orbiter 草稿和撤销隔离；复用现有创建表单，支持从选中的已验证 Orbiter Fork，不自动发送初始消息。
+- [x] `.build-local/orbie-panel-redesign/tests-final.log`：22 项定向测试／5 个套件通过，包含原生切换器点击、输入法与换行、窄窗口／浅深色渲染、恢复及 Fork 身份回归。格式、两项仓库边界、差异检查及 Mac Debug workspace 编译通过。
+- [x] 修复发送后撤销崩溃和 Orbiter 轮询的空态收缩；24 项定向测试通过，包括原生发送／撤销、延迟刷新高度稳定及失败保留消息。记录：`.build-local/orbie-panel-redesign/review-fixes-tests-final.log`。Mac Debug 编译、格式及边界检查通过。
+- [x] 补齐打开／切换会话时定位最新内容、底部跟随和上翻保留位置；恢复启动错误展示及手动重试。32 项定向测试通过，记录：`.build-local/orbie-panel-redesign/followup-tests-final.log`；Mac Debug 编译、格式及边界检查通过。
+- 验证使用隔离消息数据和离屏原生控件；未安装、未提交，未执行安装后全局唤醒、多显示器、真实输入法及真实 CLI Fork 人工验收。原型网页的加载故障不等于原生界面验收结果；原生截图与边界见方案文档。

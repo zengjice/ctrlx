@@ -3,6 +3,24 @@ import CtrlxNetworking
 import Foundation
 
 extension AppCoordinator {
+    func retryOrbieStartup() async {
+        guard orbie == nil, agentWorkflowStartupError != nil, let paths = ctrlxPaths else { return }
+        if let messages = agentMessages, let catalog = agentRuntimeCatalog {
+            // A running workflow service must not be recreated when only
+            // conversation activation failed.
+            do {
+                try await activateAgentInteraction(hostID: catalog.hostID, paths: paths, messages: messages)
+                if agentWorkflowService != nil {
+                    agentWorkflowStartupError = nil
+                }
+            } catch {
+                agentWorkflowStartupError = "Could not load Agent conversations: \(error.localizedDescription)"
+            }
+        } else {
+            await setupAgentWorkflows()
+        }
+    }
+
     func setupOrbie(hostID: UUID, paths: CtrlxPaths, interaction: AgentMessageService) {
         orbie = OrbieService(store: OrbieStore(paths: paths, hostID: hostID), interaction: interaction, recovery: agentRoleRecovery, queryCommand: Bundle.main.url(forAuxiliaryExecutable: "CtrlXCLI")?.path.posixSingleQuoted) { [weak self] intent in
             guard let self else { throw AgentWorkflowError("The Host is shutting down.") }

@@ -184,14 +184,14 @@ struct OrbiePanelTests {
                 let selector = NSSelectorFromString("accessibilityFrame")
                 let implementation = try #require(control.method(for: selector))
                 let frame = unsafeBitCast(implementation, to: (@convention(c) (AnyObject, Selector) -> CGRect).self)(control, selector)
-                #expect(frame.width > 0 && frame.height > 0 && window.frame.contains(frame))
+                #expect(frame.width > 0 && frame.height > 0 && window.frame.contains(frame), Comment(rawValue: "\(identifier): \(frame), window: \(window.frame)"))
             }
             #expect(service.agents.isEmpty)
         }
     }
 
     @Test(arguments: [560.0, 640.0])
-    func quickPanelKeepsSearchAndDraftWithinItsWindow(width: Double) async throws {
+    func quickPanelKeepsDraftAndPrimaryActionsWithinItsWindow(width: Double) async throws {
         try await withDependencies {
             $0[PreferencesService.self] = .inMemory()
             $0[SecretsService.self] = .inMemory()
@@ -215,12 +215,12 @@ struct OrbiePanelTests {
             defer { window.close() }
             try await Task.sleep(for: .milliseconds(200))
             hosting.layoutSubtreeIfNeeded()
-            for identifier in ["orbie-panel-search", "orbie-panel-draft", "orbie-panel-send", "orbie-panel-close"] {
+            for identifier in ["orbie-panel-switcher", "orbie-panel-actions", "orbie-panel-draft", "orbie-panel-send", "orbie-panel-close"] {
                 let control = try #require(find(identifier, in: hosting))
                 let selector = NSSelectorFromString("accessibilityFrame")
                 let implementation = try #require(control.method(for: selector))
                 let frame = unsafeBitCast(implementation, to: (@convention(c) (AnyObject, Selector) -> CGRect).self)(control, selector)
-                #expect(frame.width > 0 && frame.height > 0 && window.frame.contains(frame))
+                #expect(frame.width > 0 && frame.height > 0 && window.frame.contains(frame), Comment(rawValue: "\(identifier): \(frame), window: \(window.frame)"))
             }
             coordinator.orbiePanel.dismiss(restoreFocus: false)
             await orbie.saveDraft()

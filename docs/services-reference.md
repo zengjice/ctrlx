@@ -1868,9 +1868,47 @@ Creating Orbie or an Orbiter explicitly reuses the existing New Agent/Fork paths
 Provider defaults, model shortcuts, shell integration and Codex `--no-daemon`.
 Creation intent is durable before launch. The existing `@ctrlx-creation-id` token
 reconciles a lost creation reply; refresh never launches a replacement. Fork takes
-a verified snapshot of Orbie's native conversation. Subsequent conversations are
+a verified snapshot of Orbie's or the selected associated Orbiter's native conversation. Subsequent conversations are
 independent. The editable project cwd is independent of the saved material folder.
 New Orbiter creation retains the initial message as a draft for explicit Send.
+
+### Mac quick conversation panel
+
+The global panel keeps one composer and the latest three exchanges. Its height
+tracks bounded content; longer conversations scroll above the composer. The title
+opens a searchable Orbie/Orbiter switcher. Opening or switching conversations
+scrolls to the latest content. Reply/status growth follows only while the previous
+viewport was at the bottom; reading earlier messages is not interrupted. Drafts
+remain in the existing role services and are never transferred or sent by
+selecting another Agent. Full
+conversation opens the existing paginated Orbie window or selected Orbiter sheet.
+Creation and Fork open the existing forms; they do not submit a task automatically.
+Fork revalidates the selected native binding and input occupancy before launch.
+
+`OrbiePanelStatus` derives display text from delivery evidence and live readiness;
+it is not a second lifecycle or an input permit. Pending delivery, native work,
+reply verification, human input, uncertain results and recovery have distinct
+presentations. Human input evidence takes precedence over a generic pending
+message. The header and status card expose the existing Agent tab navigation;
+rechecking status never resends a message. Stop Waiting remains a confirmed action
+and does not terminate the Agent. Sending still uses the services' original guards.
+If Agent services fail before a role is available, the panel shows the startup
+error and offers an explicit retry. This retries initialization or conversation
+activation as appropriate, preserving a workflow service that already started;
+ordinary polling does not repeatedly initialize services.
+
+Return sends, Shift+Return adds a line, and native IME composition consumes its
+own Return before submission handling. Cmd-K opens actions, Cmd-J opens full
+conversation, and Escape closes a popup before dismissing the panel. Closing or
+switching preserves drafts; background completion does not activate the panel.
+External draft replacements (including clearing after send) discard native undo
+records whose text ranges are no longer valid; unchanged drafts retain undo/redo.
+Only a visible panel polls, sharing the catalog scan between the two role services.
+The bounded recent cache reads at most three records per Orbiter; full-history
+pagination remains independent. Refresh retains the previous recent messages and
+occupancy until the replacement is loaded successfully, avoiding an intermediate
+empty conversation and window collapse. Replies are selectable, can be copied in full,
+and retain saved-attachment and suggested Agent/Workflow navigation.
 
 ### Ordinary messages and shared Agent interaction
 

@@ -538,7 +538,7 @@ struct TmuxPaneMirrorApp: App {
             MacOrbiePanelView().environment(coordinator)
         }
         .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 640, height: 600)
+        .defaultSize(width: 680, height: 350)
         .defaultLaunchBehavior(.suppressed)
         .restorationBehavior(.disabled)
 

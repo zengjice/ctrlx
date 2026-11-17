@@ -16,6 +16,13 @@ struct MacOrbitersView: View {
     @State private var showsAssociation = false
     @State private var notice: String?
     @State private var files: AgentMaterialFiles?
+    private let requestedForkSource: AgentWorkflowInstance?
+
+    init(service: OrbiterService, initialSelection: String? = nil, requestedForkSource: AgentWorkflowInstance? = nil) {
+        self.service = service
+        _selectedID = State(initialValue: initialSelection)
+        self.requestedForkSource = requestedForkSource
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -76,13 +83,13 @@ struct MacOrbitersView: View {
             .sheet(item: $creation) { NewAgentTabPanel(configuration: $0, destinationDescription: "Create an independent Agent. Choose its project directory.") }
             .sheet(item: $forkAgent) { agent in
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Fork Orbie").font(.headline)
+                    Text(requestedForkSource.map { "Fork \($0.displayName)" } ?? "Fork Orbie").font(.headline)
                     Picker("Provider", selection: $forkProvider) {
                         Text("Current CLI configuration").tag(String?.none)
                         ForEach(agent.providers) { Text($0.name).tag(Optional($0.id)) }
                     }
                     Button("Fork \(agent.name)") { perform {
-                        selectedID = try await service.create(pluginID: agent.id, providerID: forkProvider, fork: true)
+                        selectedID = try await service.create(pluginID: agent.id, providerID: forkProvider, fork: true, requestedSource: requestedForkSource)
                         forkAgent = nil
                     } }.disabled(service.isBusy)
                 }.padding(24).frame(width: 480)
@@ -114,7 +121,7 @@ struct MacOrbitersView: View {
             }
             HStack {
                 Button("New Agent…") { prepareNew() }.accessibilityIdentifier("orbiter-create-new")
-                Button("Fork Orbie…") { prepareFork() }.accessibilityIdentifier("orbiter-create-fork")
+                Button(requestedForkSource == nil ? "Fork Orbie…" : "Fork Selected Agent…") { prepareFork() }.accessibilityIdentifier("orbiter-create-fork")
             }.disabled(service.isBusy)
             Button("Associate Existing Agent…") { showsAssociation = true }
             if service.agents.contains(where: { $0.creation?.id == service.draft.id }) {
@@ -214,9 +221,23 @@ struct MacOrbitersView: View {
     private func prepareFork() {
         perform {
             try service.draft.validate()
-            await coordinator.orbie?.refresh()
+            let source: AgentWorkflowInstance?
+            if let requestedForkSource {
+                await service.refresh()
+                guard
+                    let record = service.agents.first(where: { $0.agentID == requestedForkSource.agentID }),
+                    service.availability(record) == nil,
+                    let current = service.currentInstance(record), current.matchesBinding(requestedForkSource) else {
+                    throw AgentWorkflowError("The Fork source changed. Select its current conversation again.")
+                }
+                source = current
+            } else {
+                await coordinator.orbie?.refresh()
+                guard coordinator.orbie?.availability == nil else { throw AgentWorkflowError("Wait for Orbie’s verified conversation, or choose New Agent.") }
+                source = coordinator.orbie?.instance
+            }
             guard
-                coordinator.orbie?.availability == nil, let pluginID = coordinator.orbie?.instance?.pluginID,
+                let pluginID = source?.pluginID,
                 let agent = coordinator.localAgentLaunchAgents().first(where: { $0.id == pluginID }) else {
                 throw AgentWorkflowError("Wait for Orbie’s verified conversation, or choose New Agent.")
             }

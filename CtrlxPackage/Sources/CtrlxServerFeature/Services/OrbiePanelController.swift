@@ -13,6 +13,8 @@ final class OrbiePanelController {
     @ObservationIgnored private var presentWindow: (() -> Void)?
     @ObservationIgnored private var active = false
     @ObservationIgnored private var desiredVisible = false
+    @ObservationIgnored private var popoverPresented = false
+    @ObservationIgnored private var contentHeight: CGFloat = 350
     @ObservationIgnored private var registration: OrbieHotkeyRegistration?
     @ObservationIgnored private var registeredValue: String?
     @ObservationIgnored private let settings: AppSettings
@@ -65,6 +67,7 @@ final class OrbiePanelController {
         window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         window.setAccessibilityIdentifier("orbie-panel")
+        resizeContent(height: contentHeight, force: true)
         if desiredVisible {
             display(window)
         } else {
@@ -85,9 +88,35 @@ final class OrbiePanelController {
     }
 
     func resignedKey() {
-        if desiredVisible, window?.attachedSheet == nil {
+        if desiredVisible, !popoverPresented, window?.attachedSheet == nil {
             dismiss(restoreFocus: false)
         }
+    }
+
+    func setPopoverPresented(_ presented: Bool) {
+        popoverPresented = presented
+        if !presented {
+            Task { @MainActor [weak self] in
+                await Task.yield()
+                guard let self, !popoverPresented, window?.isKeyWindow != true else { return }
+                resignedKey()
+            }
+        }
+    }
+
+    func resizeContent(height: CGFloat, force: Bool = false) {
+        guard force || contentHeight != height else { return }
+        contentHeight = height
+        guard let window else { return }
+        let maximum = (window.screen ?? NSScreen.main)?.visibleFrame.height ?? 800
+        var frame = window.frame
+        let desired = min(window.frameRect(forContentRect: .init(x: 0, y: 0, width: frame.width, height: height)).height, maximum - 32)
+        frame.origin.y += frame.height - desired
+        frame.size.height = desired
+        if let screen = window.screen, frame.minY < screen.visibleFrame.minY {
+            frame.origin.y = screen.visibleFrame.minY
+        }
+        window.setFrame(frame, display: true)
     }
 
     func becameKey() {

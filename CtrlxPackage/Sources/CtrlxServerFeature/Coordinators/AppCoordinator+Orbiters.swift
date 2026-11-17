@@ -13,17 +13,17 @@ extension AppCoordinator {
         }, launch: { [weak self] task in
             guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
             let created: AgentWorkflowCreatedAgent
-            if task.forkSource != nil {
-                let current = try await readyOrbieForkSource()
+            if let expected = task.forkSource {
+                let current = try await readyRoleForkSource(expected)
                 guard
                     task.forkSource?.matchesBinding(current) == true,
                     let pane = windowManager.paneStates[current.paneID], let source = AgentForkSource(pane: pane),
                     source.sessionID == current.conversationID, source.workspaceIdentity == current.workspacePane else {
-                    throw AgentWorkflowError("The Orbie Fork source changed. Review its conversation first.")
+                    throw AgentWorkflowError("The Fork source changed. Review its conversation first.")
                 }
                 _ = try await prepareAgentFork(source, expectedWorkspacePane: current.workspacePane)
-                let verified = try await readyOrbieForkSource()
-                guard current.matchesBinding(verified) else { throw AgentWorkflowError("The Orbie conversation changed during Fork preparation.") }
+                let verified = try await readyRoleForkSource(expected)
+                guard current.matchesBinding(verified) else { throw AgentWorkflowError("The source conversation changed during Fork preparation.") }
                 let paneID = try await forkAgentSession(.init(
                     requestID: task.id, source: source, windowName: task.title,
                     workingDirectory: task.directory, targetProviderID: task.providerID
@@ -56,13 +56,36 @@ extension AppCoordinator {
     }
 
     func validateOrbiterFork(_ creationID: UUID, source: AgentForkSource) async throws {
-        let current = try await readyOrbieForkSource()
+        guard let expected = orbiters?.agents.first(where: { $0.creation?.id == creationID })?.creation?.forkSource else {
+            throw AgentWorkflowError("The Fork creation is no longer available.")
+        }
+        let current = try await readyRoleForkSource(expected)
         guard
-            let expected = orbiters?.agents.first(where: { $0.creation?.id == creationID })?.creation?.forkSource,
             expected.matchesBinding(current), current.paneID == source.paneID,
             current.conversationID == source.sessionID, current.workspacePane == source.workspaceIdentity else {
-            throw AgentWorkflowError("The Orbie process or conversation changed before Fork. The task draft is kept.")
+            throw AgentWorkflowError("The source process or conversation changed before Fork. The draft is kept.")
         }
+    }
+
+    private func readyRoleForkSource(_ expected: AgentWorkflowInstance) async throws -> AgentWorkflowInstance {
+        let current: AgentWorkflowInstance
+        if orbie?.record?.target?.agentID == expected.agentID {
+            current = try await readyOrbieForkSource()
+        } else {
+            guard
+                orbie?.record?.enabled == true,
+                orbiters?.agents.contains(where: { $0.agentID == expected.agentID }) == true,
+                let catalog = agentRuntimeCatalog, let messages = agentMessages,
+                let found = try await catalog.snapshot(refresh: true).first(where: { $0.matchesBinding(expected) }),
+                found.readiness == .ready, found.capabilityIssue == nil,
+                UUID(uuidString: found.conversationID) != nil,
+                try await messages.availability(found.agentID) == nil else {
+                throw AgentWorkflowError("The source Agent must have a ready, verified conversation before Fork.")
+            }
+            current = found
+        }
+        guard current.matchesBinding(expected) else { throw AgentWorkflowError("The Fork source changed. Review its current conversation first.") }
+        return current
     }
 
     private func readyOrbieForkSource() async throws -> AgentWorkflowInstance {

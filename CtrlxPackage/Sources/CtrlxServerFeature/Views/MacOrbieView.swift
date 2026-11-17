@@ -169,28 +169,8 @@
         }
 
         private func openTerminal(_ orbie: OrbieService) async {
-            let panes = await coordinator.tmuxService.refreshPanes()
-            coordinator.windowManager.updatePaneStates(from: panes)
-            guard let record = orbie.record else { return }
-            guard
-                let target = record.target,
-                let pane = coordinator.windowManager.paneStates.values.first(where: {
-                    guard let identity = $0.workspaceIdentity else { return false }
-                    return (identity.paneID == target.paneID && identity.windowID == target.windowID)
-                        || record.binding?.workspacePane.isSamePane(as: identity) == true
-                }) else {
-                error = "Orbie’s terminal is unavailable. Open the workspace and use its existing recovery controls, or explicitly set up Orbie again."
-                return
-            }
-            coordinator.detachedWindows.sourcePaneRequest = .init(hostID: nil, pane: pane)
-            let owner = coordinator.detachedWindows.owner(hostID: nil, windowID: pane.stableWindowId)
-            if !coordinator.detachedWindows.focusNativeWindow(workspaceID: owner) {
-                if let owner {
-                    openWindow(id: "detached-terminal", value: owner)
-                } else {
-                    openWindow(id: "panes")
-                }
-            }
+            do { try await coordinator.openOrbieTerminal(openWindow: openWindow) }
+            catch { self.error = error.localizedDescription }
         }
     }
 #endif

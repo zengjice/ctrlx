@@ -120,16 +120,28 @@ final class OrbiterService {
     }
 
     @discardableResult
-    func create(pluginID: String, providerID: String?, fork: Bool = false) async throws -> String {
+    func create(pluginID: String, providerID: String?, fork: Bool = false, requestedSource: AgentWorkflowInstance? = nil) async throws -> String {
         try begin()
         defer { isBusy = false }
         try await reconcile(inspect: true)
         try draft.validate()
         guard enabled(), var updated = index else { throw AgentWorkflowError("Enable Orbie before creating an Orbiter.") }
         guard !agents.contains(where: { $0.creation?.id == draft.id }) else { throw AgentWorkflowError("This creation is already recorded. Check the existing Agent before retrying.") }
-        let source = fork ? try await forkSource() : nil
+        let source: AgentWorkflowInstance?
+        if fork, let requestedSource {
+            guard
+                agents.contains(where: { $0.agentID == requestedSource.agentID }),
+                let current = instances.first(where: { $0.matchesBinding(requestedSource) }),
+                current.capabilityIssue == nil,
+                try await interaction.availability(current.agentID) == nil else {
+                throw AgentWorkflowError("The Fork source changed or is busy. Review its conversation first.")
+            }
+            source = current
+        } else {
+            source = fork ? try await forkSource() : nil
+        }
         guard source == nil || (source?.pluginID == pluginID && source?.readiness == .ready && UUID(uuidString: source?.conversationID ?? "") != nil) else {
-            throw AgentWorkflowError("Fork requires a ready, verified Orbie conversation of the same Agent type. Choose New Agent for another type.")
+            throw AgentWorkflowError("Fork requires a ready, verified conversation of the same Agent type. Choose New Agent for another type.")
         }
         let creation = OrbiterCreation(id: draft.id, title: draft.title, directory: draft.directory, pluginID: pluginID, providerID: providerID, forkSource: source)
         let text = [draft.goal, draft.source, draft.materials].filter { !$0.isEmpty }.joined(separator: "\n\n")
@@ -246,8 +258,8 @@ final class OrbiterService {
         }
         guard var updated = index else { return }
         var restoredAgents: [(AgentID, OrbiterRecord)] = []
-        occupancy = [:]
-        messages = []
+        var refreshedOccupancy: [AgentID: String] = [:]
+        var refreshedMessages: [AgentMessage] = []
         for i in updated.agents.indices {
             var record = updated.agents[i]
             let oldKey = record.id
@@ -296,9 +308,9 @@ final class OrbiterService {
                 }
                 record.binding = current
                 record.pane = current.workspacePane
-                occupancy[current.agentID] = try await interaction.availability(current.agentID)
+                refreshedOccupancy[current.agentID] = try await interaction.availability(current.agentID)
             }
-            messages += try await interaction.store.messages(record.messageIDs, limit: 1)
+            refreshedMessages += try await interaction.store.messages(record.messageIDs, limit: 3)
             if historyAgentID == record.id {
                 let page = try await interaction.store.page(record.messageIDs, endingAt: historyEndID)
                 if historyAgentID == record.id {
@@ -308,6 +320,8 @@ final class OrbiterService {
             updated.agents[i] = record
         }
         try await persist(updated)
+        occupancy = refreshedOccupancy
+        messages = refreshedMessages
     }
 
     private func replace(_ record: OrbiterRecord, previousID: String? = nil) async throws {
