@@ -36,6 +36,7 @@ public struct AgentWorkflowsView: View {
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                         }
+                        .listRowBackground(endpoint.id == "local" ? Color.accentColor.opacity(0.08) : nil)
                     }
                     if endpoints().isEmpty {
                         Text("Pair a Host to create a workflow.").foregroundStyle(.secondary)
@@ -123,6 +124,8 @@ private struct AgentWorkflowHostView: View {
                         HStack {
                             NavigationLink(value: AgentWorkflowNavigation.Destination.configuration(route: endpoint.id, hostID: overview.hostID, id: definition.id)) {
                                 definitionLabel(definition)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
                             }
                             Button { starting = definition } label: { Label("Start workflow", symbol: .playFill).labelStyle(.iconOnly) }
                                 .buttonStyle(.borderless)
@@ -150,6 +153,8 @@ private struct AgentWorkflowHostView: View {
                                         Text(issue).font(.caption).foregroundStyle(.orange).lineLimit(2)
                                     }
                                 }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
                             }
                             if run.status.isTerminal {
                                 deleteButton(run).labelStyle(.iconOnly).buttonStyle(.borderless)
