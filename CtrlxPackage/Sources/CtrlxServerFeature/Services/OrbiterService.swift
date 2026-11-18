@@ -11,6 +11,9 @@ final class OrbiterService {
     private(set) var historyPage = AgentMessagePage()
     @ObservationIgnored private var historyEndID: UUID?
     private(set) var isBusy = false
+    @ObservationIgnored private var isUpdating = false
+    @ObservationIgnored private var updateWaiter: CheckedContinuation<Void, Never>?
+    @ObservationIgnored private var draftSaveRequested = false
     private(set) var closedAgents = Set<AgentID>()
     private(set) var restoringAgents = Set<AgentID>()
     private(set) var recoveryIssues: [AgentID: String] = [:]
@@ -64,9 +67,11 @@ final class OrbiterService {
     }
 
     func loadHistory(endingAt id: UUID?) async {
-        guard !isBusy, let record = agents.first(where: { $0.id == historyAgentID }) else { return }
+        guard let selection = historyAgentID, (try? await begin()) != nil else { return }
+        defer { finishOperation() }
+        guard historyAgentID == selection, let record = agents.first(where: { $0.id == selection }) else { return }
         historyEndID = id == record.messageIDs.last ? nil : id
-        await refresh(inspect: false)
+        await refreshContents(inspect: false)
     }
 
     func availability(_ record: OrbiterRecord) -> String? {
@@ -99,19 +104,32 @@ final class OrbiterService {
     }
 
     func refresh(inspect: Bool = true) async {
-        guard !isBusy else { return }
-        isBusy = true
-        defer { isBusy = false }
-        do { try await reconcile(inspect: inspect)
+        guard !isBusy, !isUpdating else { return }
+        isUpdating = true
+        defer { finishUpdate() }
+        await refreshContents(inspect: inspect)
+    }
+
+    private func refreshContents(inspect: Bool) async {
+        do {
+            try await reconcile(inspect: inspect)
             if inspect {
                 try await interaction.resumePendingReplies()
             }
             issue = nil
+        } catch is CancellationError {
+            return
         } catch { issue = error.localizedDescription }
     }
 
     func saveDrafts() async {
-        guard !isBusy, let index else { return }
+        guard !isBusy, !isUpdating else {
+            draftSaveRequested = true
+            return
+        }
+        guard let index else { return }
+        isUpdating = true
+        defer { finishUpdate() }
         do { try await persist(index) } catch { issue = error.localizedDescription }
     }
 
@@ -119,10 +137,21 @@ final class OrbiterService {
         await saveDrafts()
     }
 
+    func prepareCreation(inspect: Bool = false) async throws -> UUID {
+        try await begin()
+        defer { finishOperation() }
+        if inspect || index == nil {
+            try await reconcile(inspect: inspect)
+        }
+        try draft.validate()
+        guard let hostID = index?.hostID else { throw AgentWorkflowError("Orbiters have not loaded yet.") }
+        return hostID
+    }
+
     @discardableResult
     func create(pluginID: String, providerID: String?, fork: Bool = false, requestedSource: AgentWorkflowInstance? = nil) async throws -> String {
-        try begin()
-        defer { isBusy = false }
+        try await begin()
+        defer { finishOperation() }
         try await reconcile(inspect: true)
         try draft.validate()
         guard enabled(), var updated = index else { throw AgentWorkflowError("Enable Orbie before creating an Orbiter.") }
@@ -171,8 +200,8 @@ final class OrbiterService {
     }
 
     func associate(_ candidate: AgentWorkflowInstance) async throws -> String {
-        try begin()
-        defer { isBusy = false }
+        try await begin()
+        defer { finishOperation() }
         try await reconcile(inspect: true)
         guard
             enabled(), var updated = index, candidate.hostID == updated.hostID,
@@ -185,9 +214,9 @@ final class OrbiterService {
     }
 
     func send(_ id: String) async throws {
-        try begin()
-        defer { isBusy = false }
         let text = drafts[id] ?? ""
+        try await begin()
+        defer { finishOperation() }
         try await reconcile(inspect: true)
         guard var record = agents.first(where: { $0.id == id }) else { throw AgentWorkflowError("Agent not found.") }
         if let issue = availability(record) {
@@ -206,15 +235,18 @@ final class OrbiterService {
     }
 
     func stopWaiting(_ message: AgentMessage) async throws {
+        try await begin()
+        defer { finishOperation() }
         guard agents.contains(where: { $0.messageIDs.contains(message.id) }) else { throw AgentWorkflowError("Message not found.") }
         try await interaction.stopWaiting(message.id)
-        await refresh(inspect: false)
+        await refreshContents(inspect: false)
     }
 
     func restoreOriginalConversation(_ id: String) async throws {
-        try begin()
-        defer { isBusy = false }
+        try await begin()
+        defer { finishOperation() }
         guard var record = agents.first(where: { $0.id == id }), let agentID = record.agentID, let recovery else { throw AgentWorkflowError("No recovery target is available.") }
+        guard currentInstance(record) == nil else { return }
         let restored: AgentWorkflowInstance
         do { restored = try await recovery.restore(agentID) } catch is AgentRoleRecovery.Starting {
             restoringAgents.insert(agentID)
@@ -342,8 +374,35 @@ final class OrbiterService {
         }
     }
 
-    private func begin() throws {
+    private func begin() async throws {
+        try Task.checkCancellation()
         guard !isBusy else { throw AgentWorkflowError("An Agent operation is already in progress.") }
+        // Reserve the action before waiting so the next poll cannot overtake it.
         isBusy = true
+        if isUpdating {
+            await withCheckedContinuation { updateWaiter = $0 }
+        }
+        if Task.isCancelled {
+            finishOperation()
+            throw CancellationError()
+        }
+    }
+
+    private func finishUpdate() {
+        isUpdating = false
+        updateWaiter?.resume()
+        updateWaiter = nil
+        scheduleDraftSave()
+    }
+
+    private func finishOperation() {
+        isBusy = false
+        scheduleDraftSave()
+    }
+
+    private func scheduleDraftSave() {
+        guard !isBusy, draftSaveRequested else { return }
+        draftSaveRequested = false
+        Task { [weak self] in await self?.saveDrafts() }
     }
 }

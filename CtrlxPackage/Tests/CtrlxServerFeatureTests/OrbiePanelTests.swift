@@ -158,7 +158,7 @@ struct OrbiePanelTests {
     }
 
     @Test
-    func taskDraftControlsFitSmallestWindowWithoutCreatingAnAgent() async throws {
+    func orbiterDraftControlsFitAndStayEnabledDuringInspection() async throws {
         try await withDependencies {
             $0[PreferencesService.self] = .inMemory()
             $0[SecretsService.self] = .inMemory()
@@ -168,9 +168,24 @@ struct OrbiePanelTests {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-orbiter-ui-\(UUID())")
             defer { try? FileManager.default.removeItem(at: root) }
             let hostID = UUID()
-            let workflows = AgentWorkflowService(store: AgentWorkflowStore(fileURL: root.appendingPathComponent("ledger.json"), hostID: hostID), scan: { _ in [] }, schedule: { _ in Issue.record("Opening tasks must not send") })
+            let gate = ScanGate()
+            let workflows = AgentWorkflowService(store: AgentWorkflowStore(fileURL: root.appendingPathComponent("ledger.json"), hostID: hostID), scan: { _ in
+                await gate.wait()
+                return []
+            }, schedule: { _ in Issue.record("Opening Orbiters must not send") })
             let service = try OrbiterService(store: OrbiterStore(paths: .init(stateRootOverride: root.appendingPathComponent("state")), hostID: hostID), interaction: await AgentInteractionTestSupport.readOnly(root: root, hostID: hostID, workflows: workflows), enabled: { true }, forkSource: { throw CancellationError() }, launch: { _ in throw CancellationError() }, locateCreation: { _ in nil })
-            await service.refresh()
+            await service.refresh(inspect: false)
+            let refreshing = Task { await service.refresh() }
+            defer { Task { await gate.release()
+                await refreshing.value
+            } }
+            for _ in 0..<100 {
+                if await gate.started {
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            try #require(await gate.started)
             let window = NSWindow(contentRect: CGRect(x: -10_000, y: -10_000, width: 740, height: 620), styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             let hosting = NSHostingView(rootView: MacOrbitersView(service: service).environment(AppCoordinator()))
@@ -179,13 +194,21 @@ struct OrbiePanelTests {
             defer { window.close() }
             try await Task.sleep(for: .milliseconds(200))
             hosting.layoutSubtreeIfNeeded()
-            for identifier in ["orbiter-title", "orbiter-goal", "orbiter-create-new", "orbiter-create-fork", "orbiter-search"] {
+            for identifier in ["orbiter-title", "orbiter-goal", "orbiter-new-draft", "orbiter-create-new", "orbiter-create-fork", "orbiter-search"] {
                 let control = try #require(find(identifier, in: hosting))
                 let selector = NSSelectorFromString("accessibilityFrame")
                 let implementation = try #require(control.method(for: selector))
                 let frame = unsafeBitCast(implementation, to: (@convention(c) (AnyObject, Selector) -> CGRect).self)(control, selector)
                 #expect(frame.width > 0 && frame.height > 0 && window.frame.contains(frame), Comment(rawValue: "\(identifier): \(frame), window: \(window.frame)"))
             }
+            for identifier in ["orbiter-new-draft", "orbiter-create-new", "orbiter-create-fork"] {
+                let button = try #require(find(identifier, in: hosting))
+                let selector = NSSelectorFromString("isAccessibilityEnabled")
+                let implementation = try #require(button.method(for: selector))
+                #expect(unsafeBitCast(implementation, to: (@convention(c) (AnyObject, Selector) -> Bool).self)(button, selector), Comment(rawValue: identifier))
+            }
+            await gate.release()
+            await refreshing.value
             #expect(service.agents.isEmpty)
         }
     }

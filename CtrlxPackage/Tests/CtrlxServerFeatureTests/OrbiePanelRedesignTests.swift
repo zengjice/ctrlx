@@ -200,7 +200,7 @@ struct OrbiePanelRedesignTests {
                 }
                 try await Task.sleep(for: .milliseconds(10))
             }
-            #expect(await gate.started && service.isBusy)
+            #expect(await gate.started && !service.isBusy)
             for _ in 0..<3 {
                 try await Task.sleep(for: .milliseconds(100))
                 #expect(service.messages == previous)

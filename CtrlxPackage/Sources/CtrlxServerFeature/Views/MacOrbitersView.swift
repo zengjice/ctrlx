@@ -46,7 +46,7 @@ struct MacOrbitersView: View {
                             }.tag(record.id)
                         }
                     }
-                    Button("New Orbiter…") { selectedID = nil }.disabled(service.isBusy)
+                    Button("New Orbiter…") { selectedID = nil }.accessibilityIdentifier("orbiter-new-draft")
                 }.padding().frame(minWidth: 220, maxWidth: 300)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
@@ -101,7 +101,7 @@ struct MacOrbitersView: View {
                         Button(instance.displayName) { perform {
                             selectedID = try await service.associate(instance)
                             showsAssociation = false
-                        } }
+                        } }.disabled(service.isBusy)
                     }
                     Button("Close") { showsAssociation = false }
                 }.padding().frame(width: 560, height: 400)
@@ -190,7 +190,7 @@ struct MacOrbitersView: View {
                     }
                 }
                 if message.isPending {
-                    Button("Stop Waiting") { perform { try await service.stopWaiting(message) } }
+                    Button("Stop Waiting") { perform { try await service.stopWaiting(message) } }.disabled(service.isBusy)
                 }
             }
             TextEditor(text: Binding(get: { service.drafts[record.id] ?? record.draft }, set: { service.drafts[record.id] = $0 })).frame(height: 100).border(.quaternary)
@@ -200,8 +200,7 @@ struct MacOrbitersView: View {
 
     private func prepareNew() {
         perform {
-            try service.draft.validate()
-            guard let hostID = service.index?.hostID else { throw AgentWorkflowError("Orbiters have not loaded yet.") }
+            let hostID = try await service.prepareCreation()
             let options = try await coordinator.workflowAgentCreation(hostID: hostID)
             creation = .init(
                 id: .init(hostID: "local", sessionName: service.draft.title),
@@ -220,10 +219,9 @@ struct MacOrbitersView: View {
 
     private func prepareFork() {
         perform {
-            try service.draft.validate()
+            _ = try await service.prepareCreation(inspect: requestedForkSource != nil)
             let source: AgentWorkflowInstance?
             if let requestedForkSource {
-                await service.refresh()
                 guard
                     let record = service.agents.first(where: { $0.agentID == requestedForkSource.agentID }),
                     service.availability(record) == nil,

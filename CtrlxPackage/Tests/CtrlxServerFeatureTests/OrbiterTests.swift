@@ -5,6 +5,69 @@ import Testing
 
 @MainActor
 struct OrbiterTests {
+    @Test(arguments: [false, true])
+    func creationWaitsForBackgroundScanWithoutDisablingActions(cancel: Bool) async throws {
+        let f = try await AgentInteractionTestSupport()
+        let service = await f.orbiters()
+        service.draft = .init(title: "Expert", goal: "Initial draft", directory: f.root.path)
+        let (scanGate, releaseScan) = AsyncStream<Void>.makeStream()
+        let scanNumber = f.scanCount + 1
+        f.beforeScan = {
+            guard f.scanCount == scanNumber else { return }
+            for await _ in scanGate { }
+            if cancel {
+                throw AgentWorkflowInspectionUnavailable()
+            }
+        }
+        defer {
+            releaseScan.finish()
+            f.beforeScan = nil
+        }
+        let refresh = Task { await service.refresh() }
+        for _ in 0..<100 where f.scanCount < scanNumber {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(f.scanCount == scanNumber)
+        #expect(!service.isBusy)
+        service.draft.goal = "Latest draft"
+        await service.saveDrafts()
+        #expect(!service.isBusy)
+
+        let creation = Task { try await service.create(pluginID: "codex", providerID: nil) }
+        for _ in 0..<100 where !service.isBusy {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(service.isBusy)
+        await #expect(throws: AgentWorkflowError.self) { try await service.create(pluginID: "codex", providerID: nil) }
+        await service.refresh()
+        #expect(f.scanCount == scanNumber && f.launches.isEmpty)
+
+        if cancel {
+            creation.cancel()
+        }
+        releaseScan.finish()
+        await refresh.value
+
+        if cancel {
+            await #expect(throws: CancellationError.self) { try await creation.value }
+            #expect(f.launches.isEmpty && service.agents.isEmpty && !service.isBusy)
+            let store = OrbiterStore(paths: f.paths, hostID: f.hostID)
+            for _ in 0..<100 {
+                if try await store.load().draft.goal == "Latest draft" {
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(try await store.load().draft.goal == "Latest draft")
+        } else {
+            let id = try await creation.value
+            #expect(f.launches.count == 1 && service.drafts[id] == "Latest draft")
+            #expect(service.agents.first?.id == id && !service.isBusy)
+        }
+        #expect(f.writes.isEmpty)
+        try await f.cleanup()
+    }
+
     @Test(arguments: ["codex", "claude-code"])
     func twentyMessagesUseAgentIdentityWithoutWorkflowOrTaskLifecycle(plugin: String) async throws {
         let f = try await AgentInteractionTestSupport()
