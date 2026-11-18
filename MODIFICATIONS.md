@@ -7,6 +7,44 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.171 — Traex integration and reliable Agent workflows
+
+- Add Traex as an independent built-in Agent, including its native plugins,
+  configuration/history isolation, New Agent, Resume/Fork, questions, workflow
+  messages, image targets and verified Browser/Simulator ownership. Automatic
+  input admission is limited to the locally verified Traex 0.213.1; use its
+  native model and hook menus. CtrlX does not import Codex accounts or Provider
+  defaults into Traex. See [Traex integration](docs/plugins/traex.md).
+  Source: `76149102`.
+- Preserve Workflow handoffs when an Agent changes native conversations and
+  recover already-completed results after Host restart without repeating input.
+  Resume reply observation from durable evidence while retaining pending-hook
+  guards. Sources: `a67fc397`, `f4c0a06b`, `8538af6e`.
+- Show Workflow run statuses and local-Host entries consistently. Limit step
+  selection to participating Agents and show cwd/pane identity when associating
+  existing Agents. Sources: `aa78ae8f`, `feef9652`, `56312505`.
+- Refresh Codex's native model catalog after an explicit stale-model rejection,
+  then retry the requested switch once only after the target appears. Preserve
+  plugin-installation diagnostics; timeouts and malformed responses cannot look
+  installed merely because configuration entries remain. Sources: `ff4e3317`,
+  `83f75126`.
+- Include the Orbie quick-panel and delayed-recovery changes described under
+  3.0.170 below. That version was prepared locally but not promoted to the public
+  channel; this release replaces public 3.0.169.
+
+- Validation: source-scoped Swift runs reported 989 tests across 125 suites
+  passing after repairing the Codex installer regressions. Fresh native Traex
+  plugin installation/readback/reinstallation/uninstallation and Resume argv
+  checks passed in private homes. A separate real Codex 0.169.0 model-refresh
+  test passed against a loopback catalog without sending model prompts or
+  changing user configuration. All 24 plugin/skill checks, 34 distributed-installer
+  process/flow checks, lint for 109 Swift files, both boundary checks and diff
+  checks passed. Opt-in fixtures not supplied remain skipped.
+- This publication builds macOS only. Fresh signed-App Traex TUI, real-account
+  Fork, remote Mac/iPhone UI, full E2E, the unfiltered unit suite and Apple
+  Intelligence evaluations were not run. Unrelated README and temporary-work
+  edits are preserved.
+
 ## 3.0.170 — Orbie quick conversation panel
 
 - Keep the latest three exchanges above one native composer in the global Mac
