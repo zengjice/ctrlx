@@ -51,6 +51,12 @@
             pendingOutcome = failure ?? parser.updateCandidate(candidate)
         }
 
+        func pollRecovery() throws -> Poll {
+            let result = try poll()
+            guard result.reachedEnd, pending.retained.isEmpty else { return result }
+            return .init(outcome: result.outcome ?? parser.recoveredCompletion, reachedEnd: true)
+        }
+
         func poll() throws -> Poll {
             var info = stat()
             guard fstat(handle.fileDescriptor, &info) == 0, info.st_size >= 0, UInt64(info.st_size) >= offset else {

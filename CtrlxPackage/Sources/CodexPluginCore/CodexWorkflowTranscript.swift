@@ -21,6 +21,10 @@ public struct CodexWorkflowTranscript: AgentWorkflowTranscriptParser {
         true
     }
 
+    public var recoveredCompletion: AgentWorkflowTranscriptOutcome? {
+        outcome
+    }
+
     public mutating func updateCandidate(_: String) -> AgentWorkflowTranscriptOutcome? {
         outcome
     }

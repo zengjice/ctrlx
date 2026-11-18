@@ -89,11 +89,17 @@ extension AppCoordinator {
             )
             let runner = AgentWorkflowRunner(store: store, transport: delivery.transport, onFailure: { workflowLogger.error("\($0)") })
             agentWorkflowRunner = runner
+            let recovery = AgentWorkflowResultRecovery(store: store, inspect: { [weak self] instance in
+                guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
+                return try await inspectWorkflowInstance(instance, verifyNativeWriter: true)
+            }, provider: { [weak self] pluginID in
+                await self?.pluginRegistry?.core(pluginID) as? any AgentWorkflowProviding
+            })
             agentWorkflowService = AgentWorkflowService(store: store, scan: { [weak self] _ in
                 guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
                 guard let catalog = await self.agentRuntimeCatalog else { throw AgentWorkflowError("The Agent directory is unavailable.") }
                 return try await catalog.snapshot(refresh: true).map(AgentWorkflowObservation.init)
-            }, schedule: { await runner.schedule(runID: $0) }, checkInputOwner: { [weak self] id in try await self?.checkAgentMessageOccupancy(id) }, resumeStep: { try await delivery.resumeStep($0, instance: $1) }, models: { [weak self] instance, refresh in
+            }, schedule: { await runner.schedule(runID: $0) }, checkInputOwner: { [weak self] id in try await self?.checkAgentMessageOccupancy(id) }, resumeStep: { try await delivery.resumeStep($0, instance: $1) }, recoverResults: { try await recovery.recover($0) }, models: { [weak self] instance, refresh in
                 guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
                 _ = try await inspectWorkflowInstance(instance)
                 let snapshot = try await handleAgentModels(.init(workspacePane: instance.workspacePane, refresh: refresh), paneID: instance.paneID)

@@ -51,6 +51,13 @@ transcript path even when the directory still lists the conversation before `/ne
 The completion monitor rechecks that accepted conversation against the live process;
 it neither substitutes the directory's conversation nor resends accepted input.
 The workflow's participant target remains the same Host/pane AgentID.
+After a Host restart, Continue also checks persisted accepted tasks against their
+native transcript when the Stop callback was lost. Codex requires the matching
+native turn completion; Claude Code requires the matching prompt's unblocked
+`stop_hook_summary`. Explicit-completion steps still require their recorded
+complete-step request. Recovery records verified results while paused, then
+resumes scheduling; it never resends an accepted task. Missing receipts, unfinished
+records and mismatched conversations remain unresolved.
 
 ## Event ingress
 

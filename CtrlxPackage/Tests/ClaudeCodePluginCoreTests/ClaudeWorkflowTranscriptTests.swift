@@ -111,6 +111,22 @@ struct ClaudeWorkflowTranscriptTests {
     }
 
     @Test
+    func recoveryWithoutStopCandidateRequiresUnblockedNativeCompletion() throws {
+        var parser = try started()
+        #expect(parser.updateCandidate("") == nil)
+        _ = try parser.consume(answer("proposal", parent: "user"))
+        #expect(parser.recoveredCompletion == nil)
+        _ = try parser.consume(summary("blocked", parent: "proposal", errors: ["Continue"]))
+        #expect(parser.recoveredCompletion == nil)
+        _ = try parser.consume(answer("final", parent: "blocked"))
+        #expect(try parser.consume(summary("stop", parent: "final")) == nil)
+        #expect(parser.recoveredCompletion == .succeeded("Final answer"))
+        // A later continuation of this prompt invalidates that earlier answer.
+        _ = try parser.consume(record("feedback", parent: "stop", ["type": "user", "promptId": "prompt"]))
+        #expect(parser.recoveredCompletion == nil)
+    }
+
+    @Test
     func lateCandidateReusesUnblockedSummaryAndRejectsSupersededAnswer() throws {
         var parser = try started()
         #expect(parser.updateCandidate("") == nil)

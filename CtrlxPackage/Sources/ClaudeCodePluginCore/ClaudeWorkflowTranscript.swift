@@ -30,6 +30,11 @@ public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
         return [nativeTurnID, String(prompt[start.lowerBound...end])]
     }
 
+    public var recoveredCompletion: AgentWorkflowTranscriptOutcome? {
+        guard let completedAnswer, !completedAnswer.isEmpty else { return nil }
+        return .succeeded(completedAnswer)
+    }
+
     public func isTurnStart(_ line: Data) throws -> Bool {
         guard
             let record = try JSONSerialization.jsonObject(with: line) as? [String: Any],

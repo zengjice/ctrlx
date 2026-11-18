@@ -12,6 +12,8 @@ public protocol AgentWorkflowTranscriptParser: Sendable {
     /// Cheap byte markers locate candidate records without decoding old history.
     var startMarkers: [String] { get }
     var readsSessionHeader: Bool { get }
+    /// A durable native completion, independent of a Stop callback lost on restart.
+    var recoveredCompletion: AgentWorkflowTranscriptOutcome? { get }
     func isTurnStart(_ line: Data) throws -> Bool
     /// Update Stop text without resetting the turn; return matching evidence
     /// already consumed so a late callback or inspection retry needs no replay.
@@ -20,6 +22,10 @@ public protocol AgentWorkflowTranscriptParser: Sendable {
 }
 
 public extension AgentWorkflowTranscriptParser {
+    var recoveredCompletion: AgentWorkflowTranscriptOutcome? {
+        nil
+    }
+
     var startMarkers: [String] {
         []
     }

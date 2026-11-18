@@ -9,6 +9,7 @@ actor AgentWorkflowService {
     private let checkInputOwner: @Sendable (AgentID) async throws -> Void
     private let schedule: @Sendable (UUID) async -> Void
     private let resumeStep: @Sendable (AgentWorkflowInvocation, AgentWorkflowInstance) async throws -> Void
+    private let recoverResults: @Sendable (AgentWorkflowRun) async throws -> AgentWorkflowRun
     private let now: @Sendable () -> Date
     private let onFailure: @Sendable (String) -> Void
     let models: @Sendable (AgentWorkflowInstance, Bool) async throws -> AgentModelSnapshot
@@ -23,6 +24,7 @@ actor AgentWorkflowService {
         schedule: @escaping @Sendable (UUID) async -> Void,
         checkInputOwner: @escaping @Sendable (AgentID) async throws -> Void = { _ in },
         resumeStep: @escaping @Sendable (AgentWorkflowInvocation, AgentWorkflowInstance) async throws -> Void = { _, _ in throw AgentWorkflowError("Workflow continuation input is unavailable.") },
+        recoverResults: @escaping @Sendable (AgentWorkflowRun) async throws -> AgentWorkflowRun = { $0 },
         models: @escaping @Sendable (AgentWorkflowInstance, Bool) async throws -> AgentModelSnapshot = { _, _ in throw AgentWorkflowError("This Agent does not support model selection.") },
         now: @escaping @Sendable () -> Date = { Date() },
         onFailure: @escaping @Sendable (String) -> Void = { _ in }
@@ -32,6 +34,7 @@ actor AgentWorkflowService {
         self.schedule = schedule
         self.checkInputOwner = checkInputOwner
         self.resumeStep = resumeStep
+        self.recoverResults = recoverResults
         self.models = models
         self.now = now
         self.onFailure = onFailure
@@ -201,10 +204,13 @@ actor AgentWorkflowService {
     }
 
     func resume(runID: UUID, expectedRevision: Int, roundLimit: Int? = nil) async throws -> AgentWorkflowRun {
-        let needsAgents = try await store.snapshot().runs.first(where: { $0.id == runID })?.instances.isEmpty == false
-        let instances = needsAgents ? try await refreshInstancesCatalog() : []
+        guard let original = try await store.snapshot().runs.first(where: { $0.id == runID }), original.revision == expectedRevision else {
+            throw AgentWorkflowError("The workflow changed. Reload before continuing.")
+        }
+        let instances = original.instances.isEmpty ? [] : try await refreshInstancesCatalog()
+        let recovered = try await recoverResults(original)
         let timestamp = now()
-        let run = try await store.update(runID: runID, expectedRevision: expectedRevision) {
+        let run = try await store.update(runID: runID, expectedRevision: recovered.revision) {
             try $0.resume(instances: instances, roundLimit: roundLimit, now: timestamp)
         }
         for invocation in run.invocations where invocation.status == .running && invocation.round == run.round {
