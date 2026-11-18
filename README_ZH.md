@@ -55,6 +55,8 @@ tmux attach -t coding
 3. 选择 Host、session、window 和 pane。
 
 学习交流可以使用官方提供的 Relay：`wss://ctrlx.zengjice.com:7001`。
+若所选服务要求访问密钥，请在运行项目的 Mac 上打开
+**Settings → Relay → This Mac · Relay Traffic → Access Key**，填写后点击 **Save Access Key**。
 
 iOS App 目前需要使用 Xcode 本地签名安装；iOS 系统通知需要 Relay 配置与该构建匹配的
 APNs 凭据。

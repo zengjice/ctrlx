@@ -40,9 +40,10 @@ curl -fsSL https://ctrlx-1256844776.cos.ap-guangzhou.myqcloud.com/macos/mac.sh |
 ```
 
 The installer verifies the package and replaces only `/Applications/CtrlX.app`;
-existing tmux sessions continue running. Formal releases use Developer ID signing
-and Apple notarization. Local development packages use Apple Development signing;
-neither channel uses the App Store.
+existing tmux sessions continue running. Formal releases are signed with the
+publisher's Developer ID Application identity and notarized by Apple. Local
+development packages use Apple Development signing. Neither channel uses the
+App Store.
 
 ### Reuse and share a tmux session
 
@@ -61,7 +62,9 @@ iPhone:
 3. Select the Host, session, window, and pane.
 
 For learning and community use, you can connect to the official Relay at
-`wss://ctrlx.zengjice.com:7001`.
+`wss://ctrlx.zengjice.com:7001`. If your Relay requires an access key, enter it
+on the Mac running your project under **Settings → Relay → This Mac · Relay
+Traffic → Access Key**, then choose **Save Access Key**.
 
 The iOS app currently requires a locally signed Xcode build. APNs credentials
 matching that build are required for iOS system notifications.
