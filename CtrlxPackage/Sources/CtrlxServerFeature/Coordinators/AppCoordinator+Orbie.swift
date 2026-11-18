@@ -14,7 +14,7 @@ extension AppCoordinator {
                     agentWorkflowStartupError = nil
                 }
             } catch {
-                agentWorkflowStartupError = "Could not load Agent conversations: \(error.localizedDescription)"
+                agentWorkflowStartupError = "Could not load saved conversations: \(error.localizedDescription)"
             }
         } else {
             await setupAgentWorkflows()
@@ -33,7 +33,7 @@ extension AppCoordinator {
                 let pane = tmuxService.panes.first(where: {
                     $0.paneId == created.paneID && $0.workspaceIdentity?.serverID == created.scope.serverID
                 })?.workspaceIdentity else {
-                throw AgentWorkflowError("The Agent may have started, but its persistent terminal identity is not available yet.")
+                throw AgentWorkflowError("Orbie may have started. Its tab is still being verified.")
             }
             return pane
         } locateCreation: { [weak self] id in

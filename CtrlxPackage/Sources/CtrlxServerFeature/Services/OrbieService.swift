@@ -69,16 +69,16 @@ final class OrbieService {
 
     var availability: String? {
         guard let record else { return "Loading Orbie…" }
-        guard record.enabled else { return "Orbie is disabled on this Mac. Its Agent and saved data are retained." }
+        guard record.enabled else { return "Orbie is disabled on this Mac. Its tab and saved data are kept." }
         guard record.creation != nil else { return "Create Orbie on this Mac to begin." }
         if isRestoring {
             return "Restoring the original conversation…"
         }
         if tabClosed {
-            return "The Agent tab was closed. Restore its original conversation or explicitly create a new Orbie."
+            return "The Orbie tab was closed. Restore its original conversation or create a new Orbie."
         }
         guard let target = record.target, let instance else {
-            return "The Orbie Agent is not running or is still starting. Open its tab to check, or resume the saved conversation after it has exited."
+            return "Orbie may still be starting. Open the Orbie tab to check its status or resume the saved conversation."
         }
         guard target.agentID == instance.agentID else {
             return "The Orbie tab changed. Refresh Orbie to locate its current terminal."
@@ -96,9 +96,9 @@ final class OrbieService {
         return switch instance.readiness {
         case .ready: nil
         case .busy: "Orbie is working. Your draft will be kept."
-        case .draft: "Orbie has unsent terminal input. Send or clear it in the Agent tab; your panel draft will be kept."
-        case .awaitingHuman: "Orbie needs an answer or approval. Continue in its Agent tab."
-        case .unavailable: instance.inputIssue ?? "Orbie’s input cannot be verified. Open its Agent tab and check startup or recovery."
+        case .draft: "Orbie has unsent terminal input. Send or clear it in the Orbie tab. Your panel draft is kept."
+        case .awaitingHuman: "Orbie needs an answer or approval. Continue in the Orbie tab."
+        case .unavailable: instance.inputIssue ?? "Orbie’s input cannot be verified. Open the Orbie tab to check startup or recovery."
         }
     }
 
@@ -147,7 +147,7 @@ final class OrbieService {
         }
         defer { finishOperation() }
         guard var record, record.creation == nil else {
-            throw AgentWorkflowError("Orbie already exists or creation is being checked. Open or reconcile the existing Agent first.")
+            throw AgentWorkflowError("Orbie already exists or is still starting. Check the Orbie tab before trying again.")
         }
         let directory = try await store.prepareDirectory()
         let intent = OrbieRecord.Creation(id: UUID(), pluginID: pluginID, providerID: providerID, directory: directory)
@@ -162,7 +162,7 @@ final class OrbieService {
             try await reconcile(inspect: true)
             issue = nil
         } catch {
-            issue = "Creation was not fully confirmed: \(error.localizedDescription) Check the existing Agent before rebuilding."
+            issue = "Orbie’s creation could not be confirmed. \(error.localizedDescription) Check the Orbie tab before setting it up again."
             throw AgentWorkflowError(issue ?? error.localizedDescription)
         }
     }
@@ -211,7 +211,7 @@ final class OrbieService {
         defer { finishOperation() }
         guard var updated = record else { throw AgentWorkflowError("Orbie has not loaded yet. Try staging the report again.") }
         let combined = draft.isEmpty ? text : draft + "\n\n" + text
-        guard combined.utf8.count <= 32_000 else { throw AgentWorkflowError("The Orbie draft is full. Send or shorten it before adding an Agent reply.") }
+        guard combined.utf8.count <= 32_000 else { throw AgentWorkflowError("The Orbie draft is full. Send or shorten it before adding a reply.") }
         updated.draft = combined
         try await persist(updated)
         draft = combined

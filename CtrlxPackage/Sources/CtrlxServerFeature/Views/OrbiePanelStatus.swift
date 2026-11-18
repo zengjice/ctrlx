@@ -31,22 +31,22 @@ enum OrbiePanelStatus: Equatable {
         case .terminalDraft: "There is unsent input in the terminal"
         case .restoring: "Restoring the original conversation…"
         case .uncertain: "This message’s result is not confirmed"
-        case .unavailable: "Check the Agent’s terminal"
+        case .unavailable: "Check the terminal"
         case .failed: "The message could not be completed"
         }
     }
 
     var detail: String? {
         switch self {
-        case .awaitingHuman: "Open the Agent tab to answer its question or review its request."
-        case .terminalDraft: "Send or clear the input in the Agent tab. Your panel draft is kept."
+        case .awaitingHuman: "Open the terminal tab to answer the question or review the request."
+        case .terminalDraft: "Send or clear the input in the terminal tab. Your panel draft is kept."
         case .uncertain: "Check the terminal before sending again. You can recheck without resending the message."
         case let .startupFailed(reason),
              let .unavailable(reason),
              let .failed(reason): reason
         case .restoring: "This panel will reconnect automatically. No duplicate tab will be created."
-        case .setup: "Use your existing Agent and Provider configuration."
-        case .disabled: "Your Agent, messages and draft are kept."
+        case .setup: "Choose the engine and Provider for Orbie."
+        case .disabled: "Orbie’s tab, messages and draft are kept."
         default: nil
         }
     }
@@ -64,7 +64,7 @@ enum OrbiePanelStatus: Equatable {
     }
 
     static func conversation(instance: AgentWorkflowInstance?, messages: [AgentMessage], unconfirmedSubmission: Bool = false, availability: String?) -> Self {
-        guard let instance else { return .unavailable(availability ?? "The Agent is starting or its saved conversation needs recovery.") }
+        guard let instance else { return .unavailable(availability ?? "The terminal is starting or its saved conversation needs recovery.") }
         if let issue = instance.capabilityIssue {
             return .unavailable(issue)
         }
@@ -88,7 +88,7 @@ enum OrbiePanelStatus: Equatable {
         switch instance.readiness {
         case .busy: return .working
         case .draft: return .terminalDraft
-        case .unavailable: return .unavailable(instance.inputIssue ?? availability ?? "The Agent’s input cannot be verified.")
+        case .unavailable: return .unavailable(instance.inputIssue ?? availability ?? "The terminal’s input cannot be verified.")
         case .awaitingHuman: return .awaitingHuman
         case .ready: break
         }
@@ -96,7 +96,7 @@ enum OrbiePanelStatus: Equatable {
             return .unavailable(availability)
         }
         if let last = currentMessages.last, last.status == .failed {
-            return .failed(last.issue ?? "Open the Agent tab to review the failure.")
+            return .failed(last.issue ?? "Open the terminal tab to review the failure.")
         }
         return .ready
     }

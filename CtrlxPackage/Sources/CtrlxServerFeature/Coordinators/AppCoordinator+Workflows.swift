@@ -127,7 +127,7 @@ extension AppCoordinator {
         if let messages = agentMessages, let hostID = await agentRuntimeCatalog?.hostID {
             do { try await activateAgentInteraction(hostID: hostID, paths: paths, messages: messages) }
             catch {
-                agentWorkflowStartupError = "Could not load Agent conversations: \(error.localizedDescription)"
+                agentWorkflowStartupError = "Could not load saved conversations: \(error.localizedDescription)"
                 workflowLogger.error("Could not load Agent conversations: \(error)")
             }
         }

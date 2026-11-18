@@ -29,12 +29,14 @@
                             }
                         }
                 } else {
-                    Text(coordinator.agentWorkflowStartupError ?? "Orbie is waiting for this Mac’s Agent services.")
+                    Text(coordinator.agentWorkflowStartupError ?? "Orbie is starting on this Mac…")
                         .foregroundStyle(.secondary).padding()
                 }
             }
             .frame(minWidth: 520, minHeight: 480)
-            .sheet(item: $creation) { NewAgentTabPanel(configuration: $0, destinationDescription: "Create Orbie on this Mac. Its Agent and Provider use the normal launch settings.") }
+            .sheet(item: $creation) {
+                NewAgentTabPanel(configuration: $0, destinationDescription: "Choose the engine and Provider for Orbie.", title: "Create Orbie")
+            }
             .sheet(isPresented: $showsTasks) {
                 if let orbiters = coordinator.orbiters {
                     MacOrbitersView(service: orbiters)
@@ -55,7 +57,7 @@
             } message: { Text(error ?? "") }
             .confirmationDialog("Detach the old Orbie binding?", isPresented: $confirmsRebuild) {
                 Button("Set Up Orbie Again") { Task { await coordinator.orbie?.resetBinding() } }
-            } message: { Text("The existing Agent, messages and files will be kept. You can explicitly create a new Orbie afterward.") }
+            } message: { Text("Orbie’s existing tab, messages and files will be kept. You can create a new Orbie afterward.") }
         }
 
         private func content(_ orbie: OrbieService) -> some View {
@@ -87,7 +89,7 @@
                         if orbie.canRestore {
                             AgentRoleResumeButton(tabClosed: orbie.tabClosed) { Task { await orbie.restoreOriginalConversation() } }.disabled(orbie.isBusy)
                         }
-                        Button("Open Agent Tab") { Task { await openTerminal(orbie) } }.disabled(orbie.tabClosed)
+                        Button("Open Orbie Tab") { Task { await openTerminal(orbie) } }.disabled(orbie.tabClosed)
                             .accessibilityIdentifier("orbie-open-agent")
                         Menu("More") {
                             Button("Set Up Again…") { confirmsRebuild = true }
@@ -121,7 +123,7 @@
                                 if let answer = message.answer {
                                     Text(answer).textSelection(.enabled)
                                 } else {
-                                    Text(message.issue ?? (message.status == .cancelled ? "Stopped. Check the Agent tab for any work already in progress." : "Waiting for a verified reply…"))
+                                    Text(message.issue ?? (message.status == .cancelled ? "Stopped waiting. Check the Orbie tab for any work still in progress." : "Waiting for a verified reply…"))
                                         .foregroundStyle(.secondary).textSelection(.enabled)
                                 }
                                 if let attachments = message.attachments, !attachments.isEmpty {
@@ -140,7 +142,7 @@
                     .disabled(orbie.isBusy)
                     .accessibilityLabel("Message to Orbie").accessibilityIdentifier("orbie-draft")
                 HStack {
-                    Text("Questions and approvals stay in the Agent tab.").font(.caption).foregroundStyle(.secondary)
+                    Text("Answer questions and review approvals in the Orbie tab.").font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     Button("Send") { Task { await orbie.send() } }
                         .buttonStyle(.borderedProminent)
@@ -155,12 +157,14 @@
             Task {
                 do {
                     let options = try await coordinator.workflowAgentCreation(hostID: record.hostID)
+                    let engines = options.agents.filter { ["codex", "claude-code", "traex"].contains($0.id) }
                     creation = NewAgentTabConfiguration(
                         id: .init(hostID: "local", sessionName: "Orbie"), initialDirectory: orbie.directory,
-                        agents: options.agents.filter { ["codex", "claude-code", "traex"].contains($0.id) },
-                        directorySource: options.directorySource, unavailableReason: nil, allowsDirectorySelection: false
+                        agents: engines, directorySource: options.directorySource,
+                        unavailableReason: engines.isEmpty ? "No supported engines are available. Check Settings → Agents." : nil,
+                        allowsDirectorySelection: false
                     ) { request in
-                        guard let pluginID = request.pluginID else { throw AgentWorkflowError("Choose an Agent.") }
+                        guard let pluginID = request.pluginID else { throw AgentWorkflowError("Choose an engine for Orbie.") }
                         try await orbie.create(pluginID: pluginID, providerID: request.providerID)
                         creation = nil
                     }

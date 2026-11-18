@@ -85,7 +85,7 @@ extension AppCoordinator {
         guard
             let identity = task.binding?.workspacePane ?? task.pane,
             let pane = windowManager.paneStates.values.first(where: { $0.workspaceIdentity?.isSamePane(as: identity) == true }) else {
-            throw AgentWorkflowError("This Agent’s original terminal is unavailable. Open its saved details and use the existing Resume or Use Shell controls. No message was resent.")
+            throw AgentWorkflowError("This Orbiter’s original terminal is unavailable. Open its saved details and use the Resume or Use Shell controls. No message was resent.")
         }
         return pane
     }

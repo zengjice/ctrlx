@@ -89,12 +89,12 @@ extension AppCoordinator {
     }
 
     private func readyOrbieForkSource() async throws -> AgentWorkflowInstance {
-        guard let orbie else { throw AgentWorkflowError("Create Orbie first, or choose New Agent.") }
+        guard let orbie else { throw AgentWorkflowError("Set up Orbie first, or choose New Conversation.") }
         await orbie.refresh()
         guard
             !orbie.isBusy, orbie.availability == nil, let current = orbie.instance,
             orbie.record?.binding?.matchesBinding(current) == true, UUID(uuidString: current.conversationID) != nil else {
-            throw AgentWorkflowError("Orbie must have a ready, verified native conversation before Fork. Wait or choose New Agent.")
+            throw AgentWorkflowError("Wait for Orbie’s conversation to be ready, or choose New Conversation.")
         }
         return current
     }
