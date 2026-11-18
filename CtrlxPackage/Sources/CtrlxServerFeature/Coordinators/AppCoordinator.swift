@@ -1064,6 +1064,15 @@
             #endif
         }
 
+        func synchronizeAgentMessageEvents() async throws {
+            guard let ingressSocketServer else { throw AgentWorkflowInspectionUnavailable() }
+            do { try await ingressSocketServer.waitForPendingFrames() }
+            catch is CancellationError {
+                try Task.checkCancellation()
+                throw AgentWorkflowInspectionUnavailable()
+            }
+        }
+
         func synchronizeWorkflowEvents(_ invocationID: UUID) async throws {
             guard let ingressSocketServer, let agentWorkflowEvents else {
                 throw AgentWorkflowError("Workflow event processing is unavailable on this Host.")

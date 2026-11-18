@@ -56,6 +56,10 @@ extension AppCoordinator {
             provider: { [weak self] pluginID in
                 await self?.pluginRegistry?.core(pluginID) as? any AgentWorkflowProviding
             },
+            synchronizeEvents: { [weak self] in
+                guard let self else { throw CancellationError() }
+                try await synchronizeAgentMessageEvents()
+            },
             onFailure: { Logger(label: "com.jicezeng.ctrlx.agent-messages").error("\($0)") }
         )
         agentMessages = messages

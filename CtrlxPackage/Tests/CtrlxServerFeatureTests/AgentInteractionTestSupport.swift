@@ -53,6 +53,9 @@ final class AgentInteractionTestSupport {
     var scanCount = 0
     var workflowOccupied = false
     var workflowStore: AgentWorkflowStore?
+    var replyProvider: @Sendable (String) async -> (any AgentWorkflowProviding)? = { _ in ReplyTestProvider() }
+    var inspectReply: @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance = { $0 }
+    var synchronizeEvents: @Sendable () async throws -> Void = { }
     var catalog: AgentRuntimeCatalog!
     var interaction: AgentMessageService!
     var gate = AgentWorkflowInputGate()
@@ -84,7 +87,10 @@ final class AgentInteractionTestSupport {
             catalog: catalog,
             writer: writer,
             temporaryDirectory: root.appendingPathComponent("input"),
-            inspect: { $0 },
+            inspect: { [weak self] instance in
+                guard let self else { throw CancellationError() }
+                return try await inspectReply(instance)
+            },
             occupied: { [weak self] id in
                 if await self?.workflowOccupied == true {
                     return "Agent is participating in a Workflow."
@@ -94,7 +100,11 @@ final class AgentInteractionTestSupport {
                 }
                 return nil
             },
-            provider: { _ in ReplyTestProvider() },
+            provider: replyProvider,
+            synchronizeEvents: { [weak self] in
+                guard let self else { throw CancellationError() }
+                try await synchronizeEvents()
+            },
             verificationTimeout: verificationTimeout,
             onFailure: { Issue.record(Comment(rawValue: $0)) }
         )

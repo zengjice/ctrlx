@@ -232,3 +232,17 @@ Orbie／Orbiter 界面与 Workflow 编排分别调用共用 Agent 交互能力�
 - [x] 修复发送后撤销崩溃和 Orbiter 轮询的空态收缩；24 项定向测试通过，包括原生发送／撤销、延迟刷新高度稳定及失败保留消息。记录：`.build-local/orbie-panel-redesign/review-fixes-tests-final.log`。Mac Debug 编译、格式及边界检查通过。
 - [x] 补齐打开／切换会话时定位最新内容、底部跟随和上翻保留位置；恢复启动错误展示及手动重试。32 项定向测试通过，记录：`.build-local/orbie-panel-redesign/followup-tests-final.log`；Mac Debug 编译、格式及边界检查通过。
 - 验证使用隔离消息数据和离屏原生控件；未安装、未提交，未执行安装后全局唤醒、多显示器、真实输入法及真实 CLI Fork 人工验收。原型网页的加载故障不等于原生界面验收结果；原生截图与边界见方案文档。
+
+### 2026-11-18：普通消息漏 Stop／重启后的回复核验
+
+- [x] Orbie／Orbiter 已收到可信投递回执的普通消息，复用原生解析器和增量 reader，在漏 Stop 时核验同一会话／轮次的持久完成记录。读到完整记录边界并重新核验运行绑定后保存回复、解除发送阻塞；App 重启不重发输入，不依赖面板保持打开。
+- [x] 显式后续工作、错误身份／轮次、缺少回执和未完成记录均不得完成消息；迟到回调不覆盖已保存回复，保存期间到达的新 Stop 仍保留核验。Workflow 自动交接继续要求 Stop，普通消息恢复不推进流程。
+- `.build-local/agent-message-recovery/tests.log`：114 项测试／10 个套件通过。新增回归使用生产 Codex／Claude 解析器，覆盖重启期间完成、重启后完成、运行中漏 Stop、持久结果重载、迟到／并发 Stop、错误会话／轮次、半条记录、缺少回执及 pending work；既有消息、资源回收、Workflow、Orbie／Orbiter 和转录解析回归通过。
+- 4 个 Swift 文件的 SwiftFormat、品牌／技术边界及差异检查通过。本轮执行包测试编译，未重复 App 整包构建、真实 CLI 对话或安装后人工验收；未提交、未安装。
+
+#### 原生恢复与已入队 Stop 的时序修复
+
+- [x] P1：原生恢复落盘前等待现有 ingress FIFO，再等待该消息已排队的校验；候选被 Stop 更新后重新进入核验，不使用旧 `.submitted` 的完成结果绕过 pending work。同步只用于回复恢复，不放入事件消费或终端输入路径。
+- [x] 入站服务启动期间暂不可用时复用有界重试，成功的中间进程检查不再重置整次核验的失败预算；同步后仍复核当前身份与候选。
+- `.build-local/agent-message-recovery-review/targeted-2.log` 的 25 项测试及 `regression.log` 的 97 项测试通过，共 122 项／12 个套件。新增隔离 socket 回归通过生产 Claude 事件解析、消息服务和转录 reader，分别阻塞完成度分类和消息内部校验：ACK／原生 summary 先到时仍保持等待，pending Stop 不结束消息，最终回复正常保存且只投递一次。分类与进程检查使用可控夹具，不调用真实 Apple Intelligence 或用户 Agent。
+- 7 个 Swift 文件的格式、品牌／技术边界和差异检查通过。包测试编译通过，未重复 App 整包构建或真实 CLI／App E2E；未提交、未安装。

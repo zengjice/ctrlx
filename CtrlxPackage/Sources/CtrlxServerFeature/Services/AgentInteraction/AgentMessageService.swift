@@ -12,6 +12,7 @@ actor AgentMessageService {
     private let inspect: @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance
     private let occupied: @Sendable (AgentID) async throws -> String?
     private let provider: @Sendable (String) async -> (any AgentWorkflowProviding)?
+    private let synchronizeEvents: @Sendable () async throws -> Void
     private let onFailure: @Sendable (String) -> Void
     private let verificationTimeout: Duration
     private var monitor: AgentReplyMonitor?
@@ -28,6 +29,7 @@ actor AgentMessageService {
         inspect: @escaping @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance,
         occupied: @escaping @Sendable (AgentID) async throws -> String?,
         provider: @escaping @Sendable (String) async -> (any AgentWorkflowProviding)?,
+        synchronizeEvents: @escaping @Sendable () async throws -> Void = { },
         verificationTimeout: Duration = .seconds(60),
         onFailure: @escaping @Sendable (String) -> Void
     ) {
@@ -38,6 +40,7 @@ actor AgentMessageService {
         self.inspect = inspect
         self.occupied = occupied
         self.provider = provider
+        self.synchronizeEvents = synchronizeEvents
         self.verificationTimeout = verificationTimeout
         self.onFailure = onFailure
     }
@@ -68,7 +71,10 @@ actor AgentMessageService {
                     message.status = .uncertain
                 }
             }
-        }, inspect: inspect, verificationTimeout: verificationTimeout, missingRuntimeTimeout: verificationTimeout, onFailure: onFailure)
+        }, inspect: inspect, verificationTimeout: verificationTimeout, missingRuntimeTimeout: verificationTimeout, synchronizeRecovery: { [weak self] id in
+            guard let self else { throw CancellationError() }
+            try await self.synchronizeReplyEvents(id)
+        }, onFailure: onFailure)
         for message in try await store.pending() {
             // A process restart is never evidence that a saved write was unsent.
             if message.status == .pending || message.status == .writing || message.status == .awaitingAcceptance {
@@ -91,6 +97,17 @@ actor AgentMessageService {
                 await verify(message, event: event)
             }
         }
+    }
+
+    private func synchronizeReplyEvents(_ id: UUID) async throws {
+        try await synchronizeEvents()
+        // Ingress dispatch only enqueues receipt validation. Its candidate must
+        // also reach the monitor before recovery can commit an older outcome.
+        while let event = events[id] {
+            try Task.checkCancellation()
+            await event.task.value
+        }
+        try Task.checkCancellation()
     }
 
     private func replyState(_ context: AgentReplyContext) async throws -> AgentReplyState {

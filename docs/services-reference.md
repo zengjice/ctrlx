@@ -1951,6 +1951,23 @@ resending input. A verified native failure ends the message immediately with its
 original reason, without waiting for a successful transcript. Workflow retains
 its existing wait policy.
 
+For an ordinary message with an authenticated submission receipt, the verifier
+also accepts the provider's durable native completion if the Stop callback was
+lost, including across a CtrlX restart. It checks the exact conversation and turn,
+catches up to a complete transcript boundary, and rechecks the current binding
+before saving the reply. Recovery first waits for the ingress FIFO and then the
+message's queued receipt validation; an ACK only means the Hook was enqueued.
+If a delayed Stop changes the candidate, the existing reader continues with that
+candidate instead of committing the older recovered answer. A temporary ingress
+startup failure uses the same bounded verification retry, not a fixed grace delay.
+Codex requires its native turn-completion record; Claude
+requires the matching final answer and an unblocked native Stop summary, not just
+an assistant text or `end_turn`. Explicit pending-work evidence still prevents
+completion. No receipt, an incomplete transcript, or an unrelated turn cannot
+complete a message. Late callbacks do not replace a saved reply, and recovery
+never resends input. Workflow automatic handoff still requires its Stop candidate;
+this ordinary-message recovery does not advance a workflow.
+
 Workflow input and ordinary input exclude each other for the same AgentID. Human
 terminal input remains available and is never automatically cleared, approved or
 answered. Stop Waiting cancels local reply observation and revokes a pending write;

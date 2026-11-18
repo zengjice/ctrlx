@@ -2,7 +2,7 @@ import CtrlxNetworking
 import CtrlxPluginProtocol
 import Foundation
 
-/// One reader follows a native turn from its receipt through its final Stop.
+/// One reader follows a native turn from its receipt through verified completion.
 /// Updating a Stop candidate preserves both the file cursor and parser state.
 struct AgentReplyContext: Sendable {
     let id: UUID
@@ -31,6 +31,7 @@ actor AgentReplyMonitor {
     private let onFailure: @Sendable (String) -> Void
     private let missingRuntimeTimeout: Duration?
     private let verificationTimeout: Duration
+    private let synchronizeRecovery: (@Sendable (UUID) async throws -> Void)?
     private var watches: [UUID: Watch] = [:]
 
     init(
@@ -40,6 +41,7 @@ actor AgentReplyMonitor {
         inspect: @escaping @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance,
         verificationTimeout: Duration = .seconds(60),
         missingRuntimeTimeout: Duration? = nil,
+        synchronizeRecovery: (@Sendable (UUID) async throws -> Void)? = nil,
         onFailure: @escaping @Sendable (String) -> Void
     ) {
         self.state = state
@@ -48,6 +50,7 @@ actor AgentReplyMonitor {
         self.inspect = inspect
         self.verificationTimeout = verificationTimeout
         self.missingRuntimeTimeout = missingRuntimeTimeout
+        self.synchronizeRecovery = synchronizeRecovery
         self.onFailure = onFailure
     }
 
@@ -128,6 +131,7 @@ actor AgentReplyMonitor {
             while let watch = watches[id], watch.token == token, !Task.isCancelled {
                 let context = watch.context
                 let submissionOnly = context.candidate.kind == .submitted || context.candidate.hasPendingWork
+                let recoverNative = synchronizeRecovery != nil && context.candidate.kind == .submitted && !context.candidate.hasPendingWork
                 do {
                     let currentState = try await state(context)
                     guard isCurrent(id, token: token, revision: watch.revision) else { continue }
@@ -163,17 +167,27 @@ actor AgentReplyMonitor {
                         guard live.matchesBinding(current) else {
                             throw AgentWorkflowError("The Agent identity changed while verifying its final answer.")
                         }
-                        inspectionDeadline = nil
                         nextInspection = clock.now.advanced(by: .seconds(10))
                     }
                     guard isCurrent(id, token: token, revision: revision) else { continue }
-                    let poll = try await file.poll()
+                    let poll = if recoverNative {
+                        try await file.pollRecovery()
+                    } else {
+                        try await file.poll()
+                    }
                     guard isCurrent(id, token: token, revision: revision) else { continue }
                     if let outcome = poll.outcome {
-                        if case .succeeded = outcome, submissionOnly {
-                            // Keep the parser and its evidence for the Stop;
-                            // transcript completion alone cannot authorize handoff.
+                        if case .succeeded = outcome, submissionOnly, !(recoverNative && poll.reachedEnd) {
+                            // Ordinary messages can recover a lost Stop only after
+                            // catching up with durable native completion. Workflow
+                            // handoff and explicit pending work still require Stop.
                             continue
+                        }
+                        if recoverNative {
+                            // Native completion may precede processing of an
+                            // acknowledged Stop, including its pending-work guard.
+                            try await synchronizeRecovery?(id)
+                            guard isCurrent(id, token: token, revision: revision) else { continue }
                         }
                         let latest = try await state(context).instance
                         guard let latest else {
@@ -186,8 +200,10 @@ actor AgentReplyMonitor {
                             throw AgentWorkflowError("The Agent identity changed while verifying its final answer.")
                         }
                         try await completed(context, live, outcome)
+                        guard isCurrent(id, token: token, revision: revision) else { continue }
                         return
                     }
+                    inspectionDeadline = nil
                     // Historical catch-up is not time spent waiting for native
                     // completion. Start that deadline only after reaching EOF.
                     if !submissionOnly, poll.reachedEnd, deadline == nil {
