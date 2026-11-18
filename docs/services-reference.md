@@ -2045,7 +2045,15 @@ fail visibly without launching or changing the role binding.
 
 The existing configurable global shortcut, menu entry and singleton floating
 panel remain. Esc/focus loss hides the panel; direct Agent lookup and navigation
-remain usable while Orbie is busy. Orbiters opens a list of ordinary Agents and
+remain usable while Orbie is busy. Orbie's background refresh keeps the last
+published status visible while inspecting; it does not disable editing or actions.
+An explicit operation reserves its turn and waits for the current refresh before
+reading or changing the binding. Further polls cannot overtake it, and a refresh
+cannot write an old binding back after Set Up Again. Deferred draft saves retain
+the latest text. A cancelled waiting operation does not change the binding.
+Refresh errors clear after a successful refresh; user-operation errors remain
+until a successful explicit action or verified recovery resolves them.
+Orbiters opens a list of ordinary Agents and
 their conversations. Workflows has its own list; optional tags classify definitions
 without affecting execution or participant identity. Give to Orbie appends a
 bounded selected reply to its draft and requires explicit Send.

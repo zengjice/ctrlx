@@ -73,7 +73,7 @@ struct OrbiePanelTests {
             defer { window.close() }
             try await Task.sleep(for: .milliseconds(200))
             hosting.layoutSubtreeIfNeeded()
-            #expect(orbie.isBusy)
+            #expect(orbie.isRefreshing && !orbie.isBusy)
             let button = try #require(find("orbie-open-agent", in: hosting))
             let selector = NSSelectorFromString("isAccessibilityEnabled")
             let implementation = try #require(button.method(for: selector))

@@ -246,3 +246,12 @@ Orbie／Orbiter 界面与 Workflow 编排分别调用共用 Agent 交互能力�
 - [x] 入站服务启动期间暂不可用时复用有界重试，成功的中间进程检查不再重置整次核验的失败预算；同步后仍复核当前身份与候选。
 - `.build-local/agent-message-recovery-review/targeted-2.log` 的 25 项测试及 `regression.log` 的 97 项测试通过，共 122 项／12 个套件。新增隔离 socket 回归通过生产 Claude 事件解析、消息服务和转录 reader，分别阻塞完成度分类和消息内部校验：ACK／原生 summary 先到时仍保持等待，pending Stop 不结束消息，最终回复正常保存且只投递一次。分类与进程检查使用可控夹具，不调用真实 Apple Intelligence 或用户 Agent。
 - 7 个 Swift 文件的格式、品牌／技术边界和差异检查通过。包测试编译通过，未重复 App 整包构建或真实 CLI／App E2E；未提交、未安装。
+
+### 2026-11-18：Orbie 重设与后台刷新互斥
+
+- [x] 后台刷新不再占用用户操作的 busy 状态。已确认的重设、恢复等操作先占位，等待当前刷新结束后再读取和修改绑定；期间新轮询不插队。取消等待不修改绑定，延迟草稿保存继续保留最新输入。
+- [x] 关闭／恢复状态在异步检查完成后发布，检查失败保留原状态。后台扫描错误在下次成功时清除；用户操作错误保留到明确操作成功或原生恢复核验成功，不被普通轮询清掉。
+- [x] 重设保留原 Agent、消息、草稿和文件；恢复在等待刷新后重查可用性，已恢复的 Agent 不重复启动。本次不补造缺失的原生会话 ID，也不按目录或最近时间猜测旧对话。
+- 定向回归 `OrbieRefreshTests|OrbieTests|OrbiePanelTests|OrbiePanelRedesignTests|AgentRoleRestoreRefreshTests|AgentRoleResumeUITests|AgentMessageHistoryTests` 共 34 项／7 个套件通过，记录在 `.build-local/orbie-refresh-fix/tests-final.log`。包含慢扫描／扫描失败期间重设、旧绑定回写防护、取消、恢复去重、待审批输入保护、状态稳定、错误保留，以及完整历史和离屏原生界面回归。
+- 3 个受影响 Swift 文件格式检查、品牌／技术边界和差异检查通过；顺序准备三个 native helper 后，Mac Debug workspace 编译通过（同目录 `mac-build.log`，仅编译，未签名安装）。
+- 本轮不操作用户运行中的 Agent；未在另一台 Mac 的历史数据上执行恢复，未安装、未发布。
