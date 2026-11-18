@@ -3,8 +3,14 @@ import SwiftUI
 
 @MainActor
 struct AgentWorkflowAgentPicker: View {
+    enum Purpose {
+        case step
+        case addParticipant
+    }
+
     let instances: [AgentWorkflowInstance]
-    let definition: AgentWorkflowDefinition?
+    let definition: AgentWorkflowDefinition
+    let purpose: Purpose
     let refreshing: Bool
     let error: String?
     let refresh: () async -> Void
@@ -13,19 +19,37 @@ struct AgentWorkflowAgentPicker: View {
     @State private var search = ""
 
     private var hasParticipants: Bool {
-        definition?.agents.isEmpty == false
+        !definition.agents.isEmpty
     }
 
     private var available: [AgentWorkflowInstance] {
-        guard let definition, hasParticipants else { return instances }
         let currentIDs = Set(definition.agents.compactMap { definition.instance(for: $0.id, in: instances)?.id })
-        return instances.filter { currentIDs.contains($0.id) }
+        switch purpose {
+        case .step:
+            return instances.filter { currentIDs.contains($0.id) }
+        case .addParticipant:
+            return instances.filter { !currentIDs.contains($0.id) }
+        }
     }
 
     private var filtered: [AgentWorkflowInstance] {
         available.filter { instance in
-            search.isEmpty || [instance.displayName, instance.workingDirectory]
+            search.isEmpty || [instance.displayName, instance.workingDirectory, instance.paneID]
                 .contains { $0.localizedCaseInsensitiveContains(search) }
+        }
+    }
+
+    @ViewBuilder
+    private var emptyState: some View {
+        switch purpose {
+        case .step:
+            ContentUnavailableView(
+                hasParticipants ? "No participating Agents available" : "No participating Agents configured",
+                symbol: .sparkles,
+                description: hasParticipants ? "Refresh this list or choose a replacement in Participating Agents." : "Add an Agent in Participating Agents before choosing one for this step."
+            )
+        case .addParticipant:
+            ContentUnavailableView("No more Agents available", symbol: .sparkles, description: "Start an Agent tab on this Host, then refresh this list.")
         }
     }
 
@@ -38,8 +62,12 @@ struct AgentWorkflowAgentPicker: View {
                         dismiss()
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(instance.displayName)
-                            Text(instance.workingDirectory).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            Text("\(instance.displayName) · \(instance.paneID)")
+                            Text(instance.workingDirectory)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                                .truncationMode(.middle)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
@@ -51,12 +79,7 @@ struct AgentWorkflowAgentPicker: View {
                     if refreshing {
                         ProgressView("Loading Agents…")
                     } else if available.isEmpty {
-                        ContentUnavailableView(
-                            hasParticipants ? "No participating Agents available" : "No Agents available",
-                            symbol: .sparkles,
-                            description: hasParticipants ? "Refresh this list or choose a replacement in Participating Agents." : "Start an Agent tab, then refresh this list."
-                        )
-                        .accessibilityIdentifier("workflow-agent-picker-empty")
+                        emptyState.accessibilityIdentifier("workflow-agent-picker-empty")
                     } else {
                         ContentUnavailableView.search(text: search)
                     }
@@ -66,7 +89,7 @@ struct AgentWorkflowAgentPicker: View {
                 }
             }
             .searchable(text: $search, prompt: "Find an Agent")
-            .navigationTitle("Add Agent step")
+            .navigationTitle(purpose == .step ? "Add Agent step" : "Add existing Agent")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }.accessibilityIdentifier("workflow-agent-picker-cancel")

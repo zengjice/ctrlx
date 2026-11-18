@@ -29,6 +29,7 @@ struct AgentWorkflowEditor: View {
     @State private var activeImport: AgentWorkflowImageImport?
     @State private var showingReviewTemplate = false
     @State private var showingAgentPicker = false
+    @State private var showingParticipantPicker = false
     @State private var choosingAgentFor: UUID?
     @State private var showingInitialTask = false
     @State private var showingAgents = false
@@ -101,11 +102,8 @@ struct AgentWorkflowEditor: View {
                                 }.disabled(draft.nodes.contains { $0.agentInstanceID == participant.id })
                             }
                         }
-                        Menu {
-                            ForEach(instances.filter { draft.participantID(for: $0, in: instances) == nil }) { instance in
-                                Button(instance.displayName) { draft.addAgent(instance, in: instances) }
-                            }
-                        } label: { Label("Add existing Agent", symbol: .plus) }
+                        Button { showingParticipantPicker = true } label: { Label("Add existing Agent", symbol: .plus) }
+                            .accessibilityIdentifier("workflow-add-existing-agent")
                         Button { Task { await refreshInstances() } } label: {
                             Label("Refresh Agents", symbol: .arrowClockwise)
                         }.disabled(refreshing)
@@ -114,7 +112,7 @@ struct AgentWorkflowEditor: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Participating Agents")
-                            Text(draft.agents.isEmpty ? "Choose an Agent in each step, or add an Agent step." : draft.agents.map { agentName($0.id) }.joined(separator: ", "))
+                            Text(draft.agents.isEmpty ? "Add Agents here, then choose them in your steps." : draft.agents.map { agentName($0.id) }.joined(separator: ", "))
                                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                             if draft.agents.contains(where: { draft.instance(for: $0.id, in: instances) == nil }), !refreshing {
                                 Text("Some Agents are unavailable. Choose a replacement.").font(.caption).foregroundStyle(.orange)
@@ -351,15 +349,20 @@ struct AgentWorkflowEditor: View {
             }
         }
         .sheet(isPresented: $showingAgentPicker, onDismiss: { choosingAgentFor = nil }) {
-            AgentWorkflowAgentPicker(instances: instances, definition: choosingAgentFor == nil ? draft : nil, refreshing: refreshing, error: error, refresh: refreshInstances) { instance in
-                guard !importing else { return }
-                let participantID = draft.addAgent(instance, in: instances)
+            AgentWorkflowAgentPicker(instances: instances, definition: draft, purpose: .step, refreshing: refreshing, error: error, refresh: refreshInstances) { instance in
+                guard !importing, let participantID = draft.participantID(for: instance, in: instances) else { return }
                 if let choosingAgentFor {
                     guard let index = draft.nodes.firstIndex(where: { $0.id == choosingAgentFor }) else { return }
                     draft.nodes[index].agentInstanceID = participantID
                 } else {
                     addNode(.init(name: AgentWorkflowWire.boundedName("\(instance.displayName) task"), agentInstanceID: participantID, initialTask: draft.nodes.isEmpty ? .textAndAttachments : .omit))
                 }
+            }
+        }
+        .sheet(isPresented: $showingParticipantPicker) {
+            AgentWorkflowAgentPicker(instances: instances, definition: draft, purpose: .addParticipant, refreshing: refreshing, error: error, refresh: refreshInstances) { instance in
+                guard !importing else { return }
+                draft.addAgent(instance, in: instances)
             }
         }
         .task {

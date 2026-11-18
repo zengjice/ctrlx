@@ -65,6 +65,19 @@
             try await Task.sleep(for: .milliseconds(50))
         }
 
+        private func addExistingAgent(_ instance: AgentWorkflowInstance, in window: NSWindow) async throws {
+            try await click("workflow-add-existing-agent", in: window)
+            let id = "workflow-choose-agent-\(instance.id)"
+            try await wait { element(id, in: window) != nil }
+            let button = try #require(element(id, in: window))
+            let label = try #require(attribute("accessibilityLabel", from: button) as? String)
+            #expect(label.contains(instance.displayName))
+            #expect(label.contains(instance.workingDirectory))
+            #expect(label.contains(instance.paneID))
+            try await click(id, in: window)
+            try await wait { window.sheets.isEmpty }
+        }
+
         private func inputs(in view: NSView) -> [AgentWorkflowTextInput.TextView] {
             guard !view.isHiddenOrHasHiddenAncestor else { return [] }
             if let text = view as? AgentWorkflowTextInput.TextView {
@@ -84,12 +97,12 @@
         }
 
         @Test
-        func copiedStepsRequireNewAgentsAndKeepTheirInstructions() async throws {
+        func copiedStepsBindSameNamedAgentsByDirectoryAndPane() async throws {
             _ = NSApplication.shared
             NSApp.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
             let hostID = UUID()
-            let instances = ["New Developer", "New Reviewer"].enumerated().map { index, name in
-                AgentWorkflowInstance(hostID: hostID, pluginID: "codex", processID: Int32(index + 42), processRuntimeID: "runtime-\(index)", workspacePane: .init(serverID: "private", sessionID: UUID(), windowID: UUID(), paneID: UUID()), paneID: "%\(index)", conversationID: "conversation-\(index)", displayName: name, workingDirectory: "/fixture", capabilities: .init(maximumInputBytes: 100_000), readiness: .ready)
+            let instances = ["/repo-a", "/repo-b"].enumerated().map { index, directory in
+                AgentWorkflowInstance(hostID: hostID, pluginID: "codex", processID: Int32(index + 42), processRuntimeID: "runtime-\(index)", workspacePane: .init(serverID: "private", sessionID: UUID(), windowID: UUID(), paneID: UUID()), paneID: "%\(index)", conversationID: "conversation-\(index)", displayName: "demo · work", workingDirectory: directory, capabilities: .init(maximumInputBytes: 100_000), readiness: .ready)
             }
             var original = AgentWorkflowDefinition(name: "Review loop", hostID: hostID, nodes: [], edges: [], entryNodeID: UUID(), initialInput: .init(text: "Old task", attachmentIDs: [UUID()]))
             AgentWorkflowReviewTemplate.apply(to: &original, developerID: UUID(), reviewerID: UUID())
@@ -117,13 +130,19 @@
             defer { window.close() }
             try await click("workflow-editor-save", in: window)
             #expect(saved == nil)
+            try await click("workflow-agents-toggle", in: window)
+            try await addExistingAgent(instances[1], in: window)
+            try await click("workflow-agents-toggle", in: window)
             for index in [0, 1, 2, 4] {
+                if index == 1 {
+                    try await click("workflow-agents-toggle", in: window)
+                    try await addExistingAgent(instances[0], in: window)
+                    try await click("workflow-agents-toggle", in: window)
+                }
                 let node = copy.nodes[index]
                 try await click("workflow-step-toggle-\(node.id)", in: window)
                 try await click("workflow-step-agent-\(node.id)", in: window)
-                // Each unbound step can select a new participant, or reuse one already chosen.
-                try await wait { element("workflow-choose-agent-\(instances[1].id)", in: window) != nil }
-                let instance = instances[index == 1 ? 1 : 0]
+                let instance = instances[index == 1 ? 0 : 1]
                 try await click("workflow-choose-agent-\(instance.id)", in: window)
                 try await wait { window.sheets.isEmpty }
                 #expect(inputs(in: hosting).first?.string == node.input.text)
@@ -139,6 +158,8 @@
             #expect(value.agentInstanceIDs.count == 2)
             #expect(Set(value.agents.compactMap { value.instance(for: $0.id, in: instances)?.id }) == Set(instances.map(\.id)))
             #expect(value.agentInstanceIDs.isDisjoint(with: instances.map(\.id)))
+            #expect(value.instance(for: value.nodes[0].agentInstanceID, in: instances)?.id == instances[1].id)
+            #expect(value.instance(for: value.nodes[1].agentInstanceID, in: instances)?.id == instances[0].id)
             #expect(value.nodes[0].agentInstanceID == value.nodes[2].agentInstanceID && value.nodes[0].agentInstanceID == value.nodes[4].agentInstanceID)
             #expect(value.initialInput == .init() && value.attachmentIDs.isEmpty)
             #expect(value.nodes.map(\.input.text) == original.nodes.map(\.input.text))
@@ -326,7 +347,7 @@
         }
 
         @Test(arguments: [false, true], [false, true])
-        func addingAgentStepsChoosesInstancesDirectlyAndReusesParticipants(empty: Bool, longName: Bool) async throws {
+        func addingAgentStepsOnlyOffersConfiguredParticipants(empty: Bool, longName: Bool) async throws {
             _ = NSApplication.shared
             NSApp.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
             let hostID = UUID()
@@ -334,7 +355,8 @@
                 AgentWorkflowInstance(hostID: hostID, pluginID: "codex", processID: Int32(index + 42), processRuntimeID: "runtime-\(index)", workspacePane: .init(serverID: "1:1", sessionID: UUID(), windowID: UUID(), paneID: UUID()), paneID: "%\(index)", conversationID: "conversation-\(index)", displayName: name, workingDirectory: "/fixture", capabilities: .init(maximumInputBytes: 100_000), readiness: .ready)
             }
             let content = AgentWorkflowNode(name: "Instructions", content: .init(text: "Build the feature"), initialTask: .textAndAttachments)
-            let definition = AgentWorkflowDefinition(name: "Direct selection", hostID: hostID, nodes: empty ? [] : [content], edges: [], entryNodeID: content.id, initialInput: .init(text: "Build the feature"))
+            var definition = AgentWorkflowDefinition(name: "Participant selection", hostID: hostID, nodes: empty ? [] : [content], edges: [], entryNodeID: content.id, initialInput: .init(text: "Build the feature"))
+            definition.addAgent(instances[0], in: instances)
             var saved: AgentWorkflowDefinition?
             var loaded = false
             let endpoint = AgentWorkflowEndpoint(id: "fixture", name: "Host", connected: { true }, supported: { true }) { request in
@@ -362,18 +384,16 @@
             try await wait { loaded }
             try await click("workflow-add-agent-step", in: window)
             try await wait { element("workflow-choose-agent-\(instances[0].id)", in: window) != nil }
-            #expect(element("workflow-choose-agent-\(instances[1].id)", in: window) != nil)
+            #expect(element("workflow-choose-agent-\(instances[1].id)", in: window) == nil)
             if let contentView = window.sheets.first?.contentView {
                 try capture(contentView, name: "agent-picker")
             }
             try await click("workflow-agent-picker-cancel", in: window)
             try await wait { window.sheets.isEmpty }
-            for index in 0..<2 {
+            for _ in 0..<2 {
                 try await click("workflow-add-agent-step", in: window)
                 try await wait { element("workflow-choose-agent-\(instances[0].id)", in: window) != nil }
-                if index > 0 {
-                    #expect(element("workflow-choose-agent-\(instances[1].id)", in: window) == nil)
-                }
+                #expect(element("workflow-choose-agent-\(instances[1].id)", in: window) == nil)
                 try await click("workflow-choose-agent-\(instances[0].id)", in: window)
                 try await wait { window.sheets.isEmpty && inputs(in: hosting).count == 1 }
             }
@@ -455,7 +475,7 @@
                 try await click("workflow-add-agent-step", in: window)
             }
             try await wait { element("workflow-choose-agent-\(live.id)", in: window) != nil }
-            #expect((element("workflow-choose-agent-\(unrelated.id)", in: window) != nil) == bindUnassignedStep)
+            #expect(element("workflow-choose-agent-\(unrelated.id)", in: window) == nil)
             let previousRefreshCount = refreshCount
             try await click("Refresh Agents", in: window, attributeName: "accessibilityLabel")
             try await wait { refreshCount > previousRefreshCount }
@@ -472,8 +492,8 @@
             #expect(value.instance(for: original.id, in: [live])?.id == live.id)
         }
 
-        @Test(arguments: [false, true], [false, true])
-        func configuredAgentPickerNeverOffersUnrelatedInstances(unavailable: Bool, restarted: Bool) async throws {
+        @Test(arguments: ["ready", "unavailable", "empty"], [false, true])
+        func configuredAgentPickerNeverOffersUnrelatedInstances(state: String, restarted: Bool) async throws {
             _ = NSApplication.shared
             NSApp.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
             let hostID = UUID()
@@ -484,10 +504,13 @@
             let node = AgentWorkflowNode(name: "Existing step", agentInstanceID: original.id)
             var definition = AgentWorkflowDefinition(name: "Configured", hostID: hostID, nodes: [node], edges: [], entryNodeID: node.id, participants: [.init(agentInstanceID: original.id, name: "Configured role")])
             definition.rememberTargets(from: instances)
+            if state == "empty" {
+                definition.participants = []
+            }
             if restarted {
                 instances[0] = .init(hostID: hostID, pluginID: "codex", processID: 200, processRuntimeID: "restarted", workspacePane: .init(serverID: "new-server", sessionID: UUID(), windowID: UUID(), paneID: original.workspacePane.paneID), paneID: "%99", conversationID: "resumed", displayName: "Configured", workingDirectory: "/fixture", capabilities: original.capabilities, readiness: .ready)
             }
-            let picker = AgentWorkflowAgentPicker(instances: unavailable ? [instances[1]] : instances, definition: definition, refreshing: false, error: nil, refresh: { }) { _ in
+            let picker = AgentWorkflowAgentPicker(instances: state == "unavailable" ? [instances[1]] : instances, definition: definition, purpose: .step, refreshing: false, error: nil, refresh: { }) { _ in
                 Issue.record("Inspecting the picker must not select an Agent")
             }
             let window = NSWindow(contentRect: .init(x: -10_000, y: -10_000, width: 560, height: 500), styleMask: .titled, backing: .buffered, defer: false)
@@ -495,8 +518,9 @@
             window.contentView = NSHostingView(rootView: picker)
             window.orderBack(nil)
             defer { window.close() }
-            if unavailable {
+            if state != "ready" {
                 try await wait { element("workflow-agent-picker-empty", in: window) != nil }
+                #expect(element("workflow-choose-agent-\(instances[0].id)", in: window) == nil)
             } else {
                 try await wait { element("workflow-choose-agent-\(instances[0].id)", in: window) != nil }
                 let button = try #require(element("workflow-choose-agent-\(instances[0].id)", in: window))
