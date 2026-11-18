@@ -7,6 +7,30 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.172 — Serialize Orbie actions with background refresh
+
+- Keep background inspection separate from user-operation busy state. Explicit
+  reset, recovery, send and history actions reserve their operation, wait for an
+  existing refresh, then read the current binding. Polling cannot overtake them
+  or write an old binding back after reset. Cancellation preserves the binding,
+  and deferred draft saves retain the latest input. Source: `d2bdccac`.
+- Retain recovery/closed state while asynchronous checks run and publish the
+  replacement only after success. Clear transient refresh errors after a healthy
+  scan while preserving user-operation errors until an explicit operation or
+  verified recovery succeeds. Recheck recovery availability after waiting to
+  avoid launching an already-restored Agent again.
+- Reset detaches only the role association, retaining the original Agent,
+  messages, draft and files. Missing native conversation IDs are not inferred
+  from directories or recency. See [Orbie services](docs/services-reference.md).
+
+- Validation: 68 focused tests across 17 suites passed serially, including slow
+  and failed refreshes, stale-binding protection, cancellation, recovery
+  deduplication, pending-human input, error retention, history and offscreen
+  native UI. All 34 distributed-installer process/flow checks, lint for three
+  Swift files, both boundary checks and diff checks passed. This release builds
+  macOS only; installed-App interaction, real-account CLI acceptance, full E2E,
+  the unfiltered suite and Apple Intelligence evaluations were not rerun.
+
 ## 3.0.171 — Traex integration and reliable Agent workflows
 
 - Add Traex as an independent built-in Agent, including its native plugins,
