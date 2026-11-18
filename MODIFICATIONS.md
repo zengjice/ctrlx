@@ -7,6 +7,28 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.174 — Multiple models for custom Agent Providers
+
+- Let Codex, Claude Code and Traex custom Providers store a default model plus
+  additional model IDs. Existing single-model settings remain valid, while the
+  Provider editor validates, trims and deduplicates the combined list. Each
+  model continues to use its Provider's endpoint, credential and defaults.
+  Source: `8bf493e2`.
+- Generate Codex and Traex model catalogs from every configured model and use
+  separate Traex Keychain accounts. New Agent and Fork open with the default
+  model, while recovery rebuilds the current Provider model list. Claude Code
+  exposes the same list through its native process-local `modelPicker`, without
+  editing native settings or replaying unrelated inline settings.
+  See [Provider services](docs/services-reference.md).
+
+- Validation: 19 focused unit tests across four suites, two native Codex 0.170.0
+  and Traex 0.213.1 catalog cases, lint for 18 Swift files, both boundary checks
+  and diff checks passed. The native CLIs ran with isolated `HOME` and
+  configuration directories and read both the default and secondary model IDs.
+- This release builds macOS only. Full E2E, the unfiltered unit suite and Apple
+  Intelligence evaluations were not rerun. Unrelated README and temporary-work
+  edits are preserved.
+
 ## 3.0.173 — Shared Agent CLI version admission
 
 - Use one version policy for built-in Agent workflow input and automatic resume,
