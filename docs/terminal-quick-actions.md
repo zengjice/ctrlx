@@ -270,7 +270,15 @@ the request finishes. A rejected or failed switch opens **Model Change Failed**
 with the reason; the user can retry after resolving it. Background refreshes do
 not open or dismiss this alert. Read failures show their reason in the
 strip/popover and retry after 15 seconds; manual refresh remains available.
-Switch requests are never retried automatically. A replacement pane or plugin
+Switch requests are not retried after a timeout or ambiguous result. Codex has
+one narrow exception: a new native `Model '…' is unavailable` rejection for the
+requested model can mean its running TUI still holds an older catalog than
+`debug models`. The Host opens `/model` and waits up to five seconds for the
+requested model's row to appear in the native picker. Only then does it dismiss
+the picker and retry the session-only command once, with the same identity and
+input checks. Old transcript errors, an unrecognized menu, a missing target,
+human input or a second rejection stop the attempt. This does not restart Codex
+or save a global model default. A replacement pane or plugin
 cannot inherit another target's confirmed state. Debug Mode logs identification,
 catalog, terminal and Viewer
 response durations/errors under `com.jicezeng.ctrlx.agent-models`, without process
@@ -281,6 +289,12 @@ with an explanation before sending any command. Restore the
 status fields or use native `/model`. Claude can establish an unknown selection
 through its native picker. Native manual changes are reflected when their
 current state is visible.
+
+`python3 scripts/tests/run_codex_model_refresh.py` exercises this stale-catalog
+case against the installed Codex in a private tmux server and temporary home,
+using a loopback model catalog without user credentials or conversation prompts.
+It runs the production adapter and checks the single retry, unchanged process,
+native status readback and unchanged global configuration.
 
 Model and effort shortcuts also work with tmux 3.6a on the Host. When the server
 cannot expose `bracket_paste_flag`, the Host verifies the native empty composer

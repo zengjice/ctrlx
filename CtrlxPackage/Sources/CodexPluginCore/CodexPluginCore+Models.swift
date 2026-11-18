@@ -87,6 +87,10 @@ extension CodexPluginCore: AgentModelProviding {
         return nil
     }
 
+    public nonisolated func isModelPicker(lines: [String], models _: [AgentModelOption]) -> Bool {
+        CodexModelMenu(lines: lines) != nil
+    }
+
     public func selectModel(_ selection: AgentModelSelection, models: [AgentModelOption], terminal: AgentModelTerminal) async throws -> AgentModelSelection {
         guard
             let model = models.first(where: { $0.id == selection.model }),
@@ -94,13 +98,53 @@ extension CodexPluginCore: AgentModelProviding {
             model.efforts.contains(effort), Self.safeModelArgument(model.id), Self.safeModelArgument(effort) else {
             throw AgentModelError("This model or effort is no longer available.")
         }
-        if let issue = try modelSwitchIssue(lines: await terminal.read(), models: models) {
+        let before = try await terminal.read()
+        if let issue = modelSwitchIssue(lines: before, models: models) {
             throw AgentModelError(issue)
         }
         let expected = AgentModelSelection(model: model.id, effort: effort)
-        try await terminal.submit("/model \(model.id) --reasoning=\(effort)")
+        let command = "/model \(model.id) --reasoning=\(effort)"
+        if try await switchModel(expected, command: command, models: models, before: before, terminal: terminal) {
+            return expected
+        }
+
+        // The metadata CLI can know a new model before this TUI's in-memory
+        // catalog does. Only a fresh, explicit rejection permits one retry.
+        try await terminal.submit("/model")
+        @Dependency(\.continuousClock) var clock
+        var refreshed = false
+        for _ in 0..<50 {
+            try Task.checkCancellation()
+            if let menu = try CodexModelMenu(lines: await terminal.read()), menu.contains(model) {
+                refreshed = true
+                break
+            }
+            try await clock.sleep(for: .milliseconds(100))
+        }
+        guard refreshed else {
+            throw AgentModelError("Codex did not show the requested model after refreshing. Use /model in this terminal; no model change was retried.")
+        }
+        try await terminal.send([.escape])
+        let ready = try await terminal.wait { [self] lines -> [String]? in
+            guard !isModelPicker(lines: lines, models: models), modelSelection(lines: lines, models: models) != nil else { return nil }
+            return lines
+        }
+        guard try await switchModel(expected, command: command, models: models, before: ready, terminal: terminal) else {
+            throw AgentModelError("Codex still reports this model as unavailable. Use /model in this terminal.")
+        }
+        return expected
+    }
+
+    private func switchModel(_ expected: AgentModelSelection, command: String, models: [AgentModelOption], before: [String], terminal: AgentModelTerminal) async throws -> Bool {
+        let previousErrors = CodexModelMenu.unavailableCount(modelID: expected.model, lines: before)
+        try await terminal.submit(command)
         return try await terminal.wait { [self] lines in
-            modelSelection(lines: lines, models: models) == expected ? expected : nil
+            if modelSelection(lines: lines, models: models) == expected {
+                return true
+            }
+            // If scrolling leaves the count unchanged, attribution is ambiguous:
+            // let the normal confirmation timeout fail instead of replaying input.
+            return CodexModelMenu.unavailableCount(modelID: expected.model, lines: lines) > previousErrors ? false : nil
         }
     }
 
