@@ -106,7 +106,7 @@ extension AppCoordinator {
         try gate.validate(claim)
         var nativeTurnCompleted = false
         if action == .open, windowManager.paneStates[paneID]?.agentSession?.state.isActiveWorking == true {
-            @Dependency(CodexHookTrustIdleClient.self) var idle
+            @Dependency(CodexTurnStateClient.self) var idle
             nativeTurnCompleted = await idle.isIdle(processID, runtimeID)
             try Task.checkCancellation()
             try gate.validate(claim)

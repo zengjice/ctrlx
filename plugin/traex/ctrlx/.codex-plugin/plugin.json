@@ -1,0 +1,31 @@
+{
+  "name": "ctrlx",
+  "version": "1.1.20",
+  "description": "CtrlX skills for terminals, browser, files and agent workflows.",
+  "author": {
+    "name": "ZengJice",
+    "email": "jicezeng@gmail.com",
+    "url": "https://github.com/jicezeng"
+  },
+  "homepage": "https://github.com/jicezeng/CtrlX",
+  "repository": "https://github.com/jicezeng/CtrlX",
+  "license": "AGPL-3.0",
+  "keywords": [
+    "traex",
+    "tmux",
+    "monitoring",
+    "ctrlx"
+  ],
+  "interface": {
+    "displayName": "CtrlX",
+    "shortDescription": "CtrlX skills for local workspaces.",
+    "longDescription": "Shared CtrlX skills. Lifecycle hooks are supplied separately by ctrlx-hooks.",
+    "developerName": "ZengJice",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive"
+    ],
+    "websiteURL": "https://github.com/jicezeng/CtrlX",
+    "brandColor": "#3B82F6"
+  }
+}

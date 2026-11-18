@@ -102,6 +102,29 @@ struct TerminalAgentShellIntegrationTests {
         #expect(!result.stdoutString.contains("otel"))
     }
 
+    @Test("Traex and traecli interactive launches share independent defaults", arguments: ["traex", "traecli"])
+    func traexLaunch(command: String) async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try FileManager.default.copyItem(at: fixture.executable, to: fixture.executable.deletingLastPathComponent().appendingPathComponent(command))
+        let result = try await fixture.run(defaults: [], traexDefaults: defaults, command: "__ctrlx_install_\(command); \(command) --permission-mode auto resume exact-session --no-daemon")
+        #expect(result.isSuccess)
+        #expect(result.stdoutString.components(separatedBy: "<--no-daemon>").count == 2)
+        #expect(result.stdoutString.components(separatedBy: "<--dangerously-bypass-hook-trust>").count == 2)
+        #expect(result.stdoutString.contains("<--permission-mode>\n<auto>\n<resume>\n<exact-session>"))
+    }
+
+    @Test("Traex maintenance commands never receive interactive flags", arguments: ["exec task", "plugin list", "models", "dashboard", "channel", "acp", "worktree-apply", "migrate", "--version"])
+    func traexMaintenance(arguments: String) async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try FileManager.default.copyItem(at: fixture.executable, to: fixture.executable.deletingLastPathComponent().appendingPathComponent("traex"))
+        let result = try await fixture.run(defaults: [], traexDefaults: defaults, command: "__ctrlx_install_traex; traex \(arguments)")
+        #expect(result.isSuccess)
+        #expect(!result.stdoutString.contains("<--no-daemon>"))
+        #expect(!result.stdoutString.contains("<--dangerously-bypass-hook-trust>"))
+    }
+
     @Test("Only supported shells receive the zsh integration")
     func supportedShells() {
         #expect(TerminalAgentShellIntegration.supports(shell: "/bin/zsh"))
@@ -381,7 +404,7 @@ struct TerminalAgentShellIntegrationTests {
         do {
             try await withDependencies {
                 $0[ProcessRunner.self] = runner
-                $0[TerminalAgentShellFiles.self].prepare = { try await store.prepare($0) }
+                $0[TerminalAgentShellFiles.self].prepare = { try await store.prepare($0, traexArguments: $1) }
                 $0.continuousClock = ContinuousClock()
             } operation: {
                 let tmux = TmuxService(tmuxPath: binary, socketPath: socket)
@@ -463,7 +486,7 @@ struct TerminalAgentShellIntegrationTests {
             try await withDependencies {
                 $0[ProcessRunner.self] = runner
                 $0[WorkspaceRecoverySystem.self] = .liveValue
-                $0[TerminalAgentShellFiles.self].prepare = { try await store.prepare($0) }
+                $0[TerminalAgentShellFiles.self].prepare = { try await store.prepare($0, traexArguments: $1) }
                 $0.continuousClock = ContinuousClock()
             } operation: {
                 let tmux = TmuxService(tmuxPath: binary, socketPath: socket)
@@ -524,7 +547,7 @@ struct TerminalAgentShellIntegrationTests {
         let calls = LockIsolated<[[String]]>([])
         let prepared = LockIsolated<[[String]]>([])
         try await withDependencies {
-            $0[TerminalAgentShellFiles.self].prepare = { args in
+            $0[TerminalAgentShellFiles.self].prepare = { args, _ in
                 prepared.withValue { $0.append(args) }
                 return "/temporary/init dir"
             }
@@ -553,7 +576,7 @@ struct TerminalAgentShellIntegrationTests {
     func preparationFailure() async throws {
         let calls = LockIsolated<[[String]]>([])
         try await withDependencies {
-            $0[TerminalAgentShellFiles.self].prepare = { _ in throw CocoaError(.fileWriteOutOfSpace) }
+            $0[TerminalAgentShellFiles.self].prepare = { _, _ in throw CocoaError(.fileWriteOutOfSpace) }
             $0[ProcessRunner.self].run = { _, args, _, _ in
                 calls.withValue { $0.append(args) }
                 return Self.tmuxResult(for: args)
@@ -576,7 +599,7 @@ struct TerminalAgentShellIntegrationTests {
         let calls = LockIsolated<[[String]]>([])
         let inputs = LockIsolated<[String]>([])
         try await withDependencies {
-            $0[TerminalAgentShellFiles.self].prepare = { _ in
+            $0[TerminalAgentShellFiles.self].prepare = { _, _ in
                 if telemetry == "unavailable" {
                     throw CocoaError(.fileWriteOutOfSpace)
                 }
@@ -692,13 +715,14 @@ struct TerminalAgentShellIntegrationTests {
 
         func run(
             defaults: [String]?,
+            traexDefaults: [String] = [],
             command: String,
             interactive: Bool = true,
             environment: [String: String] = [:]
         ) async throws -> ProcessResult {
             let prefix: String
             if let defaults {
-                let directory = try await TerminalAgentShellFileStore(root: root.appendingPathComponent("generated")).prepare(defaults)
+                let directory = try await TerminalAgentShellFileStore(root: root.appendingPathComponent("generated")).prepare(defaults, traexArguments: traexDefaults)
                 prefix = TerminalAgentShellIntegration.launchPrefix(directory: directory)
             } else {
                 prefix = ""

@@ -246,6 +246,7 @@ final public class TmuxService {
     /// Snapshotted only when creating a new shell. Never inject initialization
     /// keystrokes into an existing pane or override the user's dotfiles.
     @ObservationIgnored var terminalCodexArguments: @MainActor () async -> [String] = { [] }
+    @ObservationIgnored var terminalTraexArguments: @MainActor () async -> [String] = { [] }
 
     @ObservationIgnored
     @Dependency(TerminalAgentShellFiles.self) private var terminalAgentShellFiles
@@ -253,9 +254,10 @@ final public class TmuxService {
     private func instrumentedShellCommand() async -> String? {
         guard TerminalAgentShellIntegration.supports(shell: Self.userShellPath) else { return nil }
         let arguments = await terminalCodexArguments()
-        guard !arguments.isEmpty else { return nil }
+        let traexArguments = await terminalTraexArguments()
+        guard !arguments.isEmpty || !traexArguments.isEmpty else { return nil }
         do {
-            let directory = try await terminalAgentShellFiles.prepare(arguments)
+            let directory = try await terminalAgentShellFiles.prepare(arguments, traexArguments)
             return TerminalAgentShellIntegration.launchPrefix(directory: directory) + defaultCommandWrapper
         } catch {
             // Integration is optional; a disk-full or unwritable temp directory

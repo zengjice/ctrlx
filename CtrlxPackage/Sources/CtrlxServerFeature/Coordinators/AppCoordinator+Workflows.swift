@@ -219,7 +219,7 @@ extension AppCoordinator {
         } else {
             @Dependency(AgentSessionIdentityClient.self) var identities
             let workflowAllowsBinding = try await agentWorkflowStore?.allowsInitialConversationBinding(for: live) == true
-            let allowsInitialBinding = live.pluginID == "codex" && live.conversationID.isEmpty || workflowAllowsBinding
+            let allowsInitialBinding = CodexProcessSessionReader.supports(pluginID: live.pluginID) && live.conversationID.isEmpty || workflowAllowsBinding
             let issue = await identities.workflowInputIssue(for: live, allowsInitialBinding: allowsInitialBinding)
             try Task.checkCancellation()
             if let issue {
@@ -264,13 +264,13 @@ extension AppCoordinator {
         guard pane.binding.matches(instance) else {
             throw AgentWorkflowInspectionUnavailable()
         }
-        if verifyNativeWriter, instance.pluginID == "codex" {
+        if verifyNativeWriter, CodexProcessSessionReader.supports(pluginID: instance.pluginID) {
             // The first submission can precede SessionStart. Its actual CLI
             // writer verifies the thread independently of the old UI/cache ID.
             guard await identities.codexOwnsSession(String(instance.processID), instance.processRuntimeID, instance.conversationID) else {
                 throw AgentWorkflowInspectionUnavailable()
             }
-        } else if !instance.conversationID.isEmpty || instance.pluginID != "codex" {
+        } else if !instance.conversationID.isEmpty || !CodexProcessSessionReader.supports(pluginID: instance.pluginID) {
             guard
                 let state = windowManager.paneStates[instance.paneID],
                 let native = await identities.currentIdentity(in: state, detected: current),

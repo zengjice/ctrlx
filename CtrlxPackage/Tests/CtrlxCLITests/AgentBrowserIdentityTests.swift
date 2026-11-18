@@ -17,37 +17,51 @@ struct AgentBrowserIdentityTests {
         })
     }
 
-    @Test(arguments: ["codex", "claude", "home/.local/share/claude/versions/2.1.276", "Caskroom/claude-code/2.1.276/claude"])
+    @Test(arguments: ["codex", "traex", "traecli", "claude", "home/.local/share/claude/versions/2.1.276", "Caskroom/claude-code/2.1.276/claude"])
     func nativeAgentThroughToolShellAndHelper(_ name: String) throws {
         let agent = process(10, name: name)
         let processes = client([agent, process(11, parent: 10, name: "codex-code-mode-host"), process(12, parent: 11, name: "zsh")])
         #expect(try processes.callingAgent(from: 12, uid: 501) == agent)
-        #expect(agent.agentName == (name == "codex" ? "Codex" : "Claude Code"))
+        #expect(agent.agentName == (name == "codex" ? "Codex" : ["traex", "traecli"].contains(name) ? "Traex" : "Claude Code"))
     }
 
-    @Test(arguments: ["codex", "claude"], ["codex", "claude"])
+    @Test(arguments: ["codex", "traex", "claude"], ["codex", "traex", "claude"])
     func nestedAgentsUseNearestNativeProcess(_ outerName: String, _ innerName: String) throws {
         let inner = process(20, parent: 11, name: innerName)
         let processes = client([process(10, name: outerName), process(11, parent: 10, name: "zsh"), inner, process(21, parent: 20, name: "sh")])
         #expect(try processes.callingAgent(from: 21, uid: 501) == inner)
     }
 
-    @Test func independentInstancesDoNotUseSharedShellOrPane() throws {
+    @Test
+    func independentInstancesDoNotUseSharedShellOrPane() throws {
         let processes = client([process(9, name: "tmux"), process(10, parent: 9), process(20, parent: 9, name: "claude")])
         let a = try processes.callingAgent(from: 10, uid: 501)
         let b = try processes.callingAgent(from: 20, uid: 501)
         #expect(a.runtimeKey != b.runtimeKey)
     }
 
-    @Test(arguments: ["zsh", "node", "codex-code-mode-host", "not-codex", "codex-fake", "claude-helper", "not-claude", "claude-code",
-                      "other/versions/2.1.276", "claude/versions/helper", "claude/versions/2.1.276/helper", "claude/versions/2x1x276"])
+    @Test(arguments: [
+        "zsh",
+        "node",
+        "codex-code-mode-host",
+        "not-codex",
+        "codex-fake",
+        "claude-helper",
+        "not-claude",
+        "claude-code",
+        "other/versions/2.1.276",
+        "claude/versions/helper",
+        "claude/versions/2.1.276/helper",
+        "claude/versions/2x1x276",
+    ])
     func unsupportedExecutablesDoNotGrantIdentity(_ name: String) {
         #expect(throws: AgentBrowserTransport.Failure.self) {
             try client([process(10, name: name)]).callingAgent(from: 10, uid: 501)
         }
     }
 
-    @Test func unknownForeignAndCyclicAncestryFailsClosed() {
+    @Test
+    func unknownForeignAndCyclicAncestryFailsClosed() {
         for processes in [client([]), client([process(10, uid: 502)]), client([process(10, name: "claude", uid: 502)]), client([process(10, parent: 10, name: "zsh")])] {
             #expect(throws: AgentBrowserTransport.Failure.self) { try processes.callingAgent(from: 10, uid: 501) }
         }
@@ -55,7 +69,7 @@ struct AgentBrowserIdentityTests {
         #expect(throws: AgentBrowserTransport.Failure.self) { try client(longChain).callingAgent(from: 10, uid: 501) }
     }
 
-    @Test(arguments: ["codex", "claude"])
+    @Test(arguments: ["codex", "traex", "traecli", "claude"])
     func exitedAndReusedPIDCannotValidateOldOwner(_ name: String) {
         let old = process(10, name: name)
         for processes in [client([]), client([process(10, name: name, start: 101)]), client([process(10, name: "zsh")])] {
@@ -63,7 +77,8 @@ struct AgentBrowserIdentityTests {
         }
     }
 
-    @Test func liveInspectorMatchesThisProcess() throws {
+    @Test
+    func liveInspectorMatchesThisProcess() throws {
         let value = try AgentBrowserProcessClient.liveValue.inspect(getpid())
         #expect(value.pid == getpid())
         #expect(value.parentPID == getppid())
@@ -73,7 +88,7 @@ struct AgentBrowserIdentityTests {
         try AgentBrowserProcessClient.liveValue.validate(value)
     }
 
-    @Test(arguments: ["codex", "claude", "codex-code-mode-host", "pretender"])
+    @Test(arguments: ["codex", "traex", "traecli", "claude", "codex-code-mode-host", "pretender"])
     func removedExecutablePreservesOnlyKernelVerifiedIdentity(_ name: String) async throws {
         let root = try temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -91,48 +106,62 @@ struct AgentBrowserIdentityTests {
         let fixture = Process()
         fixture.executableURL = binary
         fixture.arguments = [ready.path]
+        let exits = AsyncStream<Void> { continuation in
+            fixture.terminationHandler = { _ in
+                continuation.yield(())
+                continuation.finish()
+            }
+        }
         try fixture.run()
-        defer {
+        func stopFixture() async {
             if fixture.isRunning {
                 fixture.terminate()
             }
-            fixture.waitUntilExit()
-        }
-        for _ in 0..<100 {
-            if FileManager.default.fileExists(atPath: ready.path) {
+            for await _ in exits {
                 break
             }
-            try await Task.sleep(for: .milliseconds(10))
         }
-        try #require(FileManager.default.fileExists(atPath: ready.path))
-        let processes = AgentBrowserProcessClient.liveValue
-        let before = try processes.inspect(fixture.processIdentifier)
-        let previous = try AgentBrowserTransport.withRunContext(for: before, root: root) { _, value in value }
-        try FileManager.default.removeItem(at: binary)
-        if name == "pretender" {
-            #expect(before.agentName == nil)
-            #expect(throws: AgentBrowserTransport.Failure.self) { try processes.inspect(fixture.processIdentifier) }
-            return
+        do {
+            for _ in 0..<100 {
+                if FileManager.default.fileExists(atPath: ready.path) {
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            try #require(FileManager.default.fileExists(atPath: ready.path))
+            let processes = AgentBrowserProcessClient.liveValue
+            let before = try processes.inspect(fixture.processIdentifier)
+            let previous = try AgentBrowserTransport.withRunContext(for: before, root: root) { _, value in value }
+            try FileManager.default.removeItem(at: binary)
+            if name == "pretender" {
+                #expect(before.agentName == nil)
+                #expect(throws: AgentBrowserTransport.Failure.self) { try processes.inspect(fixture.processIdentifier) }
+            } else {
+                let after = try processes.inspect(fixture.processIdentifier)
+                #expect(after.executable == name)
+                #expect(after.runtimeKey == before.runtimeKey)
+                #expect(after.agentName == before.agentName)
+                #expect(before.isSameRuntime(as: after))
+                try processes.validate(before)
+                let next = try AgentBrowserTransport.withRunContext(for: after, root: root) { _, value in value }
+                #expect(next["run"] as? String == previous["run"] as? String)
+                #expect(next["secret"] as? String == previous["secret"] as? String)
+                if name == "codex-code-mode-host" {
+                    #expect(after.agentName == nil)
+                    let owner = process(after.parentPID, name: "codex", uid: getuid())
+                    let ancestry = AgentBrowserProcessClient(inspect: { pid in
+                        pid == after.pid ? after : owner
+                    })
+                    #expect(try ancestry.callingAgent(from: after.pid, uid: getuid()) == owner)
+                } else {
+                    #expect(try processes.callingAgent(from: after.pid, uid: getuid()).runtimeKey == before.runtimeKey)
+                }
+            }
+        } catch {
+            await stopFixture()
+            throw error
         }
-        let after = try processes.inspect(fixture.processIdentifier)
-        #expect(after.executable == name)
-        #expect(after.runtimeKey == before.runtimeKey)
-        #expect(after.agentName == before.agentName)
-        #expect(before.isSameRuntime(as: after))
-        try processes.validate(before)
-        let next = try AgentBrowserTransport.withRunContext(for: after, root: root) { _, value in value }
-        #expect(next["run"] as? String == previous["run"] as? String)
-        #expect(next["secret"] as? String == previous["secret"] as? String)
-        if name == "codex-code-mode-host" {
-            #expect(after.agentName == nil)
-            let owner = process(after.parentPID, name: "codex", uid: getuid())
-            let ancestry = AgentBrowserProcessClient(inspect: { pid in
-                pid == after.pid ? after : owner
-            })
-            #expect(try ancestry.callingAgent(from: after.pid, uid: getuid()) == owner)
-        } else {
-            #expect(try processes.callingAgent(from: after.pid, uid: getuid()).runtimeKey == before.runtimeKey)
-        }
+        await stopFixture()
     }
 
     @Test
@@ -157,7 +186,7 @@ struct AgentBrowserIdentityTests {
         return root
     }
 
-    @Test(arguments: ["codex", "claude"])
+    @Test(arguments: ["codex", "traex", "traecli", "claude"])
     func repeatedCallsReusePrivateContextAndPIDReuseIsIsolated(_ name: String) throws {
         let root = try temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -181,7 +210,8 @@ struct AgentBrowserIdentityTests {
         }
     }
 
-    @Test func concurrentFirstCallsCreateOnlyOneIdentityAndRegistration() async throws {
+    @Test
+    func concurrentFirstCallsCreateOnlyOneIdentityAndRegistration() async throws {
         let root = try temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let owner = process(10)
@@ -198,13 +228,16 @@ struct AgentBrowserIdentityTests {
                 }
             }
             var values = Set<String>()
-            for try await value in group { values.insert(value) }
+            for try await value in group {
+                values.insert(value)
+            }
             return values
         }
         #expect(identities.count == 1)
     }
 
-    @Test func mismatchedSavedIdentityAndSymlinkAreRejected() throws {
+    @Test
+    func mismatchedSavedIdentityAndSymlinkAreRejected() throws {
         let root = try temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let owner = process(10)
@@ -223,7 +256,8 @@ struct AgentBrowserIdentityTests {
         }
     }
 
-    @Test func actionRejectsUnidentifiedCallerBeforeFilesystemOrBrowserAccess() throws {
+    @Test
+    func actionRejectsUnidentifiedCallerBeforeFilesystemOrBrowserAccess() throws {
         try withDependencies {
             $0[AgentBrowserProcessClient.self] = client([process(getppid(), name: "zsh", uid: getuid())])
         } operation: {
@@ -238,7 +272,7 @@ struct AgentBrowserIdentityTests {
         let root = try temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let owner = process(getppid(), name: name, uid: getuid())
-        struct HostUnavailable: Error {}
+        struct HostUnavailable: Error { }
         try withDependencies {
             $0[AgentBrowserProcessClient.self] = client([owner])
             $0[AgentBrowserHostClient.self] = .init(prepare: { requested in

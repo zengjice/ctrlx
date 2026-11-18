@@ -2,7 +2,7 @@
 
 ## Owned tabs
 
-`action tabs/open` identifies the nearest local native `codex` or `claude` process
+`action tabs/open` identifies the nearest local native `codex`, `traex`/`traecli` or `claude` process
 and creates its group, including for already-running agents. CtrlX must be running
 on that Mac with the agent in a local tmux pane. No special launcher or inherited
 `CTRLX_BROWSER_CONTEXT` is needed. Older Node.js Claude Code is not supported.

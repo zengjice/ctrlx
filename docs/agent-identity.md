@@ -35,7 +35,7 @@ comparisons remain at those operation/history boundaries. They must not become
 alternative product identity resolvers. In particular, finding a task after a
 restart does not resend its input or continue a paused workflow.
 
-Resource requests recheck the requesting Codex process's current writer. A
+Resource requests recheck the requesting Codex/Traex process's current writer. A
 process-detected conversation cache is refreshed on that path, so switching away
 and back in one process can recover the original resources. Ordinary background
 reconciliation still uses the native cache; hook-owned state needs its native

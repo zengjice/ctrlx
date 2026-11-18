@@ -82,28 +82,30 @@ struct AgentWorkflowQuestionTests {
 
     private func question(_ variant: String) async throws -> PluginEvent {
         let claude = variant == "claude-code"
+        let traex = variant.hasPrefix("traex")
         let asyncQuestion = variant == "codex-async"
+        let pluginID = claude ? "claude-code" : (traex ? "traex" : "codex")
         let payload: [String: Any] = [
             "hook_event_name": claude ? "PermissionRequest" : "PreToolUse", "session_id": "conversation-0",
-            "tool_name": claude ? "AskUserQuestion" : (asyncQuestion ? "request_user_input_async" : "request_user_input"),
+            "tool_name": claude || traex ? "AskUserQuestion" : (asyncQuestion ? "request_user_input_async" : "request_user_input"),
             "tool_use_id": "question-call", "cwd": "/private/fixture",
-            "tool_input": ["questions": [[
+            "tool_input": ["isBlocking": variant != "traex-async", "questions": [[
                 asyncQuestion ? "title" : "question": "Which approach?", "header": "Approach", "multiSelect": false,
                 "options": [["label": "Simple", "description": "Use the existing path"], ["label": "New", "description": "Start again"]],
             ]]],
         ]
-        let frame = try IngressFrame(pluginID: claude ? "claude-code" : "codex", context: [
+        let frame = try IngressFrame(pluginID: pluginID, context: [
             "TMUX_PANE": "%0", "CTRLX_WORKFLOW_VERSION": "1", "CTRLX_INGRESS_ACK": "1",
         ], payload: JSONSerialization.data(withJSONObject: payload))
         if claude {
             return try #require(await ClaudeCodePluginCore().handleIngress(frame))
         }
-        return try #require(await CodexPluginCore().handleIngress(frame))
+        return try #require(await CodexPluginCore(distribution: traex ? .traex : .codex).handleIngress(frame))
     }
 
-    @Test(arguments: ["claude-code", "codex", "codex-async"])
+    @Test(arguments: ["claude-code", "codex", "codex-async", "traex", "traex-async"])
     func nativeQuestionsPreserveNotificationsAndAllowIntervention(variant: String) async throws {
-        let f = try await fixture(plugin: variant == "claude-code" ? variant : "codex")
+        let f = try await fixture(plugin: variant.hasPrefix("traex") ? "traex" : (variant == "claude-code" ? variant : "codex"))
         defer { try? FileManager.default.removeItem(at: f.root) }
         try await withDependencies {
             $0[PreferencesService.self] = .inMemory()
@@ -124,6 +126,7 @@ struct AgentWorkflowQuestionTests {
             await dispatcher.dispatch(event, ingressPeer: f.peer)
             #expect(try notifications.value == [#require(event.notification)])
             #expect(try await f.store.snapshot().runs[0].status == .running)
+            #expect(try await f.store.snapshot().runs[0].invocations.first { $0.id == f.invocation.id }?.hasAskedQuestion == true)
             try await gate.human(paneID: "%0") { inputs += 1 }
             try await gate.human(paneID: "%1") { inputs += 1 }
 
@@ -167,12 +170,12 @@ struct AgentWorkflowQuestionTests {
         await f.runner.shutdown()
     }
 
-    @Test(arguments: ["no-question", "wrong-session", "wrong-peer", "wrong-pane", "wrong-plugin"])
-    func unrelatedEventsCannotMarkATaskAsAsking(scenario: String) async throws {
-        let f = try await fixture()
+    @Test(arguments: ["no-question", "wrong-session", "wrong-peer", "wrong-pane", "wrong-plugin"], ["codex", "traex"])
+    func unrelatedEventsCannotMarkATaskAsAsking(scenario: String, pluginID: String) async throws {
+        let f = try await fixture(plugin: pluginID)
         defer { try? FileManager.default.removeItem(at: f.root) }
         let event = PluginEvent(
-            pluginID: scenario == "wrong-plugin" ? "claude-code" : "codex",
+            pluginID: scenario == "wrong-plugin" ? "claude-code" : pluginID,
             sessionID: scenario == "wrong-session" ? "another" : "conversation-0",
             notification: .init(title: "Notice", body: "Notice", isQuestion: scenario != "no-question"),
             tmuxPane: scenario == "wrong-pane" ? "%1" : "%0"
@@ -186,7 +189,7 @@ struct AgentWorkflowQuestionTests {
         await f.runner.shutdown()
     }
 
-    @Test(arguments: ["codex", "claude-code"])
+    @Test(arguments: ["codex", "claude-code", "traex"])
     func manualTurnsDoNotPauseOrReplaceTheTask(plugin: String) async throws {
         let f = try await fixture(plugin: plugin)
         defer { try? FileManager.default.removeItem(at: f.root) }

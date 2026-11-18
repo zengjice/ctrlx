@@ -3,15 +3,15 @@ import CtrlxPluginProtocol
 
 extension CodexPluginCore: AgentWorkflowProviding {
     public nonisolated var workflowCLIVersionSupport: String? {
-        Self.supportedAutomationCLIVersions
+        distribution.supportedAutomationVersions
     }
 
     public nonisolated func supportsWorkflowCLI(_ version: String) -> Bool {
-        Self.supportsAutomationCLI(version)
+        distribution.supportsAutomationCLI(version)
     }
 
     public nonisolated var workflowComposer: AgentWorkflowComposer {
-        .init(prompt: "› ", dimPlaceholder: "Ask Codex to do anything", pendingInputHints: ["Queued follow-up inputs"])
+        .init(prompt: distribution == .codex ? "› " : "❯ ", dimPlaceholder: distribution == .codex ? "Ask Codex to do anything" : "Ask TRAE CLI to do anything", allowsAnyDimPlaceholder: distribution == .traex, pendingInputHints: ["Queued follow-up inputs"])
     }
 
     public nonisolated var workflowCapabilities: AgentWorkflowCapabilities {
@@ -19,6 +19,6 @@ extension CodexPluginCore: AgentWorkflowProviding {
     }
 
     public nonisolated func workflowTranscript(conversationID: String, nativeTurnID: String, prompt: String, candidate: String) -> any AgentWorkflowTranscriptParser {
-        CodexWorkflowTranscript(conversationID: conversationID, nativeTurnID: nativeTurnID)
+        CodexWorkflowTranscript(conversationID: conversationID, nativeTurnID: nativeTurnID, agentName: distribution.displayName)
     }
 }

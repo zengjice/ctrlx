@@ -15,14 +15,14 @@ struct AgentForkTests {
         #expect(AgentForkSource.unavailableReason(panes: [pane])?.contains("Codex or Claude Code") == true)
     }
 
-    @Test("Only recognized native Agent conversations can be forked; window reordering preserves identity")
-    func sourceIdentity() throws {
+    @Test("Only recognized native Agent conversations can be forked; window reordering preserves identity", arguments: ["codex", "claude-code", "traex"])
+    func sourceIdentity(pluginID: String) throws {
         var pane = PaneState(
             paneId: "%12",
             sessionName: "work",
             tmuxWindowId: "@4",
             currentPath: "/repo",
-            agentSession: .init(paneId: "%12", pluginID: "codex"),
+            agentSession: .init(paneId: "%12", pluginID: pluginID),
             claudeSessionID: UUID().uuidString
         )
         let source = try #require(AgentForkSource(pane: pane))

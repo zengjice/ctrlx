@@ -6,7 +6,7 @@ struct CodexQuestionNotification {
     let callID: String
     let notification: NotificationSpec
 
-    init?(payload: Data) {
+    init?(payload: Data, distribution: CodexDistribution = .codex) {
         guard
             let hook = try? JSONDecoder().decode(Hook.self, from: payload),
             hook.eventName == "PreToolUse", !hook.callID.isEmpty else { return nil }
@@ -18,6 +18,8 @@ struct CodexQuestionNotification {
         case "request_user_input_async",
              "functions.request_user_input_async":
             questions = hook.input.questions.compactMap(\.title)
+        case "AskUserQuestion" where distribution == .traex:
+            questions = hook.input.questions.compactMap(\.question)
         default:
             return nil
         }
@@ -27,7 +29,7 @@ struct CodexQuestionNotification {
         self.callID = hook.callID
         let detail = questions.count == 1 ? questions[0] : "\(questions.count) questions: \(questions.joined(separator: " · "))"
         self.notification = NotificationSpec(
-            title: "Codex wants answers", body: String(detail.prefix(256)), isQuestion: true,
+            title: "\(distribution.displayName) wants answers", body: String(detail.prefix(256)), isQuestion: true,
             questionID: "\(hook.sessionID):\(hook.callID)"
         )
     }

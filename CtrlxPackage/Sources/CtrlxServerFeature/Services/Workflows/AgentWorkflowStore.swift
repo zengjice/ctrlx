@@ -135,7 +135,7 @@ actor AgentWorkflowStore {
             guard
                 observation.processID > 1, !observation.processRuntimeID.isEmpty,
                 !observation.pluginID.isEmpty, !observation.paneID.isEmpty,
-                !observation.conversationID.isEmpty || observation.pluginID == "codex",
+                !observation.conversationID.isEmpty || CodexProcessSessionReader.supports(pluginID: observation.pluginID),
                 paneIDs.insert(observation.workspacePane.paneID).inserted,
                 processIDs.insert(observation.processID).inserted else {
                 throw AgentWorkflowError("Cannot register ambiguous or unverified Agent processes.")

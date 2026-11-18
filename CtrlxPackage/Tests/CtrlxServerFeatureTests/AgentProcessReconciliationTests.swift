@@ -2,6 +2,7 @@
     import ConcurrencyExtras
     import CtrlxCommon
     import CtrlxNetworking
+    import CtrlxPluginProtocol
     import Dependencies
     import Foundation
     import Testing
@@ -74,6 +75,45 @@
         @Test("agent process reconciliation runs every ten seconds")
         func reconciliationInterval() {
             #expect(MirrorWindowManager.agentReconciliationInterval == .seconds(10))
+        }
+
+        @Test("Traex interruption clears Working only if the same turn is still current", arguments: [false, true])
+        func reconcilesInterruptedTraexTurn(newSubmission: Bool) async throws {
+            let turn = UUID(), nextTurn = UUID(), conversation = UUID().uuidString
+            let process = PluginIngressPeer.Process(processID: 101, parentProcessID: 1, userID: 501, startSeconds: 100, startMicroseconds: 0)
+            let peer = try #require(PluginIngressPeer.capture(peerPID: 101, userID: 501, inspect: { _ in process }))
+            let duringRead = LockIsolated<(@MainActor @Sendable () -> Void)?>(nil)
+            try await withDependencies {
+                $0[AgentSessionIdentityClient.self].runtimeID = { _ in process.runtimeID }
+                $0[CodexTurnStateClient.self].wasAborted = { pid, runtime, session, submittedTurn in
+                    #expect(pid == "101" && runtime == process.runtimeID && session == conversation)
+                    #expect(submittedTurn == turn)
+                    await duringRead.value?()
+                    return true
+                }
+            } operation: {
+                let manager = makeWindowManager()
+                var pane = try #require(manager.paneStates["%5"])
+                pane.workspaceIdentity = .init(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+                manager.setPaneStatesForPreview([pane])
+                _ = manager.reconcileDetectedAgentSessions(detected(pluginID: "traex"))
+                let binding = try #require(manager.currentAgentBinding(forPane: "%5"))
+                let submit: @MainActor @Sendable (UUID) -> Void = { turnID in
+                    let event = PluginEvent(pluginID: "traex", sessionID: conversation, state: .working, tmuxPane: "%5", workflow: .init(
+                        kind: .submitted, nativeTurnID: turnID.uuidString, transcriptPath: "/fixture/rollout.jsonl", text: "Task"
+                    ))
+                    #expect(manager.acceptCurrentEvent(event, binding: binding, peer: peer, nativeConversationID: nil) != nil)
+                    manager.applyState(pluginID: "traex", sessionID: conversation, state: .working, tmuxPane: "%5", projectPath: nil)
+                }
+                submit(turn)
+                if newSubmission {
+                    duringRead.setValue { submit(nextTurn) }
+                }
+                #expect(await manager.reconcileInterruptedTraexTurns() == !newSubmission)
+                #expect(manager.paneStates["%5"]?.agentSession?.state == (newSubmission ? .working : .idle))
+                #expect(manager.paneStates["%5"]?.claudeSessionID == conversation)
+                #expect(manager.currentAgentBinding(forPane: "%5")?.runtimeID == process.runtimeID)
+            }
         }
 
         @Test("Concurrent agent detection shares one process snapshot")

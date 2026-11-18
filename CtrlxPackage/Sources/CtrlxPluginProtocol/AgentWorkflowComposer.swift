@@ -5,13 +5,15 @@ import Foundation
 public struct AgentWorkflowComposer: Sendable {
     public let prompt: String
     public let dimPlaceholder: String?
+    public let allowsAnyDimPlaceholder: Bool
     public let enclosedByRules: Bool
     public let drawsInverseCursor: Bool
     public let pendingInputHints: [String]
 
-    public init(prompt: String, dimPlaceholder: String? = nil, enclosedByRules: Bool = false, drawsInverseCursor: Bool = false, pendingInputHints: [String] = []) {
+    public init(prompt: String, dimPlaceholder: String? = nil, allowsAnyDimPlaceholder: Bool = false, enclosedByRules: Bool = false, drawsInverseCursor: Bool = false, pendingInputHints: [String] = []) {
         self.prompt = prompt
         self.dimPlaceholder = dimPlaceholder
+        self.allowsAnyDimPlaceholder = allowsAnyDimPlaceholder
         self.enclosedByRules = enclosedByRules
         self.drawsInverseCursor = drawsInverseCursor
         self.pendingInputHints = pendingInputHints

@@ -17,8 +17,8 @@ public struct AgentForkSource: Codable, Sendable, Equatable, Identifiable {
         if panes.contains(where: { AgentForkSource(pane: $0) != nil }) {
             return nil
         }
-        let supported = panes.filter { ["codex", "claude-code"].contains($0.agentSession?.pluginID ?? "") }
-        guard !supported.isEmpty else { return "Fork requires a recognized Codex or Claude Code conversation." }
+        let supported = panes.filter { ["codex", "claude-code", "traex"].contains($0.agentSession?.pluginID ?? "") }
+        guard !supported.isEmpty else { return "Fork requires a recognized Codex or Claude Code or Traex conversation." }
         if supported.allSatisfy({ $0.claudeSessionID.flatMap(UUID.init(uuidString:)) == nil }) {
             return "The conversation ID is not verified yet. Wait for Agent activity to restore it."
         }
@@ -28,7 +28,7 @@ public struct AgentForkSource: Codable, Sendable, Equatable, Identifiable {
     public init?(pane: PaneState) {
         guard
             let agent = pane.agentSession,
-            agent.pluginID == "codex" || agent.pluginID == "claude-code",
+            ["codex", "claude-code", "traex"].contains(agent.pluginID),
             let sessionID = pane.claudeSessionID, UUID(uuidString: sessionID) != nil,
             let directory = pane.currentPath, directory.hasPrefix("/"),
             !directory.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)

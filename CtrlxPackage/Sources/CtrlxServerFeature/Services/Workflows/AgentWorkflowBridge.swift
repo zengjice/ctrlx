@@ -43,7 +43,7 @@ extension AgentWorkflowStore {
         guard let evidence = try load().bridgeEvidence?.first(where: { $0.matchesProcess(instance) }) else {
             // Codex starts hooks on its first prompt, including after resume.
             // Receipt and completion checks still require this process's evidence.
-            if allowsFirstSubmission, instance.pluginID == "codex" {
+            if allowsFirstSubmission, CodexProcessSessionReader.supports(pluginID: instance.pluginID) {
                 return nil
             }
             return "This Agent has not confirmed its workflow hook. Update its CtrlX plugin, then restart the Agent or submit a normal prompt before starting a workflow."

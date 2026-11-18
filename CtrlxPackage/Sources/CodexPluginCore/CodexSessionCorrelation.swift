@@ -28,10 +28,14 @@ struct CodexSessionCorrelation: Sendable {
     /// directory must never reconcile or remove another app's pane records.
     static func live(
         stateDirectory: URL? = nil,
+        pluginID: String = "codex",
         home: URL = FileManager.default.homeDirectoryForCurrentUser
     ) -> CodexSessionCorrelation {
         let ctrlxRoot = home.appendingPathComponent(".ctrlx")
-        let defaultState = ctrlxRoot.appendingPathComponent("state/plugins/codex")
+        let defaultState = ctrlxRoot.appendingPathComponent("state/plugins/\(pluginID)")
+        if pluginID != "codex" {
+            return CodexSessionCorrelation(root: (stateDirectory ?? defaultState).appendingPathComponent("codex-sessions"))
+        }
         if
             let stateDirectory,
             stateDirectory.resolvingSymlinksInPath().path != defaultState.resolvingSymlinksInPath().path {

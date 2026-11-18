@@ -204,7 +204,7 @@
                 let process = try system.inspect(pid)
                 guard process.owner.uid == getuid() else { break }
                 let executable = URL(fileURLWithPath: process.executable)
-                if ["codex", "claude", "opencode", "omp", "pi"].contains(executable.lastPathComponent) {
+                if ["codex", "traex", "traecli", "claude", "opencode", "omp", "pi"].contains(executable.lastPathComponent) {
                     return process.owner
                 }
                 // Claude's native installer resolves its launcher to claude/versions/<version>.

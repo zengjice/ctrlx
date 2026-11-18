@@ -78,7 +78,8 @@ enum CodexTranslator {
         contextProjectDir: String?,
         occurrenceID: String,
         closePaneOnSessionEnd: Bool = false,
-        approvalsReviewer: CodexApprovalsReviewer = .user
+        approvalsReviewer: CodexApprovalsReviewer = .user,
+        agentName: String = "Codex"
     ) -> Output? {
         let body = action.body
         let sessionID = body.sessionId
@@ -107,7 +108,7 @@ enum CodexTranslator {
             approvalsReviewer: approvalsReviewer
         )
 
-        let notification = guardianHandled ? nil : Self.notification(for: hookEvent)
+        let notification = guardianHandled ? nil : Self.notification(for: hookEvent, agentName: agentName)
         let (state, pending): (AgentState?, PendingRequest?) = guardianHandled
             ? (.working, nil)
             : Self.state(
@@ -212,11 +213,11 @@ enum CodexTranslator {
 
     /// Reuses the migrated `HookEvent.buildNotification()` so the copy stays
     /// identical to the legacy path (Codex-flavored via the agent-name args).
-    private static func notification(for event: HookEvent) -> NotificationSpec? {
+    private static func notification(for event: HookEvent, agentName: String) -> NotificationSpec? {
         guard
             let (title, body) = event.buildNotification(
-                agentDisplayName: agentDisplayName,
-                agentShortName: agentShortName
+                agentDisplayName: agentName,
+                agentShortName: agentName
             ) else {
             return nil
         }

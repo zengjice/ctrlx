@@ -6,7 +6,7 @@ import Foundation
 
 extension CodexPluginCore: AgentModelProviding {
     public nonisolated var modelDiscoveryCommand: String? {
-        "codex"
+        distribution.command
     }
 
     public nonisolated var modelComposer: AgentWorkflowComposer {
@@ -17,8 +17,8 @@ extension CodexPluginCore: AgentModelProviding {
         guard let version = context.discoveryVersion, !version.isEmpty else {
             return "The model discovery CLI version could not be read. Use /model in this terminal."
         }
-        guard version.hasPrefix("codex-cli "), version != "codex-cli " else {
-            return "Unrecognized Codex CLI version (\(version)). Use /model in this terminal."
+        guard version.hasPrefix(distribution.versionPrefix), version != distribution.versionPrefix else {
+            return "Unrecognized \(distribution.displayName) CLI version (\(version)). Use /model in this terminal."
         }
         return nil
     }
@@ -41,7 +41,7 @@ extension CodexPluginCore: AgentModelProviding {
                 args.append(value)
                 index += 1
             } else if ["-p", "--profile"].contains(value) || value.hasPrefix("--profile=") {
-                throw AgentModelError("Model discovery for a Codex --profile launch is not available yet. Use /model in this terminal.")
+                throw AgentModelError("Model discovery for a \(distribution.displayName) --profile launch is not available yet. Use /model in this terminal.")
             } else {
                 index += 1
             }
@@ -52,15 +52,15 @@ extension CodexPluginCore: AgentModelProviding {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
-            throw AgentModelError("Codex model discovery failed (\(context.discoveryVersion ?? "unknown version")). Use /model in this terminal.")
+            throw AgentModelError("\(distribution.displayName) model discovery failed (\(context.discoveryVersion ?? "unknown version")). Use /model in this terminal.")
         }
         guard result.isSuccess, !result.outputTruncated else {
-            throw AgentModelError("Codex model discovery failed (\(context.discoveryVersion ?? "unknown version")). Use /model in this terminal.")
+            throw AgentModelError("\(distribution.displayName) model discovery failed (\(context.discoveryVersion ?? "unknown version")). Use /model in this terminal.")
         }
         do {
             return try CodexModelCatalog.parse(result.stdout)
         } catch {
-            throw AgentModelError("Codex returned an incompatible model catalog (\(context.discoveryVersion ?? "unknown version")). Use /model in this terminal.")
+            throw AgentModelError("\(distribution.displayName) returned an incompatible model catalog (\(context.discoveryVersion ?? "unknown version")). Use /model in this terminal.")
         }
     }
 
@@ -81,6 +81,9 @@ extension CodexPluginCore: AgentModelProviding {
     }
 
     public nonisolated func modelSwitchIssue(lines: [String], models: [AgentModelOption]) -> String? {
+        guard distribution == .codex else {
+            return "Traex uses an interactive /model picker; inline model commands are not supported. Choose the model and effort in its terminal."
+        }
         guard modelSelection(lines: lines, models: models)?.effort != nil else {
             return "Codex's status line does not expose its model and effort. Restore them or use /model in this terminal."
         }
@@ -160,7 +163,7 @@ enum CodexModelCatalog {
         let models: [Model]
         struct Model: Decodable {
             let slug: String
-            let display_name: String
+            let display_name: String?
             let visibility: String
             let default_reasoning_level: String?
             let supported_reasoning_levels: [Effort]
@@ -172,7 +175,7 @@ enum CodexModelCatalog {
     static func parse(_ data: Data) throws -> [AgentModelOption] {
         let catalog = try JSONDecoder().decode(Catalog.self, from: data)
         let models = catalog.models.filter { $0.visibility == "list" }.map {
-            AgentModelOption(id: $0.slug, name: $0.display_name, efforts: $0.supported_reasoning_levels.map(\.effort), defaultEffort: $0.default_reasoning_level)
+            AgentModelOption(id: $0.slug, name: $0.display_name ?? $0.slug, efforts: $0.supported_reasoning_levels.map(\.effort), defaultEffort: $0.default_reasoning_level)
         }
         guard !models.isEmpty, models.count <= 100, Set(models.map(\.id)).count == models.count else {
             throw AgentModelError("Codex returned an empty or ambiguous model catalog.")

@@ -25,6 +25,9 @@ extension CodexPluginCore: AgentHookTrustProviding {
     }
 
     public func trustHooks(terminal: AgentHookTrustTerminal, refreshIfTrusted: Bool = false) async throws -> AgentHookTrustResult {
+        guard distribution == .codex else {
+            throw AgentHookTrustError("Manage Traex hook approval and refresh with /hooks in its terminal.")
+        }
         try await terminal.perform(.open)
         let panel = try await waitForHookTrustPanel(terminal)
         if panel == .needsReview {

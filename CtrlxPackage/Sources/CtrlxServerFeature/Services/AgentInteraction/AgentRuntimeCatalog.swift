@@ -54,7 +54,7 @@ actor AgentRuntimeCatalog {
             guard
                 observation.processID > 1, !observation.processRuntimeID.isEmpty,
                 !observation.pluginID.isEmpty, !observation.paneID.isEmpty,
-                !observation.conversationID.isEmpty || observation.pluginID == "codex",
+                !observation.conversationID.isEmpty || CodexProcessSessionReader.supports(pluginID: observation.pluginID),
                 panes.insert(observation.workspacePane.paneID).inserted,
                 processes.insert(observation.processID).inserted else {
                 throw AgentWorkflowError("Cannot register ambiguous or unverified Agent processes.")
@@ -108,7 +108,7 @@ actor AgentRuntimeCatalog {
         if let evidence = bridges.first(where: { $0.matchesProcess(instance) }) {
             return evidence.issue
         }
-        if allowsFirstSubmission, instance.pluginID == "codex" {
+        if allowsFirstSubmission, CodexProcessSessionReader.supports(pluginID: instance.pluginID) {
             return nil
         }
         return "This Agent has not confirmed its CtrlX hook. Refresh its hooks or submit a normal prompt before sending here."

@@ -1,12 +1,12 @@
 ---
 name: agent-browser
-description: Default for CtrlX webpage interaction, localhost UI tests, screenshots and video recording via ctrlx browser. For local Codex/Claude Code; not explicitly requested external browsers or native-app UI.
+description: Default for CtrlX webpage interaction, localhost UI tests, screenshots and video recording via ctrlx browser. For local Codex/Traex/Claude Code; not external browsers or native-app UI.
 ---
 
 # Default browser entry point
 
 For webpage interaction, localhost UI tests, screenshots and video recording in
-a local CtrlX Codex/Claude Code session, use `ctrlx browser` by default, even when the
+a local CtrlX Codex/Traex/Claude Code session, use `ctrlx browser` by default, even when the
 user does not name this skill. It controls the source Host's Chromium; paired
 Mac/iOS Viewers can view those pages.
 

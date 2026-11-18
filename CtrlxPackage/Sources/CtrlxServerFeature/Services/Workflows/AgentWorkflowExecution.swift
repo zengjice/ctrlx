@@ -27,7 +27,7 @@ struct AgentWorkflowExecution: Sendable {
         for instance in instances {
             guard
                 instance.hostID == definition.hostID, instance.processID > 1,
-                !instance.processRuntimeID.isEmpty, !instance.conversationID.isEmpty || instance.pluginID == "codex" else {
+                !instance.processRuntimeID.isEmpty, !instance.conversationID.isEmpty || CodexProcessSessionReader.supports(pluginID: instance.pluginID) else {
                 throw AgentWorkflowStartRejection("\(instance.displayName): The Agent's process or conversation could not be verified. Edit the workflow and select a live Agent.")
             }
             if let issue = instance.capabilityIssue {
@@ -308,7 +308,7 @@ struct AgentWorkflowExecution: Sendable {
 
     func canBindFirstConversation(_ instance: AgentWorkflowInstance, invocationID: UUID? = nil) -> Bool {
         guard
-            !run.status.isTerminal, instance.pluginID == "codex", UUID(uuidString: instance.conversationID) != nil,
+            !run.status.isTerminal, CodexProcessSessionReader.supports(pluginID: instance.pluginID), UUID(uuidString: instance.conversationID) != nil,
             let bound = run.instances.first(where: { $0.id == instance.id }),
             bound.matchesProcess(instance), !bound.matchesBinding(instance) else { return false }
         let calls = run.invocations.filter { $0.delivery.toAgentID == instance.id }

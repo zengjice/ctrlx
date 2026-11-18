@@ -35,7 +35,9 @@ private actor WorkspaceAgentProcessReader {
         do {
             let result = try await processes.run(executable: executable, arguments: ["--version"], environment: nil, timeout: 5)
             let text = result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
-            let value = result.isSuccess && text.count <= 100 && !text.contains("\n") ? text : nil
+            let lines = text.components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            let traexInstallation = lines.count == 2 && lines[0].hasPrefix("traecli ") && lines[1].hasPrefix("installation: ")
+            let value = result.isSuccess && text.count <= 100 && (lines.count == 1 || traexInstallation) ? lines[0] : nil
             versions[executable] = (modified, size, value)
             return value
         } catch {
@@ -173,7 +175,7 @@ enum WorkspaceAgentProcessArguments {
                 providerID = value
                 continue
             }
-            guard name == "CODEX_HOME" || name == "CLAUDE_CONFIG_DIR" else { continue }
+            guard name == "CODEX_HOME" || name == "TRAE_HOME" || name == "CLAUDE_CONFIG_DIR" else { continue }
             guard value.hasPrefix("/"), roots[name] == nil || roots[name] == value else {
                 throw WorkspaceRecoveryError("The Agent configuration directory is not an unambiguous absolute path.")
             }

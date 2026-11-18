@@ -4,6 +4,10 @@ import Foundation
 /// Reads only the active writer's metadata, never argv (which names the parent
 /// of a fork) or a history-directory search (which can belong to another pane).
 actor CodexProcessSessionReader {
+    static func supports(pluginID: String) -> Bool {
+        pluginID == "codex" || pluginID == "traex"
+    }
+
     static let headerLimit = 256 * 1_024
     static let completionLimit = 1_024 * 1_024
     private static let descriptorLimit = 4_096
@@ -23,13 +27,22 @@ actor CodexProcessSessionReader {
     }
 
     func turnCompleted(processID: String, runtimeID: String) -> Bool {
+        hasCompletedTurn(processID: processID, runtimeID: runtimeID)
+    }
+
+    func turnAborted(processID: String, runtimeID: String, conversationID: String, turnID: UUID) -> Bool {
+        hasCompletedTurn(processID: processID, runtimeID: runtimeID, conversationID: conversationID, abortedTurnID: turnID)
+    }
+
+    private func hasCompletedTurn(processID: String, runtimeID: String, conversationID: String? = nil, abortedTurnID: UUID? = nil) -> Bool {
         guard
             !Task.isCancelled, let pid = Int32(processID),
             AgentSessionIdentityClient.processRuntimeID(processID) == runtimeID,
             let writer = activeRollout(pid: pid),
             let header = readHeader(writer),
-            Self.sessionID(header: header, path: writer.path) != nil,
-            readCompletion(writer),
+            let sessionID = Self.sessionID(header: header, path: writer.path),
+            conversationID == nil || sessionID == conversationID,
+            readCompletion(writer, abortedTurnID: abortedTurnID),
             !Task.isCancelled,
             AgentSessionIdentityClient.processRuntimeID(processID) == runtimeID,
             activeRollout(pid: pid) == writer
@@ -116,7 +129,7 @@ actor CodexProcessSessionReader {
         return Data(bytes[..<newline])
     }
 
-    private func readCompletion(_ rollout: Rollout) -> Bool {
+    private func readCompletion(_ rollout: Rollout, abortedTurnID: UUID?) -> Bool {
         guard let fd = openRollout(rollout) else { return false }
         defer { close(fd) }
         var before = stat()
@@ -128,12 +141,12 @@ actor CodexProcessSessionReader {
         var after = stat()
         guard
             size == count, fstat(fd, &after) == 0, after.st_size == before.st_size,
-            Self.lastTurnCompleted(Data(bytes), startsAtBeginning: offset == 0)
+            Self.lastTurnCompleted(Data(bytes), startsAtBeginning: offset == 0, abortedTurnID: abortedTurnID)
         else { return false }
         return true
     }
 
-    static func lastTurnCompleted(_ data: Data, startsAtBeginning: Bool = true) -> Bool {
+    static func lastTurnCompleted(_ data: Data, startsAtBeginning: Bool = true, abortedTurnID: UUID? = nil) -> Bool {
         // A partial append may be a newer task start. Never fall back to an
         // older completion when the latest record is incomplete or malformed.
         guard data.count <= completionLimit, data.last == 10 else { return false }
@@ -165,6 +178,9 @@ actor CodexProcessSessionReader {
                  "turn_complete",
                  "turn_aborted":
                 guard let id = record.payload.turn_id.flatMap(UUID.init(uuidString:)), completedTurn == nil || completedTurn == id else { return false }
+                if let abortedTurnID, completedTurn == nil {
+                    guard id == abortedTurnID, record.payload.type == "turn_aborted" else { return false }
+                }
                 completedTurn = id
             case "task_started",
                  "turn_started":

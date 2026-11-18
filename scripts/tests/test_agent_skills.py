@@ -101,31 +101,33 @@ class SkillResources(unittest.TestCase):
                 self.assertIn(resource.resolve(), visited, str(resource))
 
     @unittest.skipUnless(shutil.which("rsync"), "rsync required for bundle sync")
-    def test_codex_bundle_mirrors_all_resources_without_editing_source(self):
+    def test_native_bundles_mirror_all_resources_without_editing_source(self):
         with tempfile.TemporaryDirectory(prefix="cx-sk-", dir="/tmp") as tmp:
             plugin = Path(tmp) / "CtrlX.app/Contents/Resources/plugin"
             source = plugin / "ctrlx/skills"
-            destination = plugin / "codex/ctrlx/skills"
+            destinations = [plugin / name / "ctrlx/skills" for name in ["codex", "traex"]]
             shutil.copytree(SKILLS, source)
-            for marketplace in [plugin, plugin / "codex"]:
-                source_marketplace = ROOT / ("plugin/codex" if marketplace.name == "codex" else "plugin")
+            for marketplace in [plugin, plugin / "codex", plugin / "traex"]:
+                source_marketplace = ROOT / ("plugin/" + marketplace.name if marketplace.name in ["codex", "traex"] else "plugin")
                 shutil.copytree(source_marketplace / "ctrlx-hooks", marketplace / "ctrlx-hooks")
                 for legacy in ["hooks", "scripts"]:
                     stale = marketplace / "ctrlx" / legacy
                     stale.mkdir(parents=True)
                     (stale / "old.txt").write_text("stale monolithic component")
-            destination.mkdir(parents=True)
-            (destination / "obsolete.md").write_text("stale built resource")
+            for destination in destinations:
+                destination.mkdir(parents=True)
+                (destination / "obsolete.md").write_text("stale built resource")
             before = {p.relative_to(source): p.read_bytes()
                       for p in source.rglob("*") if p.is_file()}
             env = dict(os.environ, BUILT_PRODUCTS_DIR=tmp, PRODUCT_NAME="CtrlX")
             for _ in range(2):
                 subprocess.run(["bash", str(ROOT / "scripts/sync-codex-skills.sh")],
                                env=env, check=True, capture_output=True, timeout=15)
-                after = {p.relative_to(destination): p.read_bytes()
-                         for p in destination.rglob("*") if p.is_file()}
-                self.assertEqual(before, after)
-                for marketplace in [plugin, plugin / "codex"]:
+                for destination in destinations:
+                    after = {p.relative_to(destination): p.read_bytes()
+                             for p in destination.rglob("*") if p.is_file()}
+                    self.assertEqual(before, after)
+                for marketplace in [plugin, plugin / "codex", plugin / "traex"]:
                     self.assertFalse((marketplace / "ctrlx/hooks").exists())
                     self.assertFalse((marketplace / "ctrlx/scripts").exists())
             self.assertEqual(before, {p.relative_to(source): p.read_bytes()
@@ -142,10 +144,10 @@ class PluginSessionContext(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.directory = Path(temporary.name)
         bundle = self.directory / "CtrlX.app/Contents/Resources/plugin"
-        self.skills = {"claude-code": bundle / "ctrlx", "codex": bundle / "codex/ctrlx"}
-        self.plugins = {"claude-code": bundle / "ctrlx-hooks", "codex": bundle / "codex/ctrlx-hooks"}
+        self.skills = {"claude-code": bundle / "ctrlx", "codex": bundle / "codex/ctrlx", "traex": bundle / "traex/ctrlx"}
+        self.plugins = {"claude-code": bundle / "ctrlx-hooks", "codex": bundle / "codex/ctrlx-hooks", "traex": bundle / "traex/ctrlx-hooks"}
         for name, path in self.plugins.items():
-            source = "plugin" if name == "claude-code" else "plugin/codex"
+            source = "plugin" if name == "claude-code" else "plugin/" + name
             shutil.copytree(ROOT / source / "ctrlx-hooks", path)
             shutil.copytree(ROOT / source / "ctrlx", self.skills[name])
         subprocess.run(["bash", str(ROOT / "scripts/sync-codex-skills.sh")],

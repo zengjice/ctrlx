@@ -9,10 +9,10 @@
     @Suite("Codex questions through shell wrappers")
     @MainActor
     struct CodexQuestionShellWrapperTests {
-        nonisolated private static let paneLine = "%7\u{001F}100\u{001F}/project\n"
-        nonisolated private static let processTree = "100 1 /bin/zsh\n101 100 /bin/zsh\n102 101 /opt/homebrew/bin/codex\n"
+        private nonisolated static let paneLine = "%7\u{001F}100\u{001F}/project\n"
+        private nonisolated static let processTree = "100 1 /bin/zsh\n101 100 /bin/zsh\n102 101 /opt/homebrew/bin/codex\n"
 
-        nonisolated private static func frame(
+        private nonisolated static func frame(
             command: String = "zsh", count: Int = 1, composer: String = "› Ask Codex to do anything",
             column: Int = 2, inMode: Bool = false, hint: String = "shift← to answer", suffix: String = ""
         ) -> String {
@@ -22,10 +22,16 @@
             return "\(command)\t\(column)\t5\t\(inMode ? 1 : 0)\n" + (["output"] + footer + ["", composer]).joined(separator: "\n")
         }
 
-        nonisolated private static func output(executable: String, arguments: [String], frame: String) -> String {
-            if executable == "/bin/ps" { return processTree }
-            if arguments.contains("list-panes") { return paneLine }
-            if arguments.contains("capture-pane") { return frame }
+        private nonisolated static func output(executable: String, arguments: [String], frame: String) -> String {
+            if executable == "/bin/ps" {
+                return processTree
+            }
+            if arguments.contains("list-panes") {
+                return paneLine
+            }
+            if arguments.contains("capture-pane") {
+                return frame
+            }
             return ""
         }
 
@@ -41,7 +47,9 @@
                     commands.withValue { $0.append(arguments) }
                     // Age ticks between the first capture and the recheck must
                     // not make the same queue appear different.
-                    if arguments.contains("capture-pane") { captures.withValue { $0 += 1 } }
+                    if arguments.contains("capture-pane") {
+                        captures.withValue { $0 += 1 }
+                    }
                     let frame = Self.frame(count: count.value, hint: hint, suffix: " · \(captures.value)s")
                     let output = Self.output(executable: executable, arguments: arguments, frame: frame)
                     return ProcessResult(exitCode: 0, stdout: Data(output.utf8), stderr: Data())
@@ -59,27 +67,34 @@
         }
 
         @Test("A shell footer cannot substitute for verified Codex in the same pane", arguments: [
-            "no-codex", "other-agent", "other-pane", "ps-failed", "panes-failed",
+            "no-codex", "other-agent", "traex", "traecli", "traex-foreground", "traecli-foreground", "other-pane", "ps-failed", "panes-failed",
         ])
         func unverifiedProcess(scenario: String) async throws {
             let commands = LockIsolated<[[String]]>([])
             try await withDependencies {
                 $0[ProcessRunner.self].run = { executable, arguments, _, _ in
                     commands.withValue { $0.append(arguments) }
-                    var output = Self.output(executable: executable, arguments: arguments, frame: Self.frame())
+                    let command = scenario.hasSuffix("-foreground") ? String(scenario.dropLast("-foreground".count)) : "zsh"
+                    var output = Self.output(executable: executable, arguments: arguments, frame: Self.frame(command: command))
                     var exitCode: Int32 = 0
                     if executable == "/bin/ps" {
                         switch scenario {
                         case "no-codex": output = "100 1 zsh\n101 100 zsh\n"
                         case "other-agent": output = "100 1 zsh\n101 100 claude\n"
+                        case "traex",
+                             "traecli": output = "100 1 zsh\n101 100 \(scenario)\n"
                         case "other-pane": output = "100 1 zsh\n200 1 zsh\n201 200 codex\n"
                         case "ps-failed": exitCode = 1
                         default: break
                         }
                     }
                     if arguments.contains("list-panes") {
-                        if scenario == "other-pane" { output += "%8\u{001F}200\u{001F}/other\n" }
-                        if scenario == "panes-failed" { exitCode = 1 }
+                        if scenario == "other-pane" {
+                            output += "%8\u{001F}200\u{001F}/other\n"
+                        }
+                        if scenario == "panes-failed" {
+                            exitCode = 1
+                        }
                     }
                     return ProcessResult(exitCode: exitCode, stdout: Data(output.utf8), stderr: Data())
                 }
@@ -122,7 +137,9 @@
             try await withDependencies {
                 $0[ProcessRunner.self].run = { executable, arguments, _, _ in
                     commands.withValue { $0.append(arguments) }
-                    if executable == "/bin/ps", invalidate.value { changed.setValue(true) }
+                    if executable == "/bin/ps", invalidate.value {
+                        changed.setValue(true)
+                    }
                     let frame = changed.value ? Self.frame(
                         command: scenario == "other-agent" ? "claude" : "zsh",
                         count: scenario == "count" ? 2 : 1,

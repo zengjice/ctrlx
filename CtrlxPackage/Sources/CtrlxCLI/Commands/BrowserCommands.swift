@@ -170,13 +170,13 @@ struct BrowserIdentityCommand: ParsableCommand {
 }
 
 struct BrowserRunCommand: ParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "run", abstract: "Optional launch convenience; plain codex or claude also discovers its browser identity automatically")
+    static let configuration = CommandConfiguration(commandName: "run", abstract: "Optional launch convenience; native codex, traex or claude tools discover their browser identity automatically")
     @Option(help: "Human-readable session / window / pane label") var label: String?
     @Argument(parsing: .captureForPassthrough) var command: [String]
 
     func run() throws {
         let words = command.first == "--" ? Array(command.dropFirst()) : command
-        guard let executable = words.first, !executable.isEmpty else { throw ValidationError("Use: ctrlx browser run -- <agent> [arguments] (codex or claude)") }
+        guard let executable = words.first, !executable.isEmpty else { throw ValidationError("Use: ctrlx browser run -- <agent> [arguments] (codex, traex or claude)") }
         if let label {
             setenv("CTRLX_BROWSER_LABEL", label, 1)
         }

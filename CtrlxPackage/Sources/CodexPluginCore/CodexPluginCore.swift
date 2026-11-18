@@ -19,11 +19,12 @@ import Foundation
 /// Defensive by mandate (spec §13): never trap on hostile on-disk data.
 public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, AgentSessionResuming, AgentPluginMaintenance, AgentAccountReporting {
     public static let pluginID = "codex"
+    public nonisolated let distribution: CodexDistribution
 
     private var host: (any PluginHost)?
     private var settings = CodexSettings()
 
-    private let scanner = CodexScanner()
+    private let scanner: CodexScanner
     private var correlation: CodexSessionCorrelation
     private let correlationWasInjected: Bool
     private let configReader = CodexConfigReader()
@@ -82,31 +83,40 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         private static let sessionEndPollSeconds: Double = 5
     #endif
 
-    public init() {
-        self.correlation = .live()
+    public init(distribution: CodexDistribution = .codex) {
+        self.distribution = distribution
+        self.scanner = CodexScanner(distribution: distribution)
+        self.correlation = .live(pluginID: distribution.pluginID)
         self.correlationWasInjected = false
+        self.settings = distribution.settings(from: Data())
+        self.command = distribution.command
     }
 
     /// Test seam: inject the pane↔session correlation store so a test can point
     /// it at a temp directory instead of the real `~/.ctrlx/codex-sessions/`.
-    init(correlation: CodexSessionCorrelation) {
+    init(correlation: CodexSessionCorrelation, distribution: CodexDistribution = .codex) {
+        self.distribution = distribution
+        self.scanner = CodexScanner(distribution: distribution)
         self.correlation = correlation
         self.correlationWasInjected = true
+        self.settings = distribution.settings(from: Data())
+        self.command = distribution.command
     }
 
     // MARK: - Lifecycle
 
     public func dashboardAccounts() async -> [DashboardAccount] {
-        await accountReporter.accounts(command: command, roots: codexHomeRoots())
+        guard distribution == .codex else { return [] }
+        return await accountReporter.accounts(command: command, roots: codexHomeRoots())
     }
 
     public func initialize(_ env: PluginEnv, host: any PluginHost) async throws {
         if !correlationWasInjected {
-            correlation = .live(stateDirectory: env.stateDir)
+            correlation = .live(stateDirectory: env.stateDir, pluginID: distribution.pluginID)
         }
         self.host = host
         // `env.settings` is the authoritative initial settings value (spec §11).
-        settings = CodexSettings.decode(from: env.settings)
+        settings = distribution.settings(from: env.settings)
         marketplaceSource = env.marketplaceSource
         stateDirectory = env.stateDir
         otlpReceiverEndpoint = env.otlpReceiverEndpoint
@@ -135,6 +145,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
     /// and the durable `HookEvent` / `HookEventMessage` semantics as Claude
     /// Code, so the parser is reused (additive phase).
     public func handleIngress(_ frame: IngressFrame) async -> PluginEvent? {
+        guard frame.pluginID == distribution.pluginID else { return nil }
         // Drop subagent (`Task`) hook events the way the legacy shared
         // `HookServerService` did for every agent. Codex's bridge forwards
         // SubagentStart/SubagentStop, and a trailing SubagentStop after the main
@@ -161,7 +172,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
 
         if
             case let .preToolUse(body) = action,
-            let question = CodexQuestionNotification(payload: frame.payload) {
+            let question = CodexQuestionNotification(payload: frame.payload, distribution: distribution) {
             guard notifiedQuestionCalls[body.sessionId, default: []].insert(question.callID).inserted else { return nil }
             // A question can be asynchronous. Notify without opening a blocking
             // form, retracting another form, or changing the agent's working state.
@@ -203,7 +214,8 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
                 // — without it iOS reuses the first form's persisted answer.
                 occurrenceID: UUID().uuidString,
                 closePaneOnSessionEnd: settings.closePaneOnSessionEnd,
-                approvalsReviewer: reviewer
+                approvalsReviewer: reviewer,
+                agentName: distribution.displayName
             )
         else {
             return nil
@@ -375,6 +387,10 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
             return posture
         }
 
+        // Traex profiles are separate files, so Codex's persisted-profile
+        // fallback cannot prove a Traex session's effective approval policy.
+        guard distribution == .codex else { return .user }
+
         let fresh = configReader.approvalsReviewer(codexHome: root)
         let snapshot = reviewerSnapshot(sessionID: sessionID, root: root, transcriptPath: transcriptPath)
         guard fresh == snapshot else {
@@ -394,6 +410,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
     /// which re-read `config.toml` — refresh their snapshot.
     private func recordReviewerSnapshot(sessionID: String, transcriptPath: String?) {
         guard
+            distribution == .codex,
             let transcriptPath,
             let root = codexHomeRoot(forTranscriptPath: transcriptPath)
         else { return }
@@ -441,7 +458,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
     private func codexHomeRoot(forTranscriptPath transcript: String) -> URL? {
         let transcriptPath = URL(fileURLWithPath: transcript).resolvingSymlinksInPath().path
         for root in codexHomeRoots() {
-            let sessionsPrefix = root.appendingPathComponent("sessions")
+            let sessionsPrefix = root.appendingPathComponent(distribution.sessionsDirectory)
                 .resolvingSymlinksInPath().path + "/"
             if transcriptPath.hasPrefix(sessionsPrefix) {
                 return root
@@ -459,7 +476,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
     }
 
     public func providerOptions() async -> [AgentProviderOption] {
-        settings.providerOptions
+        distribution == .codex ? settings.providerOptions : []
     }
 
     public func commandForLaunch(projectPath _: String, providerID: String?) async throws -> LaunchCommand? {
@@ -479,12 +496,12 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
     public func commandForFork(sessionID: String, projectPath: String, targetProviderID: String?) async throws -> AgentForkLaunch {
         guard UUID(uuidString: sessionID) != nil else { throw AgentForkError("Invalid Codex conversation ID.") }
         @Dependency(AgentForkHistoryClient.self) var history
-        let root = try await history.root(sessionID, codexHomeRoots().map(\.path), .codex)
+        let root = try await history.root(sessionID, codexHomeRoots().map(\.path), distribution.historyLayout)
         let provider = try await providerConfiguration(targetProviderID)
         var environment = provider.environment
         // The fork must read history from the source root; Provider overrides
         // only change how the copied conversation talks to its model endpoint.
-        environment["CODEX_HOME"] = root
+        environment[distribution.homeVariable] = root
         return AgentForkLaunch(command: LaunchCommand(
             command: settings.commandPath,
             args: ["fork", sessionID, "-C", projectPath] + provider.arguments + terminalLaunchArguments(),
@@ -498,16 +515,16 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         version.wholeMatch(of: /codex-cli 0\.16[0-9]\.(0|[1-9][0-9]*)/) != nil
     }
 
-    private static func automaticResumeVersionUnavailableReason(_ version: String?) -> String? {
-        guard let version, supportsAutomationCLI(version) else {
-            return "Automatic resume supports \(supportedAutomationCLIVersions); found \(version ?? "unknown version"). Choose Resume to reopen it explicitly."
+    private func automaticResumeVersionUnavailableReason(_ version: String?) -> String? {
+        guard let version, distribution.supportsAutomationCLI(version) else {
+            return "Automatic resume supports \(distribution.supportedAutomationVersions); found \(version ?? "unknown version"). Choose Resume to reopen it explicitly."
         }
         return nil
     }
 
     public func automaticResumeUnavailableReason(_ descriptor: AgentResumeDescriptor, currentVersion: String?) async -> String? {
         guard descriptor.executable != nil else { return "The original process invocation was not recorded. Choose Resume to reopen it explicitly." }
-        return Self.automaticResumeVersionUnavailableReason(currentVersion)
+        return automaticResumeVersionUnavailableReason(currentVersion)
     }
 
     public func recoveryDescriptor(sessionID: String, projectPath: String, invocation: AgentResumeInvocation? = nil) async throws -> AgentResumeDescriptor {
@@ -515,17 +532,18 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         @Dependency(AgentForkHistoryClient.self) var history
         let roots: [String]
         if let invocation {
-            roots = [invocation.configurationRoots["CODEX_HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex").path]
+            roots = [invocation.configurationRoots[distribution.homeVariable] ?? distribution.defaultHome(environment: [:]).path]
         } else {
             roots = codexHomeRoots().map(\.path)
         }
-        let root = try await history.root(sessionID, roots, .codex)
+        let root = try await history.root(sessionID, roots, distribution.historyLayout)
         let arguments = try Self.resumeArguments(
             invocation?.arguments ?? [],
-            allowsProviderOverrides: invocation?.providerID != nil
+            allowsProviderOverrides: invocation?.providerID != nil,
+            distribution: distribution
         )
         return AgentResumeDescriptor(
-            pluginID: Self.pluginID,
+            pluginID: distribution.pluginID,
             sessionID: sessionID,
             projectPath: projectPath,
             configurationRoot: root,
@@ -533,16 +551,16 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
             executable: invocation?.executable,
             cliVersion: invocation?.version,
             arguments: arguments,
-            automaticResumeUnavailableReason: invocation == nil ? "The original process invocation was not recorded." : Self.automaticResumeVersionUnavailableReason(invocation?.version),
+            automaticResumeUnavailableReason: invocation == nil ? "The original process invocation was not recorded." : automaticResumeVersionUnavailableReason(invocation?.version),
             providerID: invocation?.providerID
         )
     }
 
-    private static func resumeArguments(_ arguments: [String], allowsProviderOverrides: Bool = false) throws -> [String] {
+    private static func resumeArguments(_ arguments: [String], allowsProviderOverrides: Bool = false, distribution: CodexDistribution = .codex) throws -> [String] {
         let arguments = allowsProviderOverrides ? removingProviderOverrides(arguments) : arguments
         return try AgentResumeArguments.capture(
             arguments,
-            values: ["--model", "--profile", "--sandbox", "--ask-for-approval", "--add-dir", "--local-provider"],
+            values: distribution.resumeValueOptions,
             flags: ["--oss", "--search", "--no-alt-screen", "--no-daemon", "--strict-config", "--dangerously-bypass-approvals-and-sandbox", "--approve-for-me", bypassHookTrustArgument],
             ignoredValues: ["--cd", "--image"],
             ignoredFlags: ["--last", "--all", "--include-non-interactive", "--worktree"],
@@ -561,15 +579,15 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
 
     public func commandForResume(_ descriptor: AgentResumeDescriptor) async throws -> AgentForkLaunch {
         guard
-            descriptor.pluginID == Self.pluginID, UUID(uuidString: descriptor.sessionID) != nil,
+            descriptor.pluginID == distribution.pluginID, UUID(uuidString: descriptor.sessionID) != nil,
             descriptor.configurationRoot.hasPrefix("/"), descriptor.projectPath.hasPrefix("/") else {
             throw AgentForkError("Invalid Codex recovery identity.")
         }
         @Dependency(AgentForkHistoryClient.self) var history
         // Only the recorded root is eligible. A changed settings list must not
         // silently resume another account's copy of the same conversation.
-        let root = try await history.root(descriptor.sessionID, [descriptor.configurationRoot], .codex)
-        guard try Self.resumeArguments(descriptor.arguments, allowsProviderOverrides: descriptor.providerID != nil) == descriptor.arguments else {
+        let root = try await history.root(descriptor.sessionID, [descriptor.configurationRoot], distribution.historyLayout)
+        guard try Self.resumeArguments(descriptor.arguments, allowsProviderOverrides: descriptor.providerID != nil, distribution: distribution) == descriptor.arguments else {
             throw AgentForkError("Invalid Codex recovery options.")
         }
         @Dependency(AgentResumeExecutableClient.self) var executables
@@ -587,10 +605,26 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         if !arguments.contains("--no-daemon") {
             arguments.append("--no-daemon")
         }
+        var topLevelArguments: [String] = []
+        if distribution == .traex {
+            let valueOptions = distribution.resumeValueOptions
+            var index = 0
+            while index < arguments.count {
+                let option = arguments[index]
+                let count = option == "--config" || valueOptions.contains(option) ? 2 : 1
+                if option == "--shell-tool-timeout" {
+                    // Traex accepts this option only before its subcommand.
+                    topLevelArguments += arguments[index..<(index + count)]
+                    arguments.removeSubrange(index..<(index + count))
+                } else {
+                    index += count
+                }
+            }
+        }
         return AgentForkLaunch(command: LaunchCommand(
             command: executable,
-            args: ["resume", descriptor.sessionID, "-C", descriptor.projectPath] + arguments + provider.arguments + terminalTelemetryArguments(),
-            env: provider.environment.merging(["CODEX_HOME": root]) { _, root in root }
+            args: topLevelArguments + ["resume", descriptor.sessionID, "-C", descriptor.projectPath] + arguments + provider.arguments + terminalTelemetryArguments(),
+            env: provider.environment.merging([distribution.homeVariable: root]) { _, root in root }
         ))
     }
 
@@ -600,6 +634,9 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         _ requestedID: String?,
         catalogCommand: String? = nil
     ) async throws -> CodexProviderLaunch {
+        guard distribution == .codex || requestedID == nil else {
+            throw AgentProviderError("Use Traex's native configuration to select its Provider.")
+        }
         guard let providerID = requestedID else { return CodexProviderLaunch(arguments: [], environment: [:]) }
         guard settings.providerOptions.contains(where: { $0.id == providerID }) else {
             throw AgentProviderError("The selected Codex Provider no longer exists in Settings → Agents → Codex.")
@@ -754,10 +791,12 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
     }
 
     public func terminalTelemetryArguments() -> [String] {
+        // The current Traex release does not emit Codex's OTLP/JSON events.
+        guard distribution == .codex else { return [] }
         // Point Codex's OTLP log export at the Mac-local receiver via `-c`
         // overrides (issue #602). Gated on the per-agent `exportTelemetry`
         // setting; empty (no overrides) when off or when no receiver is running.
-        settings.exportTelemetry
+        return settings.exportTelemetry
             ? CodexOtelConfig.launchOverrides(otlpEndpoint: otlpReceiverEndpoint)
             : []
     }
@@ -765,29 +804,44 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
     // MARK: - CLI-based plugin install
 
     public func install(configRoot: String?) async throws -> InstallResult {
-        try await cliInstaller().install(configRoot: configRoot)
+        if distribution == .traex {
+            return try await traexInstaller().install(configRoot: configRoot)
+        }
+        return try await cliInstaller().install(configRoot: configRoot)
     }
 
     public func uninstall(configRoot: String?) async throws {
+        if distribution == .traex {
+            return try await traexInstaller().uninstall(configRoot: configRoot)
+        }
         try await cliInstaller().uninstall(configRoot: configRoot)
     }
 
     public func installStatus(configRoot: String?) async -> PluginInstallStatus {
-        await cliInstaller().installStatus(configRoot: configRoot)
+        if distribution == .traex {
+            return await traexInstaller().installStatus(configRoot: configRoot)
+        }
+        return await cliInstaller().installStatus(configRoot: configRoot)
     }
 
     public func bundledPluginVersion() async throws -> String {
-        try await cliInstaller().bundledVersion()
+        if distribution == .traex {
+            return try await traexInstaller().bundledVersion()
+        }
+        return try await cliInstaller().bundledVersion()
     }
 
     public func reinstall(configRoot: String?) async throws -> PluginInstallStatus {
-        try await cliInstaller().reinstall(configRoot: configRoot)
+        if distribution == .traex {
+            return try await traexInstaller().reinstall(configRoot: configRoot)
+        }
+        return try await cliInstaller().reinstall(configRoot: configRoot)
     }
 
     // MARK: - Settings
 
     public func applySettings(_ raw: Data) async -> SettingsResult {
-        let decoded = CodexSettings.decode(from: raw)
+        let decoded = distribution.settings(from: raw)
         let foldersChanged = decoded.additionalConfigFolders != settings.additionalConfigFolders
         settings = decoded
         command = decoded.commandPath
@@ -802,6 +856,10 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
 
     // MARK: - Private helpers
 
+    private func traexInstaller() -> TraexCLIInstaller {
+        TraexCLIInstaller(processRunner: processRunner, command: command, marketplaceSource: marketplaceSource)
+    }
+
     private func cliInstaller() -> CodexCLIInstaller {
         CodexCLIInstaller(
             processRunner: processRunner,
@@ -813,7 +871,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
     /// Returns all CODEX_HOME roots to scan/watch: the default root plus any
     /// additional roots from settings.
     private func codexHomeRoots() -> [URL] {
-        [CodexScanner.defaultCodexHome()] + settings.additionalConfigFolders.map {
+        [distribution.defaultHome()] + settings.additionalConfigFolders.map {
             URL(fileURLWithPath: $0).standardizedFileURL
         }
     }
@@ -917,7 +975,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
             guard let host else { return }
             await log(.debug, "Codex process exited; synthesizing session end for pane \(pane)")
             await host.emit(PluginEvent(
-                pluginID: CodexPluginCore.pluginID,
+                pluginID: distribution.pluginID,
                 sessionID: sessionID,
                 appActions: [.sessionEnded(
                     sessionID: pane,
@@ -930,7 +988,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         private func startWatchers() {
             guard watchers.isEmpty else { return }
             for root in codexHomeRoots() {
-                let sessionsPath = root.appendingPathComponent("sessions").path
+                let sessionsPath = root.appendingPathComponent(distribution.sessionsDirectory).path
                 let watcher = CodexSessionsWatcher(path: sessionsPath) { [weak self] in
                     Task { [weak self] in
                         await self?.refreshProjects()

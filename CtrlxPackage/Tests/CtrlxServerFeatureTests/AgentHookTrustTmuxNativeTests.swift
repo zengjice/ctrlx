@@ -70,7 +70,7 @@ struct AgentHookTrustTmuxNativeTests {
                 $0[SecretsService.self] = .inMemory()
                 $0[SimulatorSystemClient.self] = SimulatorSystemClient()
                 $0[AgentSessionIdentityClient.self].runtimeID = AgentSessionIdentityClient.liveValue.runtimeID
-                $0[CodexHookTrustIdleClient.self].isIdle = { _, _ in nativeTurnCompleted.value }
+                $0[CodexTurnStateClient.self].isIdle = { _, _ in nativeTurnCompleted.value }
             } operation: {
                 let settings = AppSettings()
                 settings.tmuxPath = executable

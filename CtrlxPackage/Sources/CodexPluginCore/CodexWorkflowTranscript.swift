@@ -5,12 +5,14 @@ import Foundation
 public struct CodexWorkflowTranscript: AgentWorkflowTranscriptParser {
     private let conversationID: String
     private let nativeTurnID: String
+    private let agentName: String
     private var sessionMatches = false
     private var outcome: AgentWorkflowTranscriptOutcome?
 
-    public init(conversationID: String, nativeTurnID: String) {
+    public init(conversationID: String, nativeTurnID: String, agentName: String = "Codex") {
         self.conversationID = conversationID
         self.nativeTurnID = nativeTurnID
+        self.agentName = agentName
     }
 
     public var startMarkers: [String] {
@@ -53,18 +55,18 @@ public struct CodexWorkflowTranscript: AgentWorkflowTranscriptParser {
              "turn_complete":
             if let error = payload["error"], !(error is NSNull) {
                 let reason = (error as? [String: Any])?["message"] as? String
-                    ?? "The native Codex turn completed with an error."
+                    ?? "The native \(agentName) turn completed with an error."
                 outcome = .failed(reason)
                 return outcome
             }
             guard let answer = payload["last_agent_message"] as? String, !answer.isEmpty else {
-                outcome = .failed("The native Codex turn has no final answer to hand off.")
+                outcome = .failed("The native \(agentName) turn has no final answer to hand off.")
                 return outcome
             }
             outcome = .succeeded(answer)
             return outcome
         case "turn_aborted":
-            outcome = .failed("The native Codex turn was interrupted.")
+            outcome = .failed("The native \(agentName) turn was interrupted.")
             return outcome
         default:
             return nil

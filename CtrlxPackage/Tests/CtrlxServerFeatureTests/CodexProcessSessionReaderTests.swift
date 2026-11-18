@@ -19,7 +19,7 @@ struct CodexProcessSessionReaderTests {
     }
 
     @Test("Only the latest complete native turn can override cached Working", arguments: ["complete", "turn-complete", "aborted", "active", "new-task", "late-old-completion", "new-context", "unknown-event", "partial", "malformed", "no-turn", "no-start", "truncated-prefix", "token-count"])
-    func nativeCompletion(_ scenario: String) {
+    func nativeCompletion(_ scenario: String) throws {
         var data = event("task_started") + event("task_complete")
         switch scenario {
         case "turn-complete": data = event("turn_started") + event("turn_complete")
@@ -38,6 +38,8 @@ struct CodexProcessSessionReaderTests {
         default: break
         }
         #expect(CodexProcessSessionReader.lastTurnCompleted(data, startsAtBeginning: scenario != "truncated-prefix") == ["complete", "turn-complete", "aborted", "truncated-prefix", "token-count"].contains(scenario))
+        let turn = try #require(UUID(uuidString: childID))
+        #expect(CodexProcessSessionReader.lastTurnCompleted(data, startsAtBeginning: scenario != "truncated-prefix", abortedTurnID: turn) == (scenario == "aborted"))
     }
 
     @Test("Completion must come from this process's current unique writable conversation")
@@ -50,6 +52,7 @@ struct CodexProcessSessionReaderTests {
         let pid = String(getpid())
         let runtime = try #require(AgentSessionIdentityClient.processRuntimeID(pid))
         let reader = CodexProcessSessionReader()
+        let interruptedTurn = try #require(UUID(uuidString: parentID))
         #expect(await !reader.turnCompleted(processID: pid, runtimeID: runtime))
         let writer = try FileHandle(forWritingTo: file)
         defer { try? writer.close() }
@@ -58,8 +61,11 @@ struct CodexProcessSessionReaderTests {
         try writer.seekToEnd()
         try writer.write(contentsOf: event("task_started", turn: parentID))
         #expect(await !reader.turnCompleted(processID: pid, runtimeID: runtime))
-        try writer.write(contentsOf: event("task_complete", turn: parentID))
+        try writer.write(contentsOf: event("turn_aborted", turn: parentID))
         #expect(await reader.turnCompleted(processID: pid, runtimeID: runtime))
+        #expect(await reader.turnAborted(processID: pid, runtimeID: runtime, conversationID: childID, turnID: interruptedTurn))
+        #expect(await !reader.turnAborted(processID: pid, runtimeID: runtime, conversationID: parentID, turnID: interruptedTurn))
+        #expect(await !reader.turnAborted(processID: pid, runtimeID: runtime, conversationID: childID, turnID: UUID()))
         try writer.write(contentsOf: Data("{partial".utf8))
         #expect(await !reader.turnCompleted(processID: pid, runtimeID: runtime))
         try writer.write(contentsOf: Data("}\n".utf8))

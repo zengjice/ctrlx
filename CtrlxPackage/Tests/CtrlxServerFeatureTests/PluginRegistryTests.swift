@@ -1,7 +1,7 @@
 #if os(macOS)
     import CtrlxNetworking
-    import Foundation
     import CtrlxPluginProtocol
+    import Foundation
     import Testing
     @testable import CtrlxServerFeature
 
@@ -34,6 +34,11 @@
             #expect(codex?.processNames == ["codex"])
             #expect(codex?.color == "#3B82F6")
             #expect(codex?.shortName == "codex")
+
+            let traex = registry.manifests["traex"]
+            #expect(traex?.displayName == "Traex")
+            #expect(traex?.processNames == ["traex", "traecli"])
+            #expect(traex?.runtime == .inProcess)
         }
 
         @Test("processNamesByPlugin surfaces detection names for both bundled plugins")
@@ -42,6 +47,7 @@
             let names = registry.processNamesByPlugin
             #expect(names["claude-code"] == ["claude"])
             #expect(names["codex"] == ["codex"])
+            #expect(names["traex"] == ["traex", "traecli"])
         }
 
         @Test("enable initializes a core and disable shuts it down")

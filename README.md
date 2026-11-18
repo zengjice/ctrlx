@@ -22,7 +22,7 @@ model.
 - **Session-aware voice input:** Mac and iPhone voice input use the focused
   terminal's recent text and metadata to correct what you say, without auto-sending.
 - **Agent-aware:** Track working, completed, permission, question, and plan
-  states for Claude Code, Codex, and agents added through open sidecar plugins.
+  states for Claude Code, Codex, Traex, and agents added through open sidecar plugins.
 - **Secure Relay:** Every device connects outbound; terminal frames remain
   end-to-end encrypted between the Host and Viewer.
 

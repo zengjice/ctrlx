@@ -8,6 +8,66 @@ import Testing
 @testable import CtrlxServerFeature
 
 struct WorkspaceAgentProcessTests {
+    @Test("Version discovery accepts Traex's installation line without hiding unknown output")
+    func versionOutput() async {
+        let cases: [(String, Int32, String?)] = [
+            ("codex-cli 0.167.0\n", 0, "codex-cli 0.167.0"),
+            ("2.1.308 (Claude Code)\n", 0, "2.1.308 (Claude Code)"),
+            ("traecli 0.213.1\ninstallation: public\n", 0, "traecli 0.213.1"),
+            ("traecli 0.214.0\ninstallation: public\n", 0, "traecli 0.214.0"),
+            ("traecli 0.213.1\ninstallation: public\nextra output\n", 0, nil),
+            ("traecli 0.213.1\nunrecognized diagnostic\n", 0, nil),
+            ("codex-cli 0.167.0\ninstallation: public\n", 0, nil),
+            ("traecli 0.213.1\ninstallation: public\n", 1, nil),
+        ]
+        for (output, exitCode, expected) in cases {
+            await withDependencies {
+                $0[ProcessRunner.self].run = { _, arguments, _, _ in
+                    #expect(arguments == ["--version"])
+                    return .init(exitCode: exitCode, stdout: Data(output.utf8), stderr: Data())
+                }
+            } operation: {
+                let version = await WorkspaceAgentProcessClient.liveValue.version("/fixture/\(UUID())/agent")
+                #expect(version == expected)
+                if let version, version.hasPrefix("traecli ") {
+                    let core = CodexPluginCore(distribution: .traex)
+                    #expect((core.workflowRuntimeIssue(cliVersion: version) == nil) == (version == "traecli 0.213.1"))
+                }
+            }
+        }
+    }
+
+    @Test("Native Traex multiline version reaches model and automatic-resume admission", .enabled(if: ProcessInfo.processInfo.environment["CTRLX_TRAEX_NATIVE_TESTS"] == "1"))
+    func nativeTraexVersion() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        let executable = try #require(environment["CTRLX_TRAEX_TEST_EXECUTABLE"]
+            ?? (environment["PATH"] ?? "").split(separator: ":").map { String($0) + "/traex" }
+            .first { FileManager.default.isExecutableFile(atPath: $0) })
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-traex-version-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await withDependencies {
+            $0.continuousClock = ContinuousClock()
+            $0[ProcessRunner.self].run = { path, arguments, _, timeout in
+                try await ProcessRunner.liveValue.run(path, arguments, [
+                    "HOME": root.path, "TRAE_HOME": root.path,
+                    "TRAEX_AUTO_UPDATE_ON_STARTUP": "0", "TRAECLI_AUTO_UPDATE_ON_STARTUP": "0",
+                ], timeout)
+            }
+            $0[AgentForkHistoryClient.self].root = { _, _, _ in root.path }
+        } operation: {
+            let version = try #require(await WorkspaceAgentProcessClient.liveValue.version(executable))
+            #expect(version == "traecli 0.213.1")
+            let core = CodexPluginCore(distribution: .traex)
+            #expect(core.workflowRuntimeIssue(cliVersion: version) == nil)
+            let context = AgentModelContext(invocation: .init(executable: executable, arguments: [], version: version), environment: [:], directory: root.path)
+            #expect(core.modelRuntimeIssue(context) == nil)
+            let descriptor = try await core.recoveryDescriptor(sessionID: UUID().uuidString, projectPath: root.path, invocation: context.invocation)
+            #expect(descriptor.automaticResumeUnavailableReason == nil)
+            #expect(await core.automaticResumeUnavailableReason(descriptor, currentVersion: version) == nil)
+        }
+    }
+
     @Test("Removing the running executable preserves identity and workflow version admission", arguments: ["codex", "claude-code"])
     func removedExecutable(pluginID: String) async throws {
         try await withDependencies {
@@ -73,7 +133,7 @@ struct WorkspaceAgentProcessTests {
         let python = try #require(["/opt/homebrew/bin/python3", "/usr/local/bin/python3"].first { FileManager.default.isExecutableFile(atPath: $0) }, "A non-system Python is required to exercise readable process environment on macOS")
         process.executableURL = URL(fileURLWithPath: python)
         process.arguments = ["-c", "import time; time.sleep(30)"]
-        process.environment = ["CODEX_HOME": "/fixture/codex", "PRIVATE_TOKEN": "not-persisted"]
+        process.environment = ["CODEX_HOME": "/fixture/codex", "TRAE_HOME": "/fixture/traex", "PRIVATE_TOKEN": "not-persisted"]
         // Observe exit without blocking Swift's cooperative test executor.
         let exits = AsyncStream<Int32> { continuation in
             process.terminationHandler = { process in
@@ -104,7 +164,7 @@ struct WorkspaceAgentProcessTests {
                 let invocation = try await client.invocation(pid, runtime)
                 #expect(invocation.executable.hasPrefix("/") && invocation.executable.lowercased().contains("python"))
                 #expect(invocation.arguments == ["-c", "import time; time.sleep(30)"])
-                #expect(invocation.configurationRoots == ["CODEX_HOME": "/fixture/codex"])
+                #expect(invocation.configurationRoots == ["CODEX_HOME": "/fixture/codex", "TRAE_HOME": "/fixture/traex"])
                 await #expect(throws: WorkspaceRecoveryError.self) { try await client.invocation(pid, "obsolete-runtime") }
             }
         } catch {
@@ -131,13 +191,14 @@ struct WorkspaceAgentProcessTests {
         let data = arguments(argv, environment: [
             "API_KEY=private-token",
             "CODEX_HOME=/private/codex",
+            "TRAE_HOME=/private/traex",
             "CLAUDE_CONFIG_DIR=/private/claude",
             "\(AgentProviderEnvironment.markerKey)=custom",
             "PATH=/bin",
         ])
         let parsed = try WorkspaceAgentProcessArguments.parse(data)
         #expect(parsed.arguments == argv)
-        #expect(parsed.configurationRoots == ["CODEX_HOME": "/private/codex", "CLAUDE_CONFIG_DIR": "/private/claude"])
+        #expect(parsed.configurationRoots == ["CODEX_HOME": "/private/codex", "TRAE_HOME": "/private/traex", "CLAUDE_CONFIG_DIR": "/private/claude"])
         #expect(parsed.providerID == "custom")
     }
 

@@ -56,6 +56,7 @@
             var factories: [String: @Sendable () -> any PluginCore] = [
                 ClaudeCodePluginCore.pluginID: { ClaudeCodePluginCore() },
                 CodexPluginCore.pluginID: { CodexPluginCore() },
+                "traex": { CodexPluginCore(distribution: .traex) },
             ]
             #if DEBUG
                 // Reference core for contract/E2E tests; not shipped in Release.
@@ -215,6 +216,11 @@
         func terminalCodexLaunchArguments() async -> [String] {
             guard let codex = active[CodexPluginCore.pluginID] as? CodexPluginCore else { return [] }
             return await codex.terminalLaunchArguments()
+        }
+
+        func terminalTraexLaunchArguments() async -> [String] {
+            guard let traex = active["traex"] as? CodexPluginCore else { return [] }
+            return await traex.terminalLaunchArguments()
         }
 
         /// The core for `id`, if enabled (used by the ingress router).

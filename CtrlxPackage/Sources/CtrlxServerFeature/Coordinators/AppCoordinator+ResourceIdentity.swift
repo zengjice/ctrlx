@@ -25,7 +25,7 @@ extension AppCoordinator {
             let native = await identities.currentIdentity(in: pane, detected: process),
             native.runtimeID == owner.key else { return nil }
         // /new can replace the conversation without replacing its process.
-        if process.pluginID == "codex", await identities.codexSessionID(String(owner.pid), owner.key) != native.source.sessionID {
+        if CodexProcessSessionReader.supports(pluginID: process.pluginID), await identities.codexSessionID(String(owner.pid), owner.key) != native.source.sessionID {
             return nil
         }
         guard
