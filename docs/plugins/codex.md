@@ -40,6 +40,10 @@ the separate bridge. If only hooks remain, Settings shows a partial installation
 with the hook version, keeps Uninstall available, and offers to restore skills.
 Codex's configuration fallback recognizes either registered component when the
 marketplace cannot be listed, but does not infer absence from a failed query.
+Timeouts and malformed CLI output remain check errors even when plugin entries
+exist in the native configuration. A failed command retains its diagnostic or
+exit code; malformed marketplace JSON explains which query failed before either
+plugin is replaced.
 Uninstall directly removes the two marketplace-qualified IDs without listing
 the marketplace source, so moving/deleting the original app cannot block it.
 Both removals are attempted and real failures are reported.

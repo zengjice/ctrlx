@@ -24,7 +24,11 @@ struct CodexPluginReinstallTests {
             if args.contains("--json") {
                 output = #"{"marketplaces":[{"name":"ctrlx","root":"/bundle/plugin"}]}"#
             } else if args.contains("list") {
-                output = "ctrlx@ctrlx installed, enabled \(target) /bundle/plugin/ctrlx"
+                let calls = await recorder.calls
+                output = "PLUGIN STATUS VERSION PATH\n" + ["ctrlx", "ctrlx-hooks"].map { name in
+                    let updated = calls.contains(["codex", "plugin", "add", "\(name)@ctrlx"])
+                    return "\(name)@ctrlx installed \(updated ? target : "1.0.0") /bundle/plugin/\(name)"
+                }.joined(separator: "\n")
             } else {
                 output = "Added"
             }
@@ -33,11 +37,13 @@ struct CodexPluginReinstallTests {
         let status = try await withDependencies {
             $0[AgentPluginResourceClient.self].version = { _ in target }
         } operation: { try await installer.reinstall(configRoot: "/isolated/codex") }
-        #expect(status == .installed(version: target))
+        #expect(status == .installed(version: "\(target) + hooks \(target)"))
         #expect(await recorder.calls == [
             ["codex", "plugin", "marketplace", "add", "/bundle/plugin"],
             ["codex", "plugin", "marketplace", "list", "--json"],
+            ["codex", "plugin", "list", "-m", "ctrlx"],
             ["codex", "plugin", "add", "ctrlx@ctrlx"],
+            ["codex", "plugin", "add", "ctrlx-hooks@ctrlx"],
             ["codex", "plugin", "list", "-m", "ctrlx"],
         ])
     }
@@ -133,10 +139,20 @@ struct CodexPluginReinstallTests {
         ])
     }
 
-    @Test("Timeout remains a check error, not a missing CLI")
-    func failedCheck() async {
-        let installer = CodexCLIInstaller(processRunner: ProcessRunner { _, _, _, _ in throw ProcessRunnerError.timeout }, command: "codex", marketplaceSource: URL(fileURLWithPath: "/bundle"))
-        #expect(await installer.installStatus(configRoot: nil) == .checkFailed(message: ProcessRunnerError.timeout.localizedDescription))
+    @Test("Timeout and malformed output remain check errors even with configured plugins", arguments: [false, true])
+    func failedCheck(timeout: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-check-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "[plugins.\"ctrlx@ctrlx\"]\nenabled = true\n".write(to: root.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
+        let installer = CodexCLIInstaller(processRunner: ProcessRunner { _, _, _, _ in
+            if timeout {
+                throw ProcessRunnerError.timeout
+            }
+            return ProcessResult(exitCode: 0, stdout: Data("not a plugin table".utf8), stderr: Data())
+        }, command: "codex", marketplaceSource: URL(fileURLWithPath: "/bundle"))
+        let message = timeout ? ProcessRunnerError.timeout.localizedDescription : "Codex returned an unrecognized plugin list."
+        #expect(await installer.installStatus(configRoot: root.path) == .checkFailed(message: message))
     }
 
     @Test("Malformed list is unknown and fresh-root empty list is not installed")

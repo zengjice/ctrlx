@@ -116,7 +116,15 @@ struct CodexCLIInstaller {
 
             let marketplaces: [Entry]
         }
-        let root = try JSONDecoder().decode(Sources.self, from: result.stdout).marketplaces.first { $0.name == Self.marketplaceName }?.root
+        let root: String?
+        do {
+            root = try JSONDecoder().decode(Sources.self, from: result.stdout).marketplaces.first { $0.name == Self.marketplaceName }?.root
+        } catch {
+            throw AgentPluginInstallError(
+                "Codex returned an unexpected response to 'plugin marketplace list --json'. "
+                    + "Expected a JSON marketplace list with name and root fields. The existing plugin was not replaced."
+            )
+        }
         guard let root, URL(fileURLWithPath: root).resolvingSymlinksInPath() == marketplaceSource.resolvingSymlinksInPath() else {
             throw AgentPluginInstallError("The ctrlx marketplace does not point to this CtrlX app. No plugins were replaced.")
         }
@@ -156,10 +164,13 @@ struct CodexCLIInstaller {
             return .agentUnavailable
         } catch ProcessRunnerError.executableNotFound {
             return .agentUnavailable
-        } catch {
+        } catch let ProcessRunnerError.executionFailed(exitCode, stderr) {
             if let status = configuredInstallStatus(configRoot: configRoot), case .installed = status {
                 return status
             }
+            let detail = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            return .checkFailed(message: detail.isEmpty ? "Codex CLI exited with code \(exitCode)." : detail)
+        } catch {
             return .checkFailed(message: error.localizedDescription)
         }
     }
