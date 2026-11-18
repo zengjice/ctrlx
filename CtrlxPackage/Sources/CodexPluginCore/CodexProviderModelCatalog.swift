@@ -32,17 +32,19 @@ enum CodexProviderModelCatalog {
         guard
             let object = try JSONSerialization.jsonObject(with: result.stdout) as? [String: Any],
             let models = object["models"] as? [[String: Any]],
-            var model = models.first
+            let template = models.first
         else {
             throw CodexProviderModelCatalogError.invalidBundledCatalog
         }
-        guard let instructions = instructionTemplate(from: model) else {
+        guard let instructions = instructionTemplate(from: template) else {
             throw CodexProviderModelCatalogError.missingInstructions
         }
 
-        model = customModel(from: model, provider: provider, instructions: instructions)
+        let customModels = provider.modelIDs.enumerated().map { index, id in
+            customModel(from: template, provider: provider, id: id, priority: index, instructions: instructions)
+        }
         let catalog = try JSONSerialization.data(
-            withJSONObject: ["models": [model]],
+            withJSONObject: ["models": customModels],
             options: [.sortedKeys]
         )
         let directory = stateDirectory.appendingPathComponent("model-catalogs", isDirectory: true)
@@ -67,11 +69,13 @@ enum CodexProviderModelCatalog {
     private static func customModel(
         from template: [String: Any],
         provider: CodexProviderProfile,
+        id: String,
+        priority: Int,
         instructions: String
     ) -> [String: Any] {
         var model = template
-        model["slug"] = provider.model
-        model["display_name"] = provider.model
+        model["slug"] = id
+        model["display_name"] = id
         model["description"] = "Configured for \(provider.name)"
         model["default_reasoning_level"] = (provider.reasoningEffort ?? .medium).rawValue
         model["supported_reasoning_levels"] = CodexReasoningEffort.allCases.map {
@@ -84,7 +88,7 @@ enum CodexProviderModelCatalog {
         model["shell_type"] = "unified_exec"
         model["visibility"] = "list"
         model["supported_in_api"] = true
-        model["priority"] = 0
+        model["priority"] = priority
         model["additional_speed_tiers"] = [String]()
         model["service_tiers"] = [[String: Any]]()
         model["include_skills_usage_instructions"] = false

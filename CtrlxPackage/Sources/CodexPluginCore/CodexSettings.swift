@@ -40,6 +40,12 @@ public struct CodexProviderProfile: Codable, Sendable, Equatable, Identifiable {
     public var name: String
     public var baseURL: String
     public var model: String
+    public var models: [String]?
+
+    public var modelIDs: [String] {
+        AgentProviderModels.ids(defaultModel: model, models: models)
+    }
+
     public var environmentKey: String
     public var reasoningEffort: CodexReasoningEffort?
 
@@ -48,6 +54,7 @@ public struct CodexProviderProfile: Codable, Sendable, Equatable, Identifiable {
         name: String,
         baseURL: String,
         model: String,
+        models: [String]? = nil,
         environmentKey: String,
         reasoningEffort: CodexReasoningEffort? = nil
     ) {
@@ -55,6 +62,7 @@ public struct CodexProviderProfile: Codable, Sendable, Equatable, Identifiable {
         self.name = name
         self.baseURL = baseURL
         self.model = model
+        self.models = models
         self.environmentKey = environmentKey
         self.reasoningEffort = reasoningEffort
     }
@@ -64,6 +72,7 @@ public struct CodexProviderProfile: Codable, Sendable, Equatable, Identifiable {
         case name
         case baseURL = "base_url"
         case model
+        case models
         case environmentKey = "environment_key"
         case reasoningEffort = "reasoning_effort"
     }
@@ -172,7 +181,7 @@ public struct CodexSettings: Codable, Sendable, Equatable {
     }
 
     public static func isValidEnvironmentKey(_ key: String) -> Bool {
-        !key.hasPrefix("CTRLX_") && key != "CODEX_HOME" && key != "PATH" && key != "HOME"
+        !key.hasPrefix("CTRLX_") && key != "CODEX_HOME" && key != "TRAE_HOME" && key != "PATH" && key != "HOME"
             && key.range(of: #"^[A-Za-z_][A-Za-z0-9_]*$"#, options: .regularExpression) != nil
     }
 

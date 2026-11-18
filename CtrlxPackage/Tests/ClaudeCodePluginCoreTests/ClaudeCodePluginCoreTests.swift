@@ -167,7 +167,7 @@ struct ClaudeCodePluginCoreTests {
 
             let fork = try await core.commandForFork(sessionID: id, projectPath: "/repo", targetProviderID: profile.id)
             #expect(fork.command.command == "claude")
-            #expect(fork.command.args == ["--resume", id, "--fork-session", "--effort", "high"])
+            #expect(try ClaudeProviderModelPicker.extracting(from: fork.command.args).arguments == ["--resume", id, "--fork-session", "--effort", "high"])
             #expect(fork.command.env == [
                 "ANTHROPIC_BASE_URL": "https://api.example.com/v1",
                 "ANTHROPIC_AUTH_TOKEN": "fixture-key",
@@ -211,7 +211,7 @@ struct ClaudeCodePluginCoreTests {
             let core = ClaudeCodePluginCore()
             try await core.initialize(makeEnv(settings: settings), host: MockPluginHost())
             let launch = try #require(try await core.commandForLaunch(projectPath: "/repo", providerID: nil))
-            #expect(launch.args == ["--effort", "max"])
+            #expect(try ClaudeProviderModelPicker.extracting(from: launch.args).arguments == ["--effort", "max"])
             #expect(launch.env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "500000")
             #expect(launch.unsetEnvironment.contains("CLAUDE_CODE_MAX_CONTEXT_TOKENS"))
         }
@@ -304,7 +304,7 @@ struct ClaudeCodePluginCoreTests {
             #expect(resumed.command.env["ANTHROPIC_MODEL"] == "claude-custom")
             #expect(resumed.command.env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "1000000")
             #expect(resumed.command.env["CLAUDE_CONFIG_DIR"] == "/source/claude")
-            #expect(resumed.command.args == ["--resume", id, "--effort", "high"])
+            #expect(try ClaudeProviderModelPicker.extracting(from: resumed.command.args).arguments == ["--resume", id, "--effort", "high"])
         }
     }
 

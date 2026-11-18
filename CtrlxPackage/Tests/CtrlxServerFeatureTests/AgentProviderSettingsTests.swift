@@ -16,13 +16,13 @@
     struct AgentProviderSettingsTests {
         @Test(
             "Generated and existing identities keep credentials and defaults after a rename",
-            arguments: ["codex", "claude-code"],
+            arguments: ["codex", "claude-code", "traex"],
             [false, true]
         )
         func renamePreservesLaunch(pluginID: String, legacy: Bool) async throws {
             var draft = AgentProviderDraft(pluginID: pluginID)
             if legacy {
-                if pluginID == "codex" {
+                if pluginID != "claude-code" {
                     draft = AgentProviderDraft(profile: CodexProviderProfile(
                         id: "existing-provider", name: "Old name", baseURL: "", model: "", environmentKey: draft.environmentKey
                     ), pluginID: pluginID)
@@ -35,7 +35,8 @@
             draft.name = "团队接入"
             draft.baseURL = "https://api.example.com/v1"
             draft.model = "test-model"
-            if pluginID == "codex" {
+            draft.models = ["test-model", "second-model"]
+            if pluginID != "claude-code" {
                 draft.reasoningEffort = .xhigh
             } else {
                 draft.claudeReasoningEffort = .high
@@ -58,12 +59,12 @@
 
             try await withDependencies {
                 $0[SecretsService.self] = secrets
-                $0[ProcessRunner.self] = modelCatalogRunner()
+                $0[ProcessRunner.self] = modelCatalogRunner(command: pluginID)
             } operation: {
                 let core: any AgentProviderSelecting
                 let codexCore: CodexPluginCore?
-                if pluginID == "codex" {
-                    let initialized = CodexPluginCore()
+                if pluginID != "claude-code" {
+                    let initialized = CodexPluginCore(distribution: pluginID == "traex" ? .traex : .codex)
                     try await initialized.initialize(environment, host: MockPluginHost())
                     core = initialized
                     codexCore = initialized
@@ -75,24 +76,26 @@
                 }
                 let before = try #require(try await core.commandForLaunch(projectPath: "/fixture", providerID: nil))
                 var edited: AgentProviderDraft
-                if pluginID == "codex" {
+                if pluginID != "claude-code" {
                     let saved = try JSONDecoder().decode(CodexSettings.self, from: originalSettings)
                     edited = try AgentProviderDraft(profile: #require(saved.providers.first), pluginID: pluginID)
                 } else {
                     let saved = try JSONDecoder().decode(ClaudeCodeSettings.self, from: originalSettings)
                     edited = try AgentProviderDraft(profile: #require(saved.providers.first), pluginID: pluginID)
                 }
+                #expect(edited.modelIDs == ["test-model", "second-model"])
                 edited.name = "新的显示名称"
                 _ = try await core.applySettings(settings(edited, pluginID: pluginID))
                 let after = try #require(try await core.commandForLaunch(projectPath: "/fixture", providerID: nil))
                 #expect(after.env == before.env)
                 #expect(after.env[AgentProviderEnvironment.markerKey] == providerID)
-                #expect(after.env[pluginID == "codex" ? "OPENAI_API_KEY" : "ANTHROPIC_AUTH_TOKEN"] == "fixture-key")
+                #expect(after.env[pluginID != "claude-code" ? "OPENAI_API_KEY" : "ANTHROPIC_AUTH_TOKEN"] == "fixture-key")
                 #expect(await core.providerOptions().contains(AgentProviderOption(id: providerID, name: edited.name)))
-                if pluginID == "codex" {
+                if pluginID != "claude-code" {
                     #expect(after.args.contains(#"model_reasoning_effort="xhigh""#))
                 } else {
-                    #expect(after.args == ["--effort", "high"])
+                    #expect(after.args.prefix(2) == ["--effort", "high"])
+                    #expect(after.args.contains("--settings"))
                     #expect(after.env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "1000000")
                 }
                 await codexCore?.shutdown()
@@ -137,7 +140,7 @@
 
         @Test(
             "Provider forms render without accessing the system Keychain",
-            arguments: ["codex", "claude-code"],
+            arguments: ["codex", "claude-code", "traex"],
             [false, true]
         )
         func renderForm(pluginID: String, editing: Bool) async throws {
@@ -146,6 +149,7 @@
             original.name = "团队 API"
             original.baseURL = "https://api.example.com/v1"
             original.model = "test-model"
+            original.models = ["test-model", "second-model", "third-model"]
             let presentation = AgentProviderEditorPresentation(pluginID: pluginID, original: editing ? original : nil, providers: [])
             let sheet = withDependencies {
                 $0[SecretsService.self] = .inMemory()
@@ -169,20 +173,20 @@
         }
 
         private func settings(_ draft: AgentProviderDraft, pluginID: String) throws -> Data {
-            if pluginID == "codex" {
-                return try JSONEncoder().encode(CodexSettings(exportTelemetry: false, providers: [draft.codexProfile()], defaultProviderID: draft.providerID))
+            if pluginID != "claude-code" {
+                return try JSONEncoder().encode(CodexSettings(commandPath: pluginID, exportTelemetry: false, providers: [draft.codexProfile()], defaultProviderID: draft.providerID))
             }
             return try JSONEncoder().encode(ClaudeCodeSettings(providers: [draft.claudeProfile()], defaultProviderID: draft.providerID))
         }
 
-        private func modelCatalogRunner() -> ProcessRunner {
+        private func modelCatalogRunner(command: String) -> ProcessRunner {
             ProcessRunner(
                 run: { _, _, _, _ in
                     throw ProcessRunnerError.executionFailed(exitCode: -1, stderr: "runBounded expected")
                 },
                 runBounded: { executable, arguments, environment, _, _ in
                     #expect(executable == "/usr/bin/env")
-                    #expect(arguments == ["codex", "debug", "models", "--bundled"])
+                    #expect(arguments == [command, "debug", "models", "--bundled"])
                     #expect(environment == nil)
                     return ProcessResult(
                         exitCode: 0,

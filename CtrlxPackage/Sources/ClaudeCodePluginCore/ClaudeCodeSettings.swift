@@ -41,6 +41,12 @@ public struct ClaudeProviderProfile: Codable, Sendable, Equatable, Identifiable 
     public var name: String
     public var baseURL: String
     public var model: String
+    public var models: [String]?
+
+    public var modelIDs: [String] {
+        AgentProviderModels.ids(defaultModel: model, models: models)
+    }
+
     public var authKind: ClaudeProviderAuthKind
     public var environmentKey: String
     public var reasoningEffort: ClaudeReasoningEffort?
@@ -51,6 +57,7 @@ public struct ClaudeProviderProfile: Codable, Sendable, Equatable, Identifiable 
         name: String,
         baseURL: String,
         model: String,
+        models: [String]? = nil,
         authKind: ClaudeProviderAuthKind,
         environmentKey: String,
         reasoningEffort: ClaudeReasoningEffort? = nil,
@@ -60,6 +67,7 @@ public struct ClaudeProviderProfile: Codable, Sendable, Equatable, Identifiable 
         self.name = name
         self.baseURL = baseURL
         self.model = model
+        self.models = models
         self.authKind = authKind
         self.environmentKey = environmentKey
         self.reasoningEffort = reasoningEffort
@@ -71,6 +79,7 @@ public struct ClaudeProviderProfile: Codable, Sendable, Equatable, Identifiable 
         case name
         case baseURL = "base_url"
         case model
+        case models
         case authKind = "auth_kind"
         case environmentKey = "environment_key"
         case reasoningEffort = "reasoning_effort"

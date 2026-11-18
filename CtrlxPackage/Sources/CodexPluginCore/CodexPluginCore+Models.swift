@@ -98,7 +98,7 @@ extension CodexPluginCore: AgentModelProviding {
         guard
             let model = models.first(where: { $0.id == selection.model }),
             let effort = selection.effort ?? model.defaultEffort,
-            model.efforts.contains(effort), Self.safeModelArgument(model.id), Self.safeModelArgument(effort) else {
+            model.efforts.contains(effort), AgentProviderModels.isValidID(model.id), Self.safeModelArgument(effort) else {
             throw AgentModelError("This model or effort is no longer available.")
         }
         let before = try await terminal.read()
@@ -152,8 +152,8 @@ extension CodexPluginCore: AgentModelProviding {
     }
 
     private nonisolated static func safeModelArgument(_ value: String) -> Bool {
-        !value.isEmpty && value.utf8.count < 200 && value.utf8.allSatisfy {
-            (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || [45, 46, 95].contains($0)
+        AgentProviderModels.isValidID(value) && value.utf8.allSatisfy {
+            (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) || [45, 46, 47, 58, 95].contains($0)
         }
     }
 }

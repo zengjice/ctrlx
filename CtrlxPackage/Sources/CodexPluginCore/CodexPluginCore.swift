@@ -476,7 +476,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
     }
 
     public func providerOptions() async -> [AgentProviderOption] {
-        distribution == .codex ? settings.providerOptions : []
+        settings.providerOptions.filter { distribution == .codex || $0.id != CodexSettings.builtInProviderID }
     }
 
     public func commandForLaunch(projectPath _: String, providerID: String?) async throws -> LaunchCommand? {
@@ -559,7 +559,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
 
     public func commandForLogoutAndResume(_ descriptor: AgentResumeDescriptor) async throws -> AgentForkLaunch {
         guard descriptor.providerID == nil || descriptor.providerID == CodexSettings.builtInProviderID else {
-            throw AgentProviderError("Log Out and Log In is not supported for custom API Providers. Do not log out. Update the API key in Settings → Agents → Codex → Providers.")
+            throw AgentProviderError("Log Out and Log In is not supported for custom API Providers. Do not log out. Update the API key in Settings → Agents → \(distribution.displayName) → Providers.")
         }
         return try await commandForResume(descriptor).loggingOutFirst(arguments: ["logout"])
     }
@@ -621,12 +621,9 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         _ requestedID: String?,
         catalogCommand: String? = nil
     ) async throws -> CodexProviderLaunch {
-        guard distribution == .codex || requestedID == nil else {
-            throw AgentProviderError("Use Traex's native configuration to select its Provider.")
-        }
         guard let providerID = requestedID else { return CodexProviderLaunch(arguments: [], environment: [:]) }
-        guard settings.providerOptions.contains(where: { $0.id == providerID }) else {
-            throw AgentProviderError("The selected Codex Provider no longer exists in Settings → Agents → Codex.")
+        guard await providerOptions().contains(where: { $0.id == providerID }) else {
+            throw AgentProviderError("The selected \(distribution.displayName) Provider no longer exists in Settings → Agents → \(distribution.displayName).")
         }
         if providerID == CodexSettings.builtInProviderID {
             return CodexProviderLaunch(
@@ -635,26 +632,26 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
             )
         }
         guard let profile = settings.providers.first(where: { $0.id == providerID }) else {
-            throw AgentProviderError("The selected Codex Provider no longer exists in Settings → Agents → Codex.")
+            throw AgentProviderError("The selected \(distribution.displayName) Provider no longer exists in Settings → Agents → \(distribution.displayName).")
         }
         guard
             CodexSettings.isValidProviderID(profile.id),
             CodexSettings.isValidEnvironmentKey(profile.environmentKey),
             !profile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             let url = URL(string: profile.baseURL), url.scheme == "http" || url.scheme == "https", url.host != nil,
-            !profile.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            AgentProviderModels.isValid(defaultModel: profile.model, models: profile.models)
         else {
-            throw AgentProviderError("The selected Codex Provider has invalid settings. Edit it in Settings → Agents → Codex → Providers.")
+            throw AgentProviderError("The selected \(distribution.displayName) Provider has invalid settings. Edit it in Settings → Agents → \(distribution.displayName) → Providers.")
         }
-        let account = AgentProviderKeychainAccount.account(pluginID: Self.pluginID, providerID: profile.id)
+        let account = AgentProviderKeychainAccount.account(pluginID: distribution.pluginID, providerID: profile.id)
         let apiKey: String?
         do {
             apiKey = try await secrets.loadSecret(account)
         } catch {
-            throw AgentProviderError("The API key for Codex Provider '\(profile.name)' could not be read from Keychain.")
+            throw AgentProviderError("The API key for \(distribution.displayName) Provider '\(profile.name)' could not be read from Keychain.")
         }
         guard let apiKey, !apiKey.isEmpty else {
-            throw AgentProviderError("Add an API key for Codex Provider '\(profile.name)' in Settings → Agents → Codex → Providers.")
+            throw AgentProviderError("Add an API key for \(distribution.displayName) Provider '\(profile.name)' in Settings → Agents → \(distribution.displayName) → Providers.")
         }
         let prefix = "model_providers.\(profile.id)"
         var arguments = [
@@ -688,7 +685,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         command: String
     ) async throws -> URL {
         guard let stateDirectory else {
-            throw AgentProviderError("The Codex plugin state directory is unavailable.")
+            throw AgentProviderError("The \(distribution.displayName) plugin state directory is unavailable.")
         }
         do {
             return try await CodexProviderModelCatalog.write(
@@ -699,7 +696,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
             )
         } catch {
             throw AgentProviderError(
-                "Could not prepare /model reasoning options for Codex Provider '\(profile.name)': \(error.localizedDescription)"
+                "Could not prepare /model reasoning options for \(distribution.displayName) Provider '\(profile.name)': \(error.localizedDescription)"
             )
         }
     }

@@ -11,8 +11,8 @@ import Testing
 
 @MainActor
 struct AgentModelShortcutDefaultsTests {
-    @Test("Provider settings read native model metadata without starting a conversation", arguments: [false, true])
-    func catalog(official: Bool) async throws {
+    @Test("Provider settings read native model metadata without starting a conversation", arguments: [("codex", false), ("codex", true), ("traex", false)])
+    func catalog(pluginID: String, official: Bool) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-shortcut-catalog-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         try await withDependencies {
@@ -20,13 +20,21 @@ struct AgentModelShortcutDefaultsTests {
             $0[SecretsService.self] = .inMemory()
             $0[SimulatorSystemClient.self] = SimulatorSystemClient()
             $0[LoginShellPath.self] = .testValue
+            $0[AgentResumeExecutableClient.self].resolve = { _, configured in
+                #expect(configured == "traex")
+                return "/fixture/traex"
+            }
+            $0[WorkspaceAgentProcessClient.self].version = { executable in
+                #expect(executable == "/fixture/traex")
+                return "traecli 0.213.1"
+            }
             $0[AgentCLIClient.self].inspect = { agent, _ in
                 #expect(agent == .codex)
                 return .available(path: "/fixture/codex", version: "codex-cli 0.165.0")
             }
             $0[ProcessRunner.self].runWithExactEnvironment = { executable, arguments, _, _, _, input in
                 #expect(executable == "/usr/bin/env")
-                #expect(arguments.prefix(5).elementsEqual(["-C", FileManager.default.homeDirectoryForCurrentUser.path, "/fixture/codex", "debug", "models"]))
+                #expect(arguments.prefix(5).elementsEqual(["-C", FileManager.default.homeDirectoryForCurrentUser.path, "/fixture/\(pluginID)", "debug", "models"]))
                 #expect(arguments.contains(#"model_provider="openai""#) == official)
                 #expect(input == nil)
                 return ProcessResult(exitCode: 0, stdout: Data(#"{"models":[{"slug":"model","display_name":"Model","visibility":"list","supported_reasoning_levels":[{"effort":"high"}]}]}"#.utf8), stderr: Data())
@@ -34,22 +42,22 @@ struct AgentModelShortcutDefaultsTests {
         } operation: {
             let coordinator = AppCoordinator()
             coordinator.ctrlxPaths = CtrlxPaths(stateRootOverride: root)
-            let settings = try JSONEncoder().encode(CodexSettings(exportTelemetry: false, defaultProviderID: "team"))
-            #expect(await coordinator.setPluginSettings(id: "codex", settings) == nil)
+            let settings = try JSONEncoder().encode(CodexSettings(commandPath: pluginID, exportTelemetry: false, defaultProviderID: "team"))
+            #expect(await coordinator.setPluginSettings(id: pluginID, settings) == nil)
             let registry = PluginRegistry()
-            await registry.enable("codex", host: MockPluginHost(), env: PluginEnv(
+            await registry.enable(pluginID, host: MockPluginHost(), env: PluginEnv(
                 pluginRoot: root.appendingPathComponent("plugin"), stateDir: root,
                 appVersion: "test", settings: settings, marketplaceSource: root
             ))
             coordinator.pluginRegistry = registry
-            let options = try await coordinator.agentProviderModels(pluginID: "codex", providerID: official ? "openai" : nil)
+            let options = try await coordinator.agentProviderModels(pluginID: pluginID, providerID: official ? "openai" : nil)
             #expect(options.map(\.id) == ["model"])
             #expect(options.first?.efforts == ["high"])
-            await registry.disable("codex")
+            await registry.disable(pluginID)
         }
     }
 
-    @Test("Provider defaults persist independently and only initialize new tabs", arguments: ["codex", "claude-code"])
+    @Test("Provider defaults persist independently and only initialize new tabs", arguments: ["codex", "claude-code", "traex"])
     func providerDefaults(pluginID: String) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-shortcuts-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -60,14 +68,14 @@ struct AgentModelShortcutDefaultsTests {
         } operation: { () async throws in
             let coordinator = AppCoordinator()
             coordinator.ctrlxPaths = CtrlxPaths(stateRootOverride: root)
-            let official = pluginID == "codex" ? "openai" : "anthropic"
+            let official = pluginID != "claude-code" ? "openai" : "anthropic"
             var configured = [
                 "": AgentModelShortcuts(models: ["cli-hidden"]),
                 official: AgentModelShortcuts(efforts: ["low"]),
                 "team": AgentModelShortcuts(models: ["team-hidden"], efforts: ["medium"]),
             ]
             func encoded() throws -> Data {
-                if pluginID == "codex" {
+                if pluginID != "claude-code" {
                     return try JSONEncoder().encode(CodexSettings(
                         providers: [.init(id: "team", name: "Team", baseURL: "https://example.com", model: "model", environmentKey: "API_KEY")],
                         defaultProviderID: "team", modelShortcutDefaults: configured
@@ -109,7 +117,7 @@ struct AgentModelShortcutDefaultsTests {
             #expect(nextDefaults.models == ["new-default"])
             // An unrelated settings save must preserve the stored display defaults.
             let saved = coordinator.pluginSettingsData(id: pluginID)
-            if pluginID == "codex" {
+            if pluginID != "claude-code" {
                 var settings = CodexSettings.decode(from: saved)
                 settings.autoRun = false
                 #expect(try JSONDecoder().decode(CodexSettings.self, from: JSONEncoder().encode(settings)).modelShortcutDefaults == configured)

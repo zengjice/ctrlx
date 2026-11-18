@@ -17,7 +17,8 @@ extension AppCoordinator {
     func newAgentModelShortcuts(pluginID: String, providerID: String?) -> AgentModelShortcuts {
         let data = pluginSettingsData(id: pluginID)
         switch pluginID {
-        case CodexPluginCore.pluginID:
+        case CodexPluginCore.pluginID,
+             "traex":
             let settings = CodexSettings.decode(from: data)
             return settings.modelShortcutDefaults[(providerID ?? settings.resolvedDefaultProviderID) ?? ""] ?? .init()
         case ClaudeCodePluginCore.pluginID:
@@ -36,8 +37,9 @@ extension AppCoordinator {
 
     /// Export only metadata through the same native catalog reader as the status bar.
     func agentProviderModels(pluginID: String, providerID: String?) async throws -> [AgentModelOption] {
+        let agent = InstallableAgentCLI(rawValue: pluginID)
         guard
-            let agent = InstallableAgentCLI(rawValue: pluginID),
+            agent != nil || pluginID == "traex",
             let core = pluginRegistry?.core(pluginID),
             let models = core as? any AgentModelProviding else {
             throw AgentModelError("Model shortcuts are not available for this Agent.")
@@ -53,11 +55,25 @@ extension AppCoordinator {
             launch = command
         } else {
             // This row means the CLI configuration, independently of the chosen launch default.
-            launch = LaunchCommand(command: AgentCLICommandSettings.command(in: pluginSettingsData(id: pluginID), agent: agent))
+            let data = pluginSettingsData(id: pluginID)
+            let command = agent.map { AgentCLICommandSettings.command(in: data, agent: $0) }
+                ?? CodexDistribution.traex.settings(from: data).commandPath
+            launch = LaunchCommand(command: command)
         }
-        @Dependency(AgentCLIClient.self) var cli
-        guard case let .available(path, version, _) = await cli.inspect(agent, launch.command) else {
-            throw AgentModelError("The Agent CLI is unavailable. Check Agent Setup before refreshing models.")
+        let path: String
+        let version: String?
+        if let agent {
+            @Dependency(AgentCLIClient.self) var cli
+            guard case let .available(resolved, detected, _) = await cli.inspect(agent, launch.command) else {
+                throw AgentModelError("The Agent CLI is unavailable. Check Agent Setup before refreshing models.")
+            }
+            path = resolved
+            version = detected
+        } else {
+            @Dependency(AgentResumeExecutableClient.self) var executables
+            @Dependency(WorkspaceAgentProcessClient.self) var processes
+            path = try await executables.resolve(nil, launch.command)
+            version = await processes.version(path)
         }
         @Dependency(LoginShellPath.self) var loginPath
         var environment = ProcessInfo.processInfo.environment

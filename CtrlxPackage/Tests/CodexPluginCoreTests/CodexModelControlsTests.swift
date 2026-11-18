@@ -159,8 +159,8 @@ struct CodexModelControlsTests {
         #expect(core.modelSwitchIssue(lines: ["  Test Model low · ~/project"], models: options) == nil)
     }
 
-    @Test
-    func switchUsesSessionCommandAndReadback() async throws {
+    @Test(arguments: ["test-model", "vendor/model:revision", "vendor/model@revision"])
+    func switchUsesSessionCommandAndReadback(modelID: String) async throws {
         actor Fixture {
             var commands: [String] = []
             func submit(_ value: String) {
@@ -168,13 +168,23 @@ struct CodexModelControlsTests {
             }
 
             func read() -> [String] {
-                ["  Test Model high · ~/project"]
+                ["  Test Model \(commands.isEmpty ? "low" : "high") · ~/project"]
             }
         }
         let fixture = Fixture()
         let core = CodexPluginCore()
-        let result = try await core.selectModel(.init(model: "test-model", effort: "high"), models: models, terminal: .init(read: { await fixture.read() }, submit: { await fixture.submit($0) }, send: { _ in Issue.record("Unexpected menu input") }))
-        #expect(result == .init(model: "test-model", effort: "high"))
-        #expect(await fixture.commands == ["/model test-model --reasoning=high"])
+        let models = [AgentModelOption(id: modelID, name: "Test Model", efforts: ["low", "high"], defaultEffort: "low")]
+        let result = try await core.selectModel(.init(model: modelID, effort: "high"), models: models, terminal: .init(read: { await fixture.read() }, submit: { await fixture.submit($0) }, send: { _ in Issue.record("Unexpected menu input") }))
+        #expect(result == .init(model: modelID, effort: "high"))
+        #expect(await fixture.commands == ["/model \(modelID) --reasoning=high"])
+    }
+
+    @Test(arguments: ["bad model", "bad\nmodel", "bad\u{1b}[201~"])
+    func invalidModelIDNeverSendsInput(modelID: String) async {
+        let models = [AgentModelOption(id: modelID, name: "Test Model", efforts: ["high"], defaultEffort: "high")]
+        let terminal = AgentModelTerminal(read: { ["  Test Model high · ~/project"] }, submit: { _ in Issue.record("Invalid model was submitted") }, send: { _ in Issue.record("Unexpected terminal input") })
+        await #expect(throws: AgentModelError.self) {
+            try await CodexPluginCore().selectModel(.init(model: modelID, effort: "high"), models: models, terminal: terminal)
+        }
     }
 }

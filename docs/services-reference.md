@@ -1097,6 +1097,32 @@ All UI-facing Fork callbacks retain explicit `@MainActor` function types,
 including the shared Mac/iOS panel and Host refresh/launch callbacks. Network
 callers and suspended I/O must hop back before accessing pane/UI state.
 
+Custom Providers for Codex, Claude Code and Traex accept a default model plus
+additional model IDs (one per line in Mac Settings → Agents → Providers).
+The existing `model` field remains the launch default; the optional `models` list
+is additive and deduplicated, so older single-model profiles remain readable.
+Models share the Provider's endpoint, Keychain credential, reasoning default and,
+for Claude, optional context-window declaration. Model IDs must be nonempty,
+contain no whitespace/control characters, and stay under 200 UTF-8 bytes; the
+combined list is limited to 100 models.
+
+Codex/Traex generate one catalog containing every configured model for native
+`/model` and status-bar discovery. Traex credentials use `agent-provider.traex.*`,
+separate from Codex, and its unnamed/default choice keeps native configuration
+instead of adding an OpenAI login choice. Traex's inline model switching remains
+unsupported; use its native `/model` picker. New Agent and Fork use the Provider's
+default model. Recovery regenerates the Provider's model choices from current
+settings without persisting credentials or copying another Agent's home.
+
+Claude uses native [`modelPicker`](https://code.claude.com/docs/en/settings-reference#modelpicker)
+via process-local `--settings`, including the same lineup in the metadata-only
+SDK handshake. Only the generated model-picker-only shape is accepted for
+model discovery and stripped from recovery snapshots; unrelated inline settings
+remain unsupported. Recovery reconstructs that lineup from the saved Provider ID
+and retains captured effort options. These overrides never edit the user's
+native CLI configuration. Existing processes pick up new launch settings when
+reopened; saving a Provider does not restart live Agents.
+
 Worktrees start from the source workspace's HEAD, with branch `<name>` at
 the primary repository's `.worktrees/<name>` and the same window name. An existing
 branch or directory is rejected with a prompt to choose another name; the panel

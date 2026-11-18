@@ -382,7 +382,7 @@
                 .settingsAnchor(.agentCommand)
 
                 // Providers
-                if pluginID == CodexPluginCore.pluginID || pluginID == ClaudeCodePluginCore.pluginID {
+                if pluginID == CodexPluginCore.pluginID || pluginID == ClaudeCodePluginCore.pluginID || pluginID == "traex" {
                     providerSettingsSection
                 }
 
@@ -613,7 +613,9 @@
             Section {
                 Picker("Launch Default Provider", selection: $defaultProviderID) {
                     Text("Current CLI configuration").tag(String?.none)
-                    Text(builtInProviderName).tag(Optional(builtInProviderID))
+                    if let builtInProvider {
+                        Text(builtInProvider.name).tag(Optional(builtInProvider.id))
+                    }
                     ForEach(providers) { provider in
                         Text(provider.name.isEmpty ? "Unnamed Provider" : provider.name)
                             .tag(Optional(provider.providerID))
@@ -625,10 +627,12 @@
                 LabeledContent("Current CLI configuration") {
                     modelShortcutsButton(providerID: nil, name: "Current CLI configuration")
                 }
-                LabeledContent("Built in") {
-                    HStack {
-                        Text(builtInProviderName)
-                        modelShortcutsButton(providerID: builtInProviderID, name: builtInProviderName)
+                if let builtInProvider {
+                    LabeledContent("Built in") {
+                        HStack {
+                            Text(builtInProvider.name)
+                            modelShortcutsButton(providerID: builtInProvider.id, name: builtInProvider.name)
+                        }
                     }
                 }
 
@@ -687,20 +691,16 @@
             .settingsAnchor(.agentProviders)
         }
 
-        private var builtInProviderID: String {
-            pluginID == CodexPluginCore.pluginID
-                ? CodexSettings.builtInProviderID
-                : ClaudeCodeSettings.builtInProviderID
-        }
-
-        private var builtInProviderName: String {
-            pluginID == CodexPluginCore.pluginID
-                ? CodexSettings.builtInProvider.name
-                : ClaudeCodeSettings.builtInProvider.name
+        private var builtInProvider: AgentProviderOption? {
+            switch pluginID {
+            case "codex": CodexSettings.builtInProvider
+            case "claude-code": ClaudeCodeSettings.builtInProvider
+            default: nil
+            }
         }
 
         private var providerOptions: [AgentProviderOption] {
-            [AgentProviderOption(id: builtInProviderID, name: builtInProviderName)]
+            [builtInProvider].compactMap { $0 }
                 + providers.map { AgentProviderOption(id: $0.providerID, name: $0.name) }
         }
 
@@ -719,7 +719,7 @@
             let contextWindow = pluginID == ClaudeCodePluginCore.pluginID
                 ? provider.contextWindowTokens.map { "\($0) tokens" }
                 : nil
-            return [provider.model, effort, contextWindow]
+            return [provider.model, provider.modelIDs.count > 1 ? "\(provider.modelIDs.count) models" : nil, effort, contextWindow]
                 .compactMap { value in
                     guard let value, !value.isEmpty else { return nil }
                     return value
@@ -1035,6 +1035,11 @@
         var name: String
         var baseURL: String
         var model: String
+        var models: [String]?
+        var modelIDs: [String] {
+            AgentProviderModels.ids(defaultModel: model, models: models)
+        }
+
         var environmentKey: String
         var authKind: ClaudeProviderAuthKind
         var reasoningEffort: CodexReasoningEffort?
@@ -1053,7 +1058,7 @@
             self.reasoningEffort = nil
             self.claudeReasoningEffort = nil
             self.contextWindowTokens = nil
-            if pluginID == CodexPluginCore.pluginID {
+            if pluginID != ClaudeCodePluginCore.pluginID {
                 self.environmentKey = "OPENAI_API_KEY"
                 self.authKind = .apiKey
             } else {
@@ -1067,6 +1072,7 @@
             self.name = profile.name
             self.baseURL = profile.baseURL
             self.model = profile.model
+            self.models = profile.models
             self.environmentKey = profile.environmentKey
             self.authKind = .apiKey
             self.reasoningEffort = profile.reasoningEffort
@@ -1079,6 +1085,7 @@
             self.name = profile.name
             self.baseURL = profile.baseURL
             self.model = profile.model
+            self.models = profile.models
             self.environmentKey = profile.environmentKey
             self.authKind = profile.authKind
             self.reasoningEffort = nil
@@ -1092,6 +1099,7 @@
                 name: name,
                 baseURL: baseURL,
                 model: model,
+                models: models,
                 environmentKey: environmentKey,
                 reasoningEffort: reasoningEffort
             )
@@ -1103,6 +1111,7 @@
                 name: name,
                 baseURL: baseURL,
                 model: model,
+                models: models,
                 authKind: authKind,
                 environmentKey: authKind.environmentKey,
                 reasoningEffort: claudeReasoningEffort,
@@ -1144,6 +1153,7 @@
 
         @State private var draft: AgentProviderDraft
         @State private var contextWindowTokensText: String
+        @State private var additionalModelsText: String
         @State private var apiKey = ""
         @State private var isAPIKeyVisible = false
         @State private var hasStoredKey = false
@@ -1156,6 +1166,7 @@
             self.onSave = onSave
             let original = presentation.original ?? AgentProviderDraft(pluginID: presentation.pluginID)
             _draft = State(initialValue: original)
+            _additionalModelsText = State(initialValue: original.modelIDs.filter { $0 != original.model }.joined(separator: "\n"))
             _contextWindowTokensText = State(initialValue: original.contextWindowTokens.map(String.init) ?? "")
         }
 
@@ -1178,9 +1189,15 @@
                     TextField("Base URL", text: $draft.baseURL, prompt: Text("https://api.example.com"))
                         .autocorrectionDisabled()
                         .accessibilityIdentifier("agentProviderBaseURL")
-                    TextField("Model", text: $draft.model)
+                    TextField("Default model", text: $draft.model)
                         .autocorrectionDisabled()
                         .accessibilityIdentifier("agentProviderModel")
+                    TextField("Additional models (one per line)", text: $additionalModelsText, axis: .vertical)
+                        .lineLimit(3...6)
+                        .autocorrectionDisabled()
+                        .accessibilityIdentifier("agentProviderModels")
+                    Text("The default model starts new sessions and forks. Additional models are available in /model. Reasoning and context settings below apply to this Provider's models.")
+                        .font(.caption).foregroundStyle(.secondary)
                     if isClaude {
                         Picker("Default reasoning effort", selection: $draft.claudeReasoningEffort) {
                             Text("Use Claude Code default").tag(ClaudeReasoningEffort?.none)
@@ -1198,13 +1215,13 @@
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
                         Picker("Reasoning effort", selection: $draft.reasoningEffort) {
-                            Text("Use Codex configuration").tag(CodexReasoningEffort?.none)
+                            Text("Use CLI configuration").tag(CodexReasoningEffort?.none)
                             ForEach(CodexReasoningEffort.allCases) { effort in
                                 Text(effort.displayName).tag(Optional(effort))
                             }
                         }
                         .accessibilityIdentifier("agentProviderReasoningEffort")
-                        Text("Overrides model_reasoning_effort for this Provider. Custom Providers also expose this model and all reasoning levels to Codex's /model command. Leave it at the Codex configuration default unless the endpoint supports reasoning effort.")
+                        Text("Overrides model_reasoning_effort for this Provider. Custom Providers expose these models and reasoning levels in the CLI's /model picker. Leave it at the CLI configuration default unless the endpoint supports reasoning effort.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
@@ -1334,8 +1351,9 @@
                 errorMessage = "Enter an absolute http:// or https:// Base URL."
                 return
             }
-            guard !model.isEmpty else {
-                errorMessage = "Enter the model name used by this Provider."
+            let models = AgentProviderModels.ids(defaultModel: model, models: additionalModelsText.components(separatedBy: .newlines))
+            guard AgentProviderModels.isValid(defaultModel: model, models: models) else {
+                errorMessage = "Enter a default model and up to 100 model IDs, without spaces or control characters (under 200 bytes each)."
                 return
             }
             let environmentKeyIsValid = isClaude
@@ -1368,6 +1386,7 @@
             draft.name = name
             draft.baseURL = baseURL
             draft.model = model
+            draft.models = models
             draft.environmentKey = environmentKey
             draft.contextWindowTokens = contextWindowTokens
             onSave(draft)

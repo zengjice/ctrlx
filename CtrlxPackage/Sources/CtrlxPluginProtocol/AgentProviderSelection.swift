@@ -46,3 +46,22 @@ public enum AgentProviderKeychainAccount {
 public enum AgentProviderEnvironment {
     public static let markerKey = "CTRLX_AGENT_PROVIDER_ID"
 }
+
+/// Model IDs shared by a custom endpoint; `model` remains the launch default.
+public enum AgentProviderModels {
+    public static func ids(defaultModel: String, models: [String]?) -> [String] {
+        var seen = Set<String>()
+        return ([defaultModel] + (models ?? [])).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    public static func isValidID(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count < 200
+            && !value.unicodeScalars.contains { CharacterSet.whitespacesAndNewlines.union(.controlCharacters).contains($0) }
+    }
+
+    public static func isValid(defaultModel: String, models: [String]?) -> Bool {
+        let ids = ids(defaultModel: defaultModel, models: models)
+        return isValidID(defaultModel) && ids.count <= 100 && ids.allSatisfy(isValidID)
+    }
+}

@@ -14,9 +14,13 @@ recognizes both process names. The native configuration is
 configuration directories must be existing Traex homes. History and project
 discovery read `cli/sessions` inside those homes, not Codex's `sessions` folder.
 
-Provider, login and model defaults remain in Traex's native configuration. CtrlX
-does not supply Codex's OpenAI default, custom Provider profiles, Keychain accounts
-or account quota queries to Traex. There is no CtrlX-managed Traex CLI updater.
+The default Provider choice follows Traex's native configuration. Mac Settings →
+Agents → Traex also supports custom Responses-compatible Providers with a default
+model and additional model IDs. Each Provider uses a separate Traex Keychain
+account (`agent-provider.traex.<id>`) and generated model catalog; API credentials
+never enter settings or recovery snapshots. New Agent, Fork, recovery and the
+model-shortcut list use that configuration. CtrlX does not add Codex's OpenAI
+login default, account quota queries or CLI updater to Traex.
 
 The packaged `plugin/traex` marketplace contains two native Codex-format plugins:
 `ctrlx@ctrlx` for shared skills and `ctrlx-hooks@ctrlx` for lifecycle events.
@@ -41,7 +45,7 @@ The native verification below remains specific to Traex 0.213.1.
 
 | Operation | Behavior |
 |---|---|
-| New Agent / project | Launches Traex with its native configuration |
+| New Agent / project | Launches with native configuration or the selected custom Provider and its default model |
 | Working and completion | Uses Traex lifecycle hooks and the compatible event translator |
 | Questions | Recognizes native `AskUserQuestion` hooks for notifications and navigation; Traex opens its own terminal panel |
 | Resume / Fork | Native `resume` / `fork` with the exact conversation ID and source `TRAE_HOME` |
@@ -49,7 +53,7 @@ The native verification below remains specific to Traex 0.213.1.
 | Browser ownership and workflow identity | Verifies the current process lifetime and writable native rollout; a process name alone is insufficient |
 | Plain workflow / Agent interaction | Stable `traecli 0.213.x–0.219.x` admitted by the shared CLI policy; range admission is separate from native-version verification |
 | Images | Native pasted paths produce the compatible `[Image #N]` attachments; image targets and workflow transport recognize Traex |
-| Model catalog | Reads native `debug models`; a missing display label falls back to the model slug |
+| Model catalog | Reads native `debug models`, including all configured custom Provider models; a missing display label falls back to the model slug |
 | Model / effort switching | Use Traex's native `/model` picker; automatic inline commands and workflow overrides are rejected |
 | Hook trust / refresh | Use Traex's native `/hooks`; CtrlX does not drive Codex's incompatible trust menu |
 | Usage telemetry | Codex OTLP export is not enabled; the local Traex probe did not emit compatible records |

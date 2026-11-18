@@ -20,7 +20,7 @@ extension ClaudeCodePluginCore: AgentModelProviding {
         if let effort = context.environment["CLAUDE_CODE_EFFORT_LEVEL"], !effort.isEmpty, effort != "auto" {
             return "CLAUDE_CODE_EFFORT_LEVEL fixes this session's effort. Use Claude Code's native controls."
         }
-        if context.invocation.arguments.contains(where: { $0 == "--settings" || $0.hasPrefix("--settings=") }) {
+        if (try? ClaudeProviderModelPicker.extracting(from: context.invocation.arguments)) == nil {
             return "Model discovery with inline Claude Code settings is not supported. Use /model in this terminal."
         }
         return nil
@@ -33,7 +33,8 @@ extension ClaudeCodePluginCore: AgentModelProviding {
         @Dependency(ProcessRunner.self) var runner
         var args = ["-C", context.directory, context.discoveryExecutable, "-p", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json", "--no-session-persistence"]
         // A metadata-only SDK handshake; no prompt, tools, hooks or conversation.
-        let source = context.invocation.arguments
+        let inline = try ClaudeProviderModelPicker.extracting(from: context.invocation.arguments)
+        let source = inline.arguments
         let selectors = ["--model", "--setting-sources", "--effort"]
         var index = 0
         while index < source.count {
@@ -48,7 +49,10 @@ extension ClaudeCodePluginCore: AgentModelProviding {
                 index += 1
             }
         }
-        args += ["--settings", "{\"disableAllHooks\":true}", "--strict-mcp-config", "--mcp-config", "{\"mcpServers\":{}}"]
+        var metadataSettings = inline.settings ?? [:]
+        metadataSettings["disableAllHooks"] = true
+        let settingsData = try JSONSerialization.data(withJSONObject: metadataSettings, options: [.sortedKeys])
+        args += ["--settings", String(decoding: settingsData, as: UTF8.self), "--strict-mcp-config", "--mcp-config", "{\"mcpServers\":{}}"]
         var environment = context.environment
         environment.removeValue(forKey: "CLAUDECODE")
         let input = Data("{\"type\":\"control_request\",\"request_id\":\"ctrlx-models\",\"request\":{\"subtype\":\"initialize\"}}\n".utf8)

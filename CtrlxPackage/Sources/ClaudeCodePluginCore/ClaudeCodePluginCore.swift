@@ -263,7 +263,7 @@ public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking,
         let provider = try await providerConfiguration(providerID ?? settings.defaultProviderID)
         return LaunchCommand(
             command: settings.commandPath,
-            args: provider.arguments,
+            args: provider.arguments + provider.modelPickerArguments,
             env: provider.environment,
             unsetEnvironment: provider.unsetEnvironment
         )
@@ -295,7 +295,7 @@ public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking,
         return AgentForkLaunch(
             command: LaunchCommand(
                 command: settings.commandPath,
-                args: ["--resume", sessionID, "--fork-session"] + provider.arguments,
+                args: ["--resume", sessionID, "--fork-session"] + provider.arguments + provider.modelPickerArguments,
                 env: environment
             ),
             unsetEnvironment: unsetEnvironment
@@ -314,7 +314,17 @@ public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking,
         let roots = invocation.map { [$0.configurationRoots["CLAUDE_CONFIG_DIR"] ?? defaultRoot] }
             ?? ([defaultRoot] + [ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]].compactMap { $0 } + settings.additionalConfigFolders)
         let root = try await history.root(sessionID, roots, .claude)
-        let arguments = try Self.resumeArguments(invocation?.arguments ?? [])
+        let invocationArguments = invocation?.arguments ?? []
+        let captured: (arguments: [String], settings: [String: Any]?)
+        do {
+            captured = try ClaudeProviderModelPicker.extracting(from: invocationArguments)
+        } catch {
+            throw AgentResumeConfigurationError(error.localizedDescription)
+        }
+        guard captured.settings == nil || invocation?.providerID != nil else {
+            throw AgentResumeConfigurationError("Inline model settings require the original Provider for recovery.")
+        }
+        let arguments = try Self.resumeArguments(captured.arguments)
         return AgentResumeDescriptor(
             pluginID: Self.pluginID,
             sessionID: sessionID,
@@ -370,7 +380,7 @@ public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking,
         return AgentForkLaunch(
             command: LaunchCommand(
                 command: executable,
-                args: ["--resume", descriptor.sessionID] + descriptor.arguments,
+                args: ["--resume", descriptor.sessionID] + descriptor.arguments + provider.modelPickerArguments,
                 env: environment
             ),
             unsetEnvironment: Self.unique(provider.unsetEnvironment + (descriptor.usesDefaultConfiguration ? ["CLAUDE_CONFIG_DIR"] : []))
@@ -402,7 +412,7 @@ public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking,
             profile.environmentKey == profile.authKind.environmentKey,
             !profile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             let url = URL(string: profile.baseURL), url.scheme == "http" || url.scheme == "https", url.host != nil,
-            !profile.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            AgentProviderModels.isValid(defaultModel: profile.model, models: profile.models),
             profile.contextWindowTokens.map(ClaudeCodeSettings.isValidContextWindowTokens) ?? true
         else {
             throw AgentProviderError("The selected Claude Code Provider has invalid settings. Edit it in Settings → Agents → Claude Code → Providers.")
@@ -426,10 +436,11 @@ public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking,
         if let contextWindowTokens = profile.contextWindowTokens {
             environment["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = String(contextWindowTokens)
         }
-        return ClaudeProviderLaunch(
+        return try ClaudeProviderLaunch(
             arguments: profile.reasoningEffort.map { ["--effort", $0.rawValue] } ?? [],
             environment: environment,
-            unsetEnvironment: Self.providerEnvironmentKeys
+            unsetEnvironment: Self.providerEnvironmentKeys,
+            modelPickerArguments: ["--settings", ClaudeProviderModelPicker.settings(for: profile)]
         )
     }
 
@@ -516,4 +527,5 @@ private struct ClaudeProviderLaunch {
     let arguments: [String]
     let environment: [String: String]
     let unsetEnvironment: [String]
+    var modelPickerArguments: [String] = []
 }
