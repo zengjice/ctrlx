@@ -2100,10 +2100,13 @@ cannot write an old binding back after Set Up Again. Deferred draft saves retain
 the latest text. A cancelled waiting operation does not change the binding.
 Refresh errors clear after a successful refresh; user-operation errors remain
 until a successful explicit action or verified recovery resolves them.
-Orbiters opens a list of ordinary Agents and
-their conversations. Workflows has its own list; optional tags classify definitions
-without affecting execution or participant identity. Give to Orbie appends a
-bounded selected reply to its draft and requires explicit Send.
+Orbiters opens a list of ordinary Agents and their conversations. Its background
+refresh leaves creation controls available. Explicit operations wait for an
+in-flight refresh before using the latest records, and draft edits are saved
+once the current update or operation finishes. Workflows has its own list;
+optional tags classify definitions without affecting execution or participant
+identity. Give to Orbie appends a bounded selected reply to its draft and
+requires explicit Send.
 
 `OrbieQueryService` exposes local read-only `orbie.agents.list/show` and
 `orbie.workflows.list/show`. OS peer ancestry/runtime plus the current enabled
