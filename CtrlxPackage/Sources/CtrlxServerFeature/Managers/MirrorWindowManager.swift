@@ -548,14 +548,31 @@ final public class MirrorWindowManager {
     }
 
     @discardableResult
-    func invalidateSavedConversation(forPane paneID: String) -> Task<Void, Never>? {
+    func invalidateSavedConversation(forPane paneID: String, unlessCurrent: Bool = false) -> Task<Void, Never>? {
         guard let identity = paneStates[paneID]?.workspaceIdentity else { return nil }
+        if !unlessCurrent {
+            rememberedAgentIdentities.removeValue(forKey: paneID)
+        }
         let previous = identityWrites[paneID]?.task
-        previous?.cancel()
+        if !unlessCurrent {
+            previous?.cancel()
+        }
         let id = UUID()
-        let task = Task { [agentIdentities] in
+        let task = Task { [weak self, agentIdentities] in
             // Finish any already-enqueued save before invalidating its record.
             await previous?.value
+            // An older recovery snapshot must not revoke a newer verified hook.
+            if
+                unlessCurrent, let self, let pane = paneStates[paneID],
+                let detected = lastDetectedAgentProcesses[paneID],
+                let current = await agentIdentities.currentIdentity(in: pane, detected: detected),
+                paneStates[paneID].flatMap(AgentForkSource.init(pane:)) == current.source,
+                lastDetectedAgentProcesses[paneID]?.pluginID == detected.pluginID,
+                lastDetectedAgentProcesses[paneID]?.processIDs == detected.processIDs,
+                agentIdentities.runtimeID(current.processID) == current.runtimeID {
+                return
+            }
+            self?.rememberedAgentIdentities.removeValue(forKey: paneID)
             await agentIdentities.invalidate(identity.paneID)
         }
         identityWrites[paneID] = (id, nil, task)
@@ -622,14 +639,32 @@ final public class MirrorWindowManager {
         for (paneID, info) in detected {
             let identity = await agentIdentities.load(paneID)
             if !processDetectedPaneIds.contains(paneID) {
-                // Hook-owned sessions still need current routing metadata after
-                // a rename/move, without requiring another native hook event.
-                if
-                    !Task.isCancelled, let identity, let pane = paneStates[paneID],
-                    let current = identity.current(in: pane, detected: info, runtimeID: agentIdentities.runtimeID(identity.processID)),
-                    current.source != identity.source {
-                    await rememberAgentSessionIdentity(forPane: paneID, processNamesByPlugin: processNamesByPlugin, recoveredIdentity: current)
+                guard
+                    !Task.isCancelled, let pane = paneStates[paneID],
+                    let source = AgentForkSource(pane: pane), source.pluginID == info.pluginID,
+                    info.processIDs.count == 1, let pid = info.processIDs.first,
+                    let runtime = agentIdentities.runtimeID(pid), pane.agentSession?.processRuntimeID == runtime
+                else { continue }
+                let current = identity?.current(in: pane, detected: info, runtimeID: runtime)
+                if let current, current.source == identity?.source {
+                    continue
                 }
+                // Retry missing writes from authenticated hook state. Codex also
+                // proves that /new has not since changed its active writer.
+                if current == nil, info.pluginID == "codex", await !agentIdentities.codexOwnsSession(pid, runtime, source.sessionID) {
+                    continue
+                }
+                guard
+                    !Task.isCancelled, !processDetectedPaneIds.contains(paneID),
+                    paneStates[paneID].flatMap(AgentForkSource.init(pane:)) == source,
+                    paneStates[paneID]?.agentSession?.processRuntimeID == runtime,
+                    agentIdentities.runtimeID(pid) == runtime
+                else { continue }
+                rememberedAgentIdentities.removeValue(forKey: paneID)
+                await rememberAgentSessionIdentity(
+                    forPane: paneID, processNamesByPlugin: processNamesByPlugin,
+                    recoveredIdentity: .init(source: source, processID: pid, runtimeID: runtime)
+                )
                 continue
             }
             guard

@@ -40,6 +40,17 @@ process-detected conversation cache is refreshed on that path, so switching away
 and back in one process can recover the original resources. Ordinary background
 reconciliation still uses the native cache; hook-owned state needs its native
 conversation event and is not overwritten by resource discovery.
+If a hook-owned identity record is missing, refresh retries persisting the current
+authenticated state; Codex also verifies its active native writer. A recovery
+checkpoint for an older conversation cannot revoke an already verified current
+identity. Explicit invalidation clears the successful-write memo so fresh evidence
+can be persisted again.
+
+Workflow results match the invocation's accepted conversation, native turn and
+transcript path even when the directory still lists the conversation before `/new`.
+The completion monitor rechecks that accepted conversation against the live process;
+it neither substitutes the directory's conversation nor resends accepted input.
+The workflow's participant target remains the same Host/pane AgentID.
 
 ## Event ingress
 

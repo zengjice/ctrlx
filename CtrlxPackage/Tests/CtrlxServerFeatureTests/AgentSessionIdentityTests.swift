@@ -88,6 +88,116 @@ struct AgentSessionIdentityTests {
         }
     }
 
+    @Test("An old recovery snapshot invalidates only stale native identities", arguments: ["codex", "claude-code"], [false, true])
+    func recoveryInvalidationPreservesCurrentHook(plugin: String, freshRecord: Bool) async throws {
+        let command = plugin == "codex" ? "codex" : "claude"
+        let rows = LockIsolated("100 1 zsh\n101 100 \(command)\n")
+        let stored = LockIsolated<AgentSessionIdentity?>(nil)
+        var client = AgentSessionIdentityClient.previewValue
+        client.load = { _ in stored.value }
+        client.save = { stored.setValue($0)
+            return true
+        }
+        client.invalidate = { _ in stored.setValue(nil) }
+        client.runtimeID = { _ in "start" }
+        try await withDependencies {
+            defaults(&$0, rows: rows, client: client)
+        } operation: {
+            let manager = manager()
+            var pane = try #require(manager.paneStates["%5"])
+            pane.workspaceIdentity = .init(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+            manager.setPaneStatesForPreview([pane])
+            let names = [plugin: [command]]
+            applyVerifiedState(to: manager, pluginID: plugin, sessionID: UUID().uuidString, state: .idle, tmuxPane: "%5", projectPath: "/repo")
+            await manager.rememberAgentSessionIdentity(forPane: "%5", processNamesByPlugin: names)
+            applyVerifiedState(to: manager, pluginID: plugin, sessionID: UUID().uuidString, state: .idle, tmuxPane: "%5", projectPath: "/repo")
+            if freshRecord {
+                await manager.rememberAgentSessionIdentity(forPane: "%5", processNamesByPlugin: names)
+            }
+            let expected = try #require(manager.paneStates["%5"].flatMap(AgentForkSource.init(pane:)))
+            await manager.invalidateSavedConversation(forPane: "%5", unlessCurrent: true)?.value
+            #expect(stored.value?.source == (freshRecord ? expected : nil))
+            // Explicit invalidation also clears the successful-write memo.
+            await manager.invalidateSavedConversation(forPane: "%5")?.value
+            #expect(stored.value == nil)
+            await manager.rememberAgentSessionIdentity(forPane: "%5", processNamesByPlugin: names)
+            #expect(stored.value?.source == expected)
+        }
+    }
+
+    @Test("A recovery checkpoint waits for the current hook save without cancelling it")
+    func recoveryWaitsForCurrentHookWrite() async throws {
+        let rows = LockIsolated("100 1 zsh\n101 100 codex\n")
+        let stored = LockIsolated<AgentSessionIdentity?>(nil)
+        let (started, start) = AsyncStream<Void>.makeStream()
+        let (release, resume) = AsyncStream<Void>.makeStream()
+        defer { start.finish()
+            resume.finish()
+        }
+        var client = AgentSessionIdentityClient.previewValue
+        client.load = { _ in stored.value }
+        client.save = { identity in
+            start.yield(())
+            var iterator = release.makeAsyncIterator()
+            _ = await iterator.next()
+            #expect(!Task.isCancelled)
+            stored.setValue(identity)
+            return true
+        }
+        client.invalidate = { _ in stored.setValue(nil) }
+        client.runtimeID = { _ in "start" }
+        try await withDependencies {
+            defaults(&$0, rows: rows, client: client)
+        } operation: {
+            let manager = manager()
+            var pane = try #require(manager.paneStates["%5"])
+            pane.workspaceIdentity = .init(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+            manager.setPaneStatesForPreview([pane])
+            let sessionID = UUID().uuidString
+            applyVerifiedState(to: manager, pluginID: "codex", sessionID: sessionID, state: .idle, tmuxPane: "%5", projectPath: "/repo")
+            let save = Task { await manager.rememberAgentSessionIdentity(forPane: "%5", processNamesByPlugin: ["codex": ["codex"]]) }
+            var iterator = started.makeAsyncIterator()
+            _ = await iterator.next()
+            let checkpoint = manager.invalidateSavedConversation(forPane: "%5", unlessCurrent: true)
+            resume.yield(())
+            await save.value
+            await checkpoint?.value
+            #expect(stored.value?.source.sessionID == sessionID)
+        }
+    }
+
+    @Test("Periodic refresh restores a missing hook identity without new input", arguments: ["codex", "claude-code"], [false, true])
+    func refreshMissingHookIdentity(plugin: String, writerMatches: Bool) async throws {
+        let command = plugin == "codex" ? "codex" : "claude"
+        let rows = LockIsolated("100 1 zsh\n101 100 \(command)\n")
+        let stored = LockIsolated<AgentSessionIdentity?>(nil)
+        let sessionID = UUID().uuidString
+        var client = AgentSessionIdentityClient.previewValue
+        client.load = { _ in stored.value }
+        client.save = { stored.setValue($0)
+            return true
+        }
+        client.runtimeID = { _ in "start" }
+        client.codexOwnsSession = { pid, runtime, conversation in
+            #expect(pid == "101" && runtime == "start" && conversation == sessionID)
+            return writerMatches
+        }
+        try await withDependencies {
+            defaults(&$0, rows: rows, client: client)
+        } operation: {
+            let manager = manager()
+            let names = [plugin: [command]]
+            applyVerifiedState(to: manager, pluginID: plugin, sessionID: sessionID, state: .idle, tmuxPane: "%5", projectPath: "/repo")
+            await manager.rememberAgentSessionIdentity(forPane: "%5", processNamesByPlugin: names)
+            let expected = try #require(stored.value)
+            stored.setValue(nil)
+            await manager.refreshDetectedAgentSessions(processNamesByPlugin: names, refreshSnapshot: true)
+            #expect(stored.value == (plugin == "claude-code" || writerMatches ? expected : nil))
+            #expect(manager.paneStates["%5"]?.claudeSessionID == sessionID)
+            #expect(manager.paneStates["%5"]?.agentSession?.state == .idle)
+        }
+    }
+
     @Test("An idle fork's verified writer ID enables Fork, persists once and avoids further FD probes")
     func recoverIdleCodexFork() async throws {
         let rows = LockIsolated("100 1 zsh\n101 100 codex\n201 101 codex\n")

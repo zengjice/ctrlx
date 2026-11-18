@@ -49,6 +49,51 @@ private actor NativeWorkflowTestProvider: AgentWorkflowProviding {
 }
 
 struct AgentWorkflowNativeEventsTests {
+    @Test("A stale catalog conversation cannot swallow an accepted turn's result", arguments: ["codex", "claude-code"])
+    func acceptedResultSurvivesStaleCatalog(plugin: String) async throws {
+        let f = try await fixture(plugin: plugin)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, plugin: plugin), peer: f.peer)
+        var stale = AgentWorkflowObservation(f.instance)
+        stale.conversationID = "before-new"
+        stale.readiness = .unavailable
+        _ = try await f.store.reconcile([stale])
+        let waiting = try await f.store.snapshot().runs[0]
+        #expect(waiting.status == .running && waiting.issue != nil)
+        #expect(waiting.invocations[0].instance?.conversationID == f.instance.conversationID)
+
+        let unrelated = PluginEvent(pluginID: plugin, sessionID: stale.conversationID, tmuxPane: f.instance.paneID, workflow: .init(
+            kind: .stopCandidate, nativeTurnID: "turn", transcriptPath: f.transcript.path, text: "Unrelated"
+        ))
+        #expect(try await f.router.receive(unrelated, peer: f.peer) == nil)
+        #expect(try await f.router.receive(f.event(.stopCandidate, text: "Wrong turn", turn: "other", plugin: plugin), peer: f.peer) == nil)
+        let context = try #require(await f.router.receive(f.event(.stopCandidate, text: "Finished", plugin: plugin), peer: f.peer))
+        try Data("{\"final\":\"Finished\"}\n".utf8).write(to: f.transcript)
+        let inspections = LockIsolated(0)
+        let monitor = AgentWorkflowCompletionMonitor(store: f.store, runner: f.runner, inspect: { instance in
+            #expect(instance.matchesBinding(f.instance))
+            inspections.withValue { $0 += 1 }
+            return instance
+        }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        await monitor.verify(context, provider: NativeWorkflowTestProvider())
+        for _ in 0..<200 {
+            if try await f.store.snapshot().runs[0].status == .completed {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        await monitor.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+        let completed = try await f.store.snapshot().runs[0]
+        #expect(completed.status == .completed)
+        #expect(completed.invocations.count == 1)
+        #expect(completed.invocations[0].result?.nativeTurnID == "turn")
+        #expect(completed.invocations[0].result?.text == "Finished")
+        #expect(inspections.value >= 2)
+        #expect(try await f.store.snapshot().instances[0].conversationID == stale.conversationID)
+    }
+
     @Test(arguments: ["codex", "claude-code"], [false, true])
     func restartedTabCanCompleteItsExplicitStep(plugin: String, newConversation: Bool) async throws {
         let f = try await fixture(plugin: plugin, completion: .explicit, allowsFinish: true)
@@ -305,7 +350,8 @@ struct AgentWorkflowNativeEventsTests {
         let peer = try #require(PluginIngressPeer.capture(peerPID: 10, userID: 501) { pid in
             pid == 10 ? .init(processID: 10, parentProcessID: 1, userID: 501, startSeconds: change == "process" ? 200 : 100, startMicroseconds: 0) : nil
         })
-        #expect(try await f.router.receive(f.event(.stopCandidate, text: "Finished"), peer: peer) == nil)
+        let routed = try await f.router.receive(f.event(.stopCandidate, text: "Finished"), peer: peer)
+        #expect((routed != nil) == (change == "conversation"))
         let event = PluginEvent(pluginID: "codex", sessionID: moved.conversationID, tmuxPane: "%1", workflow: .init(
             kind: .stopCandidate, nativeTurnID: "turn", transcriptPath: f.transcript.path, text: "Finished"
         ))
@@ -319,15 +365,20 @@ struct AgentWorkflowNativeEventsTests {
             return
         }
         try Data("{\"final\":\"Finished\"}\n".utf8).write(to: f.transcript)
+        let inspections = LockIsolated(0)
         let monitor = AgentWorkflowCompletionMonitor(store: f.store, runner: f.runner, inspect: {
-            Issue.record("Another conversation must not verify the old result.")
-            return $0
+            // The directory alone cannot reject a candidate. Native inspection
+            // must still refuse a writer that actually switched conversations.
+            #expect($0.conversationID == f.instance.conversationID)
+            inspections.withValue { $0 += 1 }
+            throw AgentWorkflowInspectionUnavailable()
         }, onFailure: { Issue.record(Comment(rawValue: $0)) })
         await monitor.verify(stop, provider: NativeWorkflowTestProvider())
         try await Task.sleep(for: .milliseconds(100))
         await monitor.shutdown()
         await f.router.shutdown()
         await f.runner.shutdown()
+        #expect(inspections.value > 0)
         #expect(try await f.store.snapshot().runs[0].invocations[0].result == nil)
     }
 

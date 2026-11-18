@@ -22,9 +22,12 @@ actor AgentWorkflowCompletionMonitor {
                         && ($0.status == .running || (!submissionOnly && $0.status == .uncertain))
                 }
             }
-            return AgentReplyState(isPending: pending, instance: archive.instances.first {
+            let current = archive.instances.first {
                 $0.matchesBinding(context.instance) || $0.matchesConversation(context.instance)
-            })
+            } ?? archive.instances.first { $0.matchesProcess(context.instance) }.map { _ in context.instance }
+            // A stale catalog conversation does not replace the accepted turn.
+            // inspect still verifies its live process and native conversation.
+            return AgentReplyState(isPending: pending, instance: current)
         }, completed: { context, live, outcome in
             guard let run = try await store.snapshot().runs.first(where: { $0.invocations.contains { $0.id == context.id } }) else { return }
             switch outcome {

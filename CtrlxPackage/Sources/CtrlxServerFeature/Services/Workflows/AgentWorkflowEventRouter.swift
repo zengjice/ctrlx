@@ -126,7 +126,8 @@ actor AgentWorkflowEventRouter {
             return nil
         }
 
-        guard native.kind == .submitted || process.matchesBinding(observed) else { return nil }
+        // The catalog may still describe the conversation before /new. Match
+        // results against the accepted invocation below, not that display state.
         // Submission identity is checked by verifySubmission, which retains
         // authenticated evidence through temporary process-scan outages.
         let instance = observed
