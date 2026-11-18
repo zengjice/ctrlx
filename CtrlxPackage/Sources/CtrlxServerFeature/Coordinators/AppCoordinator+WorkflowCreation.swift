@@ -6,7 +6,21 @@ import Foundation
 
 extension AppCoordinator {
     func workflowAgentPluginIDs() -> [String] {
-        localAgentLaunchAgents().map(\.id).filter { pluginRegistry?.core($0) is any AgentWorkflowProviding }
+        workflowAgentLaunchOptions().map(\.id)
+    }
+
+    func workflowAgentLaunchOptions() -> [SessionLaunchAgent] {
+        localAgentLaunchAgents().filter { pluginRegistry?.core($0.id) is any AgentWorkflowProviding }
+    }
+
+    var workflowAgentDirectorySource: SessionDirectorySource {
+        .init(id: "local", create: { request in
+            @Dependency(SessionDirectoryClient.self) var client
+            return try await client.create(request)
+        }) { request in
+            @Dependency(SessionDirectoryClient.self) var client
+            return try await client.list(request)
+        }
     }
 
     func workflowAgentCreation(hostID: UUID, creationID: UUID? = nil, firstWindowName: String? = nil) async throws -> AgentWorkflowAgentCreation {
@@ -20,14 +34,8 @@ extension AppCoordinator {
         }
         return AgentWorkflowAgentCreation(
             hostID: hostID, sessions: sessions,
-            agents: localAgentLaunchAgents().filter { workflowAgentPluginIDs().contains($0.id) },
-            directorySource: .init(id: "local", create: { request in
-                @Dependency(SessionDirectoryClient.self) var client
-                return try await client.create(request)
-            }) { request in
-                @Dependency(SessionDirectoryClient.self) var client
-                return try await client.list(request)
-            }
+            agents: workflowAgentLaunchOptions(),
+            directorySource: workflowAgentDirectorySource
         ) { [weak self] session, request in
             guard
                 let self, let pluginID = request.pluginID,

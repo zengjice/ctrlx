@@ -1915,8 +1915,9 @@ Fork revalidates the selected native binding and input occupancy before launch.
 it is not a second lifecycle or an input permit. Pending delivery, native work,
 reply verification, human input, uncertain results and recovery have distinct
 presentations. Human input evidence takes precedence over a generic pending
-message. The header and status card expose the existing Agent tab navigation;
-rechecking status never resends a message. Stop Waiting remains a confirmed action
+message. The header and status card offer Open Orbie Tab or Open Orbiter Tab
+for the selected conversation. Rechecking status never resends a message.
+Stop Waiting remains a confirmed action
 and does not terminate the Agent. Sending still uses the services' original guards.
 If Agent services fail before a role is available, the panel shows the startup
 error and offers an explicit retry. This retries initialization or conversation
@@ -2100,9 +2101,11 @@ cannot write an old binding back after Set Up Again. Deferred draft saves retain
 the latest text. A cancelled waiting operation does not change the binding.
 Refresh errors clear after a successful refresh; user-operation errors remain
 until a successful explicit action or verified recovery resolves them.
-Orbiters opens a list of ordinary Agents and their conversations. Its background
-refresh leaves creation controls available. Explicit operations wait for an
-in-flight refresh before using the latest records, and draft edits are saved
+Orbiters offers one New Orbiter form. Its source selector starts a new
+conversation, forks Orbie or the selected Orbiter, or adds an existing
+conversation. Engine, Provider, and project directory are chosen in the form.
+Background refresh leaves creation controls available. Explicit operations wait
+for the current refresh before using the latest records, and draft edits are saved
 once the current update or operation finishes. Workflows has its own list;
 optional tags classify definitions without affecting execution or participant
 identity. Give to Orbie appends a bounded selected reply to its draft and

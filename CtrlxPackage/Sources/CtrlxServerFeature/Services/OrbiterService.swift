@@ -82,7 +82,7 @@ final class OrbiterService {
         if let id = record.agentID, restoringAgents.contains(id) {
             return "Restoring the original conversation…"
         }
-        guard let current = currentInstance(record) else { return "The Agent is unavailable. Open its tab to check startup or recovery." }
+        guard let current = currentInstance(record) else { return "This Orbiter is unavailable. Open its tab to check startup or recovery." }
         if let issue = current.capabilityIssue {
             return issue
         }
@@ -91,15 +91,15 @@ final class OrbiterService {
         }
         switch current.readiness {
         case .ready: return nil
-        case .busy: return "The Agent is working. Your draft is kept."
-        case .draft: return "The Agent has unsent terminal input. Your draft is kept."
-        case .awaitingHuman: return "Continue the question or approval in the Agent tab."
-        case .unavailable: return current.inputIssue ?? "The Agent input cannot be verified. Check its tab."
+        case .busy: return "This Orbiter is working. Your draft is kept."
+        case .draft: return "This Orbiter has unsent terminal input. Your draft is kept."
+        case .awaitingHuman: return "Answer the question or review the approval in the Orbiter tab."
+        case .unavailable: return current.inputIssue ?? "The Orbiter’s input cannot be verified. Check its tab."
         }
     }
 
     func recordForNavigation(_ id: String) async throws -> OrbiterRecord {
-        guard let record = try await store.load().agents.first(where: { $0.id == id }) else { throw AgentWorkflowError("This Agent is no longer associated with Orbie.") }
+        guard let record = try await store.load().agents.first(where: { $0.id == id }) else { throw AgentWorkflowError("This conversation is no longer listed in Orbiters.") }
         return record
     }
 
@@ -137,17 +137,6 @@ final class OrbiterService {
         await saveDrafts()
     }
 
-    func prepareCreation(inspect: Bool = false) async throws -> UUID {
-        try await begin()
-        defer { finishOperation() }
-        if inspect || index == nil {
-            try await reconcile(inspect: inspect)
-        }
-        try draft.validate()
-        guard let hostID = index?.hostID else { throw AgentWorkflowError("Orbiters have not loaded yet.") }
-        return hostID
-    }
-
     @discardableResult
     func create(pluginID: String, providerID: String?, fork: Bool = false, requestedSource: AgentWorkflowInstance? = nil) async throws -> String {
         try await begin()
@@ -155,22 +144,21 @@ final class OrbiterService {
         try await reconcile(inspect: true)
         try draft.validate()
         guard enabled(), var updated = index else { throw AgentWorkflowError("Enable Orbie before creating an Orbiter.") }
-        guard !agents.contains(where: { $0.creation?.id == draft.id }) else { throw AgentWorkflowError("This creation is already recorded. Check the existing Agent before retrying.") }
+        guard !agents.contains(where: { $0.creation?.id == draft.id }) else { throw AgentWorkflowError("This creation is already recorded. Check the existing Orbiter before retrying.") }
         let source: AgentWorkflowInstance?
         if fork, let requestedSource {
             guard
-                agents.contains(where: { $0.agentID == requestedSource.agentID }),
-                let current = instances.first(where: { $0.matchesBinding(requestedSource) }),
-                current.capabilityIssue == nil,
-                try await interaction.availability(current.agentID) == nil else {
-                throw AgentWorkflowError("The Fork source changed or is busy. Review its conversation first.")
+                let record = agents.first(where: { $0.agentID == requestedSource.agentID }),
+                let current = currentInstance(record), current.matchesBinding(requestedSource),
+                availability(record) == nil else {
+                throw AgentWorkflowError("The source conversation changed or is busy. Review it before forking.")
             }
             source = current
         } else {
             source = fork ? try await forkSource() : nil
         }
         guard source == nil || (source?.pluginID == pluginID && source?.readiness == .ready && UUID(uuidString: source?.conversationID ?? "") != nil) else {
-            throw AgentWorkflowError("Fork requires a ready, verified conversation of the same Agent type. Choose New Agent for another type.")
+            throw AgentWorkflowError("Fork requires a ready, verified conversation with the same engine. Choose New Conversation to use another engine.")
         }
         let creation = OrbiterCreation(id: draft.id, title: draft.title, directory: draft.directory, pluginID: pluginID, providerID: providerID, forkSource: source)
         let text = [draft.goal, draft.source, draft.materials].filter { !$0.isEmpty }.joined(separator: "\n\n")
@@ -206,7 +194,7 @@ final class OrbiterService {
         guard
             enabled(), var updated = index, candidate.hostID == updated.hostID,
             let current = instances.first(where: { $0.matchesBinding(candidate) }),
-            !agents.contains(where: { $0.agentID == current.agentID }) else { throw AgentWorkflowError("Choose an unassociated, verified Agent on this Host.") }
+            !agents.contains(where: { $0.agentID == current.agentID }) else { throw AgentWorkflowError("Choose a verified conversation on this Mac that isn’t already in Orbiters.") }
         let record = OrbiterRecord(agentID: current.agentID, binding: current, pane: current.workspacePane)
         updated.agents.append(record)
         try await persist(updated)
@@ -218,11 +206,11 @@ final class OrbiterService {
         try await begin()
         defer { finishOperation() }
         try await reconcile(inspect: true)
-        guard var record = agents.first(where: { $0.id == id }) else { throw AgentWorkflowError("Agent not found.") }
+        guard var record = agents.first(where: { $0.id == id }) else { throw AgentWorkflowError("Orbiter not found.") }
         if let issue = availability(record) {
             throw AgentWorkflowError(issue)
         }
-        guard let current = currentInstance(record) else { throw AgentWorkflowError("Agent not found.") }
+        guard let current = currentInstance(record) else { throw AgentWorkflowError("Orbiter not found.") }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let message = AgentMessage(instance: current, text: text)
         record.messageIDs.append(message.id)
@@ -357,7 +345,7 @@ final class OrbiterService {
     }
 
     private func replace(_ record: OrbiterRecord, previousID: String? = nil) async throws {
-        guard var updated = index, let i = updated.agents.firstIndex(where: { $0.id == (previousID ?? record.id) }) else { throw AgentWorkflowError("Agent association not found.") }
+        guard var updated = index, let i = updated.agents.firstIndex(where: { $0.id == (previousID ?? record.id) }) else { throw AgentWorkflowError("Orbiter not found.") }
         updated.agents[i] = record
         try await persist(updated)
     }
@@ -376,7 +364,7 @@ final class OrbiterService {
 
     private func begin() async throws {
         try Task.checkCancellation()
-        guard !isBusy else { throw AgentWorkflowError("An Agent operation is already in progress.") }
+        guard !isBusy else { throw AgentWorkflowError("An Orbiter operation is already in progress.") }
         // Reserve the action before waiting so the next poll cannot overtake it.
         isBusy = true
         if isUpdating {

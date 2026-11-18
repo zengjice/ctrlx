@@ -127,7 +127,7 @@ actor AgentRoleRecovery {
         if invalidated {
             record.descriptor = nil
             record.identity = nil
-            record.issue = "The previous conversation no longer belongs to this Agent. Create a new Agent explicitly."
+            record.issue = "This tab no longer has the saved conversation. Set up a new conversation to continue."
             record.invalidated = true
         } else {
             let sameConversation = record.descriptor?.sessionID == (descriptor?.sessionID ?? identity?.source.sessionID)
@@ -150,7 +150,7 @@ actor AgentRoleRecovery {
         let original = try entry(id)
         var record = original ?? Entry(agentID: id)
         guard record.invalidated != true else {
-            throw AgentWorkflowError(record.issue ?? "The saved Agent conversation was replaced. Open its terminal or create a new Agent explicitly.")
+            throw AgentWorkflowError(record.issue ?? "The saved conversation was replaced. Check its terminal or set up a new conversation.")
         }
         if record.descriptor == nil {
             let descriptor = try await recoverDescriptor(id, record.identity)
@@ -163,7 +163,7 @@ actor AgentRoleRecovery {
             try save(record)
         }
         guard let descriptor = record.descriptor else {
-            throw AgentWorkflowError("No verified native conversation was retained. Create a new Agent explicitly; the old files and messages are kept.")
+            throw AgentWorkflowError("No verified native conversation was retained. Set up a new conversation to continue. Your saved files and messages are kept.")
         }
         if record.intent == nil {
             record.intent = Intent(id: UUID(), inPlace: exists)
@@ -195,7 +195,7 @@ actor AgentRoleRecovery {
         guard
             let current = try entry(id), current.invalidated != true,
             current.descriptor?.sessionID == descriptor.sessionID, current.descriptor?.pluginID == descriptor.pluginID else {
-            throw AgentWorkflowError("The Agent conversation changed during recovery. Check its terminal.")
+            throw AgentWorkflowError("The conversation changed during recovery. Check its terminal.")
         }
         record = current
         if record.intent?.id == intent.id {
@@ -219,7 +219,7 @@ actor AgentRoleRecovery {
             live.hostID == id.hostID,
             live.workspacePane.isSamePane(as: pane), live.pluginID == descriptor.pluginID,
             live.conversationID == descriptor.sessionID else {
-            throw AgentWorkflowError("The recovery terminal is running a different conversation. Check its Agent tab.")
+            throw AgentWorkflowError("The recovery terminal is running a different conversation. Check the terminal tab.")
         }
         guard
             let latest = try entry(id), latest.invalidated != true,

@@ -81,21 +81,23 @@ public struct NewAgentTabPanel: View {
     let configuration: NewAgentTabConfiguration
     let destinationDescription: String?
     let showsHeader: Bool
+    let title: LocalizedStringKey
     @Environment(\.dismiss) private var dismiss
     @State private var launchingAgentID: String?
     @State private var errorMessage: String?
 
-    public init(configuration: NewAgentTabConfiguration, destinationDescription: String? = nil, showsHeader: Bool = true) {
+    public init(configuration: NewAgentTabConfiguration, destinationDescription: String? = nil, showsHeader: Bool = true, title: LocalizedStringKey = "New Agent") {
         self.configuration = configuration
         self.destinationDescription = destinationDescription
         self.showsHeader = showsHeader
+        self.title = title
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if showsHeader {
                 HStack {
-                    Text("New Agent").font(.headline)
+                    Text(title).font(.headline)
                     Spacer()
                     Button("Close") { dismiss() }
                         .disabled(launchingAgentID != nil)

@@ -16,7 +16,7 @@ struct OrbiterDraft: Codable, Equatable, Sendable {
             title.utf8.count <= 128, !title.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains),
             !goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             (goal + source + materials).utf8.count <= 32_000 else {
-            throw AgentWorkflowError("Enter a short Agent name and an initial message. Selected text must fit within 32 KB.")
+            throw AgentWorkflowError("Enter a short Orbiter name and an initial message. Selected text must fit within 32 KB.")
         }
         guard SessionDirectoryPath.isValid(directory) else { throw AgentWorkflowError("Choose an absolute project directory or ~/… on this Mac.") }
     }
@@ -52,7 +52,7 @@ struct OrbiterRecord: Codable, Equatable, Sendable, Identifiable {
     }
 
     var title: String {
-        binding?.displayName ?? creation?.title ?? "Unavailable Agent"
+        binding?.displayName ?? creation?.title ?? "Unavailable Orbiter"
     }
 
     var directory: String {

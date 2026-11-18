@@ -27,7 +27,11 @@ public struct MacOrbiePanelView: View {
     }
 
     private var title: String {
-        selectedID == nil ? "Orbie" : record?.title ?? "Unavailable Agent"
+        selectedID == nil ? "Orbie" : record?.title ?? "Unavailable Orbiter"
+    }
+
+    private var openTabTitle: String {
+        selectedID == nil ? "Open Orbie Tab" : "Open Orbiter Tab"
     }
 
     private var instance: AgentWorkflowInstance? {
@@ -56,7 +60,7 @@ public struct MacOrbiePanelView: View {
         if selectedID == nil {
             return coordinator.orbie?.panelStatus ?? .loading
         }
-        guard let record, let service = coordinator.orbiters else { return .unavailable("Select another Agent, or open Orbiters to locate its saved conversation.") }
+        guard let record, let service = coordinator.orbiters else { return .unavailable("Choose another conversation or open Orbiters to find the saved conversation.") }
         return service.panelStatus(record)
     }
 
@@ -68,7 +72,7 @@ public struct MacOrbiePanelView: View {
         if selectedID == nil {
             return coordinator.orbie?.availability ?? (coordinator.orbie == nil ? "Loading…" : nil)
         }
-        guard let record, let service = coordinator.orbiters else { return "Agent unavailable" }
+        guard let record, let service = coordinator.orbiters else { return "Orbiter unavailable" }
         return service.availability(record)
     }
 
@@ -202,7 +206,7 @@ public struct MacOrbiePanelView: View {
         }
         .sheet(item: $orbitersSheet) { request in
             if let service = coordinator.orbiters {
-                MacOrbitersView(service: service, initialSelection: request.selection, requestedForkSource: request.forkSource)
+                MacOrbitersView(service: service, initialSelection: request.selection, initialSource: request.source, requestedForkSource: request.forkSource)
             }
         }
         .confirmationDialog("Stop waiting for this reply?", isPresented: Binding(get: { stopMessage != nil }, set: {
@@ -223,7 +227,7 @@ public struct MacOrbiePanelView: View {
                     stopMessage = nil
                 }
             }
-        } message: { Text("This ends reply observation. It does not stop the Agent or retract input already sent. Sending again still requires an idle terminal.") }
+        } message: { Text("Work already in progress can continue and sent messages stay in the conversation. Wait for the terminal to become idle before sending again.") }
     }
 
     private var header: some View {
@@ -241,8 +245,8 @@ public struct MacOrbiePanelView: View {
                 .popover(isPresented: $showsSwitcher, arrowEdge: .bottom) { switcher }
             Text(status.title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             Spacer(minLength: 0)
-            Button { openTerminal() } label: { Label("Open Agent Tab", symbol: .terminal) }
-                .help(canOpenTerminal ? "Open Agent Tab" : "The terminal is unavailable. Use the recovery controls below.")
+            Button { openTerminal() } label: { Label(openTabTitle, symbol: .terminal) }
+                .help(canOpenTerminal ? openTabTitle : "The terminal is unavailable. Use the recovery controls below.")
                 .disabled(!canOpenTerminal).accessibilityIdentifier("orbie-panel-terminal")
             Button { openFull() } label: { Label("Full Conversation", symbol: .arrowUpLeftAndArrowDownRight) }
                 .keyboardShortcut("j", modifiers: .command).help("Full Conversation (⌘J)")
@@ -315,7 +319,7 @@ public struct MacOrbiePanelView: View {
                         }
                     }.disabled(operationBusy).accessibilityIdentifier("orbie-panel-setup")
                 } else if canOpenTerminal {
-                    Button("Open Agent Tab") { openTerminal() }.accessibilityIdentifier("orbie-panel-open-agent")
+                    Button(openTabTitle) { openTerminal() }.accessibilityIdentifier("orbie-panel-open-agent")
                 }
                 if status.needsAttention {
                     Button(startupIssue == nil ? "Recheck" : "Retry Startup") { Task { await recheck() } }
@@ -356,18 +360,18 @@ public struct MacOrbiePanelView: View {
                     Button("Open Suggested Workflow") { perform { try await coordinator.openOrbieWorkflow(id, openWindow: openWindow) } }
                 }
             } else if !message.isPending {
-                Text(message.issue ?? "Reply observation ended. Check the Agent tab for work already in progress.").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                Text(message.issue ?? "Stopped waiting. Check the terminal tab for work still in progress.").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var switcher: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField("Find Agent or project", text: $query).textFieldStyle(.roundedBorder).accessibilityIdentifier("orbie-panel-search")
+            TextField("Find a conversation or project", text: $query).textFieldStyle(.roundedBorder).accessibilityIdentifier("orbie-panel-search")
             ScrollView {
                 VStack(alignment: .leading, spacing: 4) {
                     if query.isEmpty || "Orbie".localizedStandardContains(query) {
-                        agentChoice(id: nil, title: "Orbie", subtitle: "Main Agent")
+                        agentChoice(id: nil, title: "Orbie", subtitle: nil)
                     }
                     if let service = coordinator.orbiters {
                         let entries = OrbieAgentCatalog.search(OrbieAgentCatalog.summaries(agents: service.agents, messages: service.messages, instances: service.instances), query: query, limit: service.agents.count)
@@ -384,7 +388,7 @@ public struct MacOrbiePanelView: View {
         }.padding(12).frame(width: 320)
     }
 
-    private func agentChoice(id: String?, title: String, subtitle: String) -> some View {
+    private func agentChoice(id: String?, title: String, subtitle: String?) -> some View {
         Button { selectAgent(id) } label: {
             VStack(alignment: .leading, spacing: 3) {
                 HStack {
@@ -394,7 +398,9 @@ public struct MacOrbiePanelView: View {
                         Symbols.checkmark.image
                     }
                 }
-                Text(subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                if let subtitle {
+                    Text(subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                }
             }
         }.buttonStyle(.plain).padding(8).frame(maxWidth: .infinity, alignment: .leading)
             .background(selectedID == id ? Color.accentColor.opacity(0.1) : .clear, in: RoundedRectangle(cornerRadius: 6))
@@ -403,7 +409,7 @@ public struct MacOrbiePanelView: View {
 
     private var actions: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Button("Open Agent Tab", action: openTerminal).disabled(!canOpenTerminal)
+            Button(openTabTitle, action: openTerminal).disabled(!canOpenTerminal)
             Button("Full Conversation…", action: openFull)
             Divider()
             Button("New Orbiter…") { showOrbiters(selection: nil) }
@@ -500,7 +506,10 @@ public struct MacOrbiePanelView: View {
     private func showOrbiters(selection: String?, forkSource: AgentWorkflowInstance? = nil) {
         showsSwitcher = false
         showsActions = false
-        orbitersSheet = .init(selection: selection, forkSource: selectedID == nil ? nil : forkSource)
+        orbitersSheet = .init(
+            selection: selection, source: forkSource == nil ? .newConversation : .fork,
+            forkSource: selectedID == nil ? nil : forkSource
+        )
     }
 
     private func dismissOrCloseMenu() {
@@ -521,5 +530,6 @@ public struct MacOrbiePanelView: View {
 private struct OrbitersSheet: Identifiable {
     let id = UUID()
     let selection: String?
-    var forkSource: AgentWorkflowInstance?
+    let source: MacOrbitersView.CreationSource
+    let forkSource: AgentWorkflowInstance?
 }
