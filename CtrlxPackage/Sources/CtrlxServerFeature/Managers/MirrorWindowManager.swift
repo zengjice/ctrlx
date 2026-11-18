@@ -77,8 +77,8 @@ final public class MirrorWindowManager {
     /// window IDs. The coordinator broadcasts the resulting snapshot.
     public var onPaneStatesPruned: (@MainActor @Sendable () async -> Void)?
 
-    /// Called only when process reconciliation changes a pane's terminal/agent
-    /// classification. The coordinator updates sleep prevention and viewers.
+    /// Called when reconciliation changes a pane's Agent state or classification.
+    /// The coordinator updates sleep prevention and viewers.
     public var onAgentProcessReconciliationChanged: (@MainActor @Sendable () async -> Void)?
 
     /// Called when cold-start/background-session hydration establishes a new
@@ -469,6 +469,9 @@ final public class MirrorWindowManager {
 
                 guard !Task.isCancelled, let self else { break }
                 await self.refreshDetectedAgentSessions(processNamesByPlugin: processNamesProvider())
+                if await self.reconcileInterruptedTraexTurns() {
+                    await self.onAgentProcessReconciliationChanged?()
+                }
             }
         }
     }
@@ -519,6 +522,9 @@ final public class MirrorWindowManager {
             }
             conversationEvidence[binding.paneID] = .init(runtimeID: binding.runtimeID, conversationID: event.sessionID, latestSource: peer.processes.first, latestSequence: event.sourceSequence)
         }
+        if event.pluginID == "traex", let workflow = event.workflow, workflow.kind == .submitted {
+            conversationEvidence[binding.paneID]?.submittedTurnID = UUID(uuidString: workflow.nativeTurnID)
+        }
         if pane.claudeSessionID != event.sessionID {
             _ = clearAgentSessionState(forPane: binding.paneID)
             invalidateSavedConversation(forPane: binding.paneID)
@@ -529,6 +535,30 @@ final public class MirrorWindowManager {
             paneStates[binding.paneID]?.claudeSessionID = event.sessionID
         }
         return AgentEventContext(binding: current, conversationID: event.sessionID)
+    }
+
+    func reconcileInterruptedTraexTurns() async -> Bool {
+        @Dependency(CodexTurnStateClient.self) var turns
+        var changed = false
+        for (paneID, evidence) in conversationEvidence {
+            guard
+                !Task.isCancelled,
+                paneStates[paneID]?.agentSession?.state == .working,
+                let binding = currentAgentBinding(forPane: paneID), binding.pluginID == "traex",
+                binding.runtimeID == evidence.runtimeID, let turnID = evidence.submittedTurnID else { continue }
+            let context = AgentEventContext(binding: binding, conversationID: evidence.conversationID)
+            // Traex records Esc in its rollout without a Stop hook. A newer
+            // submission can arrive while the reader is checking the old turn.
+            guard
+                context.matches(paneStates[paneID], runtimeID: agentIdentities.runtimeID),
+                await turns.wasAborted(binding.processID, binding.runtimeID, context.conversationID, turnID),
+                !Task.isCancelled, conversationEvidence[paneID]?.submittedTurnID == turnID,
+                context.matches(paneStates[paneID], runtimeID: agentIdentities.runtimeID),
+                paneStates[paneID]?.agentSession?.state == .working else { continue }
+            applyState(pluginID: binding.pluginID, sessionID: context.conversationID, state: .idle, tmuxPane: paneID, projectPath: nil)
+            changed = true
+        }
+        return changed
     }
 
     func refreshDetectedAgentSessions(
@@ -639,7 +669,7 @@ final public class MirrorWindowManager {
             else { continue }
             // Resource authorization must refresh a process-detected conversation:
             // /new and /resume can change its writer without replacing the process.
-            let verifiesWriter = info.pluginID == "codex" && verifyingConversationForProcessID.map { info.processIDs == [$0] } == true
+            let verifiesWriter = CodexProcessSessionReader.supports(pluginID: info.pluginID) && verifyingConversationForProcessID.map { info.processIDs == [$0] } == true
             var verifiedSessionID: String?
             if verifiesWriter, let pid = info.processIDs.first, let runtime = agentIdentities.runtimeID(pid) {
                 verifiedSessionID = await agentIdentities.codexSessionID(pid, runtime)
@@ -674,7 +704,7 @@ final public class MirrorWindowManager {
                 continue
             }
             guard
-                info.pluginID == "codex", info.processIDs.count == 1, let pid = info.processIDs.first,
+                CodexProcessSessionReader.supports(pluginID: info.pluginID), info.processIDs.count == 1, let pid = info.processIDs.first,
                 let runtime = agentIdentities.runtimeID(pid),
                 let sessionID = verifiesWriter ? verifiedSessionID : await agentIdentities.codexSessionID(pid, runtime),
                 !Task.isCancelled, processDetectedPaneIds.contains(paneID),

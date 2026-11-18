@@ -36,7 +36,7 @@ extension AppCoordinator {
             peer.contains(processID: pid, runtimeID: binding.runtimeID) else { return }
         @Dependency(AgentSessionIdentityClient.self) var identities
         var nativeConversationID: String?
-        if event.pluginID == "codex", windowManager.paneStates[paneID]?.claudeSessionID != event.sessionID {
+        if CodexProcessSessionReader.supports(pluginID: event.pluginID), windowManager.paneStates[paneID]?.claudeSessionID != event.sessionID {
             nativeConversationID = await identities.codexSessionID(binding.processID, binding.runtimeID)
         }
         guard let context = windowManager.acceptCurrentEvent(event, binding: binding, peer: peer, nativeConversationID: nativeConversationID) else { return }

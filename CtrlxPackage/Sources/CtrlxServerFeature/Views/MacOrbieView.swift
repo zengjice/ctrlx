@@ -157,7 +157,7 @@
                     let options = try await coordinator.workflowAgentCreation(hostID: record.hostID)
                     creation = NewAgentTabConfiguration(
                         id: .init(hostID: "local", sessionName: "Orbie"), initialDirectory: orbie.directory,
-                        agents: options.agents.filter { ["codex", "claude-code"].contains($0.id) },
+                        agents: options.agents.filter { ["codex", "claude-code", "traex"].contains($0.id) },
                         directorySource: options.directorySource, unavailableReason: nil, allowsDirectorySelection: false
                     ) { request in
                         guard let pluginID = request.pluginID else { throw AgentWorkflowError("Choose an Agent.") }

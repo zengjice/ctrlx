@@ -1,15 +1,17 @@
 # Agent iOS workflow
 
-Use `ctrlx ios` in the calling Codex or native Claude Code's local CtrlX tmux workbench.
+Use `ctrlx ios` in the calling Codex, Traex or native Claude Code's local CtrlX tmux workbench.
 Currently supports iOS Simulator only.
 Authority follows the socket caller's nearest supported agent process, never an
 environment token or focused tab.
 
 - Codex: start a new session with `ctrlx ios run -- codex`; it adds the required
   `--no-daemon` (verified with 0.162.1). Remote endpoints are rejected.
+- Traex: start with `ctrlx ios run -- traex` (or `traecli`); the same local
+  `--no-daemon` policy is verified with Traex 0.213.1.
 - Claude Code: start native `claude` directly in the CtrlX terminal. The native
   `claude/versions/<version>` installation path is recognized. `ctrlx ios run` is
-  Codex-only; do not pass `claude` or add Codex's `--no-daemon` flag to Claude.
+  for Codex-family CLIs; do not pass `claude` or add Codex's `--no-daemon` flag to Claude.
 
 These launch commands start a new agent, not a repair for an existing session's
 identity. If identification or pane routing fails, report the error and the

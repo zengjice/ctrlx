@@ -8,6 +8,10 @@ Code core; only the agent-specific differences are called out here. See
 - **Manifest:** id `codex`, display `Codex`, short `Codex`,
   `process_names: ["codex"]`, color `#3B82F6`.
 
+The [Traex distribution](traex.md) reuses compatible parts of this module with
+its own plugin identity, configuration home and native maintenance commands.
+Codex-only model/trust automation and account handling do not imply Traex support.
+
 ## Settings (`settings.json`, snake_case)
 | Key | Type | Default |
 |---|---|---|
@@ -22,7 +26,7 @@ Code core; only the agent-specific differences are called out here. See
 ## Independent skills and hook plugins
 
 The Codex marketplace ships two native plugins: `ctrlx@ctrlx` contains skills
-(1.1.19), while `ctrlx-hooks@ctrlx` contains only lifecycle declarations and the
+(1.1.20), while `ctrlx-hooks@ctrlx` contains only lifecycle declarations and the
 stable ingress bridge (1.0.0). Their versions advance independently. Skills-only
 updates must not change the hook plugin tree or version.
 

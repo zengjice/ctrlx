@@ -1,6 +1,6 @@
 import CtrlxNetworking
-import Foundation
 import CtrlxPluginProtocol
+import Foundation
 
 /// Discovers Codex CLI projects by scanning `~/.codex/sessions/` (or
 /// `$CODEX_HOME/sessions/`) for date-partitioned rollout `.jsonl` files,
@@ -20,6 +20,11 @@ import CtrlxPluginProtocol
 /// injected so a test can point it at a temp fixture.
 struct CodexScanner {
     private let fileManager = FileManager.default
+    private let distribution: CodexDistribution
+
+    init(distribution: CodexDistribution = .codex) {
+        self.distribution = distribution
+    }
 
     /// Cap on rollout files we read per scan. Codex can accumulate many
     /// rollouts; we read newest-first so older ones rarely add useful info.
@@ -72,7 +77,9 @@ struct CodexScanner {
             let projectURL = URL(fileURLWithPath: cwd).standardizedFileURL
 
             // The home directory itself is never a project.
-            if projectURL == homeStandardized { continue }
+            if projectURL == homeStandardized {
+                continue
+            }
 
             // Verify the project directory still exists on disk before
             // surfacing it — rollouts can outlive their working directory.
@@ -87,7 +94,7 @@ struct CodexScanner {
                 path: projectURL.path,
                 lastUsed: meta.startedAt,
                 configDir: nil,
-                pluginID: CodexPluginCore.pluginID
+                pluginID: distribution.pluginID
             )
 
             if let existing = projectsByPath[candidate.path] {
@@ -111,7 +118,7 @@ struct CodexScanner {
     ) -> [AgentProject] {
         var byPath: [String: AgentProject] = [:]
         for root in roots {
-            let sessions = root.appendingPathComponent("sessions")
+            let sessions = root.appendingPathComponent(distribution.sessionsDirectory)
             for project in scan(sessionsRoot: sessions, home: home) {
                 if let existing = byPath[project.path] {
                     if shouldReplace(existing: existing, with: project) {
@@ -318,7 +325,9 @@ struct CodexScanner {
     }()
 
     private static func parseISO8601(_ string: String) -> Date? {
-        if let date = iso8601Formatter.date(from: string) { return date }
+        if let date = iso8601Formatter.date(from: string) {
+            return date
+        }
         return iso8601FormatterNoFractional.date(from: string)
     }
 }

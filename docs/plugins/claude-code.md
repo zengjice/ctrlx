@@ -78,7 +78,7 @@ with `configDir` set for non-default roots. An FSEvents watcher on
 
 ## Ingress bridge (install)
 Claude's native marketplace now provides two independently versioned plugins:
-`ctrlx@ctrlx` contains skills (1.3.20); `ctrlx-hooks@ctrlx` contains lifecycle hooks
+`ctrlx@ctrlx` contains skills (1.3.21); `ctrlx-hooks@ctrlx` contains lifecycle hooks
 and the stable ingress bridge (1.0.0). Install/update verifies the marketplace
 source and uses `claude plugin install/update --scope user` only for missing or
 older components. It never uninstalls/reinstalls an unchanged hooks component

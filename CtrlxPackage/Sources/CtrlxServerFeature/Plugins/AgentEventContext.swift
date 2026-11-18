@@ -29,6 +29,7 @@ struct AgentConversationEvidence {
     var retired: Set<String> = []
     var latestSource: PluginIngressPeer.Process?
     var latestSequence: UInt64?
+    var submittedTurnID: UUID?
 
     mutating func accept(_ event: PluginEvent, nativeConversationID: String?, source: PluginIngressPeer.Process? = nil) -> Bool {
         guard nativeConversationID == nil || nativeConversationID == event.sessionID else { return false }
@@ -64,6 +65,7 @@ struct AgentConversationEvidence {
             ) else { return false }
         retired.insert(conversationID)
         conversationID = event.sessionID
+        submittedTurnID = nil
         if !older, let source {
             latestSource = source
             latestSequence = event.sourceSequence

@@ -756,7 +756,7 @@
                 additionalConfigFolders.removeAll { $0 == path }
                 persist()
             } : nil
-            if pluginID == "codex" || pluginID == "claude-code", let installations = coordinator.agentPluginInstallations {
+            if ["codex", "claude-code", "traex"].contains(pluginID), let installations = coordinator.agentPluginInstallations {
                 BundledAgentPluginRow(
                     installations: installations,
                     location: AgentPluginLocation(pluginID: pluginID, configRoot: removable ? path : nil),
@@ -832,6 +832,7 @@
             switch pluginID {
             case "claude-code": return "~/.claude"
             case "codex": return "~/.codex"
+            case "traex": return "~/.trae"
             // A sidecar declares its own default root in the manifest
             // (`sidecar.default_config_root`); fall back to `~` when absent.
             default: return coordinator.pluginDefaultConfigRoot(id: pluginID) ?? "~"
@@ -860,8 +861,9 @@
                 defaultProviderID = s.resolvedDefaultProviderID
                 modelShortcutDefaults = s.modelShortcutDefaults
                 detectFalseStopsAvailability = stopFinalityClassifier.availability()
-            case "codex":
-                let s = CodexSettings.decode(from: data)
+            case "codex",
+                 "traex":
+                let s = (pluginID == "traex" ? CodexDistribution.traex : .codex).settings(from: data)
                 commandPath = s.commandPath
                 autoRun = s.autoRun
                 logLevel = s.logLevel
@@ -940,7 +942,8 @@
                     modelShortcutDefaults: modelShortcutDefaults
                 )
                 return (try? encoder.encode(s)) ?? Data()
-            case "codex":
+            case "codex",
+                 "traex":
                 let s = CodexSettings(
                     commandPath: savedCommand,
                     autoRun: autoRun,
@@ -1464,13 +1467,13 @@
                     .font(.caption)
                     .foregroundStyle(.green)
 
-                    if pluginID == "codex" {
+                    if pluginID == "codex" || pluginID == "traex" {
                         Button("Refresh") {
                             Task { await performInstall() }
                         }
                         .controlSize(.small)
                         .accessibilityIdentifier("refreshPlugin-\(pluginID)-\(rowKey)")
-                        .help("Update CtrlX skills for this configuration. Start a new Codex session to use them.")
+                        .help("Update CtrlX skills for this configuration. Start a new Agent session to use them.")
                     }
 
                     Button("Uninstall") {

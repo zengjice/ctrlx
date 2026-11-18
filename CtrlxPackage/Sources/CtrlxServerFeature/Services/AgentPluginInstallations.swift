@@ -15,9 +15,18 @@
             home: URL = FileManager.default.homeDirectoryForCurrentUser
         ) {
             self.pluginID = pluginID
-            let variable = pluginID == "codex" ? "CODEX_HOME" : "CLAUDE_CONFIG_DIR"
+            let variable = switch pluginID {
+            case "codex": "CODEX_HOME"
+            case "traex": "TRAE_HOME"
+            default: "CLAUDE_CONFIG_DIR"
+            }
             let override = environment[variable].flatMap { $0.isEmpty ? nil : $0 }
-            let path = configRoot ?? override ?? home.appendingPathComponent(pluginID == "codex" ? ".codex" : ".claude").path
+            let directory = switch pluginID {
+            case "codex": ".codex"
+            case "traex": ".trae"
+            default: ".claude"
+            }
+            let path = configRoot ?? override ?? home.appendingPathComponent(directory).path
             // Capture the actual default once, so the displayed folder matches
             // the CLI target and a duplicate default row cannot bypass the lock.
             self.configRoot = URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL.path

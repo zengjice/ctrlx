@@ -22,6 +22,8 @@ struct AgentBrowserProcess: Equatable, Sendable {
         let path = URL(fileURLWithPath: executable)
         switch path.lastPathComponent {
         case "codex": return "Codex"
+        case "traex",
+             "traecli": return "Traex"
         case "claude": return "Claude Code"
         default:
             // Claude's native installer resolves its launcher to claude/versions/<version>.
@@ -60,7 +62,7 @@ struct AgentBrowserProcessClient: Sendable {
             pid = process.parentPID
         }
         throw AgentBrowserTransport.Failure(
-            "Cannot identify a calling agent process. Run this browser action from a local native Codex or Claude Code tool; no tab was selected or changed."
+            "Cannot identify a calling agent process. Run this browser action from a local native Codex, Traex or Claude Code tool; no tab was selected or changed."
         )
     }
 

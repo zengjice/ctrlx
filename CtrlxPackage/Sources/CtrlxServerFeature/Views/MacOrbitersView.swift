@@ -206,7 +206,7 @@ struct MacOrbitersView: View {
             creation = .init(
                 id: .init(hostID: "local", sessionName: service.draft.title),
                 initialDirectory: service.draft.directory,
-                agents: options.agents.filter { ["codex", "claude-code"].contains($0.id) },
+                agents: options.agents.filter { ["codex", "claude-code", "traex"].contains($0.id) },
                 directorySource: options.directorySource,
                 unavailableReason: nil
             ) { request in

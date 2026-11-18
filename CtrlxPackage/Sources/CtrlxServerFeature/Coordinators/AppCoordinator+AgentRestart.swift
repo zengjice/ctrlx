@@ -42,7 +42,7 @@ extension AppCoordinator {
             workspace == nil || workspace?.isSamePane(as: native.source.workspaceIdentity) == true else {
             throw AgentRestartError("The Agent conversation or terminal changed, or its identity is unverified. Reopen the current tab's menu.")
         }
-        if process.pluginID == "codex", await identities.codexSessionID(native.processID, native.runtimeID) != native.source.sessionID {
+        if CodexProcessSessionReader.supports(pluginID: process.pluginID), await identities.codexSessionID(native.processID, native.runtimeID) != native.source.sessionID {
             throw AgentRestartError("The active Codex conversation changed. Reopen its tab's menu.")
         }
         let captured = try await captureAgentBinding(paneID: native.source.paneID, detected: process)

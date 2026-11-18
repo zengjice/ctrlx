@@ -1,11 +1,11 @@
 ---
 name: agent-ios
-description: Default for live iOS Simulator UI, screenshots and bug reproduction via ctrlx ios in local CtrlX Codex/Claude Code sessions. Not physical devices, Mac UI or compile-only tasks.
+description: Default for live iOS Simulator UI, screenshots and bug reproduction via ctrlx ios in local CtrlX Codex/Traex/Claude Code sessions. Not physical devices, Mac UI or compile-only tasks.
 ---
 
 # Default iOS Simulator entry point
 
-For live iOS Simulator UI work in a local CtrlX Codex/Claude Code session, use `ctrlx ios`
+For live iOS Simulator UI work in a local CtrlX Codex/Traex/Claude Code session, use `ctrlx ios`
 first, even when the user does not name this skill. Choose its native observation
 and input before Simulator.app desktop automation, raw `simctl`, or another iOS
 automation tool. The device appears in the calling agent's CtrlX workbench.
@@ -30,7 +30,7 @@ before choosing controls outside the basic workflow.
 
 If the CLI, runtime or caller identity is unavailable, report the actual blocker;
 do not silently switch to another device or borrow another pane's identity.
-Codex uses `ctrlx ios run -- codex` for a new session; native Claude Code runs
+Codex/Traex use `ctrlx ios run -- codex` / `ctrlx ios run -- traex` for new sessions; native Claude Code runs
 directly as `claude` in the CtrlX terminal. Never launch a nested agent to repair
 the current session. Observe before input, verify visible results, and respect
 human takeover as described in the workflow.

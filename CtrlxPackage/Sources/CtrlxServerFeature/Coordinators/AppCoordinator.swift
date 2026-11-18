@@ -851,6 +851,9 @@
             tmuxService.terminalCodexArguments = { [weak registry] in
                 await registry?.terminalCodexLaunchArguments() ?? []
             }
+            tmuxService.terminalTraexArguments = { [weak registry] in
+                await registry?.terminalTraexLaunchArguments() ?? []
+            }
 
             // Provide paths to the registry before enabling any sidecar (needed to
             // build PluginRootLayout for SidecarPluginCore construction).
@@ -859,7 +862,7 @@
             // Ensure the folder-drop plugins directory exists.
             paths.ensurePluginsDir()
 
-            var pluginIDs = ["claude-code", "codex"]
+            var pluginIDs = ["claude-code", "codex", "traex"]
             #if DEBUG
                 if CommandLine.arguments.contains("--e2e-test") {
                     pluginIDs.append("echo")
@@ -1179,6 +1182,7 @@
                 let resources = Bundle.main.resourceURL ?? URL(fileURLWithPath: ".")
                 marketplaceSource = switch id {
                 case "codex": resources.appendingPathComponent("plugin/codex")
+                case "traex": resources.appendingPathComponent("plugin/traex")
                 default: resources.appendingPathComponent("plugin")
                 }
             }

@@ -1,3 +1,4 @@
+import CodexPluginCore
 import CtrlxNetworking
 import CtrlxPluginProtocol
 import Foundation
@@ -8,6 +9,28 @@ import Testing
 struct AgentWorkflowComposerTests {
     private let codex = AgentWorkflowComposer(prompt: "› ", dimPlaceholder: "Ask Codex to do anything", pendingInputHints: ["Queued follow-up inputs"])
     private let claude = AgentWorkflowComposer(prompt: "❯ ", enclosedByRules: true, drawsInverseCursor: true)
+
+    @Test("Native Traex TUI capture admits the empty composer", .enabled(if: ProcessInfo.processInfo.environment["CTRLX_TRAEX_INPUT_PROBE"] != nil))
+    func nativeTraexCapture() throws {
+        let path = try #require(ProcessInfo.processInfo.environment["CTRLX_TRAEX_INPUT_PROBE"])
+        let output = try String(contentsOfFile: path, encoding: .utf8)
+        let native = try AgentWorkflowTerminalCapture.parse(output)
+        let core = CodexPluginCore(distribution: .traex)
+        #expect(AgentWorkflowComposerInspection.readiness(native, composer: core.workflowComposer) == .ready)
+    }
+
+    @Test("Traex's rotating dim suggestions are empty input, while typed drafts are retained")
+    func traexSuggestions() {
+        let composer = AgentWorkflowComposer(prompt: "❯ ", dimPlaceholder: "Ask TRAE CLI to do anything", allowsAnyDimPlaceholder: true)
+        for suggestion in ["Ask TRAE CLI to do anything", "Implement {feature}", "Find and fix a bug in @filename"] {
+            let empty = capture(["❯ \u{1b}[2m\(suggestion)\u{1b}[0m", ""], cursor: 0)
+            #expect(AgentWorkflowComposerInspection.readiness(empty, composer: composer) == .ready)
+            let typed = capture(["❯ \(suggestion)", ""], cursor: 0)
+            #expect(AgentWorkflowComposerInspection.readiness(typed, composer: composer) == .draft)
+        }
+        let changed = capture(["❯ \u{1b}[2mImplement {feature}\u{1b}[0m human draft", ""], cursor: 0)
+        #expect(AgentWorkflowComposerInspection.readiness(changed, composer: composer) == .draft)
+    }
 
     private func capture(_ rows: [String], cursor: Int, x: Int = 2, width: Int = 80, paste: Bool? = true, copyMode: Bool = false, visible: Bool = true) -> AgentWorkflowTerminalCapture {
         .init(

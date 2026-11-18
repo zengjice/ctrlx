@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "traex",
+  "display_name": "Traex",
+  "short_name": "traex",
+  "version": "1.0.0",
+  "process_names": [
+    "traex",
+    "traecli"
+  ],
+  "ui": {
+    "color": "#20BFA9"
+  }
+}

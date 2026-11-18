@@ -11,8 +11,8 @@ import Vapor
 @MainActor
 @Suite(.dependency(SecretsService.inMemory()), .dependency(RelayCredentials.inMemory()), .dependency(PushNotificationLogService.previewValue))
 struct StableNotificationTransportTests {
-    @Test("Offline APNs retains authenticated targets; new keys and legacy Hello do not inherit them")
-    func offlinePushCapabilities() async throws {
+    @Test("Offline APNs retains authenticated targets with or without answer actions", arguments: [false, true])
+    func offlinePushCapabilities(hasAnswerAction: Bool) async throws {
         let relay = PhraseTestRelay()
         let app = try await Application.make(.testing)
         app.webSocket("api", "ws") { _, ws in
@@ -36,10 +36,11 @@ struct StableNotificationTransportTests {
             let url = try #require(URL(string: "ws://127.0.0.1:\(port)"))
             try await viewerEncryption.establishSession(partnerPublicKey: hostEncryption.publicKey, partnerKeyId: hostEncryption.keyId, pairId: "pair")
             let id = AgentID(hostID: UUID(), paneID: UUID())
-            var pane = PaneState(paneId: "%1", agentSession: .init(paneId: "%1", pluginID: "pi"), claudeSessionID: "A", workspaceIdentity: .init(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: id.paneID))
+            let pluginID = hasAnswerAction ? "pi" : "traex"
+            var pane = PaneState(paneId: "%1", agentSession: .init(paneId: "%1", pluginID: pluginID), claudeSessionID: "A", workspaceIdentity: .init(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: id.paneID))
             pane.agentSession?.processRuntimeID = "runtime"
             let binding = try #require(AgentNotificationBinding(agentID: id, pane: pane))
-            let action = NotificationActionContext(sessionId: "%1", pluginId: "pi", requestId: "request", form: .permission(.init(alwaysSuggestionID: nil)), agent: binding)
+            let action = hasAnswerAction ? NotificationActionContext(sessionId: "%1", pluginId: pluginID, requestId: "request", form: .permission(.init(alwaysSuggestionID: nil)), agent: binding) : nil
 
             func connect() async throws {
                 await host.connect(serverURL: url, deviceId: "host", deviceName: "Host", username: "test", publicKey: hostEncryption.publicKey.base64EncodedString(), publicKeyId: hostEncryption.keyId)

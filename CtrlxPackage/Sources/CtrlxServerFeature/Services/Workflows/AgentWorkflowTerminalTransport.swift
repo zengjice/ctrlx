@@ -133,7 +133,7 @@ final class AgentWorkflowTerminalTransport {
             let attachments = try await store.invocationAttachments(invocation, instance: instance, status: .pending, now: Date())
             try await attachmentReader.validate(attachments)
             guard
-                ["codex", "claude-code"].contains(instance.pluginID),
+                ["codex", "claude-code", "traex"].contains(instance.pluginID),
                 attachments.allSatisfy({ ["image/png", "image/jpeg"].contains($0.attachment.mediaType) }) else {
                 throw AgentWorkflowError("This Agent cannot receive native workflow images.")
             }

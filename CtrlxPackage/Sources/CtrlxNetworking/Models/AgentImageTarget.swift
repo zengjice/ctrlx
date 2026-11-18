@@ -9,18 +9,26 @@ public struct AgentImageTarget: Codable, Sendable, Equatable, Identifiable {
     public let sessionName: String
     public let windowID: String
     public let label: String
-    public var id: String { paneID }
+    public var id: String {
+        paneID
+    }
 
     public init?(pane: PaneState) {
-        guard let agent = pane.agentSession,
-              ["codex", "claude-code"].contains(agent.pluginID),
-              let sessionID = pane.claudeSessionID, !sessionID.isEmpty else { return nil }
-        paneID = pane.paneId
+        guard
+            let agent = pane.agentSession,
+            ["codex", "claude-code", "traex"].contains(agent.pluginID),
+            let sessionID = pane.claudeSessionID, !sessionID.isEmpty else { return nil }
+        self.paneID = pane.paneId
         self.sessionID = sessionID
-        pluginID = agent.pluginID
-        sessionName = pane.sessionName
-        windowID = pane.stableWindowId
-        label = "\(pane.windowName) · \(agent.pluginID == "codex" ? "Codex" : "Claude Code") · \(pane.paneId)"
+        self.pluginID = agent.pluginID
+        self.sessionName = pane.sessionName
+        self.windowID = pane.stableWindowId
+        let name = switch agent.pluginID {
+        case "codex": "Codex"
+        case "traex": "Traex"
+        default: "Claude Code"
+        }
+        self.label = "\(pane.windowName) · \(name) · \(pane.paneId)"
     }
 
     public func matches(_ pane: PaneState) -> Bool {
@@ -37,7 +45,9 @@ public struct AgentImageTarget: Codable, Sendable, Equatable, Identifiable {
             throw AgentImageError.message("Close the Agent's prompt editor before adding the image.")
         }
         switch pane.agentSession?.state {
-        case .awaitingPermission, .awaitingReplies, .awaitingPlanApproval:
+        case .awaitingPermission,
+             .awaitingReplies,
+             .awaitingPlanApproval:
             throw AgentImageError.message("Answer the Agent's open question or approval before adding the image.")
         default: break
         }
@@ -46,7 +56,8 @@ public struct AgentImageTarget: Codable, Sendable, Equatable, Identifiable {
     public static func defaultTarget(in targets: [Self], preferred: Self?) -> Self? {
         if let preferred {
             return targets.first { $0.paneID == preferred.paneID && $0.sessionID == preferred.sessionID
-                && $0.pluginID == preferred.pluginID && $0.sessionName == preferred.sessionName && $0.windowID == preferred.windowID }
+                && $0.pluginID == preferred.pluginID && $0.sessionName == preferred.sessionName && $0.windowID == preferred.windowID
+            }
         }
         return targets.count == 1 ? targets.first : nil
     }
@@ -54,5 +65,11 @@ public struct AgentImageTarget: Codable, Sendable, Equatable, Identifiable {
 
 public enum AgentImageError: LocalizedError {
     case message(String)
-    public var errorDescription: String? { if case let .message(message) = self { message } else { nil } }
+    public var errorDescription: String? {
+        if case let .message(message) = self {
+            message
+        } else {
+            nil
+        }
+    }
 }

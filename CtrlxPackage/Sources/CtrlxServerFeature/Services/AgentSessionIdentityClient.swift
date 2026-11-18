@@ -54,7 +54,7 @@ extension AgentSessionIdentityClient {
     }
 
     func workflowInputIssue(for instance: AgentWorkflowInstance, allowsInitialBinding: Bool = false) async -> String? {
-        guard instance.pluginID == "codex" else { return nil }
+        guard CodexProcessSessionReader.supports(pluginID: instance.pluginID) else { return nil }
         let pid = String(instance.processID)
         guard runtimeID(pid) == instance.processRuntimeID else { return "The Agent process changed." }
         // The first task is bound by its authenticated native receipt; a new

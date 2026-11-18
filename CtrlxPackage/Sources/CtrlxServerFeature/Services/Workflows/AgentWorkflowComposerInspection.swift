@@ -155,6 +155,18 @@ enum AgentWorkflowComposerInspection {
             guard isRule(row - 1), isRule(row + 1) else { return (.draft, nil) }
         }
         let body = String(line.dropFirst(composer.prompt.count)).trimmingCharacters(in: .whitespaces)
+        if composer.allowsAnyDimPlaceholder {
+            guard !body.isEmpty, let cells = terminal.getLine(row: row) else { return (.draft, nil) }
+            // Traex rotates its suggestions. Only dim text is a placeholder;
+            // a typed draft at Home must never become automatic input authority.
+            for column in capture.cursorX..<capture.width {
+                let character = terminal.getCharacter(for: cells[column])
+                if character != "\0", character != " ", !cells[column].attribute.style.contains(.dim) {
+                    return (.draft, nil)
+                }
+            }
+            return (.ready, nil)
+        }
         if let placeholder = composer.dimPlaceholder {
             guard body == placeholder, let cells = terminal.getLine(row: row) else { return (.draft, nil) }
             for column in capture.cursorX..<(capture.cursorX + placeholder.count) {

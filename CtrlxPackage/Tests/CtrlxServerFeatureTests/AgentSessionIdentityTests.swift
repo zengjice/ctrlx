@@ -156,8 +156,8 @@ struct AgentSessionIdentityTests {
         }
     }
 
-    @Test("Workflow input requires the current Codex writer and stable runtime", arguments: ["current", "switched", "missing", "runtime-before", "runtime-during", "claude"])
-    func workflowInputRevalidatesTheActiveConversation(scenario: String) async {
+    @Test("Workflow input requires the current native writer and stable runtime", arguments: ["current", "switched", "missing", "runtime-before", "runtime-during", "claude"], ["codex", "traex"])
+    func workflowInputRevalidatesTheActiveConversation(scenario: String, pluginID: String) async {
         let runtime = LockIsolated(scenario == "runtime-before" ? "replaced" : "runtime")
         let reads = LockIsolated(0)
         let conversation = UUID().uuidString
@@ -169,7 +169,7 @@ struct AgentSessionIdentityTests {
             return !["missing", "switched"].contains(scenario) && id == conversation
         }, codexSessionID: { _, _ in nil })
         let instance = AgentWorkflowInstance(
-            hostID: UUID(), pluginID: scenario == "claude" ? "claude-code" : "codex", processID: 101, processRuntimeID: "runtime",
+            hostID: UUID(), pluginID: scenario == "claude" ? "claude-code" : pluginID, processID: 101, processRuntimeID: "runtime",
             workspacePane: .init(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID()),
             paneID: "%5", conversationID: conversation, displayName: "Developer", workingDirectory: "/repo",
             capabilities: nil, readiness: .ready

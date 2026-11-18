@@ -104,7 +104,7 @@ public struct AgentForkMenu: View {
     }
 
     private var disabledReason: String? {
-        unavailableReason ?? (sources.isEmpty ? sourceUnavailableReason ?? "Fork requires a recognized Codex or Claude Code conversation." : nil)
+        unavailableReason ?? (sources.isEmpty ? sourceUnavailableReason ?? "Fork requires a recognized Codex, Claude Code or Traex conversation." : nil)
     }
 
     #if os(macOS)
@@ -176,7 +176,11 @@ public struct AgentForkPanel: View {
         self._sourceID = State(initialValue: configuration.sources.first?.paneID ?? "")
         self._directory = State(initialValue: configuration.sources.first?.workingDirectory ?? "")
         self._showsDirectoryBrowser = State(initialValue: configuration.destination == .otherDirectory)
-        let agentName = configuration.sources.first?.pluginID == "codex" ? "codex" : "claude"
+        let agentName = switch configuration.sources.first?.pluginID {
+        case "codex": "codex"
+        case "traex": "traex"
+        default: "claude"
+        }
         self._forkName = State(initialValue: configuration.destination == .worktree ? "\(agentName)-\(UUID().uuidString.prefix(8).lowercased())" : "\(agentName) fork")
     }
 
@@ -270,7 +274,12 @@ public struct AgentForkPanel: View {
             if configuration.sources.count > 1 {
                 Picker("Source Agent", selection: $sourceID) {
                     ForEach(configuration.sources) { source in
-                        Text("\(source.pluginID == "codex" ? "Codex" : "Claude Code") · pane \(source.paneID)").tag(source.paneID)
+                        let agentName = switch source.pluginID {
+                        case "codex": "Codex"
+                        case "traex": "Traex"
+                        default: "Claude Code"
+                        }
+                        Text("\(agentName) · pane \(source.paneID)").tag(source.paneID)
                     }
                 }
                 .disabled(isLaunching)

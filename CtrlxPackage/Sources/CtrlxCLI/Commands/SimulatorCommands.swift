@@ -8,26 +8,30 @@ import Foundation
 struct SimulatorCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "ios", abstract: "Control iOS in this coding agent's CtrlX session (currently iOS Simulator only)",
-        subcommands: [SimulatorActionCommand.self, SimulatorBatchCommand.self, SimulatorRunCommand.self], defaultSubcommand: SimulatorActionCommand.self)
+        subcommands: [SimulatorActionCommand.self, SimulatorBatchCommand.self, SimulatorRunCommand.self], defaultSubcommand: SimulatorActionCommand.self
+    )
 }
 
 struct SimulatorRunCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "run",
-        abstract: "Run Codex with its native --no-daemon flag so tools retain this terminal's process identity")
+        abstract: "Run Codex or Traex with --no-daemon so tools retain this terminal's process identity"
+    )
     @Argument(parsing: .captureForPassthrough) var command: [String]
 
     func run() async throws {
         let words = command.first == "--" ? Array(command.dropFirst()) : command
-        guard let executable = words.first, URL(fileURLWithPath: executable).lastPathComponent == "codex" else {
-            throw ValidationError("Use ctrlx ios run -- codex [options]; Codex must support --no-daemon")
+        guard let executable = words.first, ["codex", "traex", "traecli"].contains(URL(fileURLWithPath: executable).lastPathComponent) else {
+            throw ValidationError("Use ctrlx ios run -- codex|traex [options]; the CLI must support --no-daemon")
         }
         var arguments = Array(words.dropFirst())
         let options = arguments.prefix { $0 != "--" }
         guard !options.contains(where: { $0 == "--remote" || $0.hasPrefix("--remote=") }) else {
-            throw ValidationError("run requires local Codex execution; do not pass --remote")
+            throw ValidationError("run requires local Agent execution; do not pass --remote")
         }
-        if !options.contains("--no-daemon") { arguments.insert("--no-daemon", at: 0) }
+        if !options.contains("--no-daemon") {
+            arguments.insert("--no-daemon", at: 0)
+        }
         @Dependency(SimulatorLaunchClient.self) var launcher
         try await launcher.run(executable, arguments)
     }
@@ -41,7 +45,9 @@ struct SimulatorLaunchClient: Sendable {
 extension SimulatorLaunchClient: DependencyKey {
     static let liveValue = Self(run: { executable, arguments in
         let pointers = ([executable] + arguments).map { strdup($0) } + [nil]
-        defer { for pointer in pointers { free(pointer) } }
+        defer { for pointer in pointers {
+            free(pointer)
+        } }
         pointers.withUnsafeBufferPointer { buffer in _ = execvp(executable, buffer.baseAddress!) }
         throw ValidationError("Cannot execute \(executable): \(String(cString: strerror(errno)))")
     })
@@ -51,7 +57,7 @@ struct SimulatorActionCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "action",
         abstract:
-            "inventory | config | resources | identity | devices | storage | open | erase | delete | status | metrics | logs | crashes | show | display-mode | snapshot | wait | tap | swipe | long-press | drag | pinch | rotate | key | button | paste | install | uninstall | launch | terminate | open-url | location | appearance | privacy | push | screenshot | record-start | record-stop | record-status | claim | close"
+        "inventory | config | resources | identity | devices | storage | open | erase | delete | status | metrics | logs | crashes | show | display-mode | snapshot | wait | tap | swipe | long-press | drag | pinch | rotate | key | button | paste | install | uninstall | launch | terminate | open-url | location | appearance | privacy | push | screenshot | record-start | record-stop | record-status | claim | close"
     )
     @Argument var operation: String
     @Option var socket: String?
@@ -110,19 +116,31 @@ struct SimulatorActionCommand: ParsableCommand {
             throw ValidationError("--new requires open")
         }
         if let timeoutMs {
-            guard ["wait", "launch"].contains(operation), (1...60000).contains(timeoutMs) else {
+            guard ["wait", "launch"].contains(operation), (1...60_000).contains(timeoutMs) else {
                 throw ValidationError("--timeout-ms requires wait or launch and a value of 1...60000")
             }
         }
         if resetMeasurements, operation != "status" {
             throw ValidationError("--reset-measurements requires status")
         }
-        if viaMenu, operation != "paste" { throw ValidationError("--via-menu requires paste") }
-        if split, operation != "show" { throw ValidationError("--split requires show") }
-        if modifiers != nil, operation != "key" { throw ValidationError("--modifiers requires key") }
-        if edge != nil, operation != "swipe" { throw ValidationError("--edge requires swipe") }
-        if scale != nil, operation != "pinch" { throw ValidationError("--scale requires pinch") }
-        if seconds != nil, operation != "record-start" { throw ValidationError("--seconds requires record-start") }
+        if viaMenu, operation != "paste" {
+            throw ValidationError("--via-menu requires paste")
+        }
+        if split, operation != "show" {
+            throw ValidationError("--split requires show")
+        }
+        if modifiers != nil, operation != "key" {
+            throw ValidationError("--modifiers requires key")
+        }
+        if edge != nil, operation != "swipe" {
+            throw ValidationError("--edge requires swipe")
+        }
+        if scale != nil, operation != "pinch" {
+            throw ValidationError("--scale requires pinch")
+        }
+        if seconds != nil, operation != "record-start" {
+            throw ValidationError("--seconds requires record-start")
+        }
         if operation == "pinch" {
             guard let x, let y, let scale, endX == nil, endY == nil, holdMs == nil else {
                 throw ValidationError("pinch requires --x, --y and --scale; no endpoint or hold options")
@@ -138,8 +156,9 @@ struct SimulatorActionCommand: ParsableCommand {
             throw ValidationError("Menu paste requires an element target or both --x and --y")
         }
         if let udid {
-            guard ["open", "erase", "delete"].contains(operation), UUID(uuidString: udid) != nil,
-                  device == nil, runtime == nil, deviceType == nil else {
+            guard
+                ["open", "erase", "delete"].contains(operation), UUID(uuidString: udid) != nil,
+                device == nil, runtime == nil, deviceType == nil else {
                 throw ValidationError("--udid requires open, erase or delete and one UUID, without --device, --runtime or --device-type")
             }
         }
@@ -170,30 +189,36 @@ struct SimulatorActionCommand: ParsableCommand {
                 _ = try SimulatorLocation(latitude: latitude, longitude: longitude)
             }
         }
-        if operation != "appearance", style != nil { throw ValidationError("--style requires appearance") }
-        if operation != "privacy", privacyAction != nil || service != nil { throw ValidationError("Permission options require privacy") }
+        if operation != "appearance", style != nil {
+            throw ValidationError("--style requires appearance")
+        }
+        if operation != "privacy", privacyAction != nil || service != nil {
+            throw ValidationError("Permission options require privacy")
+        }
         if operation == "privacy" {
             guard let privacyAction, let service, let bundle else { throw ValidationError("privacy requires --action, --service and --bundle") }
             _ = try SimulatorPrivacyRequest(action: privacyAction, service: service, bundle: bundle)
         }
-        if operation != "push", payload != nil { throw ValidationError("--payload requires push") }
+        if operation != "push", payload != nil {
+            throw ValidationError("--payload requires push")
+        }
         if !["logs", "crashes"].contains(operation), lastSeconds != nil || maxBytes != nil {
             throw ValidationError("Diagnostic bounds require logs or crashes")
         }
         if operation == "logs" {
             guard let bundle, limit == nil else { throw ValidationError("logs requires --bundle; --limit applies to crash reports or AX") }
-            _ = try SimulatorLogRequest(bundle: bundle, lastSeconds: lastSeconds ?? 30, maximumBytes: maxBytes ?? 65536)
+            _ = try SimulatorLogRequest(bundle: bundle, lastSeconds: lastSeconds ?? 30, maximumBytes: maxBytes ?? 65_536)
         }
         if operation == "crashes" {
             guard let bundle else { throw ValidationError("crashes requires --bundle") }
-            _ = try SimulatorCrashRequest(bundle: bundle, lastSeconds: lastSeconds ?? 3600, limit: limit ?? 5, maximumBytes: maxBytes ?? 65536)
+            _ = try SimulatorCrashRequest(bundle: bundle, lastSeconds: lastSeconds ?? 3_600, limit: limit ?? 5, maximumBytes: maxBytes ?? 65_536)
         }
         var push: SimulatorPushNotification?
         if operation == "push" {
             guard let bundle, let payload else { throw ValidationError("push requires --bundle and --payload") }
             let file = try FileHandle(forReadingFrom: URL(fileURLWithPath: payload))
             defer { try? file.close() }
-            let data = try file.read(upToCount: 4097) ?? Data()
+            let data = try file.read(upToCount: 4_097) ?? Data()
             push = try SimulatorPushNotification(bundle: bundle, payload: data)
         }
         if operation == "display-mode" {
@@ -203,12 +228,14 @@ struct SimulatorActionCommand: ParsableCommand {
         } else if mode != nil {
             throw ValidationError("--mode requires display-mode")
         }
-        if let profile, !["standard", "balanced"].contains(profile) { throw ValidationError("Unknown simulator profile") }
+        if let profile, !["standard", "balanced"].contains(profile) {
+            throw ValidationError("Unknown simulator profile")
+        }
         if ref != nil, identifier != nil || label != nil || role != nil {
             throw ValidationError("Choose a snapshot reference or semantic selectors")
         }
         if ref != nil || identifier != nil || label != nil || role != nil {
-            guard (["tap", "long-press", "drag", "wait"].contains(operation) || operation == "paste" && viaMenu), x == nil, y == nil else {
+            guard ["tap", "long-press", "drag", "wait"].contains(operation) || operation == "paste" && viaMenu, x == nil, y == nil else {
                 throw ValidationError("Element selectors require tap, long-press, drag, wait or menu paste, without start coordinates")
             }
         }
@@ -226,30 +253,62 @@ struct SimulatorActionCommand: ParsableCommand {
             throw ValidationError("Only screenshot and record-start accept --output")
         }
         var params: [String: JSONValue] = ["command": .string(operation)]
-        if operation == "record-start", let output { params["output"] = .string(output) }
-        if let seconds { params["seconds"] = .int(seconds) }
-        if let scale { params["scale"] = .double(scale) }
+        if operation == "record-start", let output {
+            params["output"] = .string(output)
+        }
+        if let seconds {
+            params["seconds"] = .int(seconds)
+        }
+        if let scale {
+            params["scale"] = .double(scale)
+        }
         if newDevice {
             params["new"] = .bool(true)
         }
-        if split { params["split"] = .bool(true) }
-        if clear { params["clear"] = .bool(true) }
-        if let edge { params["edge"] = .string(edge.rawValue) }
-        if let style { params["style"] = .string(style.rawValue) }
-        if let privacyAction { params["action"] = .string(privacyAction.rawValue) }
-        if let service { params["service"] = .string(service.rawValue) }
-        if let push { params["payload"] = .string(String(decoding: push.payload, as: UTF8.self)) }
-        if resetMeasurements { params["resetMeasurements"] = .bool(true) }
-        if let lastSeconds { params["lastSeconds"] = .int(lastSeconds) }
-        if let maxBytes { params["maximumBytes"] = .int(maxBytes) }
-        if viaMenu { params["viaMenu"] = .bool(true) }
-        if modifiers != nil { params["modifiers"] = .array(keyModifiers.map(JSONValue.string)) }
+        if split {
+            params["split"] = .bool(true)
+        }
+        if clear {
+            params["clear"] = .bool(true)
+        }
+        if let edge {
+            params["edge"] = .string(edge.rawValue)
+        }
+        if let style {
+            params["style"] = .string(style.rawValue)
+        }
+        if let privacyAction {
+            params["action"] = .string(privacyAction.rawValue)
+        }
+        if let service {
+            params["service"] = .string(service.rawValue)
+        }
+        if let push {
+            params["payload"] = .string(String(decoding: push.payload, as: UTF8.self))
+        }
+        if resetMeasurements {
+            params["resetMeasurements"] = .bool(true)
+        }
+        if let lastSeconds {
+            params["lastSeconds"] = .int(lastSeconds)
+        }
+        if let maxBytes {
+            params["maximumBytes"] = .int(maxBytes)
+        }
+        if viaMenu {
+            params["viaMenu"] = .bool(true)
+        }
+        if modifiers != nil {
+            params["modifiers"] = .array(keyModifiers.map(JSONValue.string))
+        }
         for (name, value) in [
             ("device", device), ("udid", udid), ("runtime", runtime), ("deviceType", deviceType), ("button", button), ("text", text), ("app", app),
             ("bundle", bundle), ("url", url), ("profile", profile), ("requires", requires), ("mode", mode),
             ("ref", ref), ("identifier", identifier), ("label", label), ("role", role), ("state", state), ("orientation", orientation),
         ] {
-            if let value { params[name] = .string(value) }
+            if let value {
+                params[name] = .string(value)
+            }
         }
         for (name, value) in [("x", x), ("y", y), ("endX", endX), ("endY", endY)] {
             if let value {
@@ -257,13 +316,27 @@ struct SimulatorActionCommand: ParsableCommand {
                 params[name] = .double(value)
             }
         }
-        if let latitude { params["latitude"] = .double(latitude) }
-        if let longitude { params["longitude"] = .double(longitude) }
-        for (name, value) in [("durationMs", durationMs), ("usage", usage), ("limit", limit), ("maximumDevices", maxDevices),
-            ("memoryReserveMiB", memoryReserveMiB), ("diskReserveMiB", diskReserveMiB), ("holdMs", holdMs), ("timeoutMs", timeoutMs)] {
-            if let value { params[name] = .int(value) }
+        if let latitude {
+            params["latitude"] = .double(latitude)
         }
-        guard try JSONEncoder().encode(params).count <= 64000 else { throw ValidationError("Simulator request exceeds 64 KB") }
+        if let longitude {
+            params["longitude"] = .double(longitude)
+        }
+        for (name, value) in [
+            ("durationMs", durationMs),
+            ("usage", usage),
+            ("limit", limit),
+            ("maximumDevices", maxDevices),
+            ("memoryReserveMiB", memoryReserveMiB),
+            ("diskReserveMiB", diskReserveMiB),
+            ("holdMs", holdMs),
+            ("timeoutMs", timeoutMs),
+        ] {
+            if let value {
+                params[name] = .int(value)
+            }
+        }
+        guard try JSONEncoder().encode(params).count <= 64_000 else { throw ValidationError("Simulator request exceeds 64 KB") }
         return params
     }
 
@@ -273,7 +346,8 @@ struct SimulatorActionCommand: ParsableCommand {
         @Dependency(SimulatorCommandClient.self) var client
         let response = try client.send(
             JSONRPCRequest(id: UUID().uuidString, method: "simulator.action", params: params), socket,
-            operation == "open" ? 240 : 130, 9 * 1024 * 1024)
+            operation == "open" ? 240 : 130, 9 * 1_024 * 1_024
+        )
         guard response.ok else { throw ValidationError(response.error?.message ?? "Simulator action failed") }
         let result = try saveScreenshot(response.result ?? [:], requestedAt: screenshotRequestedAt)
         let data = try JSONEncoder().encode(result)
@@ -283,7 +357,8 @@ struct SimulatorActionCommand: ParsableCommand {
     func saveScreenshot(_ original: [String: JSONValue], requestedAt: Double) throws -> [String: JSONValue] {
         var result = original
         if operation == "screenshot", let output {
-            guard let encoded = result["data"]?.stringValue, let data = Data(base64Encoded: encoded), data.count <= 6 * 1024 * 1024,
+            guard
+                let encoded = result["data"]?.stringValue, let data = Data(base64Encoded: encoded), data.count <= 6 * 1_024 * 1_024,
                 data.starts(with: [137, 80, 78, 71, 13, 10, 26, 10])
             else { throw ValidationError("Invalid simulator PNG") }
             let fd = Darwin.open(output, O_CREAT | O_EXCL | O_WRONLY | O_NOFOLLOW, 0o600)
@@ -291,8 +366,9 @@ struct SimulatorActionCommand: ParsableCommand {
             let file = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
             try file.write(contentsOf: data)
             try file.close()
-            if case let .object(originalGeometry)? = result["geometry"],
-               case let .object(originalTiming)? = originalGeometry["screenshotTiming"] {
+            if
+                case let .object(originalGeometry)? = result["geometry"],
+                case let .object(originalTiming)? = originalGeometry["screenshotTiming"] {
                 var geometry = originalGeometry
                 var timing = originalTiming
                 timing["cliRequestedAt"] = .double(requestedAt)
@@ -319,7 +395,7 @@ extension SimulatorCommandClient: DependencyKey {
     })
 }
 
-extension SimulatorAppearance: ExpressibleByArgument {}
-extension SimulatorPrivacyAction: ExpressibleByArgument {}
-extension SimulatorPrivacyService: ExpressibleByArgument {}
-extension SimulatorTouchEdge: ExpressibleByArgument {}
+extension SimulatorAppearance: ExpressibleByArgument { }
+extension SimulatorPrivacyAction: ExpressibleByArgument { }
+extension SimulatorPrivacyService: ExpressibleByArgument { }
+extension SimulatorTouchEdge: ExpressibleByArgument { }

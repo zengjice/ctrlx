@@ -4,7 +4,17 @@ import DependenciesMacros
 import Foundation
 
 public enum AgentForkHistoryLayout: Sendable {
-    case codex, claude
+    case codex
+    case claude
+    case traex
+
+    var directory: String {
+        switch self {
+        case .codex: "sessions"
+        case .claude: "projects"
+        case .traex: "cli/sessions"
+        }
+    }
 }
 
 @DependencyClient
@@ -26,13 +36,13 @@ private actor AgentForkHistoryResolver {
         var matches: Set<String> = []
         for root in roots {
             let rootURL = URL(fileURLWithPath: root).resolvingSymlinksInPath()
-            let storage = rootURL.appendingPathComponent(layout == .codex ? "sessions" : "projects")
+            let storage = rootURL.appendingPathComponent(layout.directory)
             guard let entries = files.enumerator(at: storage, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles]) else { continue }
             for case let url as URL in entries {
                 try Task.checkCancellation()
                 let name = url.lastPathComponent.lowercased()
-                let match = layout == .codex ? name.hasSuffix("-\(id).jsonl") : name == "\(id).jsonl"
-                if match, (try url.resourceValues(forKeys: [.isRegularFileKey])).isRegularFile == true {
+                let match = layout == .claude ? name == "\(id).jsonl" : name.hasSuffix("-\(id).jsonl")
+                if match, try (url.resourceValues(forKeys: [.isRegularFileKey])).isRegularFile == true {
                     matches.insert(rootURL.path)
                     break
                 }

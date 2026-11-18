@@ -8,6 +8,15 @@
 
     @Suite("Agent plugin installation state") @MainActor
     struct AgentPluginInstallationsTests {
+        @Test("Traex installation paths never borrow Codex or Claude configuration")
+        func traexHome() {
+            let environment = ["CODEX_HOME": "/other-codex", "CLAUDE_CONFIG_DIR": "/other-claude", "TRAE_HOME": "/selected-traex"]
+            let home = URL(fileURLWithPath: "/fixture")
+            #expect(AgentPluginLocation(pluginID: "traex", configRoot: nil, environment: environment, home: home).configRoot == "/selected-traex")
+            #expect(AgentPluginLocation(pluginID: "traex", configRoot: nil, environment: [:], home: home).configRoot == "/fixture/.trae")
+            #expect(AgentPluginLocation(pluginID: "traex", configRoot: "/explicit", environment: environment, home: home).configRoot == "/explicit")
+        }
+
         private actor Core: AgentPluginMaintenance {
             var status: PluginInstallStatus = .installed(version: "1.0.0")
             var checks = 0

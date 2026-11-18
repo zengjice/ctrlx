@@ -49,7 +49,7 @@ extension AppCoordinator {
                 let native, binding.matches(native),
                 windowManager.paneStates[paneID].flatMap(AgentForkSource.init(pane:)) == native.source {
                 conversation = native.source.sessionID
-            } else if candidate.pluginID == "codex", known?.conversationID.isEmpty ?? true {
+            } else if CodexProcessSessionReader.supports(pluginID: candidate.pluginID), known?.conversationID.isEmpty ?? true {
                 // A fresh Codex process creates its first native record only
                 // after input. Its first authenticated task receipt binds it.
                 conversation = ""

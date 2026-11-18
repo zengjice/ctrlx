@@ -4,7 +4,7 @@
 
     /// Shared caller-evidence matching; the returned kernel name is never a launch path.
     public enum AgentExecutableIdentity {
-        private static let removableNames: Set = ["codex", "codex-code-mode-host", "claude", "opencode", "omp", "pi"]
+        private static let removableNames: Set = ["codex", "codex-code-mode-host", "traex", "traecli", "claude", "opencode", "omp", "pi"]
 
         public static func resolve(path: String?, errorCode: Int32, kernelName: String) -> String? {
             if let path, path.hasPrefix("/") {
