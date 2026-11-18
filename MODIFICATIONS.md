@@ -7,6 +7,31 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.173 — Shared Agent CLI version admission
+
+- Use one version policy for built-in Agent workflow input and automatic resume,
+  including the displayed support ranges. Admit stable Codex `0.160.x–0.179.x`,
+  Claude Code `2.1.300–2.1.399`, and Traex `0.213.x–0.219.x`; reject malformed,
+  prerelease and out-of-range versions for automatic resume. Preserve explicit
+  manual resume and the existing process, conversation, hook and input checks.
+  Source: `fbfbcccd`.
+- Check the CLI actually selected for recovery instead of retaining an obsolete
+  snapshot-version rejection. Range admission does not certify every included
+  CLI release. See [version policy](docs/services-reference.md#built-in-agent-cli-version-admission)
+  and [workspace recovery](docs/workspace-recovery-design.md).
+
+- Validation: 100 focused tests across nine suites, lint for 16 Swift files,
+  both boundary checks, diff checks and all 34 distributed-installer process/flow
+  tests passed. Fresh standalone native Codex 0.170.0 and Claude Code 2.1.327
+  fixtures passed idle, interrupted and approval-waiting resume, six scenarios
+  total, using private tmux/configuration roots and loopback model replies.
+  Original native histories were retained, no new model requests were sent on
+  resume, and pending approval commands were not executed.
+- This release builds macOS only. Native fixtures do not establish installed-App
+  or real-account acceptance, nor compatibility with every admitted version.
+  Full E2E, the unfiltered unit suite and Apple Intelligence evaluations were not
+  rerun. Unrelated README and temporary-work edits are preserved.
+
 ## 3.0.172 — Serialize Orbie actions with background refresh
 
 - Keep background inspection separate from user-operation busy state. Explicit
