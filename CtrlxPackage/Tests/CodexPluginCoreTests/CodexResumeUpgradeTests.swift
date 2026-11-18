@@ -29,15 +29,16 @@ struct CodexResumeUpgradeTests {
         } operation: {
             let core = CodexPluginCore()
             for version: String? in [
-                nil, "", "codex-cli 0.159.99", "codex-cli 0.170.0", "codex-cli 1.160.0",
+                nil, "", "codex-cli 0.159.99", "codex-cli 0.180.0", "codex-cli 1.160.0",
                 "codex-cli 0.167.0-beta", "codex-cli 0.167.0+build", "codex-cli 0.167.01", "0.167.0",
+                "codex-cli 0.170.0-beta", "codex-cli 0.179.0+build", "codex-cli 0.170.01", "0.170.0",
             ] {
                 let descriptor = try await core.recoveryDescriptor(
                     sessionID: UUID().uuidString, projectPath: "/project",
                     invocation: .init(executable: "/tools/codex", arguments: [], version: version)
                 )
                 let reason = await core.automaticResumeUnavailableReason(descriptor, currentVersion: version)
-                #expect(reason?.contains("0.160.x–0.169.x") == true)
+                #expect(reason?.contains("0.160.x–0.179.x") == true)
                 #expect(descriptor.automaticResumeUnavailableReason == reason)
                 let command = try await core.commandForResume(descriptor).command
                 #expect(Array(command.args.prefix(2)) == ["resume", descriptor.sessionID])

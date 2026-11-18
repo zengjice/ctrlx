@@ -15,6 +15,7 @@ struct WorkspaceAgentProcessTests {
             ("2.1.308 (Claude Code)\n", 0, "2.1.308 (Claude Code)"),
             ("traecli 0.213.1\ninstallation: public\n", 0, "traecli 0.213.1"),
             ("traecli 0.214.0\ninstallation: public\n", 0, "traecli 0.214.0"),
+            ("traecli 0.220.0\ninstallation: public\n", 0, "traecli 0.220.0"),
             ("traecli 0.213.1\ninstallation: public\nextra output\n", 0, nil),
             ("traecli 0.213.1\nunrecognized diagnostic\n", 0, nil),
             ("codex-cli 0.167.0\ninstallation: public\n", 0, nil),
@@ -31,7 +32,7 @@ struct WorkspaceAgentProcessTests {
                 #expect(version == expected)
                 if let version, version.hasPrefix("traecli ") {
                     let core = CodexPluginCore(distribution: .traex)
-                    #expect((core.workflowRuntimeIssue(cliVersion: version) == nil) == (version == "traecli 0.213.1"))
+                    #expect((core.workflowRuntimeIssue(cliVersion: version) == nil) == (version != "traecli 0.220.0"))
                 }
             }
         }

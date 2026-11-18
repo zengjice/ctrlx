@@ -212,7 +212,7 @@ struct AgentWorkflowRequestTests {
         let expected: String
         switch scenario {
         case "version":
-            observation.capabilityIssue = "Unsupported CLI version: codex-cli 0.170.0. Supported range: codex-cli 0.160.x–0.169.x (stable)."
+            observation.capabilityIssue = "Unsupported CLI version: codex-cli 0.180.0. Supported range: codex-cli 0.160.x–0.179.x (stable)."
             observation.capabilities = nil
             observation.readiness = .unavailable
             expected = try "Agent 0: \(#require(observation.capabilityIssue))"

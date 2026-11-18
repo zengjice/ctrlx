@@ -7,7 +7,7 @@ import Testing
 @testable import ClaudeCodePluginCore
 
 struct ClaudeResumeUpgradeTests {
-    @Test("Recovery reevaluates legacy warnings and CLI upgrades through the plugin contract", arguments: ["2.1.276 (Claude Code)", "2.1.308 (Claude Code)", "2.1.319 (Claude Code)"])
+    @Test("Recovery reevaluates legacy warnings and CLI upgrades through the plugin contract", arguments: ["2.1.276 (Claude Code)", "2.1.308 (Claude Code)", "2.1.319 (Claude Code)", "2.1.327 (Claude Code)"])
     func legacyWarning(version: String) async {
         let core: any AgentSessionResuming = ClaudeCodePluginCore()
         let saved = AgentResumeDescriptor(
@@ -15,8 +15,9 @@ struct ClaudeResumeUpgradeTests {
             executable: "/removed/claude", cliVersion: version,
             automaticResumeUnavailableReason: version == "2.1.276 (Claude Code)" ? nil : "Automatic resume has not been verified for Claude Code \(version)."
         )
-        #expect(await core.automaticResumeUnavailableReason(saved, currentVersion: "2.1.319 (Claude Code)") == nil)
-        #expect(await core.automaticResumeUnavailableReason(saved, currentVersion: "2.1.320 (Claude Code)") != nil)
+        #expect(await core.automaticResumeUnavailableReason(saved, currentVersion: "2.1.327 (Claude Code)") == nil)
+        #expect(await core.automaticResumeUnavailableReason(saved, currentVersion: "2.1.399 (Claude Code)") == nil)
+        #expect(await core.automaticResumeUnavailableReason(saved, currentVersion: "2.1.400 (Claude Code)") != nil)
         #expect(await core.automaticResumeUnavailableReason(saved, currentVersion: nil) != nil)
         let incomplete = AgentResumeDescriptor(pluginID: "claude-code", sessionID: saved.sessionID, projectPath: saved.projectPath, configurationRoot: saved.configurationRoot, usesDefaultConfiguration: false)
         #expect(await core.automaticResumeUnavailableReason(incomplete, currentVersion: "2.1.319 (Claude Code)") != nil)
@@ -29,7 +30,7 @@ struct ClaudeResumeUpgradeTests {
         } operation: {
             let core = ClaudeCodePluginCore()
             for version: String? in [
-                nil, "", "2.1.276 (Claude Code)", "2.1.299 (Claude Code)", "2.1.320 (Claude Code)", "3.1.308 (Claude Code)",
+                nil, "", "2.1.276 (Claude Code)", "2.1.299 (Claude Code)", "2.1.400 (Claude Code)", "3.1.308 (Claude Code)",
                 "2.1.308-beta (Claude Code)", "2.1.308+build (Claude Code)", "2.1.0308 (Claude Code)", "2.1.308",
             ] {
                 let descriptor = try await core.recoveryDescriptor(
@@ -37,7 +38,7 @@ struct ClaudeResumeUpgradeTests {
                     invocation: .init(executable: "/tools/claude", arguments: [], version: version)
                 )
                 let reason = await core.automaticResumeUnavailableReason(descriptor, currentVersion: version)
-                #expect(reason?.contains("2.1.300–2.1.319") == true)
+                #expect(reason?.contains("2.1.300–2.1.399") == true)
                 #expect(descriptor.automaticResumeUnavailableReason == reason)
                 #expect(try await core.commandForResume(descriptor).command.args == ["--resume", descriptor.sessionID])
                 #expect(await core.automaticResumeUnavailableReason(descriptor, currentVersion: "2.1.319 (Claude Code)") == nil)

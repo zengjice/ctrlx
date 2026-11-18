@@ -58,17 +58,10 @@ public enum CodexDistribution: Sendable, Equatable {
             + (self == .traex ? ["--permission-mode", "--shell-tool-timeout", "--allowed-tool", "--disallowed-tool"] : []))
     }
 
-    var supportedAutomationVersions: String {
+    var automationVersionPolicy: AgentCLIVersionPolicy {
         switch self {
-        case .codex: CodexPluginCore.supportedAutomationCLIVersions
-        case .traex: "traecli 0.213.1"
-        }
-    }
-
-    func supportsAutomationCLI(_ version: String) -> Bool {
-        switch self {
-        case .codex: CodexPluginCore.supportsAutomationCLI(version)
-        case .traex: version == "traecli 0.213.1"
+        case .codex: .codex
+        case .traex: .traex
         }
     }
 

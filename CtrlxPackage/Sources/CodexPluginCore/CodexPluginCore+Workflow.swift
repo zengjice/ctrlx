@@ -3,11 +3,11 @@ import CtrlxPluginProtocol
 
 extension CodexPluginCore: AgentWorkflowProviding {
     public nonisolated var workflowCLIVersionSupport: String? {
-        distribution.supportedAutomationVersions
+        distribution.automationVersionPolicy.supportedVersions
     }
 
     public nonisolated func supportsWorkflowCLI(_ version: String) -> Bool {
-        distribution.supportsAutomationCLI(version)
+        distribution.automationVersionPolicy.supports(version)
     }
 
     public nonisolated var workflowComposer: AgentWorkflowComposer {

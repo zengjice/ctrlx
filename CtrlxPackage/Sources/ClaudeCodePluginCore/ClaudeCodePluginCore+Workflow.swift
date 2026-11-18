@@ -1,13 +1,14 @@
+import CtrlxCommon
 import CtrlxNetworking
 import CtrlxPluginProtocol
 
 extension ClaudeCodePluginCore: AgentWorkflowProviding {
     public nonisolated var workflowCLIVersionSupport: String? {
-        Self.supportedAutomationCLIVersions
+        AgentCLIVersionPolicy.claudeCode.supportedVersions
     }
 
     public nonisolated func supportsWorkflowCLI(_ version: String) -> Bool {
-        Self.supportsAutomationCLI(version)
+        AgentCLIVersionPolicy.claudeCode.supports(version)
     }
 
     public nonisolated var workflowComposer: AgentWorkflowComposer {

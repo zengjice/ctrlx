@@ -11,7 +11,7 @@ import Testing
 /// by the translator / keystroke / scanner / installer suites).
 @Suite("ClaudeCodePluginCore")
 struct ClaudeCodePluginCoreTests {
-    @Test("Claude recovery and workflow admit the same stable CLI range", arguments: 300...319)
+    @Test("Claude recovery and workflow admit the same stable CLI range", arguments: 300...399)
     func nativeResumeSupportedVersion(patch: Int) async throws {
         let version = "2.1.\(patch) (Claude Code)"
         try await withDependencies {

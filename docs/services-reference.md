@@ -1910,6 +1910,27 @@ occupancy until the replacement is loaded successfully, avoiding an intermediate
 empty conversation and window collapse. Replies are selectable, can be copied in full,
 and retain saved-attachment and suggested Agent/Workflow navigation.
 
+### Built-in Agent CLI version admission
+
+Maintain built-in CLI ranges only in
+[`AgentCLIVersionPolicy`](../CtrlxPackage/Sources/CtrlxCommon/Constants/AgentCLIVersionPolicy.swift).
+Its three declarations define Codex `0.160.x–0.179.x`, Claude Code
+`2.1.300–2.1.399`, and Traex `0.213.x–0.219.x`, all stable versions.
+The same numeric bounds generate the displayed support range; plugin cores no
+longer carry a separate range label or matching expression.
+
+Workflow/Orbie/Orbiter automatic input uses this policy through
+`workflowRuntimeIssue` during runtime inspection. Workspace recovery uses it both
+when capturing the resume descriptor and when checking the CLI selected for
+automatic resume. Missing version output does not by itself reject an already
+running Agent's workflow input; automatic resume still requires a known supported
+version and the original invocation. Explicit manual resume remains available.
+
+Model discovery's output-format checks, native menu capabilities, hook/plugin
+versions, and Host/Viewer/Relay wire compatibility are separate contracts, not
+additional copies of these CLI ranges. Range admission does not replace process,
+conversation, hook or input verification, or claim native testing of every version.
+
 ### Ordinary messages and shared Agent interaction
 
 `AgentRuntimeCatalog` coalesces the existing process/identity scan for both clients.

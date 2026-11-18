@@ -4,7 +4,7 @@ import Testing
 @testable import ClaudeCodePluginCore
 
 struct ClaudeWorkflowTranscriptTests {
-    @Test(arguments: 300...319)
+    @Test(arguments: 300...399)
     func automaticHandoffAcceptsConfiguredCLIRange(patch: Int) {
         let provider: any AgentWorkflowProviding = ClaudeCodePluginCore()
         #expect(provider.workflowRuntimeIssue(cliVersion: "2.1.\(patch) (Claude Code)") == nil)
@@ -21,7 +21,7 @@ struct ClaudeWorkflowTranscriptTests {
     func automaticHandoffRejectsOutsideRangeAndUnknownCLIFormats() {
         let provider: any AgentWorkflowProviding = ClaudeCodePluginCore()
         for version in [
-            "2.1.299 (Claude Code)", "2.1.320 (Claude Code)", "2.1.3000 (Claude Code)",
+            "2.1.299 (Claude Code)", "2.1.400 (Claude Code)", "2.1.3000 (Claude Code)",
             "2.0.308 (Claude Code)", "2.2.308 (Claude Code)", "3.1.308 (Claude Code)",
             "2.1.0308 (Claude Code)", "2.1.-308 (Claude Code)", "2.1 (Claude Code)",
             "2.1.308-beta (Claude Code)", "2.1.308+build (Claude Code)", "2.1.308 (Claude Code)\n",
@@ -29,8 +29,8 @@ struct ClaudeWorkflowTranscriptTests {
         ] {
             #expect(provider.workflowRuntimeIssue(cliVersion: version) != nil, "Unexpectedly accepted: \(version)")
         }
-        let issue = provider.workflowRuntimeIssue(cliVersion: "2.1.320 (Claude Code)")
-        #expect(issue?.contains("2.1.300–2.1.319") == true)
+        let issue = provider.workflowRuntimeIssue(cliVersion: "2.1.400 (Claude Code)")
+        #expect(issue?.contains("2.1.300–2.1.399") == true)
         #expect(issue?.contains("Verified build") == false)
     }
 

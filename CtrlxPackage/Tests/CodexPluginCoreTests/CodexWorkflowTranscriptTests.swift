@@ -4,7 +4,7 @@ import Testing
 @testable import CodexPluginCore
 
 struct CodexWorkflowTranscriptTests {
-    @Test(arguments: 160...169)
+    @Test(arguments: 160...179)
     func automaticHandoffAcceptsConfiguredCLIRange(minor: Int) {
         let provider: any AgentWorkflowProviding = CodexPluginCore()
         for patch in [0, 1, 12] {
@@ -23,16 +23,17 @@ struct CodexWorkflowTranscriptTests {
     func automaticHandoffRejectsOutsideRangeAndUnknownCLIFormats() {
         let provider: any AgentWorkflowProviding = CodexPluginCore()
         for version in [
-            "codex-cli 0.159.99", "codex-cli 0.170.0", "codex-cli 1.160.0",
+            "codex-cli 0.159.99", "codex-cli 0.180.0", "codex-cli 1.160.0",
             "codex-cli 0.16.0", "codex-cli 0.160", "codex-cli 0.160.0.1",
             "codex-cli 0.160.-1", "codex-cli 0.160.01", "codex-cli 0.0160.0",
             "codex-cli 0.163.0-beta", "codex-cli 0.169.0+build", "codex-cli 0.160.0\n",
+            "codex-cli 0.170.0-beta", "codex-cli 0.179.0+build", "codex-cli 0.170.01", "codex-cli 0.0170.0",
             "codex-cli 0.160.x", "0.160.0", "2.1.308 (Claude Code)",
         ] {
             #expect(provider.workflowRuntimeIssue(cliVersion: version) != nil, "Unexpectedly accepted: \(version)")
         }
-        let issue = provider.workflowRuntimeIssue(cliVersion: "codex-cli 0.170.0")
-        #expect(issue?.contains("0.160.x–0.169.x") == true)
+        let issue = provider.workflowRuntimeIssue(cliVersion: "codex-cli 0.180.0")
+        #expect(issue?.contains("0.160.x–0.179.x") == true)
         #expect(issue?.contains("Verified build") == false)
     }
 

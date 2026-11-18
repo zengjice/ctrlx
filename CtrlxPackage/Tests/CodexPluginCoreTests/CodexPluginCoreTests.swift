@@ -10,7 +10,7 @@ import Testing
 /// Lifecycle + auto-launch behavior of the core itself (the pieces not covered
 /// by the translator / keystroke / scanner / installer / correlation suites).
 struct CodexPluginCoreTests {
-    @Test("Codex recovery and workflow admit the same stable CLI range without the shared daemon", arguments: 160...169, [0, 1, 12])
+    @Test("Codex recovery and workflow admit the same stable CLI range without the shared daemon", arguments: 160...179, [0, 1, 12])
     func nativeResumeSupportedVersion(minor: Int, patch: Int) async throws {
         let version = "codex-cli 0.\(minor).\(patch)"
         try await withDependencies {

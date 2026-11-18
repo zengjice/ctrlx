@@ -112,10 +112,40 @@ struct TraexPluginCoreTests {
         #expect(core.workflowComposer.prompt == "❯ ")
         #expect(core.supportsWorkflowCLI("traecli 0.213.1"))
         #expect(!core.supportsWorkflowCLI("codex-cli 0.167.0"))
-        #expect(!core.supportsWorkflowCLI("traecli 0.214.0"))
+        #expect(core.supportsWorkflowCLI("traecli 0.214.0"))
+        #expect(!core.supportsWorkflowCLI("traecli 0.220.0"))
         await #expect(throws: AgentProviderError.self) {
             try await core.commandForLaunch(projectPath: "/project", providerID: "openai")
         }
+    }
+
+    @Test("Traex workflow and automatic resume use the shared stable range", arguments: 213...219, [0, 1, 12])
+    func nativeResumeSupportedVersion(minor: Int, patch: Int) async throws {
+        try await withDependencies {
+            $0[AgentForkHistoryClient.self].root = { _, _, layout in
+                #expect(layout == .traex)
+                return "/traex/source"
+            }
+        } operation: {
+            let core = CodexPluginCore(distribution: .traex)
+            let version = "traecli 0.\(minor).\(patch)"
+            let saved = try await core.recoveryDescriptor(sessionID: UUID().uuidString, projectPath: "/project", invocation: .init(executable: "/tools/traex", arguments: [], version: version))
+            #expect(core.workflowRuntimeIssue(cliVersion: version) == nil)
+            #expect(saved.automaticResumeUnavailableReason == nil)
+            #expect(await core.automaticResumeUnavailableReason(saved, currentVersion: version) == nil)
+        }
+    }
+
+    @Test("Traex rejects outside-range and nonstable CLI versions through both admission paths")
+    func unsupportedAutomationVersions() async {
+        let core = CodexPluginCore(distribution: .traex)
+        let saved = AgentResumeDescriptor(pluginID: "traex", sessionID: UUID().uuidString, projectPath: "/project", configurationRoot: "/traex/source", usesDefaultConfiguration: false, executable: "/tools/traex")
+        for version in ["traecli 0.212.99", "traecli 0.220.0", "traecli 0.213.01", "traecli 0.213.1-beta", "traecli 0.219.0+build", "traecli 1.213.1", "codex-cli 0.213.1"] {
+            #expect(core.workflowRuntimeIssue(cliVersion: version)?.contains("traecli 0.213.x–0.219.x") == true)
+            #expect(await core.automaticResumeUnavailableReason(saved, currentVersion: version)?.contains("traecli 0.213.x–0.219.x") == true)
+        }
+        #expect(core.workflowRuntimeIssue(cliVersion: nil) == nil)
+        #expect(await core.automaticResumeUnavailableReason(saved, currentVersion: nil) != nil)
     }
 
     @Test("Traex does not inherit Codex's unverified OTLP exporter")

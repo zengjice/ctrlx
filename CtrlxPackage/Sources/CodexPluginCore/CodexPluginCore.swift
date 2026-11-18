@@ -509,22 +509,9 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         ))
     }
 
-    static let supportedAutomationCLIVersions = "codex-cli 0.160.x–0.169.x (stable)"
-
-    static func supportsAutomationCLI(_ version: String) -> Bool {
-        version.wholeMatch(of: /codex-cli 0\.16[0-9]\.(0|[1-9][0-9]*)/) != nil
-    }
-
-    private func automaticResumeVersionUnavailableReason(_ version: String?) -> String? {
-        guard let version, distribution.supportsAutomationCLI(version) else {
-            return "Automatic resume supports \(distribution.supportedAutomationVersions); found \(version ?? "unknown version"). Choose Resume to reopen it explicitly."
-        }
-        return nil
-    }
-
     public func automaticResumeUnavailableReason(_ descriptor: AgentResumeDescriptor, currentVersion: String?) async -> String? {
         guard descriptor.executable != nil else { return "The original process invocation was not recorded. Choose Resume to reopen it explicitly." }
-        return automaticResumeVersionUnavailableReason(currentVersion)
+        return distribution.automationVersionPolicy.automaticResumeUnavailableReason(currentVersion)
     }
 
     public func recoveryDescriptor(sessionID: String, projectPath: String, invocation: AgentResumeInvocation? = nil) async throws -> AgentResumeDescriptor {
@@ -551,7 +538,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
             executable: invocation?.executable,
             cliVersion: invocation?.version,
             arguments: arguments,
-            automaticResumeUnavailableReason: invocation == nil ? "The original process invocation was not recorded." : automaticResumeVersionUnavailableReason(invocation?.version),
+            automaticResumeUnavailableReason: invocation == nil ? "The original process invocation was not recorded." : distribution.automationVersionPolicy.automaticResumeUnavailableReason(invocation?.version),
             providerID: invocation?.providerID
         )
     }

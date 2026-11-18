@@ -35,6 +35,10 @@ Unknown CLI output is a check error, not proof that plugins are absent.
 
 ## Capabilities
 
+Workflow input and automatic resume use the centrally maintained
+[`AgentCLIVersionPolicy`](../../CtrlxPackage/Sources/CtrlxCommon/Constants/AgentCLIVersionPolicy.swift).
+The native verification below remains specific to Traex 0.213.1.
+
 | Operation | Behavior |
 |---|---|
 | New Agent / project | Launches Traex with its native configuration |
@@ -43,7 +47,7 @@ Unknown CLI output is a check error, not proof that plugins are absent.
 | Resume / Fork | Native `resume` / `fork` with the exact conversation ID and source `TRAE_HOME` |
 | Restart and workspace recovery | Preserves the recorded executable, configuration root and supported options |
 | Browser ownership and workflow identity | Verifies the current process lifetime and writable native rollout; a process name alone is insufficient |
-| Plain workflow / Agent interaction | Admitted for the locally verified `traecli 0.213.1`; unknown versions fail automatic input admission |
+| Plain workflow / Agent interaction | Stable `traecli 0.213.x–0.219.x` admitted by the shared CLI policy; range admission is separate from native-version verification |
 | Images | Native pasted paths produce the compatible `[Image #N]` attachments; image targets and workflow transport recognize Traex |
 | Model catalog | Reads native `debug models`; a missing display label falls back to the model slug |
 | Model / effort switching | Use Traex's native `/model` picker; automatic inline commands and workflow overrides are rejected |

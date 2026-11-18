@@ -302,22 +302,9 @@ public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking,
         )
     }
 
-    static let supportedAutomationCLIVersions = "Claude Code 2.1.300–2.1.319 (stable)"
-
-    static func supportsAutomationCLI(_ version: String) -> Bool {
-        version.wholeMatch(of: /2\.1\.3[01][0-9] \(Claude Code\)/) != nil
-    }
-
-    private static func automaticResumeVersionUnavailableReason(_ version: String?) -> String? {
-        guard let version, supportsAutomationCLI(version) else {
-            return "Automatic resume supports \(supportedAutomationCLIVersions); found \(version ?? "unknown version"). Choose Resume to reopen it explicitly."
-        }
-        return nil
-    }
-
     public func automaticResumeUnavailableReason(_ descriptor: AgentResumeDescriptor, currentVersion: String?) async -> String? {
         guard descriptor.executable != nil else { return "The original process invocation was not recorded. Choose Resume to reopen it explicitly." }
-        return Self.automaticResumeVersionUnavailableReason(currentVersion)
+        return AgentCLIVersionPolicy.claudeCode.automaticResumeUnavailableReason(currentVersion)
     }
 
     public func recoveryDescriptor(sessionID: String, projectPath: String, invocation: AgentResumeInvocation? = nil) async throws -> AgentResumeDescriptor {
@@ -337,7 +324,7 @@ public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking,
             executable: invocation?.executable,
             cliVersion: invocation?.version,
             arguments: arguments,
-            automaticResumeUnavailableReason: invocation == nil ? "The original process invocation was not recorded." : Self.automaticResumeVersionUnavailableReason(invocation?.version),
+            automaticResumeUnavailableReason: invocation == nil ? "The original process invocation was not recorded." : AgentCLIVersionPolicy.claudeCode.automaticResumeUnavailableReason(invocation?.version),
             providerID: invocation?.providerID
         )
     }
