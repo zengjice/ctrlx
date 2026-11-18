@@ -115,6 +115,25 @@ private struct AgentWorkflowHostView: View {
         }
     }
 
+    private func runStatusLabel(_ run: AgentWorkflowRunSummary) -> some View {
+        let (symbol, color): (Symbols, Color) = switch run.status {
+        case .running: (.playFill, .blue)
+        case .paused: (.pause, .orange)
+        case .finishing: (.hourglass, .blue)
+        case .completed: (.checkmarkCircle, .green)
+        case .ended: (.stopFill, .secondary)
+        }
+        return HStack(spacing: 6) {
+            symbol.image
+                .frame(minWidth: 12)
+                .foregroundStyle(color.opacity(0.8))
+                .accessibilityHidden(true)
+            Text("\(run.status.title) · round \(run.round)")
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+
     var body: some View {
         List {
             if let overview {
@@ -148,7 +167,7 @@ private struct AgentWorkflowHostView: View {
                             NavigationLink(value: AgentWorkflowNavigation.Destination.run(route: endpoint.id, hostID: overview.hostID, id: run.id)) {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(run.name)
-                                    Text("\(run.status.title) · round \(run.round)").font(.caption).foregroundStyle(.secondary)
+                                    runStatusLabel(run)
                                     if let issue = run.issue {
                                         Text(issue).font(.caption).foregroundStyle(.orange).lineLimit(2)
                                     }
