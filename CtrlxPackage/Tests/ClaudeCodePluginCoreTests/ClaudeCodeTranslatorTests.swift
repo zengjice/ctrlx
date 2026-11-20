@@ -132,11 +132,16 @@ struct ClaudeCodeTranslatorTests {
         {
             "hook_event_name": "Stop",
             "session_id": "sess-1",
+            "prompt_id": "turn-1",
+            "transcript_path": "/fixture/native.jsonl",
             "last_assistant_message": ""
         }
         """
         let event = try #require(await core.handleIngress(frame(emptyMessageStop)))
         #expect(event.state == .doneWorking(summary: ""))
+        #expect(event.notification != nil)
+        #expect(event.workflow == nil)
+        #expect(event.completionTurn == .init(nativeTurnID: "turn-1", transcriptPath: "/fixture/native.jsonl"))
     }
 
     // MARK: - Plain permission request

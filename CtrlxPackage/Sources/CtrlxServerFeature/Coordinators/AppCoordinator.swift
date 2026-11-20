@@ -840,6 +840,9 @@
                 onWorkflow: { [weak self] event, peer in
                     await self?.handleAgentWorkflowEvent(event, peer: peer)
                 },
+                shouldSuppressAgentCompletion: { [weak self] event, peer in
+                    await self?.suppressesWorkflowAgentCompletion(event, peer: peer) ?? false
+                },
                 withCurrentEvent: { [weak self] event, peer, operation in
                     await self?.withCurrentPluginEvent(event, peer: peer, operation: operation)
                 }
@@ -1988,18 +1991,33 @@
                 paneState: paneState,
                 agentID: agentID
             )
+            await deliverNotification(presentation, paneID: paneId, action: action, isQuestion: isQuestion)
+        }
+
+        func notifyWorkflowCompleted(_ run: AgentWorkflowRun) async {
+            await deliverNotification(.init(
+                title: "Workflow completed", body: run.definition.name, paneState: nil,
+                eventType: NotificationDelivery.workflowCompletionEventType
+            ), paneID: nil)
+        }
+
+        private func deliverNotification(
+            _ presentation: AgentNotificationPresentation, paneID: String?,
+            action: NotificationActionContext? = nil, isQuestion: Bool = false
+        ) async {
             // Stamp the real pane id so tapping the banner navigates to the
             // originating session; fall back to "system" only when the event
             // carries no pane (e.g. a ctrlx-cli notify with no target).
-            terminalNotificationService.showNotification(paneId ?? "system", presentation, nil)
+            terminalNotificationService.showNotification(paneID ?? "system", presentation, nil)
             await connectedViewerManager?.sendCustomPushNotificationToAll(
                 title: presentation.title,
                 subtitle: presentation.subtitle,
                 body: presentation.body,
-                paneId: paneId,
+                paneId: paneID,
                 action: action,
                 isQuestion: isQuestion ? true : nil,
-                agentID: agentID
+                agentID: presentation.agentID,
+                eventType: presentation.eventType
             )
         }
 
@@ -4955,7 +4973,8 @@
                         subtitle: notification.subtitle,
                         body: notification.body,
                         paneState: paneState,
-                        agentID: notification.agentID
+                        agentID: notification.agentID,
+                        eventType: notification.eventType
                     )
                     self.terminalNotificationService.showNotification(
                         notification.sessionId ?? "system",

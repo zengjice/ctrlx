@@ -99,7 +99,7 @@
 
         // MARK: - Initialization
 
-        private override init() {
+        override init() {
             super.init()
         }
 
@@ -180,15 +180,21 @@
 
         /// Handle a notification response (user tapped on notification).
         public func handleNotificationResponse(_ response: UNNotificationResponse) {
-            let userInfo = response.notification.request.content.userInfo
+            handleNotificationTap(userInfo: response.notification.request.content.userInfo)
+        }
+
+        func handleNotificationTap(userInfo: [AnyHashable: Any]) {
             if userInfo[DashboardNotificationClient.userInfoKey] as? Bool == true {
                 pendingDashboard = true
                 return
             }
 
-            if let hostId = userInfo["pairId"] as? String {
-                pendingDeepLink = DeepLinkInfo(paneId: userInfo["paneId"] as? String ?? "", agentID: AgentID(notificationUserInfo: userInfo), hostId: hostId)
+            if NotificationDelivery.isWorkflowCompletion(userInfo: userInfo) {
+                pendingDeepLink = nil
+                return
             }
+            guard let hostId = userInfo["pairId"] as? String else { return }
+            pendingDeepLink = DeepLinkInfo(paneId: userInfo["paneId"] as? String ?? "", agentID: AgentID(notificationUserInfo: userInfo), hostId: hostId)
         }
 
         /// Consume the pending deep link, returning and clearing the deep link info.

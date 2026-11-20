@@ -73,6 +73,38 @@ actor AgentWorkflowEventRouter {
         }
     }
 
+    func suppressesAgentCompletion(_ event: PluginEvent, peer: PluginIngressPeer) async throws -> Bool {
+        guard !stopped, let turn = event.completionTurn else { return false }
+        let receipts = pending.values
+        let archive = try await store.snapshot()
+        let current = archive.instances.first { AgentReplyEvidence.owns(event, instance: $0, peer: peer) }
+        func matchesAgent(_ bound: AgentWorkflowInstance) -> Bool {
+            guard bound.conversationID == event.sessionID else { return false }
+            return AgentReplyEvidence.owns(event, instance: bound, peer: peer)
+                || current.map { bound.agentID == $0.agentID && bound.pluginID == $0.pluginID } == true
+        }
+        func matchesTurn(id: String?, path: String?) -> Bool {
+            turn.nativeTurnID == id && turn.transcriptPath == path
+        }
+
+        // A Stop may arrive while the receipt or a continuation is still being verified.
+        if
+            let receipt = receipts.first(where: { submission in
+                matchesAgent(submission.context.instance) && [submission.context.candidate, submission.continuation].compactMap { $0 }
+                    .contains { matchesTurn(id: $0.nativeTurnID, path: $0.transcriptPath) }
+            }), let run = archive.runs.first(where: { $0.id == receipt.context.runID }) {
+            return run.definition.notifyOnAgentCompletion != true
+        }
+
+        let run = archive.runs.reversed().first { run in
+            run.invocations.contains { invocation in
+                matchesTurn(id: invocation.resultTurnID, path: invocation.resultTranscriptPath)
+                    && run.instance(for: invocation).map(matchesAgent) == true
+            }
+        }
+        return run.map { $0.definition.notifyOnAgentCompletion != true } ?? false
+    }
+
     func receive(_ event: PluginEvent, peer: PluginIngressPeer) async throws -> AgentWorkflowTurnContext? {
         guard !stopped else { return nil }
         if case .awaitingReplies = event.state {

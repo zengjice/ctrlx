@@ -1,5 +1,6 @@
 #if os(macOS)
     import CtrlxCommon
+    import CtrlxNetworking
     import Dependencies
     import DependenciesMacros
     import Foundation
@@ -67,6 +68,9 @@
             var userInfo: [String: String] = ["paneId": paneId]
             if let hostId {
                 userInfo["hostId"] = hostId
+            }
+            if let eventType = notification.eventType {
+                userInfo["eventType"] = eventType
             }
             if let agentID = notification.agentID {
                 userInfo.merge(agentID.notificationUserInfo) { _, current in current }
@@ -230,7 +234,9 @@
                 return
             }
 
-            guard userInfo["paneId"] != nil || userInfo["hostId"] != nil else { return }
+            guard
+                !NotificationDelivery.isWorkflowCompletion(userInfo: userInfo),
+                userInfo["paneId"] != nil || userInfo["hostId"] != nil else { return }
             let agentID = AgentID(notificationUserInfo: userInfo)
             let hostId = userInfo["hostId"] as? String
             // Schedule after didReceive returns — the system may reclaim focus

@@ -47,6 +47,16 @@ public struct PluginEvent: Codable, Sendable, Equatable {
     /// claimed source is accepted only with a separate kernel peer snapshot.
     public var workflow: PluginWorkflowEvent?
 
+    /// A Stop with an empty reply can attribute an alert but supplies no result.
+    public var emptyStopTurn: PluginWorkflowTurn?
+
+    public var completionTurn: PluginWorkflowTurn? {
+        if let workflow, workflow.kind == .stopCandidate {
+            return .init(nativeTurnID: workflow.nativeTurnID, transcriptPath: workflow.transcriptPath)
+        }
+        return emptyStopTurn
+    }
+
     /// Capability reported by the actual hook bridge, accepted only after the
     /// Host verifies its kernel peer. Zero identifies a legacy bridge.
     public var workflowBridgeVersion: Int?

@@ -1,7 +1,13 @@
 import Foundation
 
-/// Shared by the iOS notification delegate and its service extension.
+/// Shared notification presentation and routing rules.
 public enum NotificationDelivery {
+    public static let workflowCompletionEventType = "workflow.completed"
+
+    public static func isWorkflowCompletion(userInfo: [AnyHashable: Any]) -> Bool {
+        userInfo["eventType"] as? String == workflowCompletionEventType
+    }
+
     /// Remote questions alert even while the app is open. Ordinary remote
     /// activity remains visible in the session UI. Local notifications are
     /// explicit follow-up questions, reply failures or on-device alerts.

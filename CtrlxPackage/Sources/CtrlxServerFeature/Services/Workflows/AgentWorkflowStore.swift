@@ -87,6 +87,7 @@ struct AgentWorkflowCatalogChanged: LocalizedError, Sendable {
 actor AgentWorkflowStore {
     let fileURL: URL
     private let hostID: UUID
+    private let onCompleted: @Sendable (AgentWorkflowRun) -> Void
     private var archive: AgentWorkflowArchive?
     private var observers: [UUID: AsyncStream<Void>.Continuation] = [:]
     private var writeAuthorizations: [UUID: AgentWorkflowWriteAuthorization] = [:]
@@ -97,9 +98,10 @@ actor AgentWorkflowStore {
     var attachmentExpiry: Task<Void, Never>?
     var attachmentUploadsClosed = false
 
-    init(fileURL: URL, hostID: UUID) {
+    init(fileURL: URL, hostID: UUID, onCompleted: @escaping @Sendable (AgentWorkflowRun) -> Void = { _ in }) {
         self.fileURL = fileURL
         self.hostID = hostID
+        self.onCompleted = onCompleted
     }
 
     func snapshot() throws -> AgentWorkflowArchive {
@@ -273,6 +275,7 @@ actor AgentWorkflowStore {
         guard expectedRevision == nil || expectedRevision == updated.runs[index].revision else {
             throw AgentWorkflowError("The workflow run changed. Reload before applying this action.")
         }
+        let previousStatus = updated.runs[index].status
         var execution = try AgentWorkflowExecution(validating: updated.runs[index])
         try transition(&execution)
         let knownAttachments = Set((updated.attachments ?? []).map(\.id))
@@ -281,6 +284,9 @@ actor AgentWorkflowStore {
         }
         updated.runs[index] = execution.run
         try commit(updated)
+        if previousStatus != .completed, execution.run.status == .completed {
+            onCompleted(execution.run)
+        }
         return execution.run
     }
 

@@ -287,7 +287,8 @@ final public class ConnectedViewerManager {
         paneId: String?,
         action: NotificationActionContext? = nil,
         isQuestion: Bool? = nil,
-        agentID: AgentID? = nil
+        agentID: AgentID? = nil,
+        eventType: String? = nil
     ) async {
         await withTaskGroup(of: Void.self) { group in
             for connection in connections.values where connection.state.isConnected {
@@ -299,7 +300,8 @@ final public class ConnectedViewerManager {
                         paneId: paneId,
                         action: action,
                         isQuestion: isQuestion,
-                        agentID: agentID
+                        agentID: agentID,
+                        eventType: eventType
                     )
                 }
             }

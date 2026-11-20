@@ -406,7 +406,8 @@ final public class ConnectedViewer: Identifiable {
         paneId: String?,
         action: NotificationActionContext? = nil,
         isQuestion: Bool? = nil,
-        agentID: AgentID? = nil
+        agentID: AgentID? = nil,
+        eventType: String? = nil
     ) async {
         guard state.isConnected else {
             logger.debug("Not connected to \(viewerName), cannot send custom push")
@@ -422,17 +423,13 @@ final public class ConnectedViewer: Identifiable {
             title: title,
             subtitle: subtitle,
             body: body,
-            eventType: isQuestion == true ? "agent.question" : "cli.notify",
+            eventType: eventType ?? (isQuestion == true ? "agent.question" : "cli.notify"),
             pairId: id,
             paneId: paneId,
             agentID: agentID,
             timestamp: Date(),
             action: action
         ).forPeer(supportsStableAgentNotifications: supportsStableAgentNotifications)
-        let paneId = content.paneId
-        let agentID = content.agentID
-        let action = content.action
-
         do {
             let encryptedContent = try await e2eeService.encrypt(content)
             let badge = await onPendingSessionCount?()
@@ -444,20 +441,11 @@ final public class ConnectedViewer: Identifiable {
             )
             await send(.encryptedPush(payload))
             // Log the (pre-formatted, agent-blind) notification title so E2E
-            // scenarios can tell notification kinds apart — the wire `eventType`
-            // is agent-blind ("agent.question" or "cli.notify"); this is a test-only signal.
-            pushNotificationLog.logPushSent(title, paneId)
+            // scenarios can tell individual Agent notifications apart.
+            pushNotificationLog.logPushSent(content.title, content.paneId)
             // Mac Viewers receive desktop alerts over the live socket.
             // iOS does not display this message; its alerts arrive via APNs.
-            await sendAgentNotification(
-                title: title,
-                subtitle: subtitle,
-                body: body,
-                paneId: paneId,
-                action: action,
-                isQuestion: isQuestion,
-                agentID: agentID
-            )
+            await sendAgentNotification(content, isQuestion: isQuestion)
         } catch {
             logger.error("Failed to encrypt custom push notification: \(error)")
         }
@@ -466,26 +454,22 @@ final public class ConnectedViewer: Identifiable {
     /// Deliver a pre-baked desktop notification over the encrypted live
     /// WebSocket for Mac Viewers, alongside the independent iOS APNs delivery.
     private func sendAgentNotification(
-        title: String,
-        subtitle: String?,
-        body: String,
-        paneId: String?,
-        action: NotificationActionContext?,
-        isQuestion: Bool?,
-        agentID: AgentID?
+        _ content: NotificationContent,
+        isQuestion: Bool?
     ) async {
         guard state.isConnected else { return }
         let message = WebSocketMessage.agentNotification(
             AgentNotificationMessage(
                 pairId: id,
-                sessionId: paneId,
-                title: title,
-                subtitle: subtitle,
-                body: body,
-                timestamp: Date(),
-                action: action,
+                sessionId: content.paneId,
+                title: content.title,
+                subtitle: content.subtitle,
+                body: content.body,
+                timestamp: content.timestamp,
+                action: content.action,
                 isQuestion: isQuestion,
-                agentID: agentID
+                agentID: content.agentID,
+                eventType: content.eventType
             )
         )
         await sendEncrypted(message)

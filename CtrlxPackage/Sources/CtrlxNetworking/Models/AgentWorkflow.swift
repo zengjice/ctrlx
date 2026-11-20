@@ -183,6 +183,8 @@ public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendabl
     public var participants: [AgentWorkflowParticipant]?
     public var agentTargets: [UUID: AgentWorkflowTarget]?
     public var tags: [String]?
+    /// Absent or false sends only the workflow's completion notification.
+    public var notifyOnAgentCompletion: Bool?
 
     public init(
         id: UUID = UUID(),

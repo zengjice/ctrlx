@@ -1,3 +1,4 @@
+import ConcurrencyExtras
 import CtrlxNetworking
 import CtrlxPluginProtocol
 import Foundation
@@ -26,11 +27,13 @@ struct AgentWorkflowFinishTests {
         completion: AgentWorkflowNode.Completion = .replyEnded,
         loop: Bool = false,
         maximumRounds: Int = 5,
+        notifyOnAgentCompletion: Bool? = nil,
+        onCompleted: @escaping @Sendable (AgentWorkflowRun) -> Void = { _ in },
         inspect: @escaping @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance = { $0 }
     ) async throws -> Fixture {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-workflow-finish-\(UUID())")
         let hostID = UUID()
-        let store = AgentWorkflowStore(fileURL: directory.appendingPathComponent("ledger.json"), hostID: hostID)
+        let store = AgentWorkflowStore(fileURL: directory.appendingPathComponent("ledger.json"), hostID: hostID, onCompleted: onCompleted)
         let instance = try #require(await store.reconcile([.init(
             pluginID: "codex", processID: 10, processRuntimeID: "501:10:100:0",
             workspacePane: .init(serverID: "1:100", sessionID: UUID(), windowID: UUID(), paneID: UUID()),
@@ -38,10 +41,12 @@ struct AgentWorkflowFinishTests {
             capabilities: .init(maximumInputBytes: 10_000), readiness: .ready
         )]).first)
         let node = AgentWorkflowNode(name: "Reviewer", agentInstanceID: instance.id, allowsFinish: allowsFinish, completion: completion)
-        let definition = try await store.saveDefinition(.init(
+        var draft = AgentWorkflowDefinition(
             name: "Review", hostID: hostID, nodes: [node], edges: [], entryNodeID: node.id,
             loop: loop ? .init(finalNodeID: node.id, maximumRounds: maximumRounds) : nil
-        ), expectedRevision: nil)
+        )
+        draft.notifyOnAgentCompletion = notifyOnAgentCompletion
+        let definition = try await store.saveDefinition(draft, expectedRevision: nil)
         let run = try await store.start(
             definitionID: definition.id, expectedRevision: definition.revision, requestID: UUID(),
             now: Date(), authorizationExpiresAt: Date().addingTimeInterval(3_600)
@@ -63,6 +68,87 @@ struct AgentWorkflowFinishTests {
             service: AgentWorkflowAgentService(store: store, inspect: inspect, synchronizeEvents: { _ in }),
             instance: instance, run: active, invocation: #require(active.invocations.first), peer: peer
         )
+    }
+
+    @Test("Workflow alerts once and individual stop alerts are opt-in", arguments: [nil, true] as [Bool?])
+    func completionNotifications(notifyOnAgentCompletion: Bool?) async throws {
+        let completedRuns = LockIsolated([UUID]())
+        let onCompleted: @Sendable (AgentWorkflowRun) -> Void = { run in
+            completedRuns.withValue { $0.append(run.id) }
+        }
+        let f = try await fixture(notifyOnAgentCompletion: notifyOnAgentCompletion, onCompleted: onCompleted)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let runner = AgentWorkflowRunner(store: f.store, transport: .init(inspect: { $0 }, prepare: { _, _ in }, write: { _, _ in }), onFailure: {
+            Issue.record(Comment(rawValue: $0))
+        })
+        let router = AgentWorkflowEventRouter(store: f.store, runner: runner, inspect: { $0 })
+        let notices = LockIsolated([String]())
+        let states = LockIsolated([AgentState]())
+        let dispatcher = PluginEventDispatcher(
+            onState: { _, _, state, _, _, _ in states.withValue { $0.append(state) } },
+            onNotification: { _, _, notice, _ in notices.withValue { $0.append(notice.title) } },
+            onWorkflow: { event, _ in
+                guard event.workflow?.kind == .stopCandidate, event.workflow?.nativeTurnID == "turn-1" else { return }
+                do {
+                    try await f.store.update(runID: f.run.id) {
+                        try $0.succeed(.init(invocationID: f.invocation.id, nativeTurnID: "turn-1", text: "Done", completedAt: .now), instance: f.instance, now: .now)
+                    }
+                } catch { Issue.record(Comment(rawValue: error.localizedDescription)) }
+            },
+            shouldSuppressAgentCompletion: { event, peer in
+                do { return try await router.suppressesAgentCompletion(event, peer: peer) }
+                catch {
+                    Issue.record(Comment(rawValue: error.localizedDescription))
+                    return false
+                }
+            }
+        )
+        func event(_ title: String, turn: String, kind: PluginWorkflowEvent.Kind = .stopCandidate) -> PluginEvent {
+            .init(
+                pluginID: "codex",
+                sessionID: f.instance.conversationID,
+                state: .doneWorking(summary: nil),
+                notification: .init(title: title, body: "Done"),
+                tmuxPane: f.instance.paneID,
+                workflow: .init(kind: kind, nativeTurnID: turn, transcriptPath: "/fixture/native.jsonl", text: "Done")
+            )
+        }
+        func emptyStop(_ title: String, turn: String, path: String = "/fixture/native.jsonl", reply: String? = "") throws -> PluginEvent {
+            let payload = try JSONSerialization.data(withJSONObject: [
+                "hook_event_name": "Stop", "turn_id": turn,
+                "last_assistant_message": reply.map { $0 as Any } ?? NSNull(), "transcript_path": path,
+            ])
+            let base = PluginEvent(
+                pluginID: f.instance.pluginID, sessionID: f.instance.conversationID,
+                state: .doneWorking(summary: reply), notification: .init(title: title, body: ""), tmuxPane: f.instance.paneID
+            )
+            return PluginWorkflowHook.addingEvidence(to: base, from: .init(pluginID: base.pluginID, context: [:], payload: payload), nativeTurnKey: "turn_id")
+        }
+        #expect(completedRuns.value.isEmpty)
+        await dispatcher.dispatch(event("Manual turn", turn: "manual"), ingressPeer: f.peer)
+        await dispatcher.dispatch(event("Turn failed", turn: "turn-1", kind: .failed), ingressPeer: f.peer)
+        try await dispatcher.dispatch(emptyStop("Other tool-only turn", turn: "manual"), ingressPeer: f.peer)
+        try await dispatcher.dispatch(emptyStop("Other transcript", turn: "turn-1", path: "/fixture/other.jsonl"), ingressPeer: f.peer)
+        let toolOnly = try emptyStop("Workflow tool-only turn", turn: "turn-1")
+        #expect(toolOnly.workflow == nil)
+        await dispatcher.dispatch(toolOnly, ingressPeer: f.peer)
+        let noReply = try emptyStop("Workflow turn without reply", turn: "turn-1", reply: nil)
+        #expect(noReply.workflow == nil)
+        await dispatcher.dispatch(noReply, ingressPeer: f.peer)
+        #expect(completedRuns.value.isEmpty)
+        await dispatcher.dispatch(event("Workflow turn", turn: "turn-1"), ingressPeer: f.peer)
+        let unsuppressed = ["Manual turn", "Turn failed", "Other tool-only turn", "Other transcript"]
+        let workflowNotices = ["Workflow tool-only turn", "Workflow turn without reply", "Workflow turn"]
+        #expect(notices.value == unsuppressed + (notifyOnAgentCompletion == true ? workflowNotices : []))
+        #expect(states.value.count == 7)
+        #expect(completedRuns.value == [f.run.id])
+
+        let sameRun = try await f.store.update(runID: f.run.id) { _ in }
+        #expect(sameRun.status == .completed)
+        let reopened = await AgentWorkflowStore(fileURL: f.store.fileURL, hostID: f.instance.hostID, onCompleted: onCompleted)
+        let saved = try await reopened.snapshot()
+        #expect(saved.runs.first?.definition.notifyOnAgentCompletion == notifyOnAgentCompletion)
+        #expect(completedRuns.value == [f.run.id])
     }
 
     @Test(arguments: [false, true])
@@ -168,11 +254,11 @@ struct AgentWorkflowFinishTests {
 
     @Test
     func changedConversationAndReusedProcessCannotRequestFinish() async throws {
-        let f = try await fixture { instance in
+        let f = try await fixture(inspect: { instance in
             var replacement = instance
             replacement.conversationID = "new-conversation"
             return replacement
-        }
+        })
         defer { try? FileManager.default.removeItem(at: f.directory) }
         #expect(await f.service.handle(f.request(), peer: f.peer).error?.code == "workflow_denied")
         let reusedPID = try #require(PluginIngressPeer.capture(peerPID: 10, userID: 501) { pid in
