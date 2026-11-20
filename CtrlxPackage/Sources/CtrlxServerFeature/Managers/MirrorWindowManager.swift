@@ -78,7 +78,7 @@ final public class MirrorWindowManager {
     public var onPaneStatesPruned: (@MainActor @Sendable () async -> Void)?
 
     /// Called when reconciliation changes a pane's Agent state or classification.
-    /// The coordinator updates sleep prevention and viewers.
+    /// The coordinator updates connected Viewers.
     public var onAgentProcessReconciliationChanged: (@MainActor @Sendable () async -> Void)?
 
     /// Called when cold-start/background-session hydration establishes a new

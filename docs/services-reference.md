@@ -1397,12 +1397,13 @@ physical pane remain valid, and older peers keep the optional-identity path.
 
 ### SleepPreventionService (`CtrlxServerFeature/Managers/SleepPreventionManager.swift`)
 
-`@DependencyClient` wrapping the `LiveSleepPreventionManager` actor for IOKit
-assertions during active sessions.
-
-- Uses IOKit `IOPMAssertionCreateWithName` assertions
-- Enabled/disabled via settings toggle
-- Automatically releases when all sessions end
+`@DependencyClient` wrapping an IOKit system idle sleep assertion. The
+**Keep this Mac awake** switch under **Settings → General → Behavior** is
+enabled by default and applies while CtrlX is running, even without Agent
+sessions. An earlier choice to turn off sleep prevention is preserved.
+Changes apply immediately and CtrlX releases the assertion on quit. The
+display may turn off, and macOS still handles lid closure, manual sleep and
+low battery. [Apple IOKit documentation](https://developer.apple.com/documentation/iokit/kiopmassertiontypepreventuseridlesystemsleep)
 
 ### LoginItemService (`CtrlxServerFeature/Services/LoginItemService.swift`)
 
@@ -1682,7 +1683,7 @@ command, currentPath, width, height, isActive
 `@Observable @MainActor` with UserDefaults:
 
 - **Terminal:** fontName, fontSize, scrollbackLines, theme
-- **Behavior:** openPanesWindowOnLaunch, showStatusBar, autoConnectToServer, preventSleepDuringSessions
+- **Behavior:** openPanesWindowOnLaunch, showStatusBar, autoConnectToServer, preventIdleSleep
 - **Tmux:** tmuxPath, tmuxSocket
 - **Remote Access:** externalServerURL, deviceId, pairedViewers, pairedHosts
 - **Coding agents:** owned by plugin settings/registry, not per-agent fields in AppSettings

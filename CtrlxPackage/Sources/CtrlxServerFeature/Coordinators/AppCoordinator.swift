@@ -586,9 +586,6 @@
                 self?.pluginRegistry?.processNamesByPlugin ?? [:]
             }
 
-            // Initial sleep prevention update (in case there are already sessions)
-            updateSleepPrevention()
-
             // Start observing system wake notifications for reconnection
             startWakeObserver()
 
@@ -615,6 +612,7 @@
         /// doesn't reparent them to launchd. See `AppShutdownDelegate` for
         /// how this is invoked.
         public func shutdown() async {
+            stopSleepPrevention()
             orbiePanel.stop()
             async let ipaShutdown: Void = shutdownStage("ipa-installer") { await IPAInstaller.shared.shutdown() }
             agentWorkflowAgentService = nil
@@ -1912,8 +1910,6 @@
                 )
                 windowManager.applyRecap(recap, forPane: paneId)
             }
-            updateSleepPrevention()
-
             // High-frequency per-session update to iOS (spec §7.2). Keyed by the
             // pane, matching how the session is keyed locally.
             if let paneId = tmuxPane, windowManager.paneStates[paneId]?.sessionName.isEmpty == false {
@@ -3568,7 +3564,6 @@
                     winManager.updatePaneStates(from: panes)
                     await terminalStreaming.stopStreamsForClosedPanes(currentPanes: panes)
                     await paneStreaming.updateMonitoring(panes: panes)
-                    self?.updateSleepPrevention()
                 }
             }
 
@@ -4243,11 +4238,10 @@
             }
 
             // Process reconciliation is intentionally quiet when nothing
-            // changed. A real classification change affects sleep prevention,
-            // the full viewer snapshot, and potentially the iOS badge.
+            // changed. A real classification change affects the full viewer
+            // snapshot and potentially the iOS badge.
             windowManager.onAgentProcessReconciliationChanged = {
                 [weak self, weak connectionManager] in
-                self?.updateSleepPrevention()
                 await connectionManager?.pushSessionStateToAll()
                 await self?.broadcastBadgeDecreaseIfNeeded()
             }
@@ -4279,14 +4273,17 @@
             }
         }
 
-        /// Updates sleep prevention based on current session count.
-        /// Called after hook events and session cleanup.
-        private func updateSleepPrevention() {
-            let sessionCount = windowManager.activeSessionPaneIds.count
-            let isEnabled = settings.preventSleepDuringSessions
-            Task {
-                await sleepPreventionService.updateForSessionCount(sessionCount, isEnabled)
-            }
+        public func startSleepPrevention() {
+            guard settings.onPreventIdleSleepChanged == nil else { return }
+            let setEnabled = sleepPreventionService.setEnabled
+            settings.onPreventIdleSleepChanged = setEnabled
+            setEnabled(settings.preventIdleSleep)
+        }
+
+        func stopSleepPrevention() {
+            guard let setEnabled = settings.onPreventIdleSleepChanged else { return }
+            settings.onPreventIdleSleepChanged = nil
+            setEnabled(false)
         }
 
         /// Starts observing system wake notifications to trigger immediate reconnection.

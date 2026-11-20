@@ -41,11 +41,15 @@ import Guide from "../../layouts/Guide.astro";
 
   <h2>The Mac went to sleep</h2>
   <p>
-    While sessions are active, CtrlX holds a sleep-prevention assertion so an
-    open-lid Mac stays awake ("Prevent sleep during active sessions" in Settings).
-    Closing the lid on battery still sleeps the machine. Agents live inside tmux, so
-    nothing is lost either way — when the Mac wakes and reconnects, sessions are
-    exactly where they were.
+    <strong>Keep this Mac awake</strong> is on by default under
+    <strong>Settings → General → Behavior</strong>. It prevents idle sleep
+    while CtrlX runs, even after your sessions end. Turn off the switch or quit
+    CtrlX to allow idle sleep again.
+  </p>
+  <p>
+    The display can still turn off. Closing the lid, choosing Sleep, or low
+    battery can put your Mac to sleep. You can reconnect to your tmux sessions
+    after the Mac wakes.
   </p>
 
   <h2>tmux missing</h2>

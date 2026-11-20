@@ -415,6 +415,7 @@ struct TmuxPaneMirrorApp: App {
             await coord.shutdown()
         }
         shutdownDelegate.installNativeTerminationHandling()
+        coord.startSleepPrevention()
     }
 
     var body: some Scene {
