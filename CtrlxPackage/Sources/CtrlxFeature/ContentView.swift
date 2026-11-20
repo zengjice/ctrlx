@@ -335,6 +335,7 @@
         @State private var showingSettings = false
         @State private var showingDashboard = false
         @State private var dashboardDestination: SessionNavigation?
+        @State private var showingAttention = false
         @State private var workflowNavigation = AgentWorkflowNavigation()
         @State private var workflowDestination: SessionNavigation?
 
@@ -357,13 +358,14 @@
                         _ = pushService.consumePendingDeepLink()
                         showingDashboard = true
                     },
+                    onOpenAttention: openAttention,
                     onOpenWorkflows: {
                         _ = pushService.consumePendingDeepLink()
                         workflowNavigation.isPresented = true
                     }
                 )
             }
-            .alert("Notification", isPresented: .init(get: { notificationNavigationIssue != nil }, set: {
+            .alert("Cannot Open Tab", isPresented: .init(get: { notificationNavigationIssue != nil }, set: {
                 if !$0 {
                     notificationNavigationIssue = nil
                 }
@@ -376,7 +378,7 @@
                 if pushService.pendingDeepLink?.agentID != nil {
                     HStack {
                         ProgressView()
-                        Text("Opening notification…")
+                        Text("Opening tab…")
                         Spacer()
                         Button("Cancel") { _ = pushService.consumePendingDeepLink() }
                     }
@@ -409,6 +411,14 @@
                     dashboardDestination = SessionNavigation(sessionName: session, hostId: host)
                 }
                 .presentationDetents([.large])
+            }
+            .sheet(isPresented: $showingAttention, onDismiss: {
+                if pushService.pendingDashboard {
+                    openDashboardNotification()
+                }
+            }) {
+                IOSPendingAttentionView(open: openAttentionItem)
+                    .presentationDetents([.medium, .large])
             }
             .sheet(isPresented: $workflowNavigation.isPresented, onDismiss: {
                 if let destination = workflowDestination {
@@ -449,6 +459,10 @@
 
         private func openDashboardNotification() {
             _ = pushService.consumePendingDeepLink()
+            if showingAttention {
+                showingAttention = false
+                return
+            }
             if workflowNavigation.isPresented {
                 workflowNavigation.isPresented = false
                 return
@@ -461,12 +475,31 @@
             showingDashboard = true
         }
 
+        private func openAttention() {
+            _ = pushService.consumePendingDeepLink()
+            let items = IOSPendingAttention.items(
+                hosts: settings.pairedHosts, paneStates: sessionStore.paneStates, catalogs: sessionStore.workspaceCatalogsByHost
+            )
+            let connectedHostIDs = Set(connectionManager.activeConnections.filter(\.isHostConnected).map(\.id))
+            if let item = IOSPendingAttention.directTarget(in: items, connectedHostIDs: connectedHostIDs) {
+                openAttentionItem(item)
+            } else {
+                showingAttention = true
+            }
+        }
+
+        private func openAttentionItem(_ item: IOSPendingAttention) {
+            guard let agentID = item.agentID else { return }
+            pushService.pendingDeepLink = .init(paneId: item.id.paneId, agentID: agentID, hostId: item.id.pairId)
+        }
+
         /// Open the exact Host pane once its session metadata is available.
         private func handleDeepLink(_ deepLink: PushNotificationService.DeepLinkInfo) async {
             dashboardDestination = nil
             workflowDestination = nil
             showingSettings = false
             showingDashboard = false
+            showingAttention = false
             workflowNavigation.isPresented = false
             notificationNavigationIssue = nil
 

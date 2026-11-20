@@ -65,6 +65,111 @@ struct IOSDashboardStatusTests {
         #expect(status(paired: ["home"], panes: panes).pendingCount == 1)
     }
 
+    @Test("Attention rows follow the badge, with distinct targets across Hosts")
+    func attentionRows() {
+        let waiting = PaneState(paneId: "%1", sessionName: "work", windowName: "review", agentSession: .init(
+            paneId: "%1", state: .awaitingPlanApproval(.init(title: "Plan", plan: ""), requestID: "request")
+        ))
+        let done = PaneState(paneId: "%1", sessionName: "work", windowName: "review", agentSession: .init(
+            paneId: "%1", state: .doneWorking(summary: nil)
+        ))
+        let panes: [PaneKey: PaneState] = [
+            .init(pairId: "office", paneId: "%1"): waiting,
+            .init(pairId: "home", paneId: "%1"): done,
+            .init(pairId: "home", paneId: "%2"): .init(paneId: "%2", sessionName: "shell", isActive: true, windowName: "tools", isWindowActive: true, cliSessionState: .waiting),
+            .init(pairId: "home", paneId: "%3"): .init(paneId: "%3", sessionName: "shell", cliSessionState: .waiting),
+            .init(pairId: "removed", paneId: "%1"): waiting,
+        ]
+        let items = IOSPendingAttention.items(hosts: ["office", "home"].map(pairedHost), paneStates: panes, catalogs: [:])
+        #expect(items.count == status(panes: panes).pendingCount)
+        #expect(items.map(\.id) == [
+            .init(pairId: "office", paneId: "%1"),
+            .init(pairId: "home", paneId: "%2"),
+            .init(pairId: "home", paneId: "%1"),
+        ])
+        #expect(items.map(\.status) == [.approval, .waiting, .completed])
+    }
+
+    @Test("Attention labels distinguish duplicate window and Host names")
+    func duplicateAttentionNames() {
+        let hosts = zip(["office", "home"], ["alice", "bob"]).map { id, username in
+            PairedHost(id: id, hostName: "Studio", username: username, partnerPublicKey: "", partnerPublicKeyId: "")
+        }
+        let panes = [
+            PaneState(paneId: "%1", sessionName: "work", windowIndex: 3, windowName: "codex"),
+            PaneState(paneId: "%2", sessionName: "work", windowIndex: 8, windowName: "codex"),
+            PaneState(paneId: "%3", sessionName: "other", windowIndex: 5, windowName: "codex"),
+            PaneState(paneId: "%4", sessionName: "other", windowIndex: 5, paneIndex: 1, windowName: "codex"),
+        ]
+        let states = Dictionary(uniqueKeysWithValues: hosts.flatMap { host in
+            panes.map { pane in
+                var pane = pane
+                pane.agentSession = .init(paneId: pane.paneId, state: .doneWorking(summary: nil))
+                return (PaneKey(pairId: host.id, paneId: pane.paneId), pane)
+            }
+        })
+        let items = IOSPendingAttention.items(hosts: hosts, paneStates: states, catalogs: [:])
+        #expect(items.filter { $0.id.pairId == "office" }.map(\.tabName) == [
+            "codex · Pane 1", "codex · Pane 2", "codex · Window 3", "codex · Window 8",
+        ])
+        #expect(Set(items.map(\.hostName)) == ["Studio (alice)", "Studio (bob)"])
+    }
+
+    @Test("Attention labels number split panes from one using all panes in the window", arguments: [0, 1])
+    func attentionPaneNumbers(baseIndex: Int) {
+        let host = pairedHost("office")
+        let firstSplitPane = PaneKey(pairId: host.id, paneId: "%2")
+        var panes: [PaneKey: PaneState] = [
+            .init(pairId: host.id, paneId: "%1"): .init(paneId: "%1", sessionName: "work", paneIndex: baseIndex, windowName: "solo", agentSession: .init(paneId: "%1", state: .doneWorking(summary: nil))),
+            firstSplitPane: .init(paneId: "%2", sessionName: "work", windowIndex: 1, paneIndex: baseIndex, windowName: "split", agentSession: .init(paneId: "%2", state: .doneWorking(summary: nil))),
+            .init(pairId: host.id, paneId: "%3"): .init(paneId: "%3", sessionName: "work", windowIndex: 1, paneIndex: baseIndex + 1, windowName: "split", agentSession: .init(paneId: "%3", state: .doneWorking(summary: nil))),
+        ]
+        #expect(IOSPendingAttention.items(hosts: [host], paneStates: panes, catalogs: [:]).map(\.tabName) == [
+            "solo", "split · Pane 1", "split · Pane 2",
+        ])
+        panes[firstSplitPane]?.agentSession?.markHandled()
+        #expect(IOSPendingAttention.items(hosts: [host], paneStates: panes, catalogs: [:]).map(\.tabName) == [
+            "solo", "split · Pane 2",
+        ])
+    }
+
+    @Test("Only one verified, connected target opens directly and resolves its exact pane")
+    func singleAttentionTarget() throws {
+        let hostID = UUID()
+        let paneID = UUID()
+        let pane = PaneState(
+            paneId: "%7", sessionName: "work", tmuxWindowId: "@2", paneIndex: 1, windowName: "review",
+            agentSession: .init(paneId: "%7", state: .doneWorking(summary: nil)),
+            workspaceIdentity: .init(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: paneID)
+        )
+        let catalog = try #require(ViewerWorkspaceCatalog(state: .init(
+            pairId: "office", paneStates: ["%7": pane], workspaceIdentity: .init(hostID: hostID, serverID: "server")
+        )))
+        let hosts = [pairedHost("office")]
+        let panes = [PaneKey(pairId: "office", paneId: "%7"): pane]
+        let items = IOSPendingAttention.items(hosts: hosts, paneStates: panes, catalogs: ["office": catalog])
+        let item = try #require(IOSPendingAttention.directTarget(in: items, connectedHostIDs: ["office"]))
+        #expect(item.agentID == AgentID(hostID: hostID, paneID: paneID))
+        #expect(item.tabName == "review")
+        #expect(SessionNavigation.notification(agentID: item.agentID, hostID: item.id.pairId, catalog: catalog)?.paneSelection?.paneID == "%7")
+        #expect(IOSPendingAttention.directTarget(in: [], connectedHostIDs: ["office"]) == nil)
+        #expect(IOSPendingAttention.directTarget(in: items, connectedHostIDs: []) == nil)
+
+        let pending = PaneState(paneId: "%8", sessionName: "other", cliSessionState: .waiting)
+        let multiple = IOSPendingAttention.items(
+            hosts: hosts, paneStates: panes.merging([.init(pairId: "office", paneId: "%8"): pending]) { current, _ in current },
+            catalogs: ["office": catalog]
+        )
+        #expect(multiple.count == 2)
+        #expect(IOSPendingAttention.directTarget(in: multiple, connectedHostIDs: ["office"]) == nil)
+        let unverified = IOSPendingAttention.items(hosts: hosts, paneStates: panes, catalogs: [:])
+        #expect(IOSPendingAttention.directTarget(in: unverified, connectedHostIDs: ["office"]) == nil)
+    }
+
+    private func pairedHost(_ id: String) -> PairedHost {
+        .init(id: id, hostName: id.capitalized, username: "", partnerPublicKey: "", partnerPublicKeyId: "")
+    }
+
     @Test("A large badge stays compact while accessibility keeps the full count")
     func largeCount() {
         let panes = Dictionary(uniqueKeysWithValues: (0..<120).map { index in
@@ -73,7 +178,7 @@ struct IOSDashboardStatusTests {
         })
         #expect(status().pendingText == nil)
         #expect(status(panes: panes).pendingText == "99+")
-        #expect(status(panes: panes).accessibilityValue.contains("120 need attention"))
+        #expect(status(panes: panes).attentionAccessibilityValue == "120 need attention")
     }
 
     @Test("App badge waits for complete Host snapshots and follows the toolbar count")

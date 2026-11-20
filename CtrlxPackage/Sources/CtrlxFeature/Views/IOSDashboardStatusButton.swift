@@ -9,53 +9,74 @@
 
         var body: some View {
             Button(action: openDashboard) {
-                HStack(spacing: 6) {
-                    connectionIndicator
-
-                    (status.pendingCount > 0 ? Symbols.handsAndSparklesFill : .sparkles).image
-                        .foregroundStyle(status.pendingCount > 0 ? Color.accentColor : .primary)
-                    if let count = status.pendingText {
-                        Text(count)
-                            .font(.caption.weight(.semibold))
-                            .monospacedDigit()
-                            .foregroundStyle(Color.accentColor)
-                    }
-
-                    if status.lowQuotaCount > 0 {
-                        Symbols.exclamationmarkTriangle.image
-                            .foregroundStyle(.orange)
-                    }
+                HStack(spacing: 4) {
+                    connectionIndicator.accessibilityHidden(true)
+                    Symbols.gaugeWithDotsNeedle50percent.image
+                        .overlay(alignment: .topTrailing) {
+                            if status.lowQuotaCount > 0 {
+                                Symbols.exclamationmarkTriangle.image
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(.orange)
+                                    .offset(x: 6, y: -5)
+                            }
+                        }
                 }
-                .lineLimit(1)
-                .fixedSize()
             }
             .accessibilityLabel("Dashboard")
-            .accessibilityValue(status.accessibilityValue)
-            .accessibilityHint("Open Dashboard")
+            .accessibilityValue(status.dashboardAccessibilityValue)
             .accessibilityIdentifier("dashboard-open")
         }
 
         @ViewBuilder private var connectionIndicator: some View {
             switch status.connection {
-            case .connected,
-                 .partial:
+            case .connected:
                 Circle()
-                    .fill(status.connection == .connected ? Color.green : .orange)
-                    .frame(width: 8, height: 8)
-                if status.connection == .partial {
-                    Text("\(status.connectedCount)/\(status.hostCount)")
-                        .font(.caption)
-                        .monospacedDigit()
-                        .foregroundStyle(Color.secondary)
-                }
+                    .fill(.green)
+                    .frame(width: 6, height: 6)
+            case .partial:
+                Text("\(status.connectedCount)/\(status.hostCount)")
+                    .font(.caption2.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.orange)
+                    .fixedSize()
             case .connecting:
                 Symbols.arrowClockwise.image
+                    .font(.caption)
                     .foregroundStyle(.orange)
             case .disconnected,
                  .unpaired:
                 Symbols.wifiSlash.image
+                    .font(.caption)
                     .foregroundStyle(status.connection == .disconnected ? Color.red : .secondary)
             }
+        }
+    }
+
+    @MainActor
+    struct IOSAttentionButton: View {
+        let status: IOSDashboardStatus
+        let openAttention: () -> Void
+
+        var body: some View {
+            Button(action: openAttention) {
+                Symbols.bellFill.image
+                    .foregroundStyle(status.pendingCount > 0 ? Color.accentColor : .primary)
+                    .overlay(alignment: .topTrailing) {
+                        if let count = status.pendingText {
+                            Text(count)
+                                .font(.caption2.weight(.semibold))
+                                .monospacedDigit()
+                                .padding(.horizontal, 3)
+                                .foregroundStyle(.white)
+                                .background(Color.accentColor, in: .capsule)
+                                .fixedSize()
+                                .offset(x: 10, y: -6)
+                        }
+                    }
+            }
+            .accessibilityLabel("Needs Attention")
+            .accessibilityValue(status.attentionAccessibilityValue)
+            .accessibilityIdentifier("attention-open")
         }
     }
 #endif

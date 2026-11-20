@@ -48,6 +48,10 @@ public struct PairedHost: Codable, Identifiable, Sendable, Hashable {
         return hostName
     }
 
+    public func hasDuplicateName(in hosts: [PairedHost]) -> Bool {
+        hosts.contains { $0.id != id && $0.hostName == hostName }
+    }
+
     // MARK: - Initialization
 
     public init(

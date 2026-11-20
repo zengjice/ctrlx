@@ -20,13 +20,13 @@ enum NotificationNavigation {
         var message: String {
             switch self {
             case .missingIdentity:
-                "This notification does not contain an Agent destination. Open its tab from the Host's session list."
+                "The tab location could not be verified. Open it from the Host's session list."
             case .hostNotConnected:
-                "Could not connect to this notification's Host. Connect to it, then tap the notification again."
+                "Could not connect to the Host. Connect to it and try again."
             case .directoryNotReady:
-                "The Host's session list has not finished syncing. Wait for it to load, then tap the notification again."
+                "The Host's session list is still syncing. Wait for it to load and try again."
             case .targetUnavailable:
-                "This notification's Agent tab is no longer available on the Host. Choose another tab from its session list."
+                "This tab is no longer available on the Host. Choose another tab from its session list."
             }
         }
     }
