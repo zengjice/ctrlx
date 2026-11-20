@@ -73,6 +73,7 @@
 
         let hostFileTabs = HostFileTabService()
         let resourceSessions = HostResourceSessionStore()
+        let sessionTabLayouts = HostSessionTabLayouts()
         var workspaceRecovery: WorkspaceRecoveryController?
         let recoveredWorkspaceDrafts = WorkspaceRecoveryDrafts()
         let viewerWorkspaceRecovery: WorkspaceViewerRecovery
@@ -3249,6 +3250,25 @@
 
             // Set the router as the request handler on the socket server
             await apiSocketServer.setRequestHandler { [weak self, agentSimulator] request, peer in
+                #if DEBUG
+                    if
+                        request.method == "e2e.openPaneFiles",
+                        CommandLine.arguments.contains("--e2e-test"),
+                        CommandLine.arguments.contains("--e2e-api-socket") {
+                        guard
+                            let session = request.params["session_name"]?.stringValue,
+                            let pane = request.params["pane_id"]?.stringValue else {
+                            return .invalidParams(id: request.id, "A session and source pane are required.")
+                        }
+                        guard let self else { return .internalError(id: request.id, "Host is shutting down.") }
+                        do {
+                            let tab = try await self.hostFileTabs.open(sessionName: session, paneID: pane)
+                            return .init(id: request.id, result: ["pane_id": .string(tab.sourcePaneID ?? "")])
+                        } catch {
+                            return .internalError(id: request.id, error.localizedDescription)
+                        }
+                    }
+                #endif
                 if ["orbie.agents.list", "orbie.agents.show", "orbie.workflows.list", "orbie.workflows.show"].contains(request.method) {
                     guard let service = await self?.orbieQueries, let ingress = await self?.ingressSocketServer else { return .internalError(id: request.id, "Orbie is still starting on this Mac.") }
                     do { try await ingress.waitForPendingFrames() }
@@ -3699,6 +3719,14 @@
                     return .success(for: command.id)
                 }
 
+                if case let .editSessionTabLayout(spec) = command.command {
+                    do {
+                        guard let self else { return .failure(for: command.id, error: "Host unavailable.") }
+                        try await self.editSessionTabLayout(spec)
+                        return .success(for: command.id)
+                    } catch { return .failure(for: command.id, error: error.localizedDescription) }
+                }
+
                 // The Host is the sole authority for shared terminal layout.
                 // Viewers submit logical window IDs; the Host validates them,
                 // assigns the revision and republishes the canonical snapshot.
@@ -4140,7 +4168,8 @@
                     supportsCtrlXAppUpdateCheck: await self?.ctrlXAppUpdateService.isConfigured == true,
                     ctrlXAppUpdate: await self?.ctrlXAppUpdateService.state,
                     independentResources: await self?.independentResourceCatalog,
-                    supportsResourceAuthorization: await self?.agentBrowser.supportsResourceGrants
+                    supportsResourceAuthorization: await self?.agentBrowser.supportsResourceGrants,
+                    sessionTabLayouts: await self?.sharedSessionTabLayouts
                 )
             }
 

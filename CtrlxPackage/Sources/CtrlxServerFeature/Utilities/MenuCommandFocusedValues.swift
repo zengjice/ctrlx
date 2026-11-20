@@ -12,6 +12,7 @@ public struct WorkbenchMenuActions {
     public var selectNextSession: (@MainActor () -> Void)?
     public var newLocalSession: (@MainActor () -> Void)?
     public var newTab: (@MainActor () -> Void)?
+    public var fork: (@MainActor () -> Void)?
     public var switchSession: (@MainActor () -> Void)?
     public var toggleVoiceInput: (@MainActor () -> Void)?
 }

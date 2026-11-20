@@ -14,6 +14,7 @@ struct MenuCommandsModifier: ViewModifier {
     let onSelectNextSession: @MainActor () -> Void
     let onNewLocalSession: @MainActor () -> Void
     let onNewTab: (@MainActor () -> Void)?
+    let onFork: (@MainActor () -> Void)?
     let onSwitchSession: (@MainActor () -> Void)?
     let onToggleVoiceInput: (@MainActor () -> Void)?
     let allowsSessionNavigation: Bool
@@ -31,6 +32,7 @@ struct MenuCommandsModifier: ViewModifier {
                 selectNextSession: allowsSessionNavigation ? onSelectNextSession : nil,
                 newLocalSession: allowsSessionNavigation ? onNewLocalSession : nil,
                 newTab: onNewTab,
+                fork: onFork,
                 switchSession: onSwitchSession,
                 toggleVoiceInput: onToggleVoiceInput
             ))

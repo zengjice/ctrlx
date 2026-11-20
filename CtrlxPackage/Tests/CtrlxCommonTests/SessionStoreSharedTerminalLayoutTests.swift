@@ -1,10 +1,27 @@
 import CtrlxNetworking
+import Foundation
 import Testing
 @testable import CtrlxCommon
 
 @MainActor
 @Suite("SessionStore shared terminal layouts")
 struct SessionStoreSharedTerminalLayoutTests {
+    @Test
+    func tabGroupsRejectAnOlderSnapshotAndStayScopedToTheHost() {
+        let store = SessionStore()
+        let session = UUID()
+        let original = SessionTabLayout()
+        let edited = SessionTabLayout(order: [.window(UUID())], revision: 2)
+        store.handleStateUpdate(.init(pairId: "first", paneStates: [:], sessionTabLayouts: [session: edited]))
+        store.handleStateUpdate(.init(pairId: "first", paneStates: [:], sessionTabLayouts: [session: original]))
+        store.handleStateUpdate(.init(pairId: "second", paneStates: [:], sessionTabLayouts: [session: original]))
+
+        #expect(store.sessionTabLayoutsByHost["first"]?[session] == edited)
+        #expect(store.sessionTabLayoutsByHost["second"]?[session] == original)
+        store.clearSessions(for: "first")
+        #expect(store.sessionTabLayoutsByHost["first"] == nil)
+    }
+
     @Test("An advertised layout is stored and cleared with its host")
     func storesAndClears() {
         let store = SessionStore()

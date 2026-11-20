@@ -185,6 +185,19 @@
                 .sorted { $0.windowIndex < $1.windowIndex }
         }
 
+        private var sharedTabSessionID: UUID? {
+            relayClient.resourceSessions.first(where: { $0.name == sessionName })?.id
+                ?? sessionWindows.first?.panes.first?.workspaceIdentity?.sessionID
+        }
+
+        private var sharedTabLayout: SessionTabLayout? {
+            guard let id = sharedTabSessionID, let layouts = sessionStore.sessionTabLayoutsByHost[hostId] else { return nil }
+            if let layout = layouts[id], layout.revision > 0 {
+                return layout
+            }
+            return .init(order: linkedTabs.initialSharedOrder(topLevelOrder: fileWorkspace.topLevelTabOrder))
+        }
+
         private var windowSelectionCandidates: [WindowSelectionCandidate] {
             sessionWindows.map { window in
                 WindowSelectionCandidate(
@@ -284,11 +297,11 @@
 
         private func selectAdjacentLinkedTab(_ source: PaneLinkedTabID, direction: Int) {
             guard !showsWindowTabs, !creationSheetIsPresented, !quickActionPresentation.suspendsTerminalInput else { return }
-            if linkedTabs.sourcePaneID(source) == nil {
+            if linkedTabs.sourcePaneID(source) == nil || sharedTabLayout?.groups[source.sessionTabID] != nil {
                 selectAdjacentTopLevel(.resource(source), direction: direction)
                 return
             }
-            switch PaneLinkedTabs.adjacent(to: source, direction: direction, groups: linkedTabs.groups) {
+            switch linkedTabs.adjacentLinkedTab(source, direction: direction, layout: sharedTabLayout) {
             case let .tab(item):
                 initialPaneSelection.cancel()
                 _ = PushNotificationService.shared.consumePendingDeepLink()
@@ -312,9 +325,29 @@
         }
 
         private func selectAdjacentTopLevel(_ source: IOSTopLevelTabID, direction: Int) {
+            if let layout = sharedTabLayout, let id = source.sessionTabID {
+                selectAdjacentSharedTab(id, direction: direction, layout: layout)
+                return
+            }
             let items = linkedTabs.topLevel(stored: fileWorkspace.topLevelTabOrder)
             guard let index = items.firstIndex(of: source), items.indices.contains(index + direction) else { return }
             selectTopLevel(items[index + direction])
+        }
+
+        private func selectAdjacentSharedTab(_ source: SessionTabID, direction: Int, layout: SessionTabLayout) {
+            let tabs = linkedTabs.sharedEntries(layout, topLevelOrder: fileWorkspace.topLevelTabOrder).flatMap { entry in
+                if case let .group(group, _) = entry, group.paneID != nil {
+                    return [SessionTabID]()
+                }
+                return entry.tabs
+            }
+            guard let index = tabs.firstIndex(of: source), tabs.indices.contains(index + direction) else { return }
+            let next = tabs[index + direction]
+            if let window = sessionWindows.first(where: { $0.sessionTabID == next }) {
+                selectTerminalWindow(window)
+            } else if let resource = linkedTabs.items.first(where: { $0.sessionTabID == next }) {
+                selectTopLevel(.resource(resource))
+            }
         }
 
         private func selectTopLevel(_ item: IOSTopLevelTabID) {
@@ -779,7 +812,10 @@
                             fileWorkspace.save()
                         },
                         linkedTabOrder: fileWorkspace.linkedTabOrder,
-                        onReorderLinkedTabs: fileWorkspace.recordLinkedTabOrder
+                        onReorderLinkedTabs: fileWorkspace.recordLinkedTabOrder,
+                        sharedSessionID: sharedTabSessionID,
+                        sharedTabLayout: sharedTabLayout,
+                        onEditSharedTabs: editSharedTabs
                     )
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
@@ -864,6 +900,15 @@
                 } message: {
                     Text("Enter a new name for this tab")
                 }
+        }
+
+        private func editSharedTabs(_ edit: SessionTabLayout.Edit) async throws {
+            guard let id = sharedTabSessionID, let layout = sharedTabLayout else {
+                throw FileBrowserError.message("The Host's tab layout is unavailable.")
+            }
+            let request = EditSessionTabLayout(sessionID: id, edit: edit, initialOrder: layout.revision == 0 ? layout.order : nil)
+            let response = try await relayClient.sendCommand(request, paneId: "").get()
+            guard response.success else { throw FileBrowserError.message(response.error ?? "Could not update the tab layout.") }
         }
 
         private func resourceRequest(_ kind: ResourceTabKind, location: String? = nil) throws -> ResourceTabRequest {

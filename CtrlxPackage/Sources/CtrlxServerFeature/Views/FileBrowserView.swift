@@ -719,6 +719,8 @@ final class SessionFileTabsState {
     /// tab updates it. The four kinds may interleave in any order; the bar
     /// renders by iterating this array and dispatching on the case.
     var tabOrder: [TabDragPayload] = []
+    var manualTabGroups: [TabDragPayload: UUID] = [:]
+    var sharedManualTabGroups: [TabDragPayload: UUID] = [:]
 
     /// Serializes tmux window reorder transactions for this session. File and
     /// browser tab moves remain synchronous and are not blocked by it.
@@ -826,6 +828,7 @@ final class SessionFileTabsState {
         rightSide = Set(rightSide.map { $0.remappingWindowID(using: mapping) })
         selectedRight = selectedRight?.remappingWindowID(using: mapping)
         tabOrder = tabOrder.map { $0.remappingWindowID(using: mapping) }
+        manualTabGroups = Dictionary(manualTabGroups.map { ($0.key.remappingWindowID(using: mapping), $0.value) }, uniquingKeysWith: { first, _ in first })
     }
 
     /// Cancels in-flight browser downloads across every tab, deleting their

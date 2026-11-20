@@ -1,7 +1,7 @@
 import Foundation
 
 /// E2E scenario: Tab reordering, the "+" menu, and the unified drag model
-/// for terminals / file tabs / file explorer / browsers (issue #510).
+/// for terminals / Files tabs / browsers (issue #510).
 ///
 /// Covers the tab-bar affordances:
 /// - `+` button moved to the leading edge with a popup that creates either
@@ -13,7 +13,7 @@ import Foundation
 /// - Cmd-Option-Left / Cmd-Option-Right menu shortcuts that cycle the active tab in
 ///   the current session.
 /// - "Drag past the last tab" via the trailing drop zone.
-/// - Cross-divider drags: terminals, the file explorer, file tabs, and
+/// - Cross-divider drags: terminals, Files tabs, and
 ///   browser tabs can all be flipped between the two split panes via drag.
 /// - Auto-collapse of the split when every entry winds up on the right.
 /// - The right pane self-heals when the only right-side terminal exits.
@@ -79,10 +79,11 @@ public enum TabReorderScenario {
         // ── Phase 1: Pure-terminal drag persists to tmux ──────────
         // This must run before opening a Browser/File tab: those features
         // materialise SessionFileTabsState and previously masked the bug.
-        TestStep.log("Phase 1: Drag winC onto winA in a pure-terminal session")
+        TestStep.log("Phase 1: Drag winC to the leading edge of winA")
         TestStep.macDragElement(
             from: .labelContains("tabreorder:2 winC"),
-            to: .labelContains("tabreorder:0 winA")
+            to: .labelContains("tabreorder:0 winA"),
+            leadingEdge: true
         )
         TestStep.wait(seconds: 3)
 
@@ -100,6 +101,19 @@ public enum TabReorderScenario {
         TestStep.macWaitForElement(titled: "tabreorder:0 winC", timeout: 5)
         TestStep.macWaitForElement(titled: "tabreorder:1 winA", timeout: 5)
         TestStep.macWaitForElement(titled: "tabreorder:2 winB", timeout: 5)
+
+        // The center of a tab combines the two tabs. These two windows
+        // are already adjacent in the requested order.
+        TestStep.macDragElement(
+            from: .labelContains("tabreorder:2 winB"),
+            to: .labelContains("tabreorder:1 winA")
+        )
+        TestStep.macWaitForElementQuery(.label("winA, 2 tabs"), timeout: 5)
+        TestStep.macCGClickElement(query: .label("winA, 2 tabs"))
+        TestStep.macWaitForElementQuery(.labelContains("tabreorder:2 winB"), timeout: 5)
+        TestStep.macPressKey(.escape)
+        TestStep.macContextMenuClick(elementTitle: "winA, 2 tabs", menuItem: "Ungroup Tabs")
+        TestStep.macWaitForElementQueryToDisappear(.label("winA, 2 tabs"), timeout: 5)
 
         // ── Phase 2: "+" menu offers New Terminal and New Browser ─────
         //
@@ -238,72 +252,34 @@ public enum TabReorderScenario {
         TestStep.macWaitForElement(titled: "tabreorder:2 winC", timeout: 5)
         TestStep.macScreenshot(label: "mac-tabreorder-after-trailing-drop")
 
-        // ── Phase 8: Cross-divider drag — terminal into the right pane ─
-        //
-        // Open a file tab, open the split via its split toggle, then drag a
-        // left-side terminal onto the right-side file tab. The terminal's
-        // side flips through the unified `toggleSplit` callback and the
-        // right pane re-renders to host the terminal. Exercises the
-        // regression where dragging a terminal to the right pane left it
-        // visible on both panes.
-        //
-        // Earlier phases reordered tmux. Tab state now follows tmux's stable
-        // `@id`, so the dragged logical window remains the source even though
-        // its executable `session:index` target changed.
-        TestStep.log("Phase 8: Open hello.txt, split it, then drag a terminal across the divider")
-        TestStep.macClickButton(titled: "Files")
-        TestStep.macWaitForElement(titled: "hello.txt", timeout: 10)
-        TestStep.macContextMenuClick(elementTitle: "hello.txt", menuItem: "Open in New Tab")
-        TestStep.macWaitForElement(titled: "File tab: hello.txt", timeout: 5)
-
-        // Open split via hello.txt's split toggle.
-        TestStep.macClickButton(titled: "Open file tab in split: hello.txt")
-        TestStep.macWaitForElement(titled: "Move file tab to left: hello.txt", timeout: 5)
-        // Every terminal on the left should now show a "to right" arrow,
-        // confirming the unified split-toggle wired up for window tabs too.
+        // ── Phase 8: Move a terminal across the split ────────────────
+        TestStep.log("Phase 8: Open a Files tab, split it, then drag a terminal to the right")
+        TestStep.macCGClickElement(query: .label("New Tab"))
+        TestStep.macClickButton(titled: "New Files")
+        TestStep.macWaitForElementQuery(.labelContains("Open file tab in split:"), timeout: 10)
+        TestStep.macCGClickElement(query: .labelContains("Open file tab in split:"))
+        TestStep.macWaitForElementQuery(.labelContains("Move file tab to left:"), timeout: 5)
         TestStep.macWaitForElementQuery(.labelContains("Move terminal to right:"), timeout: 5)
         TestStep.macScreenshot(label: "mac-tabreorder-split-opened-with-file")
 
-        // Drag a left-side terminal (the one currently at tmux index 0)
-        // onto the right-side hello.txt tab. The `adjustSplitSideIfNeeded`
-        // path runs the same bookkeeping as clicking the split toggle.
         TestStep.macDragElement(
-            from: .labelContains("tabreorder:0"),
-            to: .label("Move file tab to left: hello.txt")
+            from: .labelContains("tabreorder:0 winB"),
+            to: .identifier("tab-trailing-drop-right")
         )
-        // A terminal arrow now points left — some window lives on the right.
-        TestStep.macWaitForElementQuery(.labelContains("Move terminal to left:"), timeout: 5)
-        // Settle wait for the split-pane animation; the element appears
-        // before the layout finishes transitioning.
-        TestStep.wait(seconds: 3)
-        // The cross-divider drag may have reassigned `selectedWindow` to a
-        // different left-side window than the one we registered with the
-        // file browser at the start of this phase (the click on "Files"
-        // above only inserted the *then-current* selection into
-        // `fileBrowserActiveWindowIds`). Without an explicit click here,
-        // the left pane shows the file explorer or a terminal depending on
-        // which window the auto-reassignment landed on — non-deterministic
-        // (issue regenerated this baseline twice already in #534 / #540).
-        // Re-click Files so the current selected window is registered and
-        // the screenshot always captures the file-explorer state.
-        TestStep.macClickButton(titled: "Files")
-        TestStep.wait(seconds: 1)
+        TestStep.macWaitForElementQuery(.label("Move terminal to left: winB"), timeout: 5)
         TestStep.macScreenshot(label: "mac-tabreorder-terminal-on-right")
 
-        // ── Phase 9: Drag the file explorer onto the right pane ─────
-        //
-        // The `Files` folder button is also a draggable payload, keyed on a
-        // stable `.fileExplorer` identifier (no `tmux:N` instability).
-        // Sending it to the right pane should render the file tree there
-        // instead of in the left pane — covers the regression where a
-        // right-side file-explorer click would also activate the left
-        // pane's tree.
-        TestStep.log("Phase 9: Drag Files folder button to the right pane")
+        // ── Phase 9: Move a Files tab across the split ────────────────
+        TestStep.log("Phase 9: Open a second Files tab and drag it to the right")
+        TestStep.macCGClickElement(query: .label("New Tab"))
+        TestStep.macClickButton(titled: "New Files")
+        TestStep.macWaitForElementQuery(.labelContains("Move file tab to right:"), timeout: 5)
         TestStep.macDragElement(
-            from: .label("Files"),
-            to: .label("Move file tab to left: hello.txt")
+            from: .allOf([.labelContains("File tab:"), .valueContains("selected")]),
+            to: .identifier("tab-trailing-drop-right")
         )
-        TestStep.macWaitForElement(titled: "Move file explorer to left: Files", timeout: 5)
+        TestStep.macWaitForElementQueryToDisappear(.labelContains("Move file tab to right:"), timeout: 5)
+        TestStep.macWaitForElementQuery(.labelContains("Move file tab to left:"), timeout: 5)
         TestStep.macScreenshot(label: "mac-tabreorder-explorer-on-right")
 
         // ── Phase 10: Auto-collapse when the left section is empty ─────
@@ -335,11 +311,7 @@ public enum TabReorderScenario {
             .labelContains("Move file tab to left:"),
             timeout: 5
         )
-        TestStep.macWaitForElementQueryToDisappear(
-            .labelContains("Move file explorer to left:"),
-            timeout: 5
-        )
-        TestStep.macWaitForElement(titled: "Open file tab in split: hello.txt", timeout: 5)
+        TestStep.macWaitForElementQuery(.labelContains("Open file tab in split:"), timeout: 5)
         TestStep.macScreenshot(label: "mac-tabreorder-collapsed-from-left-empty")
 
         // ── Phase 11: Right-side terminal exits → split collapses ─────
@@ -351,9 +323,8 @@ public enum TabReorderScenario {
         // visible — covers the regression where an exited right-side
         // terminal kept the empty split alive.
         TestStep.log("Phase 11: Kill the right-side terminal via tmux → split collapses")
-        // Click any "Open terminal in split:" arrow to open the split.
-        TestStep.macCGClickElement(query: .labelContains("Open terminal in split:"))
-        TestStep.macWaitForElementQuery(.labelContains("Move terminal to left:"), timeout: 5)
+        TestStep.macCGClickElement(query: .label("Open terminal in split: winC"))
+        TestStep.macWaitForElementQuery(.label("Move terminal to left: winC"), timeout: 5)
         TestStep.macScreenshot(label: "mac-tabreorder-split-only-terminal-right")
 
         // tmux kill-window with a window-name target works regardless of

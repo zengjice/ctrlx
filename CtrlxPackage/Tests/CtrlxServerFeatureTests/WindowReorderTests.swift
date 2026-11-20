@@ -1,4 +1,6 @@
 import CtrlxCommon
+import CtrlxEncryption
+import CtrlxNetworking
 import Dependencies
 import Foundation
 import Testing
@@ -7,6 +9,125 @@ import Testing
 @Suite("Tmux window reorder")
 @MainActor
 struct WindowReorderTests {
+    @Test("Only a terminal move changes tmux order, including after another workbench or tmux edits the session")
+    func sharedLayoutReordersLiveSession() async throws {
+        let path = try #require(TmuxBinaryLocator.liveValue.find())
+        let socket = "/tmp/ctrlx-tab-\(UUID().uuidString.prefix(12)).sock"
+        let runner = ProcessRunner.liveValue
+        let run: ([String]) async throws -> ProcessResult = { arguments in
+            try await runner.run(executable: path, arguments: ["-S", socket, "-f", "/dev/null"] + arguments, environment: ["TMUX": "", "TMUX_PANE": ""], timeout: 10)
+        }
+        try await withDependencies {
+            $0[ProcessRunner.self] = runner
+            $0[PreferencesService.self] = .inMemory()
+            $0[SecretsService.self] = .inMemory()
+            $0[LoginItemService.self] = .previewValue
+            $0[SimulatorSystemClient.self] = SimulatorSystemClient()
+            $0.continuousClock = ContinuousClock()
+        } operation: {
+            _ = try await run(["new-session", "-d", "-s", "tabs", "/bin/cat"])
+            do {
+                for name in ["second", "third"] {
+                    _ = try await run(["new-window", "-t", "tabs:", "-n", name, "/bin/cat"])
+                }
+                let settings = AppSettings()
+                settings.tmuxPath = path
+                settings.tmuxSocket = socket
+                let coordinator = AppCoordinator(settings: settings)
+                let panes = await coordinator.tmuxService.refreshPanes()
+                coordinator.resourceSessions.update(panes)
+                let sessionID = try #require(panes.first?.workspaceIdentity?.sessionID)
+                let order: [SessionTabID] = panes.sorted { $0.windowIndex < $1.windowIndex }.compactMap { $0.workspaceIdentity.map { .window($0.windowID) } }
+                try #require(order.count == 3)
+                #expect(coordinator.sharedSessionTabLayouts[sessionID]?.revision == 0)
+
+                let session = try coordinator.resourceSessions.resolve(sessionID)
+                let first = try SessionTabID.file(coordinator.hostFileTabs.open(session: session, directory: "/tmp").id)
+                let second = try SessionTabID.file(coordinator.hostFileTabs.open(session: session, directory: "/").id)
+                try await coordinator.editSessionTabLayout(.init(
+                    sessionID: sessionID, edit: .group(first, with: [second]),
+                    initialOrder: [order[0], order[2], second, first]
+                ))
+                #expect(coordinator.sharedSessionTabLayouts[sessionID]?.order == order + [second, first])
+                #expect(try await run(["list-windows", "-t", "tabs", "-F", "#{window_id}"]).stdoutString == "@0\n@1\n@2\n")
+
+                let placeFileBeforeDetachedWindow = EditSessionTabLayout(sessionID: sessionID, edit: .move(first, before: order[1]))
+                try await coordinator.editSessionTabLayout(placeFileBeforeDetachedWindow)
+                #expect(coordinator.sharedSessionTabLayouts[sessionID]?.order == [order[0], first, order[1], order[2], second])
+
+                // Moving C across Files alone still has to reconcile the hidden B.
+                try await coordinator.editSessionTabLayout(.init(
+                    sessionID: sessionID, edit: .move(order[2], before: first),
+                    visibleWindows: [order[0], order[2]]
+                ))
+                #expect(coordinator.sharedSessionTabLayouts[sessionID]?.order == order + [first, second])
+                #expect(try await run(["list-windows", "-t", "tabs", "-F", "#{window_id}"]).stdoutString == "@0\n@1\n@2\n")
+
+                try await coordinator.editSessionTabLayout(placeFileBeforeDetachedWindow)
+                try await coordinator.editSessionTabLayout(.init(
+                    sessionID: sessionID, edit: .move(order[2], before: order[0]),
+                    visibleWindows: [order[0], order[2]]
+                ))
+                #expect(try await run(["list-windows", "-t", "tabs", "-F", "#{window_id}"]).stdoutString == "@2\n@1\n@0\n")
+                #expect(coordinator.sharedSessionTabLayouts[sessionID]?.order == Array(order.reversed()) + [first, second])
+
+                _ = try await run(["swap-window", "-d", "-s", "@0", "-t", "@2"])
+                await coordinator.tmuxService.refreshPanes()
+                try await coordinator.editSessionTabLayout(.init(sessionID: sessionID, edit: .group(second, with: [first])))
+                #expect(coordinator.sharedSessionTabLayouts[sessionID]?.order == order + [first, second])
+                #expect(try await run(["list-windows", "-t", "tabs", "-F", "#{window_id}"]).stdoutString == "@0\n@1\n@2\n")
+
+                let request = EditSessionTabLayout(sessionID: sessionID, edit: .moveToEnd(order[0], after: order[2]))
+                try await coordinator.editSessionTabLayout(request)
+                let saved = try #require(coordinator.sharedSessionTabLayouts[sessionID])
+                #expect(saved.order == [order[1], order[2], order[0], first, second])
+                #expect(try await run(["list-windows", "-t", "tabs", "-F", "#{window_id}"]).stdoutString == "@1\n@2\n@0\n")
+
+                let next = EditSessionTabLayout(sessionID: sessionID, edit: .moveToEnd(order[1], after: nil))
+                try await withDependencies {
+                    $0[ProcessRunner.self].run = { executable, arguments, environment, timeout in
+                        if arguments.contains(where: { $0.contains("swap-window") }) {
+                            return ProcessResult(exitCode: 1, stdout: Data(), stderr: Data("injected swap failure".utf8))
+                        }
+                        return try await runner.run(executable: executable, arguments: arguments, environment: environment, timeout: timeout)
+                    }
+                } operation: {
+                    await #expect(throws: (any Error).self) { try await coordinator.editSessionTabLayout(next) }
+                }
+                #expect(coordinator.sharedSessionTabLayouts[sessionID] == saved)
+                #expect(try await run(["list-windows", "-t", "tabs", "-F", "#{window_id}"]).stdoutString == "@1\n@2\n@0\n")
+            } catch {
+                _ = try? await run(["kill-server"])
+                throw error
+            }
+            _ = try await run(["kill-server"])
+        }
+    }
+
+    @Test
+    func permanentSessionRemovalCannotBeUndoneByAnInFlightLayoutEdit() async throws {
+        try await withDependencies {
+            $0[PreferencesService.self] = .inMemory()
+        } operation: {
+            let store = HostSessionTabLayouts()
+            let closed = UUID(), other = UUID()
+            let a = SessionTabID.file(UUID()), b = SessionTabID.file(UUID())
+            let catalog = [a, b]
+            let edit = SessionTabLayout.Edit.group(a, with: [b])
+            try await store.apply(.init(sessionID: closed, edit: edit), catalog: catalog) { _ in nil }
+            try await store.apply(.init(sessionID: other, edit: edit), catalog: catalog) { _ in nil }
+            await #expect(throws: FileBrowserError.self) {
+                try await store.apply(.init(sessionID: closed, edit: edit), catalog: catalog) { _ in
+                    try store.remove(closed)
+                    return nil
+                }
+            }
+            let reopened = HostSessionTabLayouts()
+            #expect(reopened.snapshot(sessionID: closed, catalog: catalog).revision == 0)
+            #expect(reopened.snapshot(sessionID: other, catalog: catalog).revision == 1)
+        }
+    }
+
     private func pane(
         _ paneId: String,
         session: String,

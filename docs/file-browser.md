@@ -252,10 +252,9 @@ that Git tab is still open.
 
 Agent-created Browser/Simulator tabs and compatibility pane-bound resources
 are grouped by their actual source pane within one Host/session. Independent
-human resources remain in the top-level order. Children from different panes never share
-a group, even when they belong to the same tmux window or directory. Groups
-follow terminal order; children retain their client-private mixed-type order,
-and new children append to their group. Reordering does not rebind a source.
+human resources start in the top-level order. Automatic groups follow terminal
+order and keep each pane's children together. Manual groups can include tabs
+from different panes. Reordering and grouping preserve each resource's source.
 
 Mac keeps the mixed top-level terminal/human-resource order and session Git
 before the child groups. Each group
@@ -269,10 +268,11 @@ offers **Open Files**, **Open Browser** and **Open iOS Simulator** for that
 child's captured source pane. The actions are disabled when that pane is gone or
 the Host does not advertise the corresponding capability.
 
-Previous/next from a top-level tab visits the mixed terminal/human-resource
-order in its current layout. From a child it visits
-only its group's visible children; either boundary returns to the exact source
-pane. Mac operates within the focused split and can reveal the source in another
+Previous/next from a top-level tab visits the mixed terminal and resource order
+in its current layout, including members of manual groups in their displayed
+order. Within an automatic source group it visits the visible children. Either
+boundary of a source group returns to the exact source pane. Mac operates
+within the focused split and can reveal the source in another
 split or native workbench. On iOS, horizontal swipes over the top tab title switch
 child tabs; tapping the title still opens Tabs. Browser/Simulator content gestures,
 terminal swipe navigation and the bottom bar's vertical gestures retain their

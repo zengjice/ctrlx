@@ -17,6 +17,9 @@ public struct WorkbenchKeyboardCommands: Commands {
             Button("New Tab…") { actions?.newTab?() }
                 .keyboardShortcut("t", modifiers: .command)
                 .disabled(actions?.newTab == nil)
+            Button("Fork…") { actions?.fork?() }
+                .keyboardShortcut("f", modifiers: .command)
+                .disabled(actions?.fork == nil)
         }
         CommandGroup(before: .windowList) {
             Button("Switch Session…") { actions?.switchSession?() }

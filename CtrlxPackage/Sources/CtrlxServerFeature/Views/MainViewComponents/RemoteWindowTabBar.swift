@@ -75,15 +75,12 @@ struct RemoteWindowTabBar: View {
 
     @State private var hoveredWindowId: String?
 
-    /// Currently-displayed drop indicator: nil while nothing is being dragged.
-    /// The bar shows a vertical accent line to the left of the matching tab
-    /// while a compatible drag is hovering, giving the user a clear preview
-    /// of where the drop will land.
-    @State private var dropIndicator: TabDragPayload?
+    // Currently-displayed drop indicator: nil while nothing is being dragged.
+    // The bar shows a vertical accent line to the left of the matching tab
+    // while a compatible drag is hovering, giving the user a clear preview
+    // of where the drop will land.
 
-    /// Which section's trailing drop zone is currently hovered, if any. Drawn
-    /// separately from `dropIndicator` because the zone isn't a tab and has
-    /// its own visual treatment.
+    /// Which section's trailing drop zone is currently hovered.
     @State private var trailingDropTargetedSection: TabSection?
 
     private var selectedRight: TabDragPayload? {
@@ -120,7 +117,7 @@ struct RemoteWindowTabBar: View {
             includeFileExplorer: false,
             includeGit: false
         )
-        return sessionTabs?.groupedTabOrder(order, paneOrder: groupPanes.map(\.paneId)) ?? order
+        return sessionTabs?.presentedTabOrder(order, panes: groupPanes, layout: workbenchContext?.sharedTabLayout?.snapshot) ?? order
     }
 
     private var persistableTabOrder: [TabDragPayload]? {
@@ -166,15 +163,17 @@ struct RemoteWindowTabBar: View {
                     }
             }
         }
+        .onChange(of: workbenchContext?.sharedTabLayout?.snapshot, initial: true) { _, snapshot in
+            sessionTabs?.sharedManualTabGroups = snapshot?.groups ?? [:]
+        }
         // Persist the reconciled order so newly-appended windows / browsers
         // and pruned entries survive view rebuilds and session switches. The
         // computed value is idempotent so this can't loop.
         .onChange(of: persistableTabOrder, initial: true) { _, new in
             // Disconnect clears the live pane list, not the saved tab order.
             guard let new else { return }
-            if sessionTabs?.tabOrder != new {
-                sessionTabs?.recordVisibleTabOrder(new)
-            }
+            sessionTabs?.reconcileLocalTabGroups(visible: new)
+            sessionTabs?.recordVisibleTabOrder(new)
         }
     }
 
@@ -192,9 +191,7 @@ struct RemoteWindowTabBar: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
                 newWindowButton
-                PaneLinkedTabStrip(order: effectiveTabOrder, tabs: sessionTabs, panes: groupPanes) { ref in
-                    tabView(for: ref)
-                }
+                tabStrip(order: effectiveTabOrder)
                 trailingDropZone(for: .single)
             }
             .padding(.horizontal, 8)
@@ -206,9 +203,7 @@ struct RemoteWindowTabBar: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
                 newWindowButton
-                PaneLinkedTabStrip(order: leftSectionOrder, tabs: sessionTabs, panes: groupPanes) { ref in
-                    tabView(for: ref)
-                }
+                tabStrip(order: leftSectionOrder)
                 trailingDropZone(for: .left)
             }
             .padding(.leading, 8)
@@ -219,9 +214,7 @@ struct RemoteWindowTabBar: View {
     private var rightSection: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
-                PaneLinkedTabStrip(order: rightSectionOrder, tabs: sessionTabs, panes: groupPanes) { ref in
-                    tabView(for: ref)
-                }
+                tabStrip(order: rightSectionOrder, rightSide: true)
                 trailingDropZone(for: .right)
             }
             .padding(.trailing, 8)
@@ -238,6 +231,8 @@ struct RemoteWindowTabBar: View {
         case .left: "remote-tab-trailing-drop-left"
         case .right: "remote-tab-trailing-drop-right"
         }
+        let sectionOrder = effectiveTabOrder.filter { isOnRight($0) == (section == .right) }
+        let placement = WorkbenchTabDropPlacement.end(sessionTabs?.tabStripEntries(sectionOrder).flatMap(\.tabs) ?? sectionOrder)
         return Color.clear
             .contentShape(Rectangle())
             .frame(maxWidth: .infinity)
@@ -245,8 +240,8 @@ struct RemoteWindowTabBar: View {
                 DropIndicator(visible: isTargeted)
                     .padding(.leading, 4)
             }
-            .workbenchDropDestination(rightSide: section == .right) { payloads, _ in
-                handleEndDrop(payloads: payloads, section: section)
+            .workbenchDropDestination(rightSide: section == .right, placement: { _ in placement }) { payloads, destination in
+                handleEndDrop(payloads: payloads, section: section, placement: destination)
             } isTargeted: { hovering in
                 trailingDropTargetedSection = hovering ? section : (
                     trailingDropTargetedSection == section ? nil : trailingDropTargetedSection
@@ -257,12 +252,34 @@ struct RemoteWindowTabBar: View {
             .accessibilityLabel("Tab strip trailing drop zone")
     }
 
-    /// Dispatches a unified-order entry to the right view. Returns `EmptyView`
-    /// for entries whose underlying data has gone away between reconciliation
-    /// and this render pass (extremely rare; the next body cycle prunes it).
-    /// File-explorer and file-tab payloads are silently ignored — they can't
-    /// arrive from this bar in practice (no source view emits them) but the
-    /// shared `TabDragPayload` makes them syntactically possible.
+    private func tabStrip(order: [TabDragPayload], rightSide: Bool = false) -> some View {
+        let leftSelection: TabDragPayload? = sessionTabs?.selectedFileTabId.map(TabDragPayload.file)
+            ?? selectedBrowserTabId.map(TabDragPayload.browser) ?? selectedWindow.map { .window($0.stableId) }
+        return PaneLinkedTabStrip(
+            order: order, tabs: sessionTabs, panes: groupPanes, selection: rightSide ? selectedRight : leftSelection,
+            rightSide: rightSide, title: tabTitle, onDrop: handleDrop, onUngroup: ungroup
+        ) { tabView(for: $0) }
+    }
+
+    private func tabTitle(_ tab: TabDragPayload) -> String {
+        switch tab {
+        case let .window(id):
+            windows.first(where: { $0.stableId == id }).map { windowTabLabel(windowName: $0.windowName, windowIndex: $0.windowIndex) } ?? "Window"
+        case let .file(id): sessionTabs?.directoryTabs[id]?.title ?? "Files"
+        case let .browser(id): openBrowserTabs.first(where: { $0.id == id })?.tabLabel ?? "Browser"
+        case .git: "Git"
+        case .fileExplorer: "Files"
+        }
+    }
+
+    private func ungroup(_ tab: TabDragPayload) {
+        if let id = sessionTabs?.manualTabGroups[tab] {
+            sessionTabs?.manualTabGroups = sessionTabs?.manualTabGroups.filter { $0.value != id } ?? [:]
+        } else {
+            workbenchContext?.sharedTabLayout?.ungroup(tab)
+        }
+    }
+
     @ViewBuilder
     private func tabView(for ref: TabDragPayload) -> some View {
         switch ref {
@@ -318,13 +335,7 @@ struct RemoteWindowTabBar: View {
                 .padding(.trailing, 6)
         }
         .tabStripItemStyle(isSelected: selected, isOnRightSplit: onRight, isSplit: isSplit)
-        .overlay(alignment: .leading) { DropIndicator(visible: dropIndicator == payload) }
         .workbenchDraggable(payload, label: tab.title) { TabDragPreview(label: tab.title, symbol: .folder) }
-        .workbenchDropDestination(before: payload) { payloads, _ in
-            handleDrop(payloads: payloads, target: payload)
-        } isTargeted: { targeted in
-            updateDropIndicator(target: targeted ? payload : nil, for: .file)
-        }
         .stableContextMenu {
             linkedTabMenuItems(for: payload)
         }
@@ -393,16 +404,8 @@ struct RemoteWindowTabBar: View {
             .padding(.trailing, 6)
         }
         .tabStripItemStyle(isSelected: isSelected, isOnRightSplit: tabIsOnRight, isSplit: isSplit)
-        .overlay(alignment: .leading) {
-            DropIndicator(visible: dropIndicator == payload)
-        }
         .onHover { hovering in
             hoveredWindowId = hovering ? window.id : nil
-        }
-        .workbenchDropDestination(before: payload) { payloads, _ in
-            handleDrop(payloads: payloads, target: payload)
-        } isTargeted: { isTargeted in
-            updateDropIndicator(target: isTargeted ? payload : nil, for: .window)
         }
     }
 
@@ -460,14 +463,9 @@ struct RemoteWindowTabBar: View {
             isSelected: isSelected,
             isOnRight: isOnRight,
             isSplit: isSplit,
-            showsDropIndicator: dropIndicator == payload,
             onSelect: { onSelectBrowserTab(tab.id) },
             onClose: { onCloseBrowserTab(tab.id) },
-            onToggleSplit: { onToggleSplit(payload) },
-            onDrop: { payloads in handleDrop(payloads: payloads, target: payload) },
-            onTargetedChanged: { isTargeted in
-                updateDropIndicator(target: isTargeted ? payload : nil, for: .browser)
-            }
+            onToggleSplit: { onToggleSplit(payload) }
         )
         .stableContextMenu {
             linkedTabMenuItems(for: payload)
@@ -487,17 +485,23 @@ struct RemoteWindowTabBar: View {
 
     // MARK: - Drag and Drop
 
-    private func updateDropIndicator(target: TabDragPayload?, for kind: TabDragPayload.Kind) {
-        if let target {
-            dropIndicator = target
-        } else if dropIndicator?.kind == kind {
-            dropIndicator = nil
+    private func handleDrop(payloads: [TabDragPayload], placement: WorkbenchTabDropPlacement) -> Bool {
+        let targets = placement.targets
+        guard let source = payloads.first, let target = targets.first, !targets.contains(source), effectiveTabOrder.contains(source) else { return false }
+        let section = sectionOf(target)
+        let applyPlacement: @MainActor () -> Void = {
+            sessionTabs?.recordTabDrop(source, at: placement)
+            adjustSplitSideIfNeeded(source: source, to: section)
         }
-    }
-
-    private func handleDrop(payloads: [TabDragPayload], target: TabDragPayload) -> Bool {
-        defer { dropIndicator = nil }
-        guard let source = payloads.first, source != target, sessionTabs?.canReorder(source, before: target) == true else { return false }
+        if workbenchContext?.sharedTabLayout?.drop(source, at: placement, order: effectiveTabOrder, onSuccess: applyPlacement) == true {
+            return true
+        }
+        if case .group = placement {
+            guard sessionTabs?.mergeTab(source, into: targets, visible: effectiveTabOrder) == true else { return false }
+            applyPlacement()
+            return true
+        }
+        guard sessionTabs?.canReorder(source, before: target) == true else { return false }
 
         let previousOrder = effectiveTabOrder
         guard let order = TabDragPayload.moving(source, before: target, in: previousOrder) else { return false }
@@ -505,44 +509,31 @@ struct RemoteWindowTabBar: View {
         guard !windowOrderChanged || sessionTabs?.isWindowReorderPending != true else { return false }
 
         sessionTabs?.recordVisibleTabOrder(order)
+        sessionTabs?.updateLocalGroup(for: source, at: placement)
 
-        adjustSplitSideIfNeeded(source: source, to: sectionOf(target))
+        adjustSplitSideIfNeeded(source: source, to: section)
         syncSubsequences(from: order, rollbackOrder: previousOrder)
 
         return true
     }
 
-    private func handleEndDrop(payloads: [TabDragPayload], section: TabSection) -> Bool {
+    private func handleEndDrop(payloads: [TabDragPayload], section: TabSection, placement: WorkbenchTabDropPlacement) -> Bool {
         defer { trailingDropTargetedSection = nil }
-        guard let source = payloads.first else { return false }
+        guard let source = payloads.first, effectiveTabOrder.contains(source) else { return false }
+        if
+            workbenchContext?.sharedTabLayout?.drop(source, at: placement, order: effectiveTabOrder, onSuccess: {
+                sessionTabs?.recordTabDrop(source, at: placement)
+                adjustSplitSideIfNeeded(source: source, to: section)
+            }) == true {
+            return true
+        }
 
         let previousOrder = effectiveTabOrder
-        var order = previousOrder
-        guard let sourceIndex = order.firstIndex(of: source) else { return false }
-
-        let moved = order.remove(at: sourceIndex)
-
-        let insertIndex: Int
-        switch section {
-        case .single,
-             .right:
-            insertIndex = order.count
-        case .left:
-            insertIndex = (order.lastIndex { !isOnRight($0) } ?? -1) + 1
-        }
-
-        let destination: Int
-        if source.isLinkedContent {
-            destination = (order.lastIndex { sessionTabs?.canReorder(source, before: $0) == true } ?? -1) + 1
-        } else if source.windowId != nil {
-            destination = (order.lastIndex { sessionTabs?.sourcePaneID(for: $0) == nil } ?? -1) + 1
-        } else {
-            destination = insertIndex
-        }
-        order.insert(moved, at: min(destination, order.count))
+        let order = placement.placing(source, in: previousOrder)
         let windowOrderChanged = order.compactMap(\.windowId) != windows.map(\.stableId)
         guard !windowOrderChanged || sessionTabs?.isWindowReorderPending != true else { return false }
         sessionTabs?.recordVisibleTabOrder(order)
+        sessionTabs?.updateLocalGroup(for: source, at: placement)
         adjustSplitSideIfNeeded(source: source, to: section)
         syncSubsequences(from: order, rollbackOrder: previousOrder)
         return true

@@ -23,7 +23,7 @@ public enum WorkspaceLayoutActionsScenario {
             TestStep.macWaitForElement(titled: "layout-actions:0 winA", timeout: 10, instance: instance)
         }
 
-        TestStep.macDragElement(from: .labelContains("layout-actions:2 winC"), to: .labelContains("layout-actions:0 winA"))
+        TestStep.macDragElement(from: .labelContains("layout-actions:2 winC"), to: .labelContains("layout-actions:0 winA"), leadingEdge: true)
         TestStep.waitForTmuxDisplayMessage(target: "layout-actions", format: "#{W:#{window_name}#,}", contains: "winC,winA,winB,", timeout: 10)
         TestStep.macWaitForElement(titled: "layout-actions:0 winC", timeout: 10, instance: 1)
         TestStep.macClickButton(titled: "layout-actions:0 winC")
@@ -37,7 +37,7 @@ public enum WorkspaceLayoutActionsScenario {
             TestStep.macWaitForElement(titled: "Open terminal in split: winB", timeout: 10, instance: instance)
         }
 
-        TestStep.macDragElement(from: .labelContains("layout-actions:2 winB"), to: .labelContains("layout-actions:0 winC"), instance: 1)
+        TestStep.macDragElement(from: .labelContains("layout-actions:2 winB"), to: .labelContains("layout-actions:0 winC"), leadingEdge: true, instance: 1)
         TestStep.waitForTmuxDisplayMessage(target: "layout-actions", format: "#{W:#{window_name}#,}", contains: "winB,winC,winA,", timeout: 10)
         TestStep.macWaitForElement(titled: "layout-actions:0 winB", timeout: 10)
         TestStep.macClickButton(titled: "layout-actions:0 winB", instance: 1)

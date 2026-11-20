@@ -350,6 +350,8 @@ struct DetachedTerminalWindowsTests {
         let one = try #require(manager.workspace(containing: a))
         let two = try #require(manager.workspace(containing: b))
         let drag = WorkbenchTabDrag(workspaceID: one.id, hostID: "A", sessionName: "work", tab: .window("@1"))
+        #expect(manager.canTransfer(drag, to: nil, session: { _ in "work" }))
+        #expect(manager.workspaces[one.id]?.selection == .window("@1"))
         #expect(!manager.transfer(drag, to: two.id, session: { _ in "work" }))
         let forged = WorkbenchTabDrag(workspaceID: nil, hostID: "A", sessionName: "work", tab: .window("@1"))
         #expect(!manager.transfer(forged, to: one.id, session: { _ in "work" }))

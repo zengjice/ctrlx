@@ -201,12 +201,9 @@ struct BrowserTabStripItem: View {
     let isSelected: Bool
     let isOnRight: Bool
     let isSplit: Bool
-    let showsDropIndicator: Bool
     let onSelect: () -> Void
     let onClose: () -> Void
     let onToggleSplit: () -> Void
-    let onDrop: ([TabDragPayload]) -> Bool
-    let onTargetedChanged: (Bool) -> Void
 
     @State private var isHovered = false
 
@@ -256,19 +253,11 @@ struct BrowserTabStripItem: View {
             }
         }
         .tabStripItemStyle(isSelected: isSelected, isOnRightSplit: isOnRight, isSplit: isSplit)
-        .overlay(alignment: .leading) {
-            DropIndicator(visible: showsDropIndicator)
-        }
         .onHover { hovering in
             isHovered = hovering
         }
         .workbenchDraggable(payload, label: tab.tabLabel) {
             TabDragPreview(label: tab.tabLabel, symbol: tab.isSimulator ? .iphone : .globe)
-        }
-        .workbenchDropDestination(before: payload) { payloads, _ in
-            onDrop(payloads)
-        } isTargeted: { isTargeted in
-            onTargetedChanged(isTargeted)
         }
     }
 }

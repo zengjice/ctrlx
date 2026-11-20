@@ -346,23 +346,34 @@ final class DetachedTerminalWindows {
         }
     }
 
-    @discardableResult
-    func transfer(_ drag: WorkbenchTabDrag, to destinationID: UUID?, session: (DetachedTerminalTarget) -> String?) -> Bool {
+    func canTransfer(_ drag: WorkbenchTabDrag, to destinationID: UUID?, session: (DetachedTerminalTarget) -> String?) -> Bool {
         guard
             drag.workspaceID != destinationID,
-            let sourceStore = store(for: drag.workspaceID), let destinationStore = store(for: destinationID) else { return false }
+            let sourceStore = store(for: drag.workspaceID), store(for: destinationID) != nil else { return false }
         if let destinationID {
             guard
                 let group = workspaces[destinationID], group.hostID == drag.hostID,
                 group.resolvedSession(using: session) == drag.sessionName else { return false }
-            group.sessionName = drag.sessionName
         }
+        let source = sourceStore.existing(hostID: drag.hostID, session: drag.sessionName)
+        switch drag.tab {
+        case let .window(id):
+            guard let target = DetachedTerminalTarget(hostID: drag.hostID, windowID: id) else { return false }
+            return session(target) == drag.sessionName && owner(hostID: drag.hostID, windowID: id) == drag.workspaceID
+        case let .file(id): return source?.openFileTabs.contains { $0.id == id } == true
+        case let .browser(id): return source?.openBrowserTabs.contains { $0.id == id } == true
+        default: return false
+        }
+    }
+
+    @discardableResult
+    func transfer(_ drag: WorkbenchTabDrag, to destinationID: UUID?, session: (DetachedTerminalTarget) -> String?) -> Bool {
+        guard
+            canTransfer(drag, to: destinationID, session: session),
+            let sourceStore = store(for: drag.workspaceID), let destinationStore = store(for: destinationID) else { return false }
         let source = sourceStore.tabs(hostID: drag.hostID, session: drag.sessionName)
         let destination = destinationStore.tabs(hostID: drag.hostID, session: drag.sessionName)
-        if case let .window(id) = drag.tab {
-            guard
-                let target = DetachedTerminalTarget(hostID: drag.hostID, windowID: id),
-                session(target) == drag.sessionName, owner(hostID: drag.hostID, windowID: id) == drag.workspaceID else { return false }
+        if case let .window(id) = drag.tab, let target = DetachedTerminalTarget(hostID: drag.hostID, windowID: id) {
             if let old = workspace(containing: target) {
                 old.members.removeAll { $0 == target }
             }
@@ -372,6 +383,7 @@ final class DetachedTerminalWindows {
         }
         guard source.move(drag.tab, to: destination) else { return false }
         if let destinationID, let group = workspaces[destinationID] {
+            group.sessionName = drag.sessionName
             group.selection = drag.tab
             group.selectionRevision += 1
         }

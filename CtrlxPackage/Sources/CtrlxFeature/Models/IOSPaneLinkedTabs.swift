@@ -19,6 +19,101 @@ struct IOSPaneLinkedTabs {
         PaneLinkedTabs.groups(items: items, paneOrder: windows.flatMap(\.panes).map(\.paneId), sourcePane: sourcePaneID)
     }
 
+    func adjacentLinkedTab(_ tab: PaneLinkedTabID, direction: Int, layout: SessionTabLayout?) -> PaneLinkedTabs.Destination<PaneLinkedTabID>? {
+        guard let layout else { return PaneLinkedTabs.adjacent(to: tab, direction: direction, groups: groups) }
+        let id = tab.sessionTabID
+        guard
+            abs(direction) == 1,
+            case let .group(.pane(pane), members)? = sharedEntries(layout).first(where: { $0.tabs.contains(id) }),
+            let index = members.firstIndex(of: id) else { return nil }
+        let next = index + direction
+        guard members.indices.contains(next) else { return .sourcePane(pane) }
+        return items.first { $0.sessionTabID == members[next] }.map(PaneLinkedTabs.Destination.tab)
+    }
+
+    func isPrivateFile(_ tab: SessionTabID) -> Bool {
+        guard case let .file(id) = tab else { return false }
+        return files.contains { $0.id == id && $0.hostTab == nil }
+    }
+
+    func sharedMove(
+        _ source: SessionTabID, before target: SessionTabID?, layout: SessionTabLayout,
+        topLevelOrder: [IOSTopLevelTabID] = []
+    ) -> SessionTabLayout.Edit? {
+        let entries = sharedEntries(layout, topLevelOrder: topLevelOrder)
+        guard let entry = entries.first(where: { $0.tabs.contains(source) }) else { return nil }
+        let siblings: [SessionTabID]
+        if case let .group(.pane, members) = entry {
+            siblings = members
+        } else {
+            siblings = entries.flatMap { entry -> [SessionTabID] in
+                if case .group(.pane, _) = entry {
+                    return []
+                }
+                return entry.tabs
+            }
+        }
+        if let target {
+            guard target != source, siblings.contains(target) else { return nil }
+            return .move(source, before: target)
+        }
+        guard let anchor = siblings.last(where: { $0 != source && !isPrivateFile($0) }) else { return nil }
+        return .moveToEnd(source, after: anchor)
+    }
+
+    func sharedEntries(_ layout: SessionTabLayout, topLevelOrder: [IOSTopLevelTabID] = []) -> [SessionTabEntry<SessionTabID>] {
+        let resources = Dictionary(items.map { ($0.sessionTabID, $0) }, uniquingKeysWith: { first, _ in first })
+        let top = topLevel(stored: topLevelOrder).compactMap(\.sessionTabID)
+        let privateFiles = Set(files.filter { $0.hostTab == nil }.map { SessionTabID.file($0.id) })
+        let privateTabs = privateFiles.intersection(top)
+        let linked = groups.filter { $0.id != nil }.flatMap(\.items).map(\.sessionTabID)
+        let catalog = top.filter { !privateTabs.contains($0) } + linked
+        let sharedOrder = layout.ordered(catalog)
+        let panesByWindow = Dictionary(windows.compactMap { window in
+            window.sessionTabID.map { ($0, window.panes.map(\.paneId)) }
+        }, uniquingKeysWith: { first, _ in first })
+        let paneOrder = sharedOrder.flatMap { panesByWindow[$0, default: []] } + windows.flatMap(\.panes).map(\.paneId)
+        let entries = SessionTabEntry.grouped(sharedOrder, paneOrder: paneOrder) { tab in
+            if !privateFiles.contains(tab), let group = layout.groups[tab] {
+                return .manual(group)
+            }
+            return resources[tab].flatMap(sourcePaneID).map(SessionTabGroup.pane)
+        }.map { entry in
+            guard case let .group(.pane(pane), members) = entry, members.contains(where: privateFiles.contains) else { return entry }
+            let visible = Set(members)
+            var shared = members.filter { !privateFiles.contains($0) }.makeIterator()
+            let order = linked.filter(visible.contains).map { privateFiles.contains($0) ? $0 : shared.next() ?? $0 }
+            return .group(.pane(pane), order)
+        }
+        guard !privateTabs.isEmpty else { return entries }
+
+        // A manual group occupies one top-level slot. Automatic groups sit below those slots.
+        let topLevel = entries.filter { $0.sourcePaneID == nil }
+        let owners = Dictionary(uniqueKeysWithValues: topLevel.flatMap { entry in entry.tabs.map { ($0, entry.id) } })
+        let saved = topLevelOrder.compactMap(\.sessionTabID)
+        let anchors = PaneLinkedTabs.ordered(top + saved.filter { owners[$0] != nil }, stored: saved)
+        var sharedSlots = Set<SessionTabEntry<SessionTabID>.ID>()
+        var privateAfter: [Int: [SessionTabEntry<SessionTabID>]] = [:]
+        for tab in anchors {
+            if privateTabs.contains(tab) {
+                privateAfter[sharedSlots.count, default: []].append(.tab(tab))
+            } else if let entry = owners[tab] {
+                sharedSlots.insert(entry)
+            }
+        }
+        var order: [SessionTabEntry<SessionTabID>] = []
+        var slot = 0
+        for entry in topLevel {
+            if sharedSlots.contains(entry.id) {
+                order.append(contentsOf: privateAfter[slot, default: []])
+                slot += 1
+            }
+            order.append(entry)
+        }
+        order.append(contentsOf: privateAfter[slot, default: []])
+        return order + entries.filter { $0.sourcePaneID != nil }
+    }
+
     func sourcePaneID(_ item: PaneLinkedTabID) -> String? {
         switch item {
         case let .file(id): files.first { $0.id == id }?.sourcePaneID
@@ -48,10 +143,42 @@ struct IOSPaneLinkedTabs {
     func moving(_ source: IndexSet, to destination: Int, in group: PaneLinkedTabs.Group<PaneLinkedTabID>) -> [PaneLinkedTabID] {
         var moved = group.items
         moved.move(fromOffsets: source, toOffset: destination)
-        var replacement = moved.makeIterator()
-        let members = Set(group.items)
+        return mergingLinkedOrder(moved)
+    }
+
+    func movingPrivateMember(_ source: SessionTabID, before target: SessionTabID, layout: SessionTabLayout) -> [PaneLinkedTabID]? {
+        guard
+            source != target, isPrivateFile(source) || isPrivateFile(target),
+            case let .group(.pane, members)? = sharedEntries(layout).first(where: { $0.tabs.contains(source) }) else { return nil }
+        var moved = members.filter { $0 != source }
+        guard let index = moved.firstIndex(of: target) else { return nil }
+        moved.insert(source, at: index)
+        guard moved.filter({ !isPrivateFile($0) }) == members.filter({ !isPrivateFile($0) }) else { return nil }
+        let resources = Dictionary(items.map { ($0.sessionTabID, $0) }, uniquingKeysWith: { first, _ in first })
+        return mergingLinkedOrder(moved.compactMap { resources[$0] })
+    }
+
+    private func mergingLinkedOrder(_ order: [PaneLinkedTabID]) -> [PaneLinkedTabID] {
+        var replacement = order.makeIterator()
+        let members = Set(order)
         // Keep saved slots for descriptors that have not arrived yet.
         let fullOrder = PaneLinkedTabs.ordered(storedOrder + items, stored: storedOrder)
         return fullOrder.map { members.contains($0) ? (replacement.next() ?? $0) : $0 }
+    }
+}
+
+extension PaneLinkedTabID {
+    var sessionTabID: SessionTabID {
+        switch self {
+        case let .file(id): .file(id)
+        case let .browser(id),
+             let .simulator(id): .browser(id)
+        }
+    }
+}
+
+extension TmuxWindow {
+    var sessionTabID: SessionTabID? {
+        panes.first?.workspaceIdentity.map { .window($0.windowID) }
     }
 }

@@ -1,6 +1,7 @@
 import AppKit
 import CtrlxCommon
 import CtrlxNetworking
+import CtrlxPluginProtocol
 import SwiftUI
 
 @MainActor
@@ -12,6 +13,8 @@ public struct MacOrbiePanelView: View {
     @State private var notice: String?
     @State private var showsSwitcher = false
     @State private var showsActions = false
+    @State private var showsModelPicker = false
+    @State private var switchingModel = false
     @State private var stopMessage: AgentMessage?
     @State private var orbitersSheet: OrbitersSheet?
     @State private var sending = false
@@ -65,7 +68,7 @@ public struct MacOrbiePanelView: View {
     }
 
     private var operationBusy: Bool {
-        sending || retryingStartup || (selectedID == nil ? coordinator.orbie?.isBusy ?? (startupIssue == nil) : coordinator.orbiters?.isBusy ?? (startupIssue == nil))
+        sending || switchingModel || retryingStartup || (selectedID == nil ? coordinator.orbie?.isBusy ?? (startupIssue == nil) : coordinator.orbiters?.isBusy ?? (startupIssue == nil))
     }
 
     private var availability: String? {
@@ -182,10 +185,12 @@ public struct MacOrbiePanelView: View {
             } else {
                 showsSwitcher = false
                 showsActions = false
+                showsModelPicker = false
                 Task { await saveDrafts() }
             }
         }
-        .onChange(of: showsSwitcher || showsActions) { _, presented in coordinator.orbiePanel.setPopoverPresented(presented) }
+        .onChange(of: showsSwitcher || showsActions || showsModelPicker) { _, presented in coordinator.orbiePanel.setPopoverPresented(presented) }
+        .onChange(of: instance?.id) { showsModelPicker = false }
         .onChange(of: coordinator.orbiters?.historyAgentID) { old, new in
             if let id = selectedID, old == id, new != nil, coordinator.orbiters?.agents.contains(where: { $0.id == id }) == false {
                 selectedID = new
@@ -258,7 +263,7 @@ public struct MacOrbiePanelView: View {
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .bottom, spacing: 12) {
-                OrbiePanelComposer(text: draft, focusID: coordinator.orbiePanel.isVisible && !showsSwitcher && !showsActions && orbitersSheet == nil ? selectedID ?? "orbie" : nil, send: send, dismiss: dismissOrCloseMenu)
+                OrbiePanelComposer(text: draft, focusID: coordinator.orbiePanel.isVisible && !showsSwitcher && !showsActions && !showsModelPicker && orbitersSheet == nil ? selectedID ?? "orbie" : nil, send: send, dismiss: dismissOrCloseMenu)
                     .id(selectedID ?? "orbie")
                     .overlay(alignment: .topLeading) {
                         if draft.wrappedValue.isEmpty {
@@ -271,7 +276,23 @@ public struct MacOrbiePanelView: View {
                     .disabled(!canSend).help("Send (Return)").accessibilityIdentifier("orbie-panel-send")
             }
             HStack {
-                Text("This Mac")
+                if let instance, coordinator.pluginRegistry?.core(instance.pluginID) is any AgentModelProviding {
+                    AgentModelStatusBar(
+                        hostID: nil, paneID: instance.paneID, isVisible: coordinator.orbiePanel.isVisible,
+                        compactPicker: Binding(get: { showsModelPicker }, set: { visible in
+                            if visible {
+                                coordinator.orbiePanel.setPopoverPresented(true)
+                            }
+                            showsModelPicker = visible
+                        }), compactSwitching: $switchingModel, expectedInstance: instance
+                    )
+                    .environment(coordinator.windowManager)
+                    .environment(coordinator.settings)
+                    .id(instance.id)
+                    .disabled(switchingModel && !showsModelPicker)
+                } else {
+                    Text("This Mac")
+                }
                 Spacer()
                 Text(availability == nil ? "⇧ Return for a new line" : "Draft kept · Send manually when ready")
             }.font(.caption2).foregroundStyle(.secondary)
@@ -513,9 +534,10 @@ public struct MacOrbiePanelView: View {
     }
 
     private func dismissOrCloseMenu() {
-        if showsSwitcher || showsActions {
+        if showsSwitcher || showsActions || showsModelPicker {
             showsSwitcher = false
             showsActions = false
+            showsModelPicker = false
         } else {
             coordinator.orbiePanel.dismiss(restoreFocus: true)
         }

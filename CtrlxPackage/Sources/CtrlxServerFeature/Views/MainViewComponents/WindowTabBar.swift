@@ -84,15 +84,7 @@ struct WindowTabBar: View {
     @State private var hoveredFileTabId: UUID?
     @State private var isGitHovered = false
 
-    /// Currently-displayed drop indicator: nil while nothing is being dragged.
-    /// The bar shows a vertical accent line to the left of the matching tab
-    /// while a compatible drag is hovering, giving the user a clear preview
-    /// of where the drop will land.
-    @State private var dropIndicator: TabDragPayload?
-
-    /// Which section's trailing drop zone is currently hovered, if any. Drawn
-    /// separately from `dropIndicator` because the zone isn't a tab and has
-    /// its own visual treatment.
+    /// Which section's trailing drop zone is currently hovered.
     @State private var trailingDropTargetedSection: TabSection?
 
     /// Read-only accessors that mirror `SessionFileTabsState`. Defined as
@@ -150,7 +142,7 @@ struct WindowTabBar: View {
             storedOrder: sessionTabs.tabOrder,
             includeFileExplorer: false
         )
-        return sessionTabs.groupedTabOrder(order, paneOrder: groupPanes.map(\.paneId))
+        return sessionTabs.presentedTabOrder(order, panes: groupPanes, layout: workbenchContext?.sharedTabLayout?.snapshot)
     }
 
     /// Effective order restricted to entries visible on the left section in
@@ -199,20 +191,16 @@ struct WindowTabBar: View {
                     }
             }
         }
+        .onChange(of: workbenchContext?.sharedTabLayout?.snapshot, initial: true) { _, snapshot in
+            sessionTabs.sharedManualTabGroups = snapshot?.groups ?? [:]
+        }
         // Persist the reconciled order so newly-appended windows / tabs and
         // pruned entries survive view rebuilds and session switches. The
         // computed value is idempotent (`reconcile(reconcile(x)) == reconcile(x)`)
         // so this can't loop.
-        .onChange(of: effectiveTabOrder) { _, new in
-            if sessionTabs.tabOrder != new {
-                sessionTabs.recordVisibleTabOrder(new)
-            }
-        }
-        .onAppear {
-            let computed = effectiveTabOrder
-            if sessionTabs.tabOrder != computed {
-                sessionTabs.recordVisibleTabOrder(computed)
-            }
+        .onChange(of: effectiveTabOrder, initial: true) { _, order in
+            sessionTabs.reconcileLocalTabGroups(visible: order)
+            sessionTabs.recordVisibleTabOrder(order)
         }
     }
 
@@ -230,9 +218,7 @@ struct WindowTabBar: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
                 newWindowButton
-                PaneLinkedTabStrip(order: effectiveTabOrder, tabs: sessionTabs, panes: groupPanes) { ref in
-                    tabView(for: ref)
-                }
+                tabStrip(order: effectiveTabOrder)
                 if let suggestion = openSuggestionStore.suggestionsBySession[session.sessionName] {
                     openSuggestionBar(suggestion)
                 }
@@ -254,9 +240,7 @@ struct WindowTabBar: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
                 newWindowButton
-                PaneLinkedTabStrip(order: leftSectionOrder, tabs: sessionTabs, panes: groupPanes) { ref in
-                    tabView(for: ref)
-                }
+                tabStrip(order: leftSectionOrder)
                 if let suggestion = openSuggestionStore.suggestionsBySession[session.sessionName] {
                     openSuggestionBar(suggestion)
                 }
@@ -272,9 +256,7 @@ struct WindowTabBar: View {
     private var rightSection: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
-                PaneLinkedTabStrip(order: rightSectionOrder, tabs: sessionTabs, panes: groupPanes) { ref in
-                    tabView(for: ref)
-                }
+                tabStrip(order: rightSectionOrder, rightSide: true)
                 trailingDropZone(for: .right)
             }
             .padding(.trailing, 8)
@@ -300,6 +282,8 @@ struct WindowTabBar: View {
         case .left: "tab-trailing-drop-left"
         case .right: "tab-trailing-drop-right"
         }
+        let sectionOrder = effectiveTabOrder.filter { isOnRight($0) == (section == .right) }
+        let placement = WorkbenchTabDropPlacement.end(sessionTabs.tabStripEntries(sectionOrder).flatMap(\.tabs))
         return Color.clear
             .contentShape(Rectangle())
             .frame(maxWidth: .infinity)
@@ -307,8 +291,8 @@ struct WindowTabBar: View {
                 DropIndicator(visible: isTargeted)
                     .padding(.leading, 4)
             }
-            .workbenchDropDestination(rightSide: section == .right) { payloads, _ in
-                handleEndDrop(payloads: payloads, section: section)
+            .workbenchDropDestination(rightSide: section == .right, placement: { _ in placement }) { payloads, destination in
+                handleEndDrop(payloads: payloads, section: section, placement: destination)
             } isTargeted: { hovering in
                 trailingDropTargetedSection = hovering ? section : (
                     trailingDropTargetedSection == section ? nil : trailingDropTargetedSection
@@ -319,9 +303,34 @@ struct WindowTabBar: View {
             .accessibilityLabel("Tab strip trailing drop zone")
     }
 
-    /// Dispatches a unified-order entry to the right view. Returns `EmptyView`
-    /// for entries whose underlying data has gone away between reconciliation
-    /// and this render pass (extremely rare; the next body cycle prunes it).
+    private func tabStrip(order: [TabDragPayload], rightSide: Bool = false) -> some View {
+        let leftSelection: TabDragPayload? = sessionTabs.selectedFileTabId.map(TabDragPayload.file)
+            ?? selectedBrowserTabId.map(TabDragPayload.browser) ?? (isGitBrowserSelected ? .git : nil) ?? (!isAnyFileViewActive ? selectedWindow.map { .window($0.stableId) } : nil)
+        return PaneLinkedTabStrip(
+            order: order, tabs: sessionTabs, panes: groupPanes, selection: rightSide ? selectedRight : leftSelection,
+            rightSide: rightSide, title: tabTitle, onDrop: handleDrop, onUngroup: ungroup
+        ) { tabView(for: $0) }
+    }
+
+    private func tabTitle(_ tab: TabDragPayload) -> String {
+        switch tab {
+        case let .window(id):
+            session.windows.first(where: { $0.stableId == id }).map { windowTabLabel(windowName: $0.windowName, windowIndex: $0.windowIndex) } ?? "Window"
+        case let .file(id): openFileTabs.first(where: { $0.id == id })?.name ?? "Files"
+        case let .browser(id): openBrowserTabs.first(where: { $0.id == id })?.tabLabel ?? "Browser"
+        case .git: "Git"
+        case .fileExplorer: "Files"
+        }
+    }
+
+    private func ungroup(_ tab: TabDragPayload) {
+        if let id = sessionTabs.manualTabGroups[tab] {
+            sessionTabs.manualTabGroups = sessionTabs.manualTabGroups.filter { $0.value != id }
+        } else {
+            workbenchContext?.sharedTabLayout?.ungroup(tab)
+        }
+    }
+
     @ViewBuilder
     private func tabView(for ref: TabDragPayload) -> some View {
         switch ref {
@@ -388,16 +397,8 @@ struct WindowTabBar: View {
             .padding(.trailing, 6)
         }
         .tabStripItemStyle(isSelected: isSelected, isOnRightSplit: tabIsOnRight, isSplit: isSplit)
-        .overlay(alignment: .leading) {
-            DropIndicator(visible: dropIndicator == .fileExplorer)
-        }
         .workbenchDraggable(TabDragPayload.fileExplorer) {
             TabDragPreview(label: "Files", symbol: .folderFill)
-        }
-        .workbenchDropDestination(before: .fileExplorer) { payloads, _ in
-            handleDrop(payloads: payloads, target: .fileExplorer)
-        } isTargeted: { isTargeted in
-            updateDropIndicator(target: isTargeted ? .fileExplorer : nil, for: .fileExplorer)
         }
     }
 
@@ -466,16 +467,8 @@ struct WindowTabBar: View {
         }
         .tabStripItemStyle(isSelected: isSelected, isOnRightSplit: tabIsOnRight, isSplit: isSplit)
         .onHover { isGitHovered = $0 }
-        .overlay(alignment: .leading) {
-            DropIndicator(visible: dropIndicator == .git)
-        }
         .workbenchDraggable(TabDragPayload.git) {
             TabDragPreview(label: "Git", image: CustomSymbol.gitLogo.image)
-        }
-        .workbenchDropDestination(before: .git) { payloads, _ in
-            handleDrop(payloads: payloads, target: .git)
-        } isTargeted: { isTargeted in
-            updateDropIndicator(target: isTargeted ? .git : nil, for: .git)
         }
     }
 
@@ -536,16 +529,8 @@ struct WindowTabBar: View {
             .padding(.trailing, 6)
         }
         .tabStripItemStyle(isSelected: isSelected, isOnRightSplit: tabIsOnRight, isSplit: isSplit)
-        .overlay(alignment: .leading) {
-            DropIndicator(visible: dropIndicator == payload)
-        }
         .onHover { hovering in
             hoveredWindowId = hovering ? window.id : nil
-        }
-        .workbenchDropDestination(before: payload) { payloads, _ in
-            handleDrop(payloads: payloads, target: payload)
-        } isTargeted: { isTargeted in
-            updateDropIndicator(target: isTargeted ? payload : nil, for: .window)
         }
     }
 
@@ -635,9 +620,6 @@ struct WindowTabBar: View {
             .padding(.trailing, 6)
         }
         .tabStripItemStyle(isSelected: isSelected, isOnRightSplit: tabIsOnRight, isSplit: isSplit)
-        .overlay(alignment: .leading) {
-            DropIndicator(visible: dropIndicator == payload)
-        }
         .fileContextMenu(
             fullPath: sessionTabs.directoryTabs[tab.id]?.path ?? tab.path,
             directoryPath: sessionTabs.directoryTabs[tab.id]?.path ?? tab.directoryPath,
@@ -658,11 +640,6 @@ struct WindowTabBar: View {
         .workbenchDraggable(payload, label: tab.name) {
             TabDragPreview(label: tab.name, symbol: .docPlaintextFill)
         }
-        .workbenchDropDestination(before: payload) { payloads, _ in
-            handleDrop(payloads: payloads, target: payload)
-        } isTargeted: { isTargeted in
-            updateDropIndicator(target: isTargeted ? payload : nil, for: .file)
-        }
     }
 
     private func openBrowserTabView(_ tab: BrowserTab) -> some View {
@@ -677,14 +654,9 @@ struct WindowTabBar: View {
             isSelected: isSelected,
             isOnRight: isOnRight,
             isSplit: isSplit,
-            showsDropIndicator: dropIndicator == payload,
             onSelect: { onSelectBrowserTab(tab.id) },
             onClose: { onCloseBrowserTab(tab.id) },
-            onToggleSplit: { onToggleSplit(payload) },
-            onDrop: { payloads in handleDrop(payloads: payloads, target: payload) },
-            onTargetedChanged: { isTargeted in
-                updateDropIndicator(target: isTargeted ? payload : nil, for: .browser)
-            }
+            onToggleSplit: { onToggleSplit(payload) }
         )
         .stableContextMenu {
             linkedTabMenuItems(for: payload)
@@ -748,30 +720,23 @@ struct WindowTabBar: View {
 
     // MARK: - Drag and Drop
 
-    /// Updates the in-flight drop indicator, clearing any stale value when the
-    /// pointer leaves the tab without dropping (the `isTargeted` callback runs
-    /// in both directions). Each kind of tab tracks its own target so leaving
-    /// a window tab while hovering a file tab still hides the window indicator.
-    private func updateDropIndicator(target: TabDragPayload?, for kind: TabDragPayload.Kind) {
-        if let target {
-            dropIndicator = target
-        } else if dropIndicator?.kind == kind {
-            dropIndicator = nil
+    private func handleDrop(payloads: [TabDragPayload], placement: WorkbenchTabDropPlacement) -> Bool {
+        let targets = placement.targets
+        guard let source = payloads.first, let target = targets.first, !targets.contains(source), effectiveTabOrder.contains(source) else { return false }
+        let section = sectionOf(target)
+        let applyPlacement: @MainActor () -> Void = {
+            sessionTabs.recordTabDrop(source, at: placement)
+            adjustSplitSideIfNeeded(source: source, to: section)
         }
-    }
-
-    /// Translates a drop event into a reorder of the unified `tabOrder`. Any
-    /// kind can target any other kind (window onto browser, file-explorer
-    /// onto window, etc.) — the entry simply moves to the target's position
-    /// immediately before the target, matching the indicator drawn on the
-    /// target's leading edge. When the window
-    /// subsequence changes, the new order is also pushed to tmux via
-    /// `move-window`; when the file or browser subsequences change, the
-    /// corresponding `openFileTabs` / `openBrowserTabs` arrays are updated
-    /// so other consumers see the same order.
-    private func handleDrop(payloads: [TabDragPayload], target: TabDragPayload) -> Bool {
-        defer { dropIndicator = nil }
-        guard let source = payloads.first, source != target, sessionTabs.canReorder(source, before: target) else { return false }
+        if workbenchContext?.sharedTabLayout?.drop(source, at: placement, order: effectiveTabOrder, onSuccess: applyPlacement) == true {
+            return true
+        }
+        if case .group = placement {
+            guard sessionTabs.mergeTab(source, into: targets, visible: effectiveTabOrder) else { return false }
+            applyPlacement()
+            return true
+        }
+        guard sessionTabs.canReorder(source, before: target) else { return false }
 
         let previousOrder = effectiveTabOrder
         guard let order = TabDragPayload.moving(source, before: target, in: previousOrder) else { return false }
@@ -779,10 +744,11 @@ struct WindowTabBar: View {
         guard !windowOrderChanged || !sessionTabs.isWindowReorderPending else { return false }
 
         sessionTabs.recordVisibleTabOrder(order)
+        sessionTabs.updateLocalGroup(for: source, at: placement)
 
         // If the drop crosses the split, also flip the source tab's side
         // membership so it shows up in the pane the user dropped it into.
-        adjustSplitSideIfNeeded(source: source, to: sectionOf(target))
+        adjustSplitSideIfNeeded(source: source, to: section)
 
         // Sync the per-kind subsequences out to the rest of the app so
         // anything still iterating the old arrays (keyboard nav, tmux's
@@ -792,45 +758,24 @@ struct WindowTabBar: View {
         return true
     }
 
-    /// Drop handler for the trailing drop zone of a section. Moves the
-    /// source to the end of that section so users can drag "past the last
-    /// tab" instead of having to drop onto a specific neighbour. In split
-    /// mode, "end of left section" means just before the first right-side
-    /// entry so the right pane's tabs keep their visual position.
-    private func handleEndDrop(payloads: [TabDragPayload], section: TabSection) -> Bool {
+    /// Apply the resolved trailing placement and move the tab to the destination section.
+    private func handleEndDrop(payloads: [TabDragPayload], section: TabSection, placement: WorkbenchTabDropPlacement) -> Bool {
         defer { trailingDropTargetedSection = nil }
-        guard let source = payloads.first else { return false }
+        guard let source = payloads.first, effectiveTabOrder.contains(source) else { return false }
+        if
+            workbenchContext?.sharedTabLayout?.drop(source, at: placement, order: effectiveTabOrder, onSuccess: {
+                sessionTabs.recordTabDrop(source, at: placement)
+                adjustSplitSideIfNeeded(source: source, to: section)
+            }) == true {
+            return true
+        }
 
         let previousOrder = effectiveTabOrder
-        var order = previousOrder
-        guard let sourceIndex = order.firstIndex(of: source) else { return false }
-
-        let moved = order.remove(at: sourceIndex)
-
-        let insertIndex: Int
-        switch section {
-        case .single,
-             .right:
-            insertIndex = order.count
-        case .left:
-            // Insert right after the last entry that belongs to the left
-            // section. Falls through to the end if the left section is
-            // empty (e.g. every tab was sent to the right).
-            insertIndex = (order.lastIndex { !isOnRight($0) } ?? -1) + 1
-        }
-
-        let destination: Int
-        if source.isLinkedContent {
-            destination = (order.lastIndex { sessionTabs.canReorder(source, before: $0) } ?? -1) + 1
-        } else if source.windowId != nil {
-            destination = (order.lastIndex { sessionTabs.sourcePaneID(for: $0) == nil } ?? -1) + 1
-        } else {
-            destination = insertIndex
-        }
-        order.insert(moved, at: min(destination, order.count))
+        let order = placement.placing(source, in: previousOrder)
         let windowOrderChanged = order.windowIds != session.windows.map(\.stableId)
         guard !windowOrderChanged || !sessionTabs.isWindowReorderPending else { return false }
         sessionTabs.recordVisibleTabOrder(order)
+        sessionTabs.updateLocalGroup(for: source, at: placement)
         adjustSplitSideIfNeeded(source: source, to: section)
         syncSubsequences(from: order, rollbackOrder: previousOrder)
         return true

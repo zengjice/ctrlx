@@ -124,10 +124,11 @@ public enum RemoteTabReorderScenario {
         TestStep.macWaitForElementQueryToDisappear(.labelContains("Close browser tab:"), timeout: 5, instance: 1)
 
         // ── Phase 3: Drag winC ahead of winA via the AX-driven helper ───
-        TestStep.log("Phase 3: Drag winC onto winA — new order becomes winC, winA, winB, terminal 1 on the host")
+        TestStep.log("Phase 3: Drag winC to the leading edge of winA")
         TestStep.macDragElement(
             from: .labelContains("rtabreorder:2 winC"),
             to: .labelContains("rtabreorder:0 winA"),
+            leadingEdge: true,
             instance: 1
         )
         TestStep.wait(seconds: 5)

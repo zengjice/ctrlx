@@ -138,7 +138,7 @@ public extension TestStep {
             return .macOS(instance: instance)
         case let .macDrag(_, _, _, _, instance):
             return .macOS(instance: instance)
-        case let .macDragElement(_, _, instance):
+        case let .macDragElement(_, _, _, instance):
             return .macOS(instance: instance)
         case let .macDragElementOutsideWindow(_, instance):
             return .macOS(instance: instance)
