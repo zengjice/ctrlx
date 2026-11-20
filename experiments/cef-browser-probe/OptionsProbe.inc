@@ -1,17 +1,160 @@
+// Locate fixture controls in the actual capture, including the Chrome toolbar
+// and any scaling applied before the frame reaches a Viewer.
+NSPoint OptionsControlPoint(NSBitmapImageRep *bitmap, NSDictionary *frame, bool edit) {
+  NSInteger left = bitmap.pixelsWide, top = bitmap.pixelsHigh, right = -1, bottom = -1;
+  for (NSInteger y = 0; y < bitmap.pixelsHigh; y += 2) {
+    for (NSInteger x = 0; x < bitmap.pixelsWide; x += 2) {
+      NSColor *color = [[bitmap colorAtX:x y:y] colorUsingColorSpace:NSColorSpace.deviceRGBColorSpace];
+      const bool matches = edit
+          ? std::min(color.redComponent, color.blueComponent) - color.greenComponent > .4
+          : color.greenComponent - std::max(color.redComponent, color.blueComponent) > .4;
+      if (matches) {
+        left = std::min(left, x); right = std::max(right, x);
+        top = std::min(top, y); bottom = std::max(bottom, y);
+      }
+    }
+  }
+  if (right <= left || bottom <= top) return NSMakePoint(-1, -1);
+  return NSMakePoint((left + right) * .5 * [frame[@"width"] doubleValue] / bitmap.pixelsWide,
+                     (top + bottom) * .5 * [frame[@"height"] doubleValue] / bitmap.pixelsHigh);
+}
+
+using OptionsProbeResult = std::function<void(NSString *)>;
+
+void SendOptionsOperations(std::shared_ptr<ExtensionSurface> grant, NSNumber *generation, NSArray *operations,
+                           OptionsProbeResult done, NSUInteger index = 0) {
+  if (closing) return;
+  if (index == operations.count) { done(nil); return; }
+  NSMutableDictionary *payload = [@{@"lease": @"options-fixture", @"generation": generation} mutableCopy];
+  [payload addEntriesFromDictionary:operations[index]];
+  grant->Request(payload, ^(NSData *data, NSString *error) {
+    Later(0, [grant, generation, operations, done, index, data, error] {
+      if (closing) return;
+      if (!data || error) done(error ?: @"Empty options input response");
+      else SendOptionsOperations(grant, generation, operations, done, index + 1);
+    });
+  });
+}
+
+NSArray *OptionsClick(NSPoint point) {
+  NSMutableArray *operations = [NSMutableArray array];
+  for (NSString *type in @[@"mousePressed", @"mouseReleased"])
+    [operations addObject:@{@"action": @"mouse", @"type": type, @"button": @"left", @"clickCount": @1,
+        @"x": @(point.x), @"y": @(point.y)}];
+  return operations;
+}
+
+void WaitForOptionsSignal(NSString *name, NSTimeInterval deadline, OptionsProbeResult done) {
+  if (closing) return;
+  NSString *path = [configuration[@"output"] stringByAppendingPathComponent:name];
+  if ([[NSFileManager defaultManager] fileExistsAtPath:path]) done(nil);
+  else if (NSProcessInfo.processInfo.systemUptime >= deadline)
+    done([NSString stringWithFormat:@"Timed out waiting for %@", name]);
+  else Later(50, [name, deadline, done] { WaitForOptionsSignal(name, deadline, done); });
+}
+
+NSView *OptionsHitView(CefRefPtr<CefBrowser> browser, NSPoint point) {
+  NSView *view = (__bridge NSView *)browser->GetHost()->GetWindowHandle();
+  NSWindow *window = view.window;
+  NSPoint screen = NSMakePoint(NSMinX(window.frame) + point.x, NSMaxY(window.frame) - point.y);
+  NSPoint location = [window convertPointFromScreen:screen];
+  NSView *content = window.contentView;
+  return [content hitTest:[content.superview convertPoint:location fromView:nil]];
+}
+
+void CheckOptionsProtocolRejection(CefRefPtr<CefBrowser> browser, OptionsProbeResult done) {
+  CefRefPtr<ExtensionOptionsInput> input = new ExtensionOptionsInput();
+  auto submitted = std::make_shared<bool>(false);
+  // An invalid parameter reaches Chromium, which rejects it asynchronously.
+  input->Send(browser->GetHost(), "Input.insertText", @{@"text": @17}, nil, ^(NSString *error) {
+    input->Cancel();
+    bool rejected = *submitted && [error isEqual:@"Chromium rejected extension input."];
+    Report(@"options-input-error", @{@"rejectedAfterSubmission": @(rejected)});
+    done(rejected ? nil : @"Expected a Chromium input error after submission");
+  });
+  *submitted = true;
+}
+
+void EditOptions(CefRefPtr<CefBrowser> browser, std::shared_ptr<ExtensionSurface> grant,
+                 NSDictionary *frame, NSData *jpeg, std::function<void()> done) {
+  NSBitmapImageRep *bitmap = [NSBitmapImageRep imageRepWithData:jpeg];
+  const NSPoint checkbox = OptionsControlPoint(bitmap, frame, false);
+  const NSPoint edit = OptionsControlPoint(bitmap, frame, true);
+  if (checkbox.x < 0 || edit.x < 0) {
+    Report(@"failure", @{@"error": @"Options fixture controls missing from captured frame"}); CloseAll(); return;
+  }
+  NSNumber *generation = frame[@"generation"];
+  NSView *initialRenderer = OptionsHitView(browser, edit);
+  // Start another isolated app process to make the probe genuinely inactive.
+  NSWorkspaceOpenConfiguration *launch = [NSWorkspaceOpenConfiguration configuration];
+  launch.createsNewApplicationInstance = YES;
+  launch.arguments = @[@"--options-focus-fixture"];
+  [NSWorkspace.sharedWorkspace openApplicationAtURL:NSBundle.mainBundle.bundleURL configuration:launch
+      completionHandler:^(NSRunningApplication *fixture, NSError *error) {
+    CefPostTask(TID_UI, new BrowserUITask([fixture, error, browser, grant, generation, checkbox, edit, initialRenderer, done] {
+      if (!fixture || fixture.processIdentifier == getpid()) {
+        Report(@"failure", @{@"error": error.localizedDescription ?: @"Could not launch options focus fixture"});
+        CloseAll(); return;
+      }
+      auto finish = [fixture, done](NSString *failure) {
+        const bool inactive = !NSApp.isActive;
+        Report(@"options-input-focus", @{@"stayedInactive": @(inactive)});
+        [NSApp activateIgnoringOtherApps:YES];
+        [fixture terminate];
+        if (failure || !inactive) {
+          Report(@"failure", @{@"error": failure ?: @"Host regained focus during options editing"});
+          CloseAll();
+        } else done();
+      };
+      Later(500, [browser, grant, generation, checkbox, edit, initialRenderer, finish] {
+        if (NSApp.isActive) { finish(@"Options probe did not lose application focus"); return; }
+        auto editReady = [browser, grant, generation, edit, initialRenderer, finish](NSString *error) {
+          if (error) { finish(error); return; }
+          NSView *renderer = OptionsHitView(browser, edit);
+          BOOL changed = renderer && renderer != initialRenderer &&
+              [renderer isKindOfClass:NSClassFromString(@"RenderWidgetHostViewCocoa")];
+          Report(@"options-editor", @{@"rendererChanged": @(changed)});
+          // The editor field occupies the original button's coordinates. Keep the
+          // old frame generation and send text as soon as the click is acknowledged.
+          NSArray *keys = @[
+              @{@"action": @"key", @"key": @"a", @"modifiers": @4},
+              @{@"action": @"text", @"text": @"Viewer edit 中文"},
+              @{@"action": @"key", @"key": @"Enter"},
+              @{@"action": @"text", @"text": @"tail"},
+              @{@"action": @"key", @"key": @"Tab"},
+          ];
+          NSArray *operations = [OptionsClick(edit) arrayByAddingObjectsFromArray:keys];
+          SendOptionsOperations(grant, generation, operations, [browser, finish](NSString *error) {
+            if (error) { finish(error); return; }
+            WaitForOptionsSignal(@"options-saved", NSProcessInfo.processInfo.systemUptime + 6, [browser, finish](NSString *error) {
+              if (error) { finish(error); return; }
+              CheckOptionsProtocolRejection(browser, finish);
+            });
+          });
+        };
+        SendOptionsOperations(grant, generation, [OptionsClick(checkbox) arrayByAddingObjectsFromArray:OptionsClick(edit)],
+            [editReady, finish](NSString *error) {
+          if (error) { finish(error); return; }
+          WaitForOptionsSignal(@"options-editor-ready", NSProcessInfo.processInfo.systemUptime + 6, editReady);
+        });
+      });
+    }));
+  }];
+}
+
 // Runs the product options path in a disposable profile and native window.
-void WaitForOptions(CefRefPtr<CefBrowser> browser, std::function<void()> next, int attempt = 0) {
+void WaitForOptions(CefRefPtr<CefBrowser> browser, std::shared_ptr<ExtensionSurface> grant,
+                    std::function<void()> next, int attempt = 0) {
   if (closing) return;
   BOOL fixtureReady = [configuration[@"optionsMode"] isEqual:@"env"] ? attempt >= 20 :
       [[NSFileManager defaultManager] fileExistsAtPath:[configuration[@"output"] stringByAppendingPathComponent:@"options-ready.json"]];
   if (!completedLoads[browser->GetIdentifier()] || browser->IsLoading() || !fixtureReady || attempt < 20) {
-    if (attempt < 200) Later(50, [browser, next, attempt] { WaitForOptions(browser, next, attempt + 1); });
+    if (attempt < 200) Later(50, [browser, grant, next, attempt] { WaitForOptions(browser, grant, next, attempt + 1); });
     else { Report(@"failure", @{@"error": @"Options did not load"}); CloseAll(); }
     return;
   }
-  Later(400, [browser, next] {
+  Later(400, [browser, grant, next] {
     NSView *view = (__bridge NSView *)browser->GetHost()->GetWindowHandle();
-    auto grant = std::make_shared<ExtensionSurface>(@"options-fixture", [] { return !closing; }, [] {});
-    if (!grant->SetWindow(view.window)) { Report(@"failure", @{@"error": @"Options surface could not be bound"}); CloseAll(); return; }
     grant->Request(@{@"action": @"frame", @"lease": @"options-fixture", @"maximumDimension": @800}, ^(NSData *data, NSString *error) {
       NSDictionary *frame = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
       if (error || ![frame[@"jpeg"] length]) { Report(@"failure", @{@"error": error ?: @"Missing options frame"}); CloseAll(); return; }
@@ -21,9 +164,13 @@ void WaitForOptions(CefRefPtr<CefBrowser> browser, std::function<void()> next, i
       }
       Report(@"options-native-surface", @{@"captured": @YES, @"visible": @(view.window.isVisible),
           @"url": @(browser->GetMainFrame()->GetURL().ToString().c_str())});
-      grant->Revoke();
-      browser->GetHost()->CloseBrowser(true);
-      Later(100, next);
+      auto done = [grant, browser, next] {
+        grant->Revoke();
+        browser->GetHost()->CloseBrowser(true);
+        Later(100, next);
+      };
+      if ([configuration[@"optionsMode"] isEqual:@"env"]) done();
+      else EditOptions(browser, grant, frame, jpeg, done);
     });
   });
 }
@@ -45,9 +192,12 @@ void CheckExtensionOptionsContent(std::function<void()> next) {
       return;
     }
     auto opened = std::make_shared<CefRefPtr<CefBrowser>>();
-    auto present = [opened](NSString *url) -> NSString * {
+    auto grant = std::make_shared<ExtensionSurface>(@"options-fixture", [] { return !closing; }, [] {});
+    auto present = [opened, grant](NSString *url) -> NSString * {
       auto browser = OpenExtensionOptionsWindow(url);
       if (!browser) return @"Options window was not created";
+      NSView *view = (__bridge NSView *)browser->GetHost()->GetWindowHandle();
+      if (!grant->SetWindow(view.window, browser)) return @"Options surface could not be bound";
       Report(@"options-open", @{@"id": @(browser->GetIdentifier()), @"valid": @(browser->IsValid()), @"registered": @(extensionTools.contains(browser->GetIdentifier())), @"previous": @(*opened ? (*opened)->GetIdentifier() : -1)});
       if (*opened && (*opened)->GetIdentifier() != browser->GetIdentifier()) return @"Repeated options request created another window";
       *opened = browser;
@@ -58,7 +208,7 @@ void CheckExtensionOptionsContent(std::function<void()> next) {
       client->Request(@{@"operation": @"openOptions", @"id": installedFixtureID}, ^(NSData *, NSString *again) {
         if (again) { Report(@"failure", @{@"error": again}); CloseAll(); return; }
         Report(@"options-reused", @{@"sameBrowser": @YES});
-        WaitForOptions(*opened, next);
+        WaitForOptions(*opened, grant, next);
       }, present);
     }, present);
   });

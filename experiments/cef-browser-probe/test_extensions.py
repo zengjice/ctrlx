@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 import shutil
 import signal
 import subprocess
@@ -60,6 +61,10 @@ def run(app: Path, dynamic_install: bool = False, native_drag: bool = False, pro
                                    "boe": self.headers.get("x-use-boe"), "ppe": self.headers.get("x-use-ppe"),
                                    "environment": self.headers.get("x-tt-env")}).encode()
                 content_type = "application/json"
+            elif options_mode in ("tab", "legacy") and urlsplit(self.path).path in ("/options-editor", "/options-editor.js"):
+                script = urlsplit(self.path).path.endswith(".js")
+                body = (output / ("options-editor.js" if script else "options-editor.html")).read_bytes()
+                content_type = "text/javascript" if script else "text/html; charset=utf-8"
             else:
                 body = ("<!doctype html><meta charset='utf-8'><title>CtrlX extension fixture</title>"
                         "<h1>Isolated CtrlX extension test</h1><p>" + self.path + "</p>" +
@@ -79,9 +84,15 @@ def run(app: Path, dynamic_install: bool = False, native_drag: bool = False, pro
             if self.path not in ("/popup-report", "/options-report") or not 0 < size <= 65536:
                 self.send_error(400)
                 return
-            (options_reports if self.path == "/options-report" else popup_reports).append(json.loads(self.rfile.read(size)))
+            report = json.loads(self.rfile.read(size))
             if self.path == "/options-report":
-                (output / "options-ready.json").write_text(json.dumps(options_reports[-1]))
+                if report.get("editorReady"):
+                    (output / "options-editor-ready").touch()
+                else:
+                    options_reports.append(report)
+                    (output / ("options-ready.json" if "saved" in report else "options-saved")).touch()
+            else:
+                popup_reports.append(report)
             self.send_response(204)
             self.end_headers()
 
@@ -124,16 +135,82 @@ def run(app: Path, dynamic_install: bool = False, native_drag: bool = False, pro
         elif options_mode != "none":
             manifest["options_ui"] = {"page": "options.html", "open_in_tab": options_mode == "tab"}
         (extension / "manifest.json").write_text(json.dumps(manifest))
-        (extension / "options.html").write_text('<!doctype html><title>Fixture Settings</title><style>body{min-width:360px;min-height:180px}</style><h1>Fixture Settings</h1><input id="setting" value="options fixture"><script src="options.js"></script>')
-        (extension / "options.js").write_text("""
+        options_style = """
+<!doctype html><meta charset="utf-8"><title>Fixture Settings</title>
+<style>
+body { min-width: 360px; min-height: 180px; }
+label, button { display: inline-block; padding: 12px 24px; border: 0; }
+label { background: #00e034; }
+#edit, #setting { position: absolute; left: 160px; top: 76px; width: 168px; height: 58px; box-sizing: border-box; }
+#edit { background: #eb25c8; }
+</style>
+"""
+        (extension / "options.html").write_text(options_style + """
+<h1>Fixture Settings</h1>
+<label><input id="enabled" type="checkbox"> Enable fixture</label>
+<button id="edit">Edit setting</button>
+<textarea id="setting" hidden>options fixture</textarea>
+<script src="options.js"></script>
+""")
+        (output / "options-editor.html").write_text(options_style + """
+<h1>Fixture Editor</h1>
+<textarea id="setting">options fixture</textarea>
+<script src="/options-editor.js"></script>
+""")
+        options_script = """
+const report = data => fetch(%s, {method: 'POST', body: JSON.stringify(data)});
+const navigateToEditor = %s;
+const enabled = document.getElementById('enabled');
+const edit = document.getElementById('edit');
+const setting = document.getElementById('setting');
+const prior = new URLSearchParams(location.search);
+let trustedToggle = prior.get('toggle') === 'true', trustedEdit = prior.get('edit') === 'true';
+let enterCode = '';
+const editEvents = [];
+enabled?.addEventListener('change', event => { trustedToggle = event.isTrusted; });
+edit?.addEventListener('click', event => {
+  trustedEdit = event.isTrusted;
+  if (navigateToEditor) {
+    const query = new URLSearchParams({enabled: enabled.checked, toggle: trustedToggle, edit: trustedEdit});
+    location.href = navigateToEditor + '?' + query;
+    return;
+  }
+  setting.hidden = false;
+  setting.focus();
+  report({editorReady: true});
+});
+setting.addEventListener('click', event => { if (event.isTrusted) editEvents.push('click'); });
+setting.addEventListener('keydown', event => {
+  if (event.key === 'Enter') enterCode = event.code;
+  if (event.isTrusted && event.metaKey && event.code === 'KeyA') editEvents.push('selectAll');
+});
+setting.addEventListener('change', async event => {
+  const result = {value: setting.value, enabled: enabled ? enabled.checked : prior.get('enabled') === 'true'};
+  let saved;
+  if (enabled) {
+    await chrome.storage.local.set(result);
+    saved = await chrome.storage.local.get(['value', 'enabled']);
+  } else {
+    localStorage.setItem('options', JSON.stringify(result));
+    saved = JSON.parse(localStorage.getItem('options'));
+  }
+  // Persistence has already completed. Delay only the report to exercise the native wait.
+  await new Promise(resolve => setTimeout(resolve, 1200));
+  await report({...saved, enterCode, editEvents, trustedToggle, trustedEdit, trustedChange: event.isTrusted});
+});
 (async () => {
+  if (!enabled) { await report({editorReady: true}); return; }
   const previous = await chrome.storage.local.get('optionsLoads');
   const count = (previous.optionsLoads || 0) + 1;
   await chrome.storage.local.set({optionsLoads: count});
   const saved = await chrome.storage.local.get('optionsLoads');
-  await fetch(%s, {method: 'POST', body: JSON.stringify({saved: saved.optionsLoads})});
+  await report({saved: saved.optionsLoads});
 })();
-""" % json.dumps(configuration["fixture"] + "/options-report"))
+"""
+        report_url = json.dumps(configuration["fixture"] + "/options-report")
+        editor_url = configuration["fixture"] + "/options-editor" if options_mode in ("tab", "legacy") else None
+        (extension / "options.js").write_text(options_script % (report_url, json.dumps(editor_url)))
+        (output / "options-editor.js").write_text(options_script % (report_url, "null"))
     config_path = output / "config.json"
     config_path.write_text(json.dumps(configuration))
     def launch(log_name):
@@ -267,7 +344,15 @@ def run(app: Path, dynamic_install: bool = False, native_drag: bool = False, pro
             valid = (phases.get("options-reused", {}).get("sameBrowser") is True
                      and phases.get("options-native-surface", {}).get("captured") is True
                      and phases.get("options-native-surface", {}).get("visible") is True
-                     and len(options_reports) == 1 and options_reports[0]["saved"] == 1
+                     and phases.get("options-input-focus", {}).get("stayedInactive") is True
+                     and phases.get("options-input-error", {}).get("rejectedAfterSubmission") is True
+                     and (options_mode == "embedded" or phases.get("options-editor", {}).get("rendererChanged") is True)
+                     and options_reports == [
+                         {"saved": 1},
+                         {"value": "Viewer edit 中文\ntail", "enabled": True, "enterCode": "Enter",
+                          "editEvents": ["click", "selectAll"],
+                          "trustedToggle": True, "trustedEdit": True, "trustedChange": True},
+                     ]
                      and phases["options-native-surface"]["url"].startswith(
                          "chrome://extensions/?options=" if options_mode == "embedded" else "chrome-extension://"))
         compatibility["store-routing"] = phases.get("store-routing", {})
@@ -304,7 +389,7 @@ if __name__ == "__main__":
     parser.add_argument("--native-manager-input", action="store_true", help="Capture and confirm fixture removal through only the manager window's owned tree")
     parser.add_argument("--env-debugger", action="store_true", help="Characterize ENV debugger API coexistence with CEF page control and native DevTools")
     parser.add_argument("--cors", action="store_true", help="Require Chrome-compatible cross-origin header injection and preserve page CORS checks")
-    parser.add_argument("--options-mode", choices=["tab", "embedded", "legacy", "none", "env"], help="Verify declared options mode, reuse, storage and native capture")
+    parser.add_argument("--options-mode", choices=["tab", "embedded", "legacy", "none", "env"], help="Verify options availability, reuse, native capture and fixture editing in the background")
     args = parser.parse_args()
     run(args.app.resolve(), args.dynamic_install, args.native_drag, args.production_admin,
         args.env_extension, args.env_scenario, args.env_restart_scenario, args.fixture_packages,

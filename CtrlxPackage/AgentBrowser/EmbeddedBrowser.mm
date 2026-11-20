@@ -825,7 +825,7 @@ void RecordBrowserDiagnostic(NSDictionary* event) {
       auto options = OpenExtensionOptionsWindow(url);
       if (!options) return @"Could not open extension settings.";
       NSView *view = (__bridge NSView *)options->GetHost()->GetWindowHandle();
-      if (remote && !extensionSurface->SetWindow(view.window)) return @"Extension settings are unavailable.";
+      if (remote && !extensionSurface->SetWindow(view.window, options)) return @"Extension settings are unavailable.";
       return nil;
     });
   }))) reply(nil, @"Chromium is not ready or the extension request is too large.");

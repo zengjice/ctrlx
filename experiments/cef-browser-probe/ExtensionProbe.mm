@@ -607,6 +607,7 @@ class App final : public CefApp, public CefBrowserProcessHandler {
           backing:NSBackingStoreBuffered defer:NO];
       embeddedWindow.title = @"CtrlX extension compatibility — isolated profile";
       embeddedWindow.releasedWhenClosed = NO;
+      [NSApp activateIgnoringOtherApps:YES];
       [embeddedWindow makeKeyAndOrderFront:nil];
       CefBrowserSettings settings;
       for (int i = 0; i < 2; ++i) {
@@ -622,7 +623,7 @@ class App final : public CefApp, public CefBrowserProcessHandler {
       }
       manager = [configuration[@"productionAdmin"] boolValue] ? EnsureExtensionManager() : Chrome(@"chrome://extensions/");
       Later(3000, BeginChecks);
-      Later([configuration[@"envPlugin"] boolValue] ? 90000 : 45000, [] {
+      Later([configuration[@"envPlugin"] boolValue] ? 90000 : configuration[@"optionsMode"] ? 60000 : 45000, [] {
         if (!closing) { Report(@"failure", @{@"error": @"Native probe timed out"}); CloseAll(); }
       });
     }
@@ -643,6 +644,20 @@ class App final : public CefApp, public CefBrowserProcessHandler {
 
 int main(int argc, char **argv) {
   if (argc != 2) { fprintf(stderr, "Usage: extension-probe /private/run/config.json\n"); return 2; }
+  if (std::string(argv[1]) == "--options-focus-fixture") {
+    @autoreleasepool {
+      [NSApplication sharedApplication];
+      [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+      NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(50, 70, 320, 170)
+          styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
+      window.title = @"CtrlX options focus fixture";
+      [NSApp activateIgnoringOtherApps:YES];
+      [window makeKeyAndOrderFront:nil];
+      [NSTimer scheduledTimerWithTimeInterval:15 repeats:NO block:^(NSTimer *) { [NSApp terminate:nil]; }];
+      [NSApp run];
+    }
+    return 0;
+  }
   CefScopedLibraryLoader loader;
   if (!loader.LoadInMain()) return 1;
   @autoreleasepool {
