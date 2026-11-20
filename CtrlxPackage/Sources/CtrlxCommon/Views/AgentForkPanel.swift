@@ -66,9 +66,8 @@ public struct AgentForkConfiguration: Identifiable {
             guard directorySource != nil else {
                 throw AgentForkError("Forking into another directory is unavailable on this Host.")
             }
-            let directory = directory ?? source.workingDirectory
-            guard SessionDirectoryPath.isValid(directory) else {
-                throw AgentForkError("Enter an absolute Host directory or ~/… without control characters.")
+            guard let directory, SessionDirectoryPath.isValid(directory) else {
+                throw AgentForkError("Choose or enter an absolute Host directory or ~/… without control characters.")
             }
             targetDirectory = directory == source.workingDirectory ? nil : directory
         }
@@ -161,7 +160,7 @@ public struct AgentForkPanel: View {
     @State private var sourceID: String
     @State private var preparation: AgentForkPreparation?
     @State private var forkName: String
-    @State private var directory: String
+    @State private var directory = ""
     @State private var targetProviderID: String?
     @State private var acceptsCleanWorktree = false
     @State private var showsDirectoryBrowser: Bool
@@ -174,14 +173,13 @@ public struct AgentForkPanel: View {
     public init(configuration: AgentForkConfiguration) {
         self.configuration = configuration
         self._sourceID = State(initialValue: configuration.sources.first?.paneID ?? "")
-        self._directory = State(initialValue: configuration.sources.first?.workingDirectory ?? "")
         self._showsDirectoryBrowser = State(initialValue: configuration.destination == .otherDirectory)
         let agentName = switch configuration.sources.first?.pluginID {
         case "codex": "codex"
         case "traex": "traex"
         default: "claude"
         }
-        self._forkName = State(initialValue: configuration.destination == .worktree ? "\(agentName)-\(UUID().uuidString.prefix(8).lowercased())" : "\(agentName) fork")
+        self._forkName = State(initialValue: configuration.destination == .worktree ? "" : "\(agentName) fork")
     }
 
     private var source: AgentForkSource? {
@@ -236,7 +234,6 @@ public struct AgentForkPanel: View {
             preparation = nil
             errorMessage = nil
             guard let source else { return }
-            directory = source.workingDirectory
             isLoading = true
             defer {
                 if sourceID == source.paneID {
@@ -293,7 +290,7 @@ public struct AgentForkPanel: View {
                 case .otherDirectory:
                     if let directorySource = configuration.directorySource {
                         VStack(alignment: .leading, spacing: 8) {
-                            TextField("Directory on Host", text: $directory, prompt: Text(source.workingDirectory))
+                            TextField("Directory on Host", text: $directory, prompt: Text("Host directory (required)"))
                                 .textFieldStyle(.roundedBorder)
                                 .autocorrectionDisabled()
                             #if os(iOS)
@@ -302,7 +299,7 @@ public struct AgentForkPanel: View {
                                 .disabled(isLaunching || isCreatingDirectory)
                                 .accessibilityLabel("Fork directory on Host")
                                 .accessibilityIdentifier("agentFork.directory")
-                            if !SessionDirectoryPath.isValid(directory) {
+                            if !directory.isEmpty, !SessionDirectoryPath.isValid(directory) {
                                 Text("Enter an absolute Host directory or ~/… without control characters.")
                                     .font(.caption).foregroundStyle(.red)
                             }
@@ -315,8 +312,6 @@ public struct AgentForkPanel: View {
                                 }
                             }
                             .disabled(isLaunching || isCreatingDirectory)
-                            Text("Defaults to the source directory. The copied conversation opens in this directory on the Host.")
-                                .font(.caption).foregroundStyle(.secondary)
                         }
                     } else {
                         Text("Forking into another directory is unavailable on this Host.")
@@ -344,7 +339,8 @@ public struct AgentForkPanel: View {
                     Text(configuration.destination == .worktree ? "Window / Worktree Name" : "Window Name")
                         .font(.subheadline.weight(.semibold))
                 #endif
-                TextField("Name", text: $forkName).disabled(isLaunching)
+                TextField("Name", text: $forkName, prompt: configuration.destination == .worktree ? Text("Branch name (required)") : nil)
+                    .disabled(isLaunching)
                     .autocorrectionDisabled()
                 #if os(iOS)
                     .textFieldStyle(.roundedBorder)

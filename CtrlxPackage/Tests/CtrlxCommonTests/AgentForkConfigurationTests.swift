@@ -103,7 +103,7 @@ struct AgentForkConfigurationTests {
         }
     }
 
-    @Test("Other-directory Fork targets another Host directory only when its capability is available")
+    @Test("Other-directory Fork requires an explicit Host directory and the Host capability")
     func arbitraryDirectory() throws {
         let source = try #require(AgentForkSource(pane: pane("%1", index: 1)))
         let directorySource = SessionDirectorySource(id: "host", list: { _ in throw CancellationError() })
@@ -119,7 +119,7 @@ struct AgentForkConfigurationTests {
             targetProviderID: nil, directory: source.workingDirectory
         )
         #expect(unchanged.workingDirectory == nil)
-        for directory in ["", "relative", "~/line\nbreak"] {
+        for directory in [nil, "", "  ", "relative", "~/line\nbreak"] as [String?] {
             #expect(throws: AgentForkError.self) {
                 try config.forkRequest(
                     source: source, preparation: nil, name: "elsewhere", allowUncommittedChanges: false,
@@ -143,6 +143,13 @@ struct AgentForkConfigurationTests {
         let preparation = AgentForkPreparation(source: source, worktree: .init(
             repositoryRoot: "/Host/repo", primaryRoot: "/Host/repo", head: "source-head", relativeDirectory: "", hasUncommittedChanges: false
         ))
+        for name in ["", "  "] {
+            #expect(throws: AgentForkError.self) {
+                try config.forkRequest(
+                    source: source, preparation: preparation, name: name, allowUncommittedChanges: false, targetProviderID: nil
+                )
+            }
+        }
         let first = try config.forkRequest(
             source: source, preparation: preparation, name: "  feature  ", allowUncommittedChanges: false,
             targetProviderID: nil, directory: "/other"

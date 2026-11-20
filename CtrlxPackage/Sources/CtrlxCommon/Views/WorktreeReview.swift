@@ -13,8 +13,9 @@ struct WorktreeReview: View {
             Text("Use letters, numbers, ., _ or -; start with a letter or number. Do not use HEAD, .., or end with . or .lock.")
                 .font(.caption).foregroundStyle(.secondary)
             let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
-            Text("Branch: \(name)\nDirectory: \(plan.directory(name: name))\nBase: \(plan.head.prefix(12))")
-                .font(.callout).textSelection(.enabled)
+            let base = "Base: \(plan.head.prefix(12))"
+            let preview = AgentForkWorktree.isValidName(name) ? "Branch: \(name)\nDirectory: \(plan.directory(name: name))\n\(base)" : base
+            Text(preview).font(.callout).textSelection(.enabled)
             Text("Starts from HEAD. Uncommitted, untracked and ignored files are not copied. The worktree remains after closing its tab.")
                 .font(.callout).foregroundStyle(.secondary)
             if plan.hasUncommittedChanges {
