@@ -850,6 +850,7 @@ final public class ConnectedViewer: Identifiable {
                  .restartAgentSession,
                  .recoverWorkspacePane,
                  .agentModelControls,
+                 .editSessionTabLayout,
                  .setAgentModelShortcuts,
                  .readDashboard,
                  .checkCtrlXAppUpdate,

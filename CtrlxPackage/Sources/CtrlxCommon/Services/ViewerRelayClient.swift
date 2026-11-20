@@ -855,6 +855,8 @@ final public class ViewerRelayClient {
             return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .setSharedTerminalLayout(spec):
             return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
+        case let .editSessionTabLayout(spec):
+            return (try? await sendCommand(spec, paneId: "").get()) != nil
         case let .setYoloMode(spec):
             return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil
         case let .markHandled(spec):

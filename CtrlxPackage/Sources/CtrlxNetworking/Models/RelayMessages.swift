@@ -58,6 +58,7 @@ public struct SessionStateMessage: Codable, Sendable {
     /// deliberately narrower than the workbench: auxiliary tab catalogs are
     /// shared separately; placement, selection and scroll stay client-local.
     public let sharedTerminalLayouts: [String: SharedTerminalLayout]?
+    public let sessionTabLayouts: [UUID: SessionTabLayout]?
     /// nil on older Hosts; published once per repository, rather than per pane.
     public let worktreeRepositories: [RepositoryWorktreeStatus]?
     /// Absent on older hosts: viewers retain manual entry and send no lookup.
@@ -143,6 +144,7 @@ public struct SessionStateMessage: Codable, Sendable {
         case usageOverview
         case sidebarSortMode
         case sharedTerminalLayouts
+        case sessionTabLayouts
         case worktreeRepositories
         case supportsDirectoryBrowsing
         case supportsDirectoryCreation
@@ -238,7 +240,8 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsCtrlXAppUpdateCheck: Bool? = nil,
         ctrlXAppUpdate: CtrlXAppUpdateState? = nil,
         independentResources: IndependentResourceCatalog? = nil,
-        supportsResourceAuthorization: Bool? = nil
+        supportsResourceAuthorization: Bool? = nil,
+        sessionTabLayouts: [UUID: SessionTabLayout]? = nil
     ) {
         self.independentResources = independentResources
         self.supportsResourceAuthorization = supportsResourceAuthorization
@@ -252,6 +255,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.usageOverview = usageOverview
         self.sidebarSortMode = sidebarSortMode
         self.sharedTerminalLayouts = sharedTerminalLayouts
+        self.sessionTabLayouts = sessionTabLayouts
         self.worktreeRepositories = worktreeRepositories
         self.supportsDirectoryBrowsing = supportsDirectoryBrowsing
         self.supportsDirectoryCreation = supportsDirectoryCreation
@@ -352,7 +356,8 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsCtrlXAppUpdateCheck: supportsCtrlXAppUpdateCheck,
             ctrlXAppUpdate: ctrlXAppUpdate,
             independentResources: independentResources,
-            supportsResourceAuthorization: supportsResourceAuthorization
+            supportsResourceAuthorization: supportsResourceAuthorization,
+            sessionTabLayouts: sessionTabLayouts
         )
     }
 }

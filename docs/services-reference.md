@@ -126,6 +126,24 @@ rows receive comparable display snapshots; status, progress and menu values shar
 one aggregation. Unchanged rows skip display updates while theme and configured
 field changes remain observed by SwiftUI.
 
+Mac and iOS use a Host-owned order and group membership for each session's
+terminal, Files, Browser, and Simulator tabs. Drag onto a tab or group to combine
+them, or drop at the leading edge of a tab to reorder. Click or tap a group to
+show its tabs vertically. Drops on expanded members reorder within that group.
+The first shared edit merges the initiating device's visible order into the full
+session. Terminal order follows the current tmux window indices. A Mac workbench
+reorder keeps the index slots of its visible terminals and their placement
+relative to resource tabs. The Host confirms the change before publishing.
+Editing only resources leaves tmux indices intact.
+The Host stores edits by persistent session and tab IDs and removes them when
+the session is explicitly closed. Viewers ignore older revisions. Mac keeps
+client-local tab placement and split changes on the initiating device and moves
+a tab between workbenches after a shared edit succeeds.
+iOS keeps private Files positions on the device when the Host changes the shared
+order, including within source-pane groups. A local drop can move private rows
+around shared tabs and collapsed groups while preserving shared order. The Tabs
+panel and horizontal navigation use the same mixed order.
+
 **Modified arrows:** Mac Host and Viewer share `InteractiveTerminalView`. The
 SwiftTerm fork encodes Shift+arrows as legacy `ESC [ 1 ; modifier A/B/C/D`
 without requiring Kitty negotiation. `TmuxKey.from(bytes:)` preserves these
@@ -1001,6 +1019,8 @@ execution and no new model request on Resume. This is local evidence for these
 versions, not an automatic-resume compatibility claim for other CLI versions.
 
 ### Fork a native Agent conversation (Mac/iOS)
+
+On Mac, press **⌘F** in an eligible terminal tab to open **Fork in Current Directory**.
 
 Right-click a local or Viewer terminal-window tab → **Fork → In Current
 Directory / In Other Directory… / In New Worktree…**. Codex and Claude Code

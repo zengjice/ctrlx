@@ -181,9 +181,11 @@ extension AppCoordinator {
             throw error
         }
         resourceSessions.remove(session.id)
+        let layoutRemoval = Result { try sessionTabLayouts.remove(session.id) }
         hostFileTabs.closeSession(session.id)
         agentBrowser.closeResourceSession(session.id, including: browserIDs)
         await agentSimulator.closeResourceSession(session.id, including: simulatorIDs)
         refreshResourceSessions()
+        try layoutRemoval.get()
     }
 }

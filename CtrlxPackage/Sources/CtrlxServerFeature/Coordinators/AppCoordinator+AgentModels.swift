@@ -19,7 +19,7 @@ struct AgentModelRuntimeCache {
 }
 
 extension AppCoordinator {
-    func handleAgentModels(_ request: AgentModelControls, paneID: String, workflowInput: AgentWorkflowModelInput? = nil) async throws -> AgentModelSnapshot {
+    func handleAgentModels(_ request: AgentModelControls, paneID: String, workflowInput: AgentWorkflowModelInput? = nil, expectedConversationID: String? = nil) async throws -> AgentModelSnapshot {
         let start = ContinuousClock.now
         do {
             let value: AgentModelSnapshot
@@ -29,7 +29,7 @@ extension AppCoordinator {
                 }
             } else {
                 try await agentModelReads.waitForRead(paneID: paneID, identity: request.workspacePane)
-                value = try await performAgentModels(request, paneID: paneID, workflowInput: workflowInput)
+                value = try await performAgentModels(request, paneID: paneID, workflowInput: workflowInput, expectedConversationID: expectedConversationID)
             }
             recordAgentModelDiagnostic(paneID: paneID, phase: request.selection == nil ? "read" : "switch", since: start)
             return value
@@ -47,7 +47,7 @@ extension AppCoordinator {
         ])
     }
 
-    private func performAgentModels(_ request: AgentModelControls, paneID: String, workflowInput: AgentWorkflowModelInput?) async throws -> AgentModelSnapshot {
+    private func performAgentModels(_ request: AgentModelControls, paneID: String, workflowInput: AgentWorkflowModelInput?, expectedConversationID: String? = nil) async throws -> AgentModelSnapshot {
         @Dependency(AgentSessionIdentityClient.self) var identities
         let identityClient = identities
         @Dependency(WorkspaceAgentProcessClient.self) var processes
@@ -66,6 +66,9 @@ extension AppCoordinator {
         let pid = captured.binding.processID
         let runtime = captured.binding.runtimeID
         guard let currentPane = windowManager.paneStates[paneID] else { throw AgentModelError("The Agent is not available.") }
+        guard expectedConversationID == nil || (currentPane.claudeSessionID ?? "") == expectedConversationID else {
+            throw AgentModelError("The active conversation changed. Reopen its model controls.")
+        }
         let responseContext = try PluginResponseContext(pluginID: candidate.pluginID, pane: currentPane, requestID: nil, expectedWorkspacePane: request.workspacePane)
         let validateConversation: @MainActor @Sendable () throws -> Void = { [self] in
             try responseContext.validate(pluginID: candidate.pluginID, paneID: paneID, pane: windowManager.paneStates[paneID])

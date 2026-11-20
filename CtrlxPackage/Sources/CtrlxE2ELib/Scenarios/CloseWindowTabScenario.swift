@@ -56,7 +56,7 @@ public enum CloseWindowTabScenario {
         TestStep.macWaitForElement(titled: "right-B", timeout: 10)
         TestStep.macContextMenuClick(elementTitle: "closetest:0", menuItem: "Open Files")
         TestStep.macWaitForElementQuery(.labelContains("File tab:"), timeout: 10)
-        TestStep.macDragElement(from: .labelContains("File tab:"), to: .labelContains("closetest:2 right-A"))
+        TestStep.macDragElement(from: .labelContains("File tab:"), to: .labelContains("closetest:2 right-A"), leadingEdge: true)
         TestStep.wait(seconds: 2)
         TestStep.macClickButton(titled: "Open file tab in split:")
         TestStep.macClickButton(titled: "Move terminal to right: right-A")

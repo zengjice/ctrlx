@@ -1192,10 +1192,16 @@
                     TextField("Default model", text: $draft.model)
                         .autocorrectionDisabled()
                         .accessibilityIdentifier("agentProviderModel")
-                    TextField("Additional models (one per line)", text: $additionalModelsText, axis: .vertical)
-                        .lineLimit(3...6)
-                        .autocorrectionDisabled()
-                        .accessibilityIdentifier("agentProviderModels")
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Additional models (one per line)")
+                        TextEditor(text: $additionalModelsText)
+                            .font(.system(.body, design: .monospaced))
+                            .frame(height: 72)
+                            .border(.quaternary)
+                            .autocorrectionDisabled()
+                            .accessibilityLabel("Additional models, one per line")
+                            .accessibilityIdentifier("agentProviderModels")
+                    }
                     Text("The default model starts new sessions and forks. Additional models are available in /model. Reasoning and context settings below apply to this Provider's models.")
                         .font(.caption).foregroundStyle(.secondary)
                     if isClaude {
@@ -1215,8 +1221,11 @@
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
                         Picker("Reasoning effort", selection: $draft.reasoningEffort) {
+                            if draft.reasoningEffort == .some(.none) {
+                                Text("Saved override").tag(Optional.some(CodexReasoningEffort.none)).disabled(true)
+                            }
                             Text("Use CLI configuration").tag(CodexReasoningEffort?.none)
-                            ForEach(CodexReasoningEffort.allCases) { effort in
+                            ForEach(CodexReasoningEffort.allCases.filter { $0 != .none }) { effort in
                                 Text(effort.displayName).tag(Optional(effort))
                             }
                         }
@@ -1289,7 +1298,7 @@
                         Button(isSaving ? "Saving…" : "Save") { Task { await save() } }
                             .buttonStyle(.borderedProminent)
                             .disabled(isSaving || isLoadingKey)
-                            .keyboardShortcut(.defaultAction)
+                            .keyboardShortcut(.return, modifiers: .command)
                     }
                 }
             }

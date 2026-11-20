@@ -7,6 +7,9 @@ struct AgentModelStatusBar: View {
     let hostID: String?
     let paneID: String
     let isVisible: Bool
+    var compactPicker: Binding<Bool>?
+    var compactSwitching: Binding<Bool>?
+    var expectedInstance: AgentWorkflowInstance?
     @Environment(AppCoordinator.self) private var coordinator
     @Environment(MirrorWindowManager.self) private var windowManager
     @Environment(AppSettings.self) private var settings
@@ -25,6 +28,12 @@ struct AgentModelStatusBar: View {
 
     private var displayKey: AgentModelDisplayCache.Key? {
         guard let identity = pane?.workspaceIdentity, let pluginID = pane?.agentSession?.pluginID else { return nil }
+        if let expectedInstance {
+            guard
+                identity.isSamePane(as: expectedInstance.workspacePane),
+                pane?.agentSession?.processRuntimeID == expectedInstance.processRuntimeID,
+                (pane?.claudeSessionID ?? "") == expectedInstance.conversationID else { return nil }
+        }
         return .init(hostID: hostID ?? "local", pane: identity, pluginID: pluginID, runtimeID: pane?.agentSession?.processRuntimeID, conversationID: pane?.claudeSessionID)
     }
 
@@ -75,14 +84,52 @@ struct AgentModelStatusBar: View {
     }
 
     var body: some View {
-        if pane?.agentSession != nil {
+        if pane?.agentSession != nil, compactPicker == nil || displayKey != nil {
             content
-        } else {
+        } else if compactPicker == nil {
             Color.clear.frame(minWidth: 0, maxWidth: .infinity, maxHeight: 28)
         }
     }
 
     private var content: some View {
+        Group {
+            if let compactPicker {
+                compactControls(compactPicker)
+            } else {
+                inlineControls
+            }
+        }
+        .alert("Model Change Failed", isPresented: Binding(
+            get: { changeError != nil }, set: {
+                if !$0 {
+                    changeError = nil
+                }
+            }
+        )) {
+            Button("OK", role: .cancel) { changeError = nil }
+        } message: {
+            Text(changeError ?? "")
+        }
+        .task(id: isVisible ? displayKey : nil) {
+            guard isVisible, let key = displayKey else { return }
+            let cache = coordinator.agentModelDisplayCache
+            let cached = cache.entry(for: key)
+            snapshot = cached?.snapshot
+            error = nil
+            confirmed = cached != nil
+            do { try await Task.sleep(for: cache.refreshDelay(for: key)) }
+            catch { return }
+            while !Task.isCancelled {
+                if !changing {
+                    await refresh()
+                }
+                do { try await Task.sleep(for: .seconds(error == nil ? 3 : 15)) }
+                catch { break }
+            }
+        }
+    }
+
+    private var inlineControls: some View {
         HStack(spacing: 4) {
             if let snapshot, !snapshot.models.isEmpty {
                 // Cached readiness can lag behind a cleared draft or a completed
@@ -135,17 +182,6 @@ struct AgentModelStatusBar: View {
         .frame(minWidth: 0, maxWidth: .infinity)
         .frame(height: 32)
         .padding(.horizontal, 8)
-        .alert("Model Change Failed", isPresented: Binding(
-            get: { changeError != nil }, set: {
-                if !$0 {
-                    changeError = nil
-                }
-            }
-        )) {
-            Button("OK", role: .cancel) { changeError = nil }
-        } message: {
-            Text(changeError ?? "")
-        }
         .alert("Model Shortcuts Not Saved", isPresented: Binding(
             get: { shortcutError != nil }, set: {
                 if !$0 {
@@ -157,22 +193,56 @@ struct AgentModelStatusBar: View {
         } message: {
             Text(shortcutError ?? "")
         }
-        .task(id: isVisible ? displayKey : nil) {
-            guard isVisible, let key = displayKey else { return }
-            let cache = coordinator.agentModelDisplayCache
-            let cached = cache.entry(for: key)
-            snapshot = cached?.snapshot
-            error = nil
-            confirmed = cached != nil
-            do { try await Task.sleep(for: cache.refreshDelay(for: key)) }
-            catch { return }
-            while !Task.isCancelled {
-                if !changing {
-                    await refresh()
-                }
-                do { try await Task.sleep(for: .seconds(error == nil ? 3 : 15)) }
-                catch { break }
+    }
+
+    private func compactControls(_ presented: Binding<Bool>) -> some View {
+        let model = snapshot?.models.first { $0.id == snapshot?.selection?.model }
+        let title = [model?.name ?? snapshot?.selection?.model, snapshot?.selection?.effort?.capitalized]
+            .compactMap { $0 }.joined(separator: " · ")
+        return Button { presented.wrappedValue.toggle() } label: {
+            HStack(spacing: 5) {
+                Text(changing ? "Switching model…" : title.isEmpty ? "Model & Effort" : title).lineLimit(1)
+                Symbols.chevronDown.image.font(.caption2)
             }
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel("Model and reasoning effort")
+        .accessibilityValue(title)
+        .accessibilityIdentifier("orbie-model-picker")
+        .popover(isPresented: presented, arrowEdge: .top) {
+            VStack(alignment: .leading, spacing: 10) {
+                if let reason = unavailableReason ?? snapshot?.catalogWarning {
+                    Text(reason).font(.caption).foregroundStyle(.secondary)
+                }
+                if let snapshot, !snapshot.models.isEmpty {
+                    Picker("Model", selection: Binding(get: { snapshot.selection?.model }, set: { id in
+                        guard let next = snapshot.models.first(where: { $0.id == id }) else { return }
+                        let effort = snapshot.selection?.effort.flatMap { next.efforts.contains($0) ? $0 : nil } ?? next.defaultEffort
+                        change(.init(model: next.id, effort: effort))
+                    })) {
+                        if snapshot.selection == nil {
+                            Text("Choose a model").tag(String?.none).disabled(true)
+                        }
+                        ForEach(snapshot.models) { Text($0.name).tag(Optional($0.id)) }
+                    }
+                    .disabled(refreshing || changing || unavailableReason != nil)
+                    if let model, !model.efforts.isEmpty {
+                        Picker("Reasoning effort", selection: Binding(get: { snapshot.selection?.effort }, set: { effort in
+                            change(.init(model: model.id, effort: effort))
+                        })) {
+                            if snapshot.selection?.effort == nil {
+                                Text("Choose effort").tag(String?.none).disabled(true)
+                            }
+                            ForEach(model.efforts, id: \.self) { Text($0.capitalized).tag(Optional($0)) }
+                        }
+                        .disabled(refreshing || changing || unavailableReason != nil)
+                    }
+                }
+                Button("Refresh Models") { Task { await refresh(force: true) } }
+                    .disabled(refreshing || changing)
+            }
+            .padding(14)
+            .frame(width: 300, alignment: .leading)
         }
     }
 
@@ -302,13 +372,18 @@ struct AgentModelStatusBar: View {
         let identity = key.pane
         refreshGeneration += 1
         changing = true
+        compactSwitching?.wrappedValue = true
         error = nil
         changeError = nil
         Task {
-            defer { changing = false }
+            defer {
+                changing = false
+                compactSwitching?.wrappedValue = false
+            }
             do {
                 // Also wait for this client's response when connected to an older Host.
                 try await reads.waitForRead(paneID: paneID, identity: identity)
+                guard key == displayKey else { throw ModelControlError("The active conversation changed.") }
                 let value = try await request(.init(workspacePane: identity, runtimeID: snapshot.runtimeID, selection: selection, expectedSelection: snapshot.selection))
                 guard key == displayKey else { return }
                 self.snapshot = value
@@ -334,7 +409,7 @@ struct AgentModelStatusBar: View {
             guard response.success, let value = response.agentModels else { throw ModelControlError(response.error ?? "Model controls are unavailable on this Host.") }
             return value
         }
-        return try await coordinator.handleAgentModels(spec, paneID: paneID)
+        return try await coordinator.handleAgentModels(spec, paneID: paneID, expectedConversationID: expectedInstance?.conversationID)
     }
 
     private struct ModelControlError: LocalizedError {

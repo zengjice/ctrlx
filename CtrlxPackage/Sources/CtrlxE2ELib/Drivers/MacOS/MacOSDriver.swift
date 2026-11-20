@@ -806,14 +806,11 @@ public actor MacOSDriver {
         )
     }
 
-    /// Drag from the center of one accessibility element to the center of
-    /// another. Used by scenarios that test SwiftUI drag-and-drop (e.g. tab
-    /// strip reorder) so the source and target points stay anchored to the
-    /// elements themselves instead of fragile screen coordinates.
-    public func dragElement(from fromQuery: ElementQuery, to toQuery: ElementQuery) async throws {
+    /// Keep drag points anchored to accessibility elements as window geometry changes.
+    public func dragElement(from fromQuery: ElementQuery, to toQuery: ElementQuery, leadingEdge: Bool = false) async throws {
         let pid = try requirePID()
         logger.info("Drag element \(fromQuery) → \(toQuery)")
-        if !MacOSAccessibility.dragElement(appPID: pid, from: fromQuery, to: toQuery) {
+        if !MacOSAccessibility.dragElement(appPID: pid, from: fromQuery, to: toQuery, leadingEdge: leadingEdge) {
             throw MacOSDriverError.elementNotFound("\(fromQuery) or \(toQuery)")
         }
     }

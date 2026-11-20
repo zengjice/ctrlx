@@ -30,6 +30,16 @@
 			<key>UTTypeTagSpecification</key>
 			<dict/>
 		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.jicezeng.ctrlx.session-tab</string>
+			<key>UTTypeDescription</key>
+			<string>CtrlX Session Tab Drag</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+		</dict>
 	</array>
 </dict>
 </plist>

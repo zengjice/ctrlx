@@ -1196,6 +1196,7 @@ public enum CommandType: Codable, Sendable, Equatable {
     case resizeTmuxPane(ResizeTmuxPane)
     /// Set the shared terminal-window layout for a tmux session
     case setSharedTerminalLayout(SetSharedTerminalLayout)
+    case editSessionTabLayout(EditSessionTabLayout)
     /// Set yolo mode (auto-approve permissions) for a pane
     case setYoloMode(SetYoloMode)
     /// Mark a session as handled (user has seen it)

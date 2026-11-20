@@ -87,8 +87,9 @@ navigate only at the left edge, and left drags only at the right edge (including
 adjusted content insets). Reaching an edge mid-drag does not switch a Window.
 Keyboard controls and Files/browser/simulator content are not Window-swipe targets.
 For pane-linked content, the top title button provides a separate horizontal swipe:
-64 points on release selects the adjacent child in the same pane group, and either
-outer boundary returns to the exact source pane. Tapping the title still opens Tabs.
+64 points on release selects the adjacent child as shown in Tabs, and either
+outer boundary of a source group returns to its exact pane. Children moved to a
+manual group follow the order shown in that group. Tapping the title still opens Tabs.
 This leaves webpage scrolling and Simulator touch input unchanged. Selection reuses
 the window picker path (including cancelling pending creation/fit); no terminal
 resizing, extra stream subscription, Host or Relay change is introduced.

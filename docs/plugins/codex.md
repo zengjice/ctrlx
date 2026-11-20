@@ -195,8 +195,9 @@ written to recovery snapshots.
   the user's Codex config names another Provider.
 - `reasoning_effort` is optional and overrides `model_reasoning_effort` for
   New Agent, Fork and recovery launches that use this Provider. Unset keeps the
-  CLI configuration. Settings exposes `none`, `minimal`, `low`, `medium`, `high`,
-  `xhigh`, `max` and `ultra`; choose a value the Provider's model supports.
+  CLI configuration. Settings exposes `minimal`, `low`, `medium`, `high`,
+  `xhigh`, `max` and `ultra`. An existing `none` override appears as
+  **Saved override** and continues to apply until you save a different choice.
 - A custom launch passes `model_provider`, `model_providers.<id>.*`,
   `wire_api="responses"`, `requires_openai_auth=false`, optional
   `model_reasoning_effort`, a generated `model_catalog_json` and `--model` as

@@ -453,13 +453,14 @@ enum MacOSAccessibility {
     static func dragElement(
         appPID: pid_t,
         from fromQuery: ElementQuery,
-        to toQuery: ElementQuery
+        to toQuery: ElementQuery,
+        leadingEdge: Bool
     ) -> Bool {
         let fromMatches = findAllRawElements(appPID: appPID, matching: fromQuery)
         let toMatches = findAllRawElements(appPID: appPID, matching: toQuery)
         guard
             let fromCenter = fromMatches.lazy.compactMap({ centerOfElement($0) }).first,
-            let toCenter = toMatches.lazy.compactMap({ centerOfElement($0) }).first
+            let destination = toMatches.lazy.compactMap({ frameOfElement($0) }).first
         else {
             logger.info("dragElement: \(fromQuery) → \(toQuery) — at least one element not found")
             return false
@@ -469,7 +470,8 @@ enum MacOSAccessibility {
         // Use a longer step count so SwiftUI's drag pickup threshold (a few
         // pixels of movement before the operation registers) is comfortably
         // exceeded before the cursor reaches the destination.
-        drag(from: fromCenter, to: toCenter, steps: 30)
+        let x = leadingEdge ? min(destination.minX + 6, destination.midX) : destination.midX
+        drag(from: fromCenter, to: CGPoint(x: x, y: destination.midY), steps: 30)
         return true
     }
 

@@ -1008,8 +1008,8 @@ public actor TestOrchestrator {
             try await macDriver(for: instance)
                 .drag(fromX: from.x, fromY: from.y, toX: to.x, toY: to.y)
 
-        case let .macDragElement(fromQuery, toQuery, instance):
-            try await macDriver(for: instance).dragElement(from: fromQuery, to: toQuery)
+        case let .macDragElement(fromQuery, toQuery, leadingEdge, instance):
+            try await macDriver(for: instance).dragElement(from: fromQuery, to: toQuery, leadingEdge: leadingEdge)
 
         case let .macDragElementOutsideWindow(query, instance):
             try await macDriver(for: instance).dragElementOutsideWindow(matching: query)

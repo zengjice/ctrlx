@@ -139,6 +139,7 @@ public actor TmuxCommandExecutor {
                  .restartAgentSession,
                  .recoverWorkspacePane,
                  .setSharedTerminalLayout,
+                 .editSessionTabLayout,
                  .setYoloMode,
                  .markHandled,
                  .renameTmuxSession,

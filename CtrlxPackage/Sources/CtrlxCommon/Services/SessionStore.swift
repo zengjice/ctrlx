@@ -85,6 +85,8 @@ final public class SessionStore {
     /// Absent for older hosts or an unknown future mode.
     public private(set) var sidebarSortModeByHost: [String: SidebarSortMode] = [:]
 
+    /// Host-owned tab orders and groups, keyed by persistent session ID.
+    public private(set) var sessionTabLayoutsByHost: [String: [UUID: SessionTabLayout]] = [:]
     /// Host-owned terminal layouts, grouped by source Host and session name.
     public private(set) var sharedTerminalLayoutsByHost: [String: [String: SharedTerminalLayout]] = [:]
 
@@ -324,6 +326,7 @@ final public class SessionStore {
             agentModelShortcutsByHost.removeValue(forKey: hostId)
             // Layout revisions and finished-turn summaries belong to a tmux
             // incarnation, not to whichever pane reuses its numeric route.
+            sessionTabLayoutsByHost.removeValue(forKey: hostId)
             sharedTerminalLayoutsByHost.removeValue(forKey: hostId)
             lastTurnSummaryByPane = lastTurnSummaryByPane.filter { $0.key.pairId != hostId }
         }
@@ -416,6 +419,18 @@ final public class SessionStore {
         } else {
             sidebarSortModeByHost.removeValue(forKey: hostId)
         }
+        if var layouts = state.sessionTabLayouts {
+            for (id, current) in sessionTabLayoutsByHost[hostId] ?? [:] {
+                if let incoming = layouts[id], incoming.revision < current.revision {
+                    layouts[id] = current
+                }
+            }
+            if sessionTabLayoutsByHost[hostId] != layouts {
+                sessionTabLayoutsByHost[hostId] = layouts
+            }
+        } else {
+            sessionTabLayoutsByHost.removeValue(forKey: hostId)
+        }
         if let layouts = state.sharedTerminalLayouts {
             var accepted = layouts
             for (sessionName, current) in sharedTerminalLayoutsByHost[hostId] ?? [:] {
@@ -476,6 +491,7 @@ final public class SessionStore {
         hostsSupportingAgentForkDirectory.remove(hostId)
         usageOverviewByHost.removeValue(forKey: hostId)
         sidebarSortModeByHost.removeValue(forKey: hostId)
+        sessionTabLayoutsByHost.removeValue(forKey: hostId)
         sharedTerminalLayoutsByHost.removeValue(forKey: hostId)
         hostsSupportingSharedTerminalLayouts.remove(hostId)
         hostsWithReceivedState.remove(hostId)

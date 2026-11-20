@@ -356,6 +356,7 @@ extension SessionFileTabsState {
         default: return false
         }
         tabOrder.removeAll { $0 == tab }
+        manualTabGroups.removeValue(forKey: tab)
         rightSide.remove(tab)
         if selectedRight == tab {
             selectedRight = nil
