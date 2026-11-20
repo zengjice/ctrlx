@@ -585,6 +585,82 @@ struct AgentSessionIdentityTests {
         resume.finish()
     }
 
+    @Test("A stale refresh cannot replace a verified conversation", arguments: [false, true])
+    func staleRefreshDuringConversationChange(saveFirst: Bool) async throws {
+        let rows = LockIsolated("100 1 zsh\n101 100 codex\n")
+        let plugins = ["codex": ["codex"]]
+        let oldID = UUID().uuidString
+        let newID = UUID().uuidString
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-native-identity-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let disk = AgentSessionIdentityClient.diskBacked(stateRoot: directory)
+        let pauseRead = LockIsolated(false)
+        let (readStarted, startRead) = AsyncStream<Void>.makeStream()
+        let (readReleased, releaseRead) = AsyncStream<Void>.makeStream()
+        let (writeStarted, startWrite) = AsyncStream<Void>.makeStream()
+        let (writeReleased, releaseWrite) = AsyncStream<Void>.makeStream()
+        defer {
+            startRead.finish()
+            releaseRead.finish()
+            startWrite.finish()
+            releaseWrite.finish()
+        }
+        var client = disk
+        client.runtimeID = { _ in "101:start-1" }
+        client.codexSessionID = { _, _ in nil }
+        client.load = { paneID in
+            let snapshot = await disk.load(paneID)
+            if pauseRead.value {
+                startRead.yield(())
+                var iterator = readReleased.makeAsyncIterator()
+                _ = await iterator.next()
+            }
+            return snapshot
+        }
+        client.invalidate = { paneID in
+            await disk.invalidate(paneID)
+            startWrite.yield(())
+            var iterator = writeReleased.makeAsyncIterator()
+            _ = await iterator.next()
+        }
+        try await withDependencies {
+            defaults(&$0, rows: rows, client: client)
+        } operation: {
+            let manager = manager()
+            var pane = try #require(manager.paneStates["%5"])
+            pane.workspaceIdentity = .init(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+            manager.setPaneStatesForPreview([pane])
+            var previousPane = pane
+            previousPane.agentSession = .init(paneId: "%5", pluginID: "codex")
+            previousPane.claudeSessionID = oldID
+            let previous = try AgentSessionIdentity(source: #require(AgentForkSource(pane: previousPane)), processID: "101", runtimeID: "101:start-1")
+            try #require(await disk.save(previous))
+            await manager.refreshDetectedAgentSessions(processNamesByPlugin: plugins, refreshSnapshot: true)
+            try #require(manager.paneStates["%5"]?.claudeSessionID == oldID)
+
+            pauseRead.setValue(true)
+            let refresh = Task { await manager.refreshDetectedAgentSessions(processNamesByPlugin: plugins, refreshSnapshot: true) }
+            var read = readStarted.makeAsyncIterator()
+            _ = await read.next()
+            let replacement = Task { await manager.refreshVerifiedConversation(newID, replacing: previous, processNamesByPlugin: plugins) }
+            var write = writeStarted.makeAsyncIterator()
+            _ = await write.next()
+            if saveFirst {
+                releaseWrite.yield(())
+                await replacement.value
+            }
+            releaseRead.yield(())
+            await refresh.value
+            if !saveFirst {
+                releaseWrite.yield(())
+                await replacement.value
+            }
+            #expect(manager.paneStates["%5"]?.claudeSessionID == newID)
+            let reloaded = AgentSessionIdentityClient.diskBacked(stateRoot: directory)
+            #expect(await reloaded.load("%5")?.source.sessionID == newID)
+        }
+    }
+
     @Test("A failed identity write can be retried; successful repeated hooks do not rescan the process tree")
     func writeRetry() async {
         let rows = LockIsolated("100 1 zsh\n101 100 codex\n")

@@ -2,6 +2,7 @@ import ClaudeCodePluginCore
 import CodexPluginCore
 import ConcurrencyExtras
 import CtrlxCommon
+import CtrlxEncryption
 import CtrlxNetworking
 import CtrlxPluginProtocol
 import Dependencies
@@ -51,6 +52,106 @@ struct AgentRestartServiceTests {
             workspaceIdentity: .init(serverID: "12:34", sessionID: UUID(), windowID: UUID(), paneID: UUID())
         )))
         return .init(source: source, processID: "123", runtimeID: "original")
+    }
+
+    @Test("Restart refreshes a verified conversation switch and distinguishes an unavailable writer", arguments: [false, true], [false, true])
+    func liveConversationVerification(switched: Bool, hookOwned: Bool) async throws {
+        let old = try proof(plugin: "codex")
+        let workspace = try #require(old.source.workspaceIdentity)
+        let changedID = UUID().uuidString
+        let writer = LockIsolated<String?>(switched ? changedID : nil)
+        let stored = LockIsolated<AgentSessionIdentity?>(old)
+        let signals = LockIsolated(0)
+        let separator = String(PaneInfo.fieldSeparator)
+        let paneRow = [
+            "%1",
+            "work",
+            "0",
+            "0",
+            "codex",
+            old.source.workingDirectory,
+            "80",
+            "24",
+            "1",
+            "",
+            "",
+            "",
+            "1",
+            "",
+            "",
+            "",
+            "@1",
+            workspace.serverID,
+            workspace.sessionID.uuidString,
+            workspace.windowID.uuidString,
+            workspace.paneID.uuidString,
+            "$1",
+        ].joined(separator: separator)
+        try await withDependencies {
+            $0[PreferencesService.self] = .inMemory()
+            $0[SecretsService.self] = .inMemory()
+            $0[LoginItemService.self] = .previewValue
+            $0[SimulatorSystemClient.self] = SimulatorSystemClient()
+            $0[AgentSessionIdentityClient.self].runtimeID = { $0 == old.processID ? old.runtimeID : nil }
+            $0[AgentSessionIdentityClient.self].load = { _ in stored.value }
+            $0[AgentSessionIdentityClient.self].save = { stored.setValue($0)
+                return true
+            }
+            $0[AgentSessionIdentityClient.self].invalidate = { _ in stored.setValue(nil) }
+            $0[AgentSessionIdentityClient.self].codexSessionID = { _, _ in writer.value }
+            $0[AgentRestartProcessClient.self].terminate = { _, _ in signals.withValue { $0 += 1 } }
+            $0[ProcessRunner.self].run = { executable, arguments, _, _ in
+                let output: String
+                if executable == "/bin/ps" {
+                    output = "100 1 zsh\n123 100 codex"
+                } else if arguments.last?.contains("#{pane_pid}") == true {
+                    output = ["%1", "100", old.source.workingDirectory].joined(separator: separator)
+                } else if arguments.contains("list-panes") || arguments.contains("display-message") {
+                    output = paneRow
+                } else if arguments.contains("list-clients") {
+                    output = ""
+                } else {
+                    throw AgentRestartError("Unexpected process request")
+                }
+                return .init(exitCode: 0, stdout: Data(output.utf8), stderr: Data())
+            }
+        } operation: {
+            let settings = AppSettings()
+            settings.tmuxPath = "/bin/sh"
+            let coordinator = AppCoordinator(settings: settings)
+            coordinator.pluginRegistry = PluginRegistry()
+            let manager = coordinator.windowManager
+            manager.updatePaneStates(from: await coordinator.tmuxService.refreshPanes())
+            await coordinator.refreshAgentCommandIdentity()
+            if hookOwned {
+                manager.applyState(pluginID: "codex", sessionID: old.source.sessionID, state: .working, tmuxPane: "%1", projectPath: old.source.workingDirectory)
+            }
+            var published: [String] = []
+            manager.onAgentProcessReconciliationChanged = { [weak manager] in
+                if let id = manager?.paneStates["%1"]?.claudeSessionID {
+                    published.append(id)
+                }
+            }
+            let error = await #expect(throws: AgentRestartError.self) {
+                try await coordinator.restartAgentSession(.init(source: old.source, runtimeID: old.runtimeID))
+            }
+            #expect(error?.message.hasPrefix(switched ? "The active conversation changed." : "Could not verify the active conversation.") == true)
+            let expected = switched ? changedID : old.source.sessionID
+            let pane = try #require(manager.paneStates["%1"])
+            #expect(pane.claudeSessionID == expected)
+            #expect(pane.agentSession?.state == (hookOwned && !switched ? .working : .idle))
+            #expect(stored.value?.source.sessionID == expected)
+            #expect(published == (switched ? [changedID] : []))
+            // A fresh request for the verified identity reaches command preparation.
+            // The fixture has no enabled plugin, so it cannot start a restart.
+            writer.setValue(expected)
+            let source = try #require(AgentForkSource(pane: pane))
+            let retry = await #expect(throws: AgentRestartError.self) {
+                try await coordinator.restartAgentSession(.init(source: source, runtimeID: old.runtimeID))
+            }
+            #expect(retry?.message == "This Agent does not support Resume.")
+            #expect(signals.value == 0)
+        }
     }
 
     @Test("Both native plugins preserve conversation and config; a retry does not stop the replacement", arguments: ["codex", "claude-code"], [false, true])

@@ -31,6 +31,12 @@ struct AgentConversationEvidence {
     var latestSequence: UInt64?
     var submittedTurnID: UUID?
 
+    mutating func switchConversation(to sessionID: String) {
+        retired.insert(conversationID)
+        conversationID = sessionID
+        submittedTurnID = nil
+    }
+
     mutating func accept(_ event: PluginEvent, nativeConversationID: String?, source: PluginIngressPeer.Process? = nil) -> Bool {
         guard nativeConversationID == nil || nativeConversationID == event.sessionID else { return false }
         let sameSource = source != nil && source?.runtimeID == latestSource?.runtimeID
@@ -63,9 +69,7 @@ struct AgentConversationEvidence {
                 (!retired.contains(event.sessionID) || freshHook || freshBridgeEvent)
                     && (event.conversationStarted == true || event.workflow?.kind == .submitted)
             ) else { return false }
-        retired.insert(conversationID)
-        conversationID = event.sessionID
-        submittedTurnID = nil
+        switchConversation(to: event.sessionID)
         if !older, let source {
             latestSource = source
             latestSequence = event.sourceSequence

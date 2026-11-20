@@ -42,15 +42,24 @@ extension AppCoordinator {
             workspace == nil || workspace?.isSamePane(as: native.source.workspaceIdentity) == true else {
             throw AgentRestartError("The Agent conversation or terminal changed, or its identity is unverified. Reopen the current tab's menu.")
         }
-        if CodexProcessSessionReader.supports(pluginID: process.pluginID), await identities.codexSessionID(native.processID, native.runtimeID) != native.source.sessionID {
-            throw AgentRestartError("The active Codex conversation changed. Reopen its tab's menu.")
-        }
         let captured = try await captureAgentBinding(paneID: native.source.paneID, detected: process)
+        let writerID: String? = if CodexProcessSessionReader.supports(pluginID: process.pluginID) {
+            await identities.codexSessionID(native.processID, native.runtimeID)
+        } else {
+            native.source.sessionID
+        }
         guard
             captured.binding.matches(native), captured.info.currentPath == native.source.workingDirectory,
             identities.runtimeID(native.processID) == native.runtimeID,
             windowManager.paneStates[native.source.paneID].flatMap(AgentForkSource.init(pane:)) == native.source else {
             throw AgentRestartError("The Agent process or directory changed before restart.")
+        }
+        guard let writerID else {
+            throw AgentRestartError("Could not verify the active conversation. Wait for the Agent to finish starting or switching conversations, then try again.")
+        }
+        if writerID != native.source.sessionID {
+            await windowManager.refreshVerifiedConversation(writerID, replacing: native, processNamesByPlugin: registry.processNamesByPlugin)
+            throw AgentRestartError("The active conversation changed. Reopen its tab's menu.")
         }
         return native
     }
