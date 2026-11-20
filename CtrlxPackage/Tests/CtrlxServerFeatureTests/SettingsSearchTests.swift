@@ -5,6 +5,7 @@ struct SettingsSearchTests {
     @Test("Search accepts setting names, aliases and Chinese keywords", arguments: [
         ("font", SettingsTab.appearance, SettingsSection.terminalAppearance),
         ("字体", .appearance, .terminalAppearance),
+        ("休眠", .general, .behavior),
         ("tmux socket", .general, .tmux),
         ("provider", .agents, .agentProviders),
         ("telemetry", .agents, .agentAdvanced),

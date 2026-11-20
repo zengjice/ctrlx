@@ -10,47 +10,33 @@ import Logging
 /// Use `@Dependency(SleepPreventionService.self)` to access it.
 @DependencyClient
 public struct SleepPreventionService: Sendable {
-    /// Updates sleep prevention based on active session count.
-    public var updateForSessionCount: @Sendable (_ sessionCount: Int, _ isEnabled: Bool) async -> Void
-
-    /// Releases any held assertion (for explicit cleanup).
-    public var releaseIfNeeded: @Sendable () async -> Void
+    /// Holds an idle sleep assertion until disabled.
+    public var setEnabled: @MainActor @Sendable (_ isEnabled: Bool) -> Void
 }
 
 // MARK: - DependencyKey
 
 extension SleepPreventionService: DependencyKey {
     public static var previewValue: SleepPreventionService {
-        SleepPreventionService(
-            updateForSessionCount: { _, _ in },
-            releaseIfNeeded: { }
-        )
+        SleepPreventionService(setEnabled: { _ in })
     }
 
     public static var liveValue: SleepPreventionService {
         let manager = LiveSleepPreventionManager()
 
-        return SleepPreventionService(
-            updateForSessionCount: { sessionCount, isEnabled in
-                await manager.updateForSessionCount(sessionCount, isEnabled: isEnabled)
-            },
-            releaseIfNeeded: {
-                await manager.releaseIfNeeded()
-            }
-        )
+        return SleepPreventionService(setEnabled: { manager.setEnabled($0) })
     }
 }
 
 // MARK: - Live Implementation
 
-/// Actor-isolated implementation of sleep prevention using IOKit assertions.
-private actor LiveSleepPreventionManager {
-    private var isPreventingSleep = false
-    private let assertionReason = "CtrlX: Active coding-agent sessions" as CFString
+/// Shares isolation with the setting and app lifecycle so changes apply in order.
+@MainActor
+final private class LiveSleepPreventionManager {
     private var assertionID: IOPMAssertionID = 0
     private let logger = Logger(label: "com.jicezeng.ctrlx.sleep-prevention")
 
-    init() { }
+    nonisolated init() { }
 
     deinit {
         if assertionID != 0 {
@@ -58,42 +44,36 @@ private actor LiveSleepPreventionManager {
         }
     }
 
-    func updateForSessionCount(_ sessionCount: Int, isEnabled: Bool) {
-        let shouldPreventSleep = isEnabled && sessionCount > 0
-
-        if shouldPreventSleep && !isPreventingSleep {
+    func setEnabled(_ isEnabled: Bool) {
+        if isEnabled && assertionID == 0 {
             acquireAssertion()
-        } else if !shouldPreventSleep && isPreventingSleep {
-            releaseAssertion()
-        }
-    }
-
-    func releaseIfNeeded() {
-        if isPreventingSleep {
+        } else if !isEnabled && assertionID != 0 {
             releaseAssertion()
         }
     }
 
     private func acquireAssertion() {
+        var id: IOPMAssertionID = 0
         let result = IOPMAssertionCreateWithName(
             kIOPMAssertionTypePreventUserIdleSystemSleep as CFString,
             IOPMAssertionLevel(kIOPMAssertionLevelOn),
-            assertionReason,
-            &assertionID
+            "CtrlX: Keep this Mac awake" as CFString,
+            &id
         )
 
         if result == kIOReturnSuccess {
-            isPreventingSleep = true
+            assertionID = id
         } else {
             logger.warning("Failed to acquire sleep prevention assertion: \(result)")
         }
     }
 
     private func releaseAssertion() {
-        guard assertionID != 0 else { return }
-
-        IOPMAssertionRelease(assertionID)
-        assertionID = 0
-        isPreventingSleep = false
+        let result = IOPMAssertionRelease(assertionID)
+        if result == kIOReturnSuccess {
+            assertionID = 0
+        } else {
+            logger.warning("Failed to release sleep prevention assertion: \(result)")
+        }
     }
 }

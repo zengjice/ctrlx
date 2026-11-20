@@ -204,8 +204,8 @@ struct GeneralSettingsView: View {
                 Toggle("Auto-copy selected text", isOn: $settings.autoCopyOnSelect)
                     .help("Automatically copy selected text to the clipboard when the mouse is released")
 
-                Toggle("Prevent sleep during active sessions", isOn: $settings.preventSleepDuringSessions)
-                    .help("Keep this Host awake while Agent sessions are running")
+                Toggle("Keep this Mac awake", isOn: $settings.preventIdleSleep)
+                    .help("Prevent system idle sleep while CtrlX is running. The display can still turn off.")
             }
 
             .settingsAnchor(.behavior)

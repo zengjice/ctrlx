@@ -283,10 +283,15 @@ final public class AppSettings {
         didSet { preferences.setBool(autoReconnect, Keys.autoReconnect) }
     }
 
-    /// Whether to prevent host from sleeping while Claude sessions are active
-    public var preventSleepDuringSessions: Bool = Defaults.preventSleepDuringSessions {
-        didSet { preferences.setBool(preventSleepDuringSessions, Keys.preventSleepDuringSessions) }
+    /// Whether CtrlX prevents idle system sleep while running.
+    public var preventIdleSleep: Bool = Defaults.preventIdleSleep {
+        didSet {
+            preferences.setBool(preventIdleSleep, Keys.preventIdleSleep)
+            onPreventIdleSleepChanged?(preventIdleSleep)
+        }
     }
+
+    @ObservationIgnored var onPreventIdleSleepChanged: (@MainActor (Bool) -> Void)?
 
     /// Whether to automatically copy selected text to the clipboard when the mouse is released
     public var autoCopyOnSelect: Bool = Defaults.autoCopyOnSelect {
@@ -531,7 +536,7 @@ final public class AppSettings {
         self.openPanesWindowOnLaunch = preferences.optionalBool(Keys.openPanesWindowOnLaunch) ?? Defaults.openPanesWindowOnLaunch
         self.showStatusBar = preferences.optionalBool(Keys.showStatusBar) ?? Defaults.showStatusBar
         self.autoReconnect = preferences.optionalBool(Keys.autoReconnect) ?? Defaults.autoReconnect
-        self.preventSleepDuringSessions = preferences.optionalBool(Keys.preventSleepDuringSessions) ?? Defaults.preventSleepDuringSessions
+        self.preventIdleSleep = preferences.optionalBool(Keys.preventIdleSleep) ?? Defaults.preventIdleSleep
         self.autoCopyOnSelect = preferences.optionalBool(Keys.autoCopyOnSelect) ?? Defaults.autoCopyOnSelect
         self.openClickedFileInNewTab = preferences.optionalBool(Keys.openClickedFileInNewTab) ?? Defaults.openClickedFileInNewTab
         self.alwaysOpenFilesInSplit = preferences.optionalBool(Keys.alwaysOpenFilesInSplit) ?? Defaults.alwaysOpenFilesInSplit
@@ -650,7 +655,7 @@ final public class AppSettings {
         case openPanesWindowOnLaunch
         case showStatusBar
         case autoReconnect
-        case preventSleepDuringSessions
+        case preventIdleSleep = "preventSleepDuringSessions"
         case autoCopyOnSelect
         case openClickedFileInNewTab
         case alwaysOpenFilesInSplit
@@ -700,7 +705,7 @@ final public class AppSettings {
         static let openPanesWindowOnLaunch = true
         static let showStatusBar = true
         static let autoReconnect = true
-        static let preventSleepDuringSessions = true
+        static let preventIdleSleep = true
         static let autoCopyOnSelect = true
         static let openClickedFileInNewTab = true
         static let alwaysOpenFilesInSplit = false

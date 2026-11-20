@@ -71,7 +71,7 @@ struct SettingsSearchItem: Identifiable {
         .init(title: "Open sessions window on launch", tab: .general, section: .behavior),
         .init(title: "Show status bar", tab: .general, section: .behavior),
         .init(title: "Auto-copy selected text", tab: .general, section: .behavior, keywords: "clipboard 复制"),
-        .init(title: "Prevent sleep during active sessions", tab: .general, section: .behavior, keywords: "awake 休眠"),
+        .init(title: "Keep this Mac awake", tab: .general, section: .behavior, keywords: "prevent idle sleep 防休眠 休眠 睡眠"),
         .init(title: "Workspace Recovery", tab: .general, section: .recovery, keywords: "restore startup 恢复"),
         .init(title: "tmux Configuration", tab: .general, section: .tmux, keywords: "command path socket restart 路径"),
         .init(title: "Debug Mode", tab: .general, section: .diagnostics, keywords: "diagnostics 调试"),
