@@ -62,7 +62,7 @@ final public class MirrorWindowManager {
     private var rememberedAgentIdentities: [String: AgentSessionIdentity] = [:]
 
     @ObservationIgnored
-    private var identityWrites: [String: (id: UUID, source: AgentForkSource?, task: Task<Void, Never>)] = [:]
+    private var identityWrites: [String: (id: UUID, source: AgentForkSource?, task: Task<Void, Never>?)] = [:]
 
     @ObservationIgnored
     @Dependency(AgentSessionIdentityClient.self) private var agentIdentities
@@ -207,7 +207,7 @@ final public class MirrorWindowManager {
             return updatedStates[paneId]?.sessionName.isEmpty == false
         }
         for paneId in stalePaneIds {
-            identityWrites.removeValue(forKey: paneId)?.task.cancel()
+            identityWrites.removeValue(forKey: paneId)?.task?.cancel()
             rememberedAgentIdentities.removeValue(forKey: paneId)
             processDetectedPaneIds.remove(paneId)
             suppressedAgentProcessIDs.removeValue(forKey: paneId)
@@ -526,15 +526,39 @@ final public class MirrorWindowManager {
             conversationEvidence[binding.paneID]?.submittedTurnID = UUID(uuidString: workflow.nativeTurnID)
         }
         if pane.claudeSessionID != event.sessionID {
-            _ = clearAgentSessionState(forPane: binding.paneID)
-            invalidateSavedConversation(forPane: binding.paneID)
-            updateSession(paneId: binding.paneID) { session in
-                session.pluginID = event.pluginID
-                session.processRuntimeID = binding.runtimeID
-            }
-            paneStates[binding.paneID]?.claudeSessionID = event.sessionID
+            replaceAgentConversation(event.sessionID, binding: current)
         }
         return AgentEventContext(binding: current, conversationID: event.sessionID)
+    }
+
+    /// Adopt a new conversation only while the pane still matches the verified read.
+    func refreshVerifiedConversation(_ sessionID: String, replacing previous: AgentSessionIdentity, processNamesByPlugin: [String: [String]]) async {
+        let paneID = previous.source.paneID
+        guard
+            !Task.isCancelled, sessionID != previous.source.sessionID, UUID(uuidString: sessionID) != nil,
+            let binding = currentAgentBinding(forPane: paneID), binding.matches(previous),
+            paneStates[paneID].flatMap(AgentForkSource.init(pane:)) == previous.source else { return }
+        var evidence = conversationEvidence[paneID] ?? .init(runtimeID: binding.runtimeID, conversationID: previous.source.sessionID)
+        if evidence.runtimeID != binding.runtimeID || evidence.conversationID != previous.source.sessionID {
+            evidence = .init(runtimeID: binding.runtimeID, conversationID: previous.source.sessionID)
+        }
+        evidence.switchConversation(to: sessionID)
+        conversationEvidence[paneID] = evidence
+        replaceAgentConversation(sessionID, binding: binding, projectPath: paneStates[paneID]?.agentSession?.detectedProjectPath)
+        await rememberAgentSessionIdentity(forPane: paneID, processNamesByPlugin: processNamesByPlugin)
+        await onAgentProcessReconciliationChanged?()
+    }
+
+    private func replaceAgentConversation(_ sessionID: String, binding: AgentProcessBinding, projectPath: String? = nil) {
+        let paneID = binding.paneID
+        _ = clearAgentSessionState(forPane: paneID)
+        invalidateSavedConversation(forPane: paneID)
+        updateSession(paneId: paneID) { session in
+            session.pluginID = binding.pluginID
+            session.processRuntimeID = binding.runtimeID
+            session.detectedProjectPath = projectPath
+        }
+        paneStates[paneID]?.claudeSessionID = sessionID
     }
 
     func reconcileInterruptedTraexTurns() async -> Bool {
@@ -589,6 +613,11 @@ final public class MirrorWindowManager {
         }
         let id = UUID()
         let task = Task { [weak self, agentIdentities] in
+            defer {
+                if self?.identityWrites[paneID]?.id == id {
+                    self?.identityWrites[paneID]?.task = nil
+                }
+            }
             // Finish any already-enqueued save before invalidating its record.
             await previous?.value
             // An older recovery snapshot must not revoke a newer verified hook.
@@ -620,8 +649,8 @@ final public class MirrorWindowManager {
             let names = processNamesByPlugin[source.pluginID], !names.isEmpty,
             let expectedRuntime = pane.agentSession?.processRuntimeID
         else { return }
-        if let pending = identityWrites[paneID], pending.source == source {
-            await pending.task.value
+        if let pending = identityWrites[paneID], pending.source == source, let task = pending.task {
+            await task.value
         }
         if
             let remembered = rememberedAgentIdentities[paneID], remembered.source == source,
@@ -656,7 +685,7 @@ final public class MirrorWindowManager {
         identityWrites[paneID] = (id, source, task)
         await task.value
         if identityWrites[paneID]?.id == id {
-            identityWrites.removeValue(forKey: paneID)
+            identityWrites[paneID] = (id, nil, nil)
         }
     }
 
@@ -667,7 +696,16 @@ final public class MirrorWindowManager {
     ) async -> Bool {
         var changed = false
         for (paneID, info) in detected {
+            // Read after pending writes. Keep the last write ID even after it
+            // finishes so an earlier read cannot restore an obsolete record.
+            let write = identityWrites[paneID]
+            if let task = write?.task {
+                await task.value
+                guard identityWrites[paneID]?.id == write?.id else { continue }
+            }
+            let sessionBeforeLoad = paneStates[paneID]?.claudeSessionID
             let identity = await agentIdentities.load(paneID)
+            guard !Task.isCancelled, identityWrites[paneID]?.id == write?.id else { continue }
             if !processDetectedPaneIds.contains(paneID) {
                 guard
                     !Task.isCancelled, let pane = paneStates[paneID],
@@ -698,7 +736,7 @@ final public class MirrorWindowManager {
                 continue
             }
             guard
-                !Task.isCancelled, processDetectedPaneIds.contains(paneID), let pane = paneStates[paneID],
+                let pane = paneStates[paneID], pane.claudeSessionID == sessionBeforeLoad,
                 lastDetectedAgentProcesses[paneID]?.pluginID == info.pluginID,
                 lastDetectedAgentProcesses[paneID]?.processIDs == info.processIDs
             else { continue }
@@ -710,6 +748,7 @@ final public class MirrorWindowManager {
                 verifiedSessionID = await agentIdentities.codexSessionID(pid, runtime)
                 guard
                     !Task.isCancelled, processDetectedPaneIds.contains(paneID),
+                    identityWrites[paneID]?.id == write?.id, paneStates[paneID]?.claudeSessionID == pane.claudeSessionID,
                     lastDetectedAgentProcesses[paneID]?.pluginID == info.pluginID,
                     lastDetectedAgentProcesses[paneID]?.processIDs == info.processIDs,
                     agentIdentities.runtimeID(pid) == runtime else { continue }
@@ -743,6 +782,7 @@ final public class MirrorWindowManager {
                 let runtime = agentIdentities.runtimeID(pid),
                 let sessionID = verifiesWriter ? verifiedSessionID : await agentIdentities.codexSessionID(pid, runtime),
                 !Task.isCancelled, processDetectedPaneIds.contains(paneID),
+                identityWrites[paneID]?.id == write?.id,
                 lastDetectedAgentProcesses[paneID]?.pluginID == info.pluginID,
                 lastDetectedAgentProcesses[paneID]?.processIDs == info.processIDs,
                 agentIdentities.runtimeID(pid) == runtime,
@@ -890,7 +930,7 @@ final public class MirrorWindowManager {
 
     private func clearAgentSessionState(forPane paneId: String) -> Bool {
         guard paneStates[paneId]?.agentSession != nil else { return false }
-        identityWrites[paneId]?.task.cancel()
+        identityWrites[paneId]?.task?.cancel()
         rememberedAgentIdentities.removeValue(forKey: paneId)
         paneStates[paneId]?.agentSession = nil
         // Drop the OTEL telemetry joined to this session (issue #597) so a fresh

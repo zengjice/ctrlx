@@ -936,6 +936,11 @@ history, executable and configuration are checked before exit. Unverified IDs or
 unsupported startup options fail before signalling. Arbitrary shell environment
 and unsent drafts are not captured. Codex resumes with `--no-daemon`.
 
+When the Host verifies a different active Codex conversation in the same
+process, it refreshes the tab's conversation identity and asks the user to
+reopen the menu. An unavailable or ambiguous native writer has a separate
+verification error. Both outcomes stop the request before exit.
+
 Before Resume, a fresh interactive login shell rereads the Host user's startup
 files. Zsh uses its normal startup sequence (including `.zshrc` and `ZDOTDIR`);
 Bash honors the first readable `.bash_profile`, `.bash_login` or `.profile`,
