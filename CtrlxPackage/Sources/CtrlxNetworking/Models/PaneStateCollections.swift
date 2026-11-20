@@ -113,22 +113,22 @@ public extension Collection where Element == PaneState {
             }
     }
 
-    /// The pending badge count over these panes: agent panes whose displayed
-    /// state is `.waiting` (per agent pane, honoring the manual override in
-    /// both directions — issue #702) PLUS terminal-only sessions pinned to
-    /// `.waiting`, counted once per session even though the override stamps
-    /// every sibling pane. Equals the number of bell rows the menu dropdown
-    /// renders for the same panes — with one accepted transient: an agent
-    /// pane whose hook arrived before any tmux scan (empty `sessionName`)
-    /// counts here but isn't a row anywhere until the next scan (≤5s) fills
-    /// its metadata in. Deliberate: the iOS badge INCREASE rides that
-    /// session's alert push and is never re-pushed, so excluding the pane
-    /// would freeze the phone's badge too low rather than briefly high.
+    /// Agent panes displayed as waiting and one representative pane for each
+    /// terminal-only session pinned to waiting. An Agent event may arrive
+    /// before the tmux scan, so its pane can count while its tab is unresolved.
     /// Callers with panes from several hosts must apply this per host so
     /// same-named sessions don't merge.
+    var pendingAttentionPanes: [PaneState] {
+        let terminalPaneIDs = Set(terminalOnlySessions().filter { $0.displayedState == .waiting }.map(\.representativePaneId))
+        return filter { pane in
+            if pane.agentSession != nil {
+                return pane.displayedState == .waiting
+            }
+            return terminalPaneIDs.contains(pane.paneId)
+        }
+    }
+
     var pendingSessionCount: Int {
-        let agentPending = filter { $0.agentSession != nil && $0.displayedState == .waiting }.count
-        let terminalPending = terminalOnlySessions().count { $0.displayedState == .waiting }
-        return agentPending + terminalPending
+        pendingAttentionPanes.count
     }
 }

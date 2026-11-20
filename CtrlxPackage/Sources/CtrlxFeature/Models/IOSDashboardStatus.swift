@@ -75,7 +75,11 @@ struct IOSDashboardStatus {
         }
     }
 
-    var accessibilityValue: String {
-        "\(connectionDescription) · \(pendingCount) need attention · \(lowQuotaCount) accounts low on quota"
+    var dashboardAccessibilityValue: String {
+        "\(connectionDescription) · \(lowQuotaCount) accounts low on quota"
+    }
+
+    var attentionAccessibilityValue: String {
+        "\(pendingCount) need attention"
     }
 }

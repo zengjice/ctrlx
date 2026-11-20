@@ -670,6 +670,15 @@ input, and do not rebroadcast `SessionStateMessage`.
 - `DashboardView` is shared by the reusable Mac window and iOS Sessions status
   sheet. Selecting a Host only changes the Dashboard; opening a session is an
   explicit navigation action.
+- iOS Sessions has separate toolbar buttons for Dashboard and Needs Attention.
+  The Dashboard button shows the current Host connection status and low quota.
+  The bell counts pending panes with the same rule as the app badge, including
+  manually waiting terminals. With one confirmed target on a connected Host,
+  the bell opens that pane directly. Otherwise it opens a sheet with waiting
+  items above completed items. Window indexes distinguish duplicate tab names
+  within a session. Split panes are numbered from one in window order. Both
+  routes use the existing notification target resolution. Browsing the sheet
+  leaves read state untouched.
 
 - The Mac status menu puts waiting panes first (including their Host), followed by
   per-account quota summaries and a Dashboard action. Other sessions remain under

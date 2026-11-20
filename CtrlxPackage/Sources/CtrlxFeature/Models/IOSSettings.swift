@@ -401,7 +401,7 @@
         /// - Parameter host: The host to check
         /// - Returns: True if another paired host has the same hostName
         public func hasDuplicateHostName(for host: PairedHost) -> Bool {
-            pairedHosts.contains { $0.id != host.id && $0.hostName == host.hostName }
+            host.hasDuplicateName(in: pairedHosts)
         }
     }
 #endif

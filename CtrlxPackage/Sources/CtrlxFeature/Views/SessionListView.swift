@@ -8,6 +8,7 @@
         @Binding var navigationPath: NavigationPath
         let onOpenSettings: () -> Void
         let onOpenDashboard: () -> Void
+        var onOpenAttention: () -> Void = { }
         var onOpenWorkflows: () -> Void = { }
 
         @Environment(SessionStore.self) private var sessionStore
@@ -29,6 +30,7 @@
         @State private var attemptedNavigationRecovery = false
 
         var body: some View {
+            let status = dashboardStatus
             Group {
                 if sessionStore.hasSessions || !settings.pairedHosts.isEmpty {
                     sessionsList
@@ -65,7 +67,10 @@
                     .accessibilityLabel("Settings")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    IOSDashboardStatusButton(status: dashboardStatus, openDashboard: onOpenDashboard)
+                    IOSDashboardStatusButton(status: status, openDashboard: onOpenDashboard)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    IOSAttentionButton(status: status, openAttention: onOpenAttention)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     EditButton()
