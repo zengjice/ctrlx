@@ -72,6 +72,7 @@
         private let onAppAction: AppActionSink
         private let isYoloModeEnabled: AutoApproveCheck
         private let onWorkflow: WorkflowSink
+        private let shouldSuppressAgentCompletion: @Sendable (PluginEvent, PluginIngressPeer) async -> Bool
         public typealias CurrentEventSink = @Sendable (PluginEvent, PluginIngressPeer?, @escaping @Sendable () async -> Void) async -> Void
         private let withCurrentEvent: CurrentEventSink
 
@@ -84,6 +85,7 @@
             onAppAction: @escaping AppActionSink = { _, _, _, _ in },
             isYoloModeEnabled: @escaping AutoApproveCheck = { _ in false },
             onWorkflow: @escaping WorkflowSink = { _, _ in },
+            shouldSuppressAgentCompletion: @escaping @Sendable (PluginEvent, PluginIngressPeer) async -> Bool = { _, _ in false },
             withCurrentEvent: @escaping CurrentEventSink = { _, _, operation in await operation() }
         ) {
             self.onState = onState
@@ -92,6 +94,7 @@
             self.onAppAction = onAppAction
             self.isYoloModeEnabled = isYoloModeEnabled
             self.onWorkflow = onWorkflow
+            self.shouldSuppressAgentCompletion = shouldSuppressAgentCompletion
             self.withCurrentEvent = withCurrentEvent
         }
 
@@ -99,6 +102,15 @@
 
         /// Fan one envelope out to the sinks (spec §5).
         public func dispatch(_ event: PluginEvent, ingressPeer: PluginIngressPeer? = nil, origin: PluginEventOrigin? = nil) async {
+            // A final Stop can complete the run while it is being routed.
+            let quietCompletion: Bool
+            if
+                case .doneWorking = event.state, event.completionTurn != nil,
+                let notice = event.notification, notice.isQuestion != true, let ingressPeer {
+                quietCompletion = await shouldSuppressAgentCompletion(event, ingressPeer)
+            } else {
+                quietCompletion = false
+            }
             if event.workflow != nil || event.workflowBridgeVersion != nil, let ingressPeer {
                 await onWorkflow(event, ingressPeer)
             }
@@ -121,11 +133,11 @@
             }
 
             await withCurrentEvent(event, ingressPeer) {
-                await self.dispatchCurrent(event, ingressPeer: ingressPeer)
+                await self.dispatchCurrent(event, ingressPeer: ingressPeer, quietCompletion: quietCompletion)
             }
         }
 
-        private func dispatchCurrent(_ event: PluginEvent, ingressPeer: PluginIngressPeer?) async {
+        private func dispatchCurrent(_ event: PluginEvent, ingressPeer: PluginIngressPeer?, quietCompletion: Bool) async {
             let paneID = event.tmuxPane ?? event.sessionID
             if let state = event.state {
                 // Yolo auto-approve (spec §6): an auto-approvable permission on a
@@ -150,7 +162,7 @@
                     event.projectPath,
                     event.permissionMode
                 )
-                if let notification = event.notification, !suppressNotification {
+                if let notification = event.notification, !suppressNotification, !quietCompletion {
                     await onNotification(event.pluginID, paneID, notification, effectiveState)
                 }
             } else if let notification = event.notification {

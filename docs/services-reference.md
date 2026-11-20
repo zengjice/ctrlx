@@ -1768,6 +1768,17 @@ Mac live receivers preserve the subtitle and can add context for older Hosts
 when pane metadata is available. Missing metadata preserves the original copy.
 Locally generated CLI notifications and terminal OSC copy keep their existing semantics.
 
+The Workflow editor's **Notify when individual Agents finish** switch is off by
+default, including for existing workflows. The Host sends a single **Workflow
+completed** alert after recording successful completion. Turn completion alerts
+for workflow-owned input are quiet by default, including tool-only turns with
+no reply text. Questions, approvals, failures, and independent Agent turns
+still use their normal alerts. The preference is copied into each new run
+when it starts. Tapping a Workflow completion alert opens the app without an
+Agent destination and cancels any pending Agent navigation on iOS. Ordinary
+alerts without a stable Agent destination still show the session list and
+the navigation message.
+
 Codex and Claude Code `SessionStart` hooks initialize idle session state without
 emitting an alert, including startup, resume, clear and compact. The Host still
 processes session identity and initialization; no startup notification is sent

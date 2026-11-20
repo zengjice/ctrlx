@@ -9,6 +9,22 @@ import Testing
 
 @MainActor
 struct NotificationNavigationWaitingTests {
+    #if os(iOS)
+        @Test("A Workflow completion tap supersedes an Agent tap waiting for the Host")
+        func workflowCompletionCancelsPendingAgentTap() {
+            let service = PushNotificationService()
+            let agent = AgentID(hostID: UUID(), paneID: UUID())
+            var agentTap: [AnyHashable: Any] = ["eventType": "cli.notify", "pairId": "pair", "paneId": "%7"]
+            for (key, value) in agent.notificationUserInfo {
+                agentTap[key] = value
+            }
+            service.handleNotificationTap(userInfo: agentTap)
+            #expect(service.pendingDeepLink?.agentID == agent)
+            service.handleNotificationTap(userInfo: ["eventType": NotificationDelivery.workflowCompletionEventType, "pairId": "pair"])
+            #expect(service.pendingDeepLink == nil)
+        }
+    #endif
+
     private func catalog(_ id: AgentID, paneID: String = "%1") throws -> ViewerWorkspaceCatalog {
         try #require(ViewerWorkspaceCatalog(state: .init(pairId: "pair", paneStates: [paneID: .init(
             paneId: paneID, sessionName: "work", tmuxWindowId: "@1",

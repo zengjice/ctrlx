@@ -324,6 +324,26 @@ struct CodexTranslatorTests {
         #expect(notification.body.contains("All done with the refactor."))
     }
 
+    @Test("A Codex Stop without reply text attributes the alert without supplying a result", arguments: ["", nil] as [String?])
+    func stopWithoutReply(reply: String?) async throws {
+        let (core, _) = try await makeCore()
+        let encodedReply = try String(decoding: JSONEncoder().encode(reply), as: UTF8.self)
+        let json = """
+        {
+            "hook_event_name": "Stop",
+            "session_id": "sess-stop",
+            "turn_id": "turn-1",
+            "transcript_path": "/fixture/native.jsonl",
+            "last_assistant_message": \(encodedReply)
+        }
+        """
+        let event = try #require(await core.handleIngress(frame(json)))
+        #expect(event.state == .doneWorking(summary: reply))
+        #expect(event.notification != nil)
+        #expect(event.workflow == nil)
+        #expect(event.completionTurn == .init(nativeTurnID: "turn-1", transcriptPath: "/fixture/native.jsonl"))
+    }
+
     // MARK: - SessionStart
 
     @Test("sessionStart initializes idle state without a notification", arguments: ["startup", "resume", "clear", "compact"])

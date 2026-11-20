@@ -35,7 +35,11 @@ extension AppCoordinator {
             try await setupAgentInteraction(hostID: hostID, paths: paths, gate: gate)
             let store = AgentWorkflowStore(
                 fileURL: paths.stateRoot.appendingPathComponent("Workflows/ledger.json"), hostID: hostID
-            )
+            ) { [weak self] run in
+                Task { @MainActor [weak self] in
+                    await self?.notifyWorkflowCompleted(run)
+                }
+            }
             let original = try await store.snapshot()
             try await agentRuntimeCatalog?.seedBridges(original.bridgeEvidence ?? [])
             if let messages = agentMessages {
@@ -177,6 +181,14 @@ extension AppCoordinator {
             if let paneID = event.tmuxPane {
                 await pauseAgentWorkflows(paneID: paneID, reason: "The Agent's workflow event could not be verified.")
             }
+        }
+    }
+
+    func suppressesWorkflowAgentCompletion(_ event: PluginEvent, peer: PluginIngressPeer) async -> Bool {
+        do { return try await agentWorkflowEvents?.suppressesAgentCompletion(event, peer: peer) ?? false }
+        catch {
+            workflowLogger.error("Could not check workflow notification preferences: \(error)")
+            return false
         }
     }
 

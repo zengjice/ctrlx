@@ -109,6 +109,7 @@ public struct AgentNotificationMessage: Codable, Sendable, Equatable {
     public let body: String
     public let timestamp: Date
     public let isQuestion: Bool?
+    public let eventType: String?
 
     /// Action-button context when the notification accompanies an open
     /// permission / question form (issue #710), mirroring
@@ -124,7 +125,8 @@ public struct AgentNotificationMessage: Codable, Sendable, Equatable {
         timestamp: Date,
         action: NotificationActionContext? = nil,
         isQuestion: Bool? = nil,
-        agentID: AgentID? = nil
+        agentID: AgentID? = nil,
+        eventType: String? = nil
     ) {
         self.pairId = pairId
         self.sessionId = sessionId
@@ -135,6 +137,7 @@ public struct AgentNotificationMessage: Codable, Sendable, Equatable {
         self.timestamp = timestamp
         self.action = action
         self.isQuestion = isQuestion
+        self.eventType = eventType
     }
 
     public func withPairId(_ pairId: String) -> AgentNotificationMessage {
@@ -147,7 +150,8 @@ public struct AgentNotificationMessage: Codable, Sendable, Equatable {
             timestamp: timestamp,
             action: action,
             isQuestion: isQuestion,
-            agentID: agentID
+            agentID: agentID,
+            eventType: eventType
         )
     }
 
@@ -161,6 +165,7 @@ public struct AgentNotificationMessage: Codable, Sendable, Equatable {
         case timestamp
         case action
         case isQuestion
+        case eventType
     }
 
     public init(from decoder: Decoder) throws {
@@ -173,6 +178,7 @@ public struct AgentNotificationMessage: Codable, Sendable, Equatable {
         self.body = try container.decode(String.self, forKey: .body)
         self.timestamp = try container.decode(Date.self, forKey: .timestamp)
         self.isQuestion = try container.decodeIfPresent(Bool.self, forKey: .isQuestion)
+        self.eventType = try container.decodeIfPresent(String.self, forKey: .eventType)
         // Lenient like `NotificationContent.action`: an undecodable context
         // from a newer host degrades to a plain notification rather than
         // dropping the whole message.

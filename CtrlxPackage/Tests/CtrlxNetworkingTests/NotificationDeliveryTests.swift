@@ -51,6 +51,22 @@ struct NotificationDeliveryTests {
         #expect(!NotificationDelivery.shouldPresentInForeground(isRemote: true, userInfo: ["eventType": event]))
     }
 
+    @Test("Workflow completion keeps its type through both Viewer transports")
+    func workflowCompletionRouting() throws {
+        let type = NotificationDelivery.workflowCompletionEventType
+        let content = NotificationContent(title: "Workflow completed", body: "Review", eventType: type, pairId: "office")
+        let push = try JSONDecoder().decode(NotificationContent.self, from: JSONEncoder().encode(content.forPeer(supportsStableAgentNotifications: false)))
+        #expect(try NotificationDelivery.isWorkflowCompletion(userInfo: userInfo(for: push)))
+
+        let live = AgentNotificationMessage(pairId: content.pairId, sessionId: nil, title: content.title, body: content.body, timestamp: content.timestamp, eventType: type)
+        let remote = try JSONDecoder().decode(AgentNotificationMessage.self, from: JSONEncoder().encode(live)).withPairId("remote-office")
+        #expect(remote.eventType == type && remote.pairId == "remote-office")
+
+        let legacy = Data(#"{"pairId":"office","title":"Finished","body":"Agent reply","timestamp":0}"#.utf8)
+        #expect(try JSONDecoder().decode(AgentNotificationMessage.self, from: legacy).eventType == nil)
+        #expect(!NotificationDelivery.isWorkflowCompletion(userInfo: ["pairId": "office", "eventType": "cli.notify"]))
+    }
+
     @Test("Local question follow-ups and delivery failures remain visible")
     func localNotifications() {
         #expect(NotificationDelivery.shouldPresentInForeground(isRemote: false, userInfo: [:]))

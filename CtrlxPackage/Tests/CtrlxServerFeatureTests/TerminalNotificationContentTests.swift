@@ -35,6 +35,19 @@ struct TerminalNotificationContentTests {
         #expect(content.userInfo["hostId"] == nil)
     }
 
+    @Test(arguments: [nil, "host-a"] as [String?])
+    func workflowCompletionIsExplicitEvenWithoutPaneMetadata(hostID: String?) {
+        let workflow = AgentNotificationPresentation(
+            title: "Workflow completed", body: "Review", paneState: nil, eventType: NotificationDelivery.workflowCompletionEventType
+        )
+        let ordinary = AgentNotificationPresentation(title: "Finished", body: "Agent reply", paneState: nil)
+        let completion = TerminalNotificationService.content(paneId: "system", notification: workflow, hostId: hostID)
+        let fallback = TerminalNotificationService.content(paneId: "system", notification: ordinary, hostId: hostID)
+        #expect(NotificationDelivery.isWorkflowCompletion(userInfo: completion.userInfo))
+        #expect(!NotificationDelivery.isWorkflowCompletion(userInfo: fallback.userInfo))
+        #expect(fallback.userInfo["hostId"] as? String == hostID)
+    }
+
     @Test
     func acceptanceLogRetainsEventStatusAndHostRouting() throws {
         let log = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-notification-\(UUID()).log")

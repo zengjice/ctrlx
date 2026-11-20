@@ -58,6 +58,10 @@ struct AgentWorkflowEditor: View {
                         let tags = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
                         draft.tags = tags.isEmpty ? nil : tags
                     }))
+                    Toggle("Notify when individual Agents finish", isOn: Binding(
+                        get: { draft.notifyOnAgentCompletion == true },
+                        set: { draft.notifyOnAgentCompletion = $0 ? true : nil }
+                    ))
                     DisclosureGroup(isExpanded: expansion($showingInitialTask)) {
                         taskInput("Initial task", input: $draft.initialInput)
                         Text("Optional default task and attachments. You can also set the task when starting a run.")

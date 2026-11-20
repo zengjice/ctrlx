@@ -1869,6 +1869,8 @@ struct AgentWorkflowNativeEventsTests {
             onFailure: { _ in failures.withValue { $0 += 1 } }
         )
         _ = try await router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        #expect(try await router.suppressesAgentCompletion(f.event(.stopCandidate, text: "Final"), peer: f.peer))
+        #expect(try await !router.suppressesAgentCompletion(f.event(.stopCandidate, text: "Manual", turn: "other"), peer: f.peer))
         _ = try await router.receive(f.event(.stopCandidate, text: "Final"), peer: f.peer)
         if action == "shutdown" {
             await router.shutdown()
