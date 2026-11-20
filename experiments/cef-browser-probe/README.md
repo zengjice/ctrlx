@@ -58,8 +58,13 @@ still use only this test fixture and a new private profile.
 
 `--options-mode tab|embedded|legacy|none` adds direct Settings acceptance:
 current options availability, native opening from the declared mode, repeated-open
-reuse (including loading), storage in the private extension profile, and capture
-through the product `ExtensionSurface`. `none` checks rejection without a settings
+reuse (including loading), and capture through the product `ExtensionSurface`.
+For an editable fixture, a separate probe process takes focus while the surface
+toggles a checkbox, opens the editor and saves multiline text in the private
+profile. Tab and legacy modes switch renderers in the same window. The probe
+sends input using the existing frame, checks a Chromium rejection, and waits for
+the delayed save receipt.
+`none` checks rejection without a settings
 page. Screenshots are saved as `options.jpg` in the run's evidence directory.
 Run modes sequentially. `--options-mode env --env-extension <verified-directory>`
 opens the unmodified ENV-Plugin options page in another private profile and verifies
