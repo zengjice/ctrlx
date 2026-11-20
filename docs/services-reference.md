@@ -1035,13 +1035,13 @@ Right-click a local or Viewer terminal-window tab → **Fork → In Current
 Directory / In Other Directory… / In New Worktree…**. Codex and Claude Code
 implement the optional `AgentSessionForking` capability; sidecars retain their
 existing wire contract. All modes open the shared naming panel before creation.
-Current Directory uses the source pane's directory directly. Other Directory
-pre-fills that source directory and can target another existing directory on
-the same Host, either by typing `/…` or `~/…` or by browsing folders; the copied
-conversation and the new tmux window use that target. Worktree mode continues to
-derive its directory from the source repository and cannot also name a target
-directory. The entered name is used for the new window; current-directory names
-may contain spaces or Unicode.
+Current Directory uses the source pane's directory directly. In Other Directory,
+choose an existing directory on the same Host by entering `/…` or `~/…` or by
+browsing folders. The copied conversation and the new tmux window use that
+target. In New Worktree, enter a branch name to preview the new directory under
+the source repository's primary checkout. The branch name also names the new
+window. Current-directory window names may contain spaces or Unicode.
+The target directory and branch fields start empty.
 Multiple Agent panes require a source choice, defaulting to native focus or the active pane.
 Detection without a native conversation UUID is not enough to enable Fork.
 Unavailable Fork actions show whether the Host is offline/outdated, the native
