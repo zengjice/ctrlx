@@ -3,6 +3,11 @@ import Foundation
 import Testing
 @testable import CtrlxCommon
 
+#if os(macOS)
+    import AppKit
+    import SwiftUI
+#endif
+
 private actor ForkPanelBackgroundCaller {
     func run(configuration: AgentForkConfiguration, source: AgentForkSource) async throws {
         _ = try await configuration.prepare(source)
@@ -225,6 +230,32 @@ struct AgentForkConfigurationTests {
     }
 
     #if os(macOS)
+        @Test("A blank Fork directory field still browses the Host home")
+        func browseHostHomeFromEmptyForkDirectory() async throws {
+            let source = try #require(AgentForkSource(pane: pane("%1", index: 1)))
+            var paths: [String] = []
+            let configuration = AgentForkConfiguration(sources: [source], destination: .otherDirectory, directorySource: .init(id: "host") { request in
+                paths.append(request.path)
+                return .init(directory: "/Host/home", parentDirectory: "/Host", isExactDirectory: true, entries: [])
+            }, prepare: { .init(source: $0, worktree: nil) }, fork: { _ in
+                Issue.record("Browsing should not create a Fork")
+            })
+            _ = NSApplication.shared
+            let window = NSWindow(contentRect: .init(x: -10_000, y: -10_000, width: 560, height: 640), styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = NSHostingView(rootView: AgentForkPanel(configuration: configuration))
+            window.orderBack(nil)
+            defer { window.close() }
+
+            for _ in 0..<100 {
+                if !paths.isEmpty {
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            #expect(paths.first == "~/")
+        }
+
         @Test("Native window context menu preserves every Fork destination and action")
         func nativeForkContextMenu() throws {
             let source = try #require(AgentForkSource(pane: pane("%1", index: 1)))

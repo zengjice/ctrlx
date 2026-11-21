@@ -34,6 +34,7 @@ public struct SessionStateMessage: Codable, Sendable {
     public let workspaceIdentity: WorkspaceIdentityScope?
     public let supportsWorkspaceInputIdentity: Bool?
     public let supportsTerminalStreamIdentity: Bool?
+    public let supportsGuardedTerminalTabClose: Bool?
     /// Unified per-pane state keyed by pane ID
     public let paneStates: [String: PaneState]
     /// Discovered agent projects on the host (each tagged by `pluginID`).
@@ -138,6 +139,7 @@ public struct SessionStateMessage: Codable, Sendable {
         case workspaceIdentity
         case supportsWorkspaceInputIdentity
         case supportsTerminalStreamIdentity
+        case supportsGuardedTerminalTabClose
         case paneStates
         case agentProjects
         case homeDirectory
@@ -236,6 +238,7 @@ public struct SessionStateMessage: Codable, Sendable {
         workspaceIdentity: WorkspaceIdentityScope? = nil,
         supportsWorkspaceInputIdentity: Bool? = nil,
         supportsTerminalStreamIdentity: Bool? = nil,
+        supportsGuardedTerminalTabClose: Bool? = nil,
         supportsCtrlXAppUpdate: Bool? = nil,
         supportsCtrlXAppUpdateCheck: Bool? = nil,
         ctrlXAppUpdate: CtrlXAppUpdateState? = nil,
@@ -249,6 +252,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.workspaceIdentity = workspaceIdentity
         self.supportsWorkspaceInputIdentity = supportsWorkspaceInputIdentity
         self.supportsTerminalStreamIdentity = supportsTerminalStreamIdentity
+        self.supportsGuardedTerminalTabClose = supportsGuardedTerminalTabClose
         self.paneStates = paneStates
         self.agentProjects = agentProjects
         self.homeDirectory = homeDirectory
@@ -352,6 +356,7 @@ public struct SessionStateMessage: Codable, Sendable {
             workspaceIdentity: workspaceIdentity,
             supportsWorkspaceInputIdentity: supportsWorkspaceInputIdentity,
             supportsTerminalStreamIdentity: supportsTerminalStreamIdentity,
+            supportsGuardedTerminalTabClose: supportsGuardedTerminalTabClose,
             supportsCtrlXAppUpdate: supportsCtrlXAppUpdate,
             supportsCtrlXAppUpdateCheck: supportsCtrlXAppUpdateCheck,
             ctrlXAppUpdate: ctrlXAppUpdate,

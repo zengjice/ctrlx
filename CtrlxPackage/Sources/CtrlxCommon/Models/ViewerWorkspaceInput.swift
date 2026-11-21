@@ -35,6 +35,7 @@ public struct ViewerWorkspaceInputState: Equatable, Sendable {
     private var windowPaneIDs: [String: String] = [:]
     public private(set) var supportsIdentity = false
     public private(set) var supportsStreamIdentity = false
+    public private(set) var supportsGuardedTerminalTabClose = false
 
     public init() { }
 
@@ -42,6 +43,7 @@ public struct ViewerWorkspaceInputState: Equatable, Sendable {
         pairID = state.pairId
         supportsIdentity = state.supportsWorkspaceInputIdentity == true
         supportsStreamIdentity = state.supportsTerminalStreamIdentity == true
+        supportsGuardedTerminalTabClose = state.supportsGuardedTerminalTabClose == true
         catalog = ViewerWorkspaceCatalog(state: state)
         windowPaneIDs.removeAll()
         for pane in state.paneStates.values.sorted(by: { $0.paneId < $1.paneId }) {

@@ -87,6 +87,8 @@
         let onInputPresentationChange: @MainActor (TerminalInputPresentation.State?) -> Void
         /// Parent toolbars can place Copy without moving the pane-owned snapshot sheet.
         let onCopyActionChange: @MainActor ((@MainActor () -> Void)?) -> Void
+        let onCopyPresentationChange: @MainActor (Bool) -> Void
+        let onLinkOrAlertPresentationChange: @MainActor (Bool) -> Void
         let onViewportGridChange: @MainActor (TerminalViewportSizing.Grid?) -> Void
         let onKeyboardDismissed: @MainActor () -> Void
         let onPasteImage: (@MainActor (ClipboardImage?) -> Void)?
@@ -139,6 +141,11 @@
         /// Immutable terminal text shown in the native iOS copy surface.
         @State private var textSnapshot: TerminalTextSnapshot?
         @State private var linkPresentation = TerminalLinkPresentation()
+        private var isLinkOrAlertPresented: Bool {
+            linkPresentation.suspendsTerminalInput || fileLinkActions != nil
+                || showsEmptySnapshotAlert || coordinator.pasteError != nil
+        }
+
         @State private var clipboardImagePaste: TerminalImagePasteRequest?
 
         /// Restores toolbar-controlled terminal input after the copy sheet closes.
@@ -183,6 +190,8 @@
             onTerminalInputReadinessChange: @escaping @MainActor ((@MainActor () -> Bool)?) -> Void = { _ in },
             onInputPresentationChange: @escaping @MainActor (TerminalInputPresentation.State?) -> Void = { _ in },
             onCopyActionChange: @escaping @MainActor ((@MainActor () -> Void)?) -> Void = { _ in },
+            onCopyPresentationChange: @escaping @MainActor (Bool) -> Void = { _ in },
+            onLinkOrAlertPresentationChange: @escaping @MainActor (Bool) -> Void = { _ in },
             onViewportGridChange: @escaping @MainActor (TerminalViewportSizing.Grid?) -> Void = { _ in },
             onKeyboardDismissed: @escaping @MainActor () -> Void = { },
             onSwitchWindow: (@MainActor (TerminalWindowSwipePolicy.Direction) -> Void)? = nil,
@@ -220,6 +229,8 @@
             self.onTerminalInputReadinessChange = onTerminalInputReadinessChange
             self.onInputPresentationChange = onInputPresentationChange
             self.onCopyActionChange = onCopyActionChange
+            self.onCopyPresentationChange = onCopyPresentationChange
+            self.onLinkOrAlertPresentationChange = onLinkOrAlertPresentationChange
             self.onViewportGridChange = onViewportGridChange
             self.onKeyboardDismissed = onKeyboardDismissed
             self.onSwitchWindow = onSwitchWindow
@@ -317,12 +328,12 @@
             .sheet(item: $textSnapshot, onDismiss: restoreTerminalInputAfterCopy) { snapshot in
                 TerminalTextCopyView(snapshot: snapshot)
             }
-            .sheet(item: $linkPresentation.item, onDismiss: { linkPresentation.didDismiss() }) { item in
+            .sheet(item: $linkPresentation.item, onDismiss: linkDidDismiss) { item in
                 TerminalLinkSheet(url: item.url, isHostConnected: isConnected, openHostURL: openHostURLAction)
             }
             .confirmationDialog("File Reference", isPresented: .init(get: { fileLinkActions != nil }, set: {
                 if !$0 {
-                    fileLinkActions = nil
+                    setFileLinkActions(nil)
                 }
             }), titleVisibility: .visible) {
                 if let selection = fileLinkActions, let openFileLink {
@@ -337,11 +348,11 @@
                         }.disabled(!canOpenFileLinkActions)
                     }
                 }
-                Button("Cancel", role: .cancel) { fileLinkActions = nil }
+                Button("Cancel", role: .cancel) { setFileLinkActions(nil) }
             } message: {
                 Text(canOpenFileLinkActions ? (fileLinkActions?.path ?? "") : "The source terminal changed or disconnected. Open the link again.")
             }
-            .alert("No Terminal Text", isPresented: $showsEmptySnapshotAlert) {
+            .alert("No Terminal Text", isPresented: .init(get: { showsEmptySnapshotAlert }, set: setEmptySnapshotAlert)) {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text("The terminal buffer does not contain any text to copy.")
@@ -350,11 +361,11 @@
                 get: { coordinator.pasteError != nil },
                 set: {
                     if !$0 {
-                        coordinator.pasteError = nil
+                        setPasteError(nil)
                     }
                 }
             )) {
-                Button("OK") { coordinator.pasteError = nil }
+                Button("OK") { setPasteError(nil) }
             } message: {
                 Text(coordinator.pasteError ?? "")
             }
@@ -363,6 +374,7 @@
             }
             .onAppear {
                 onInputPresentationChange(currentInputPresentation)
+                publishLinkOrAlertPresentation()
                 onCopyActionChange(coordinator.streamState == .streaming ? presentTextSnapshot : nil)
                 publishVoiceInputContextProvider()
                 onCursorNavigationCancellationChange { [weak coordinator] in
@@ -388,11 +400,16 @@
                 onExternalInputSenderChange(nil)
                 onTerminalInputReadinessChange(nil)
                 onCopyActionChange(nil)
+                onCopyPresentationChange(false)
+                onLinkOrAlertPresentationChange(false)
                 coordinator.cancelPendingKeys()
                 Task { await stopStreaming() }
             }
             .onChange(of: voiceInputPaneMetadata) {
                 publishVoiceInputContextProvider()
+            }
+            .onChange(of: coordinator.pasteError != nil) {
+                publishLinkOrAlertPresentation()
             }
             .onChange(of: isActive) { _, active in
                 if !active {
@@ -483,7 +500,7 @@
         private func presentTextSnapshot() {
             guard !linkPresentation.suspendsTerminalInput else { return }
             guard let snapshot = coordinator.terminalState?.makeTextSnapshot?() else {
-                showsEmptySnapshotAlert = true
+                setEmptySnapshotAlert(true)
                 return
             }
 
@@ -493,6 +510,7 @@
             // Cancel a parent-owned pending Fit before resigning can emit
             // keyboard/layout notifications or a queued Host reply is handled.
             onInputPresentationChange(terminalInputPresentation(isCopyPresented: true))
+            onCopyPresentationChange(true)
 
             // Sheet presentation does not reliably release the terminal's
             // UIKit first responder. Resign synchronously before changing the
@@ -511,11 +529,36 @@
             guard
                 isActive, !inputSuspension.suspendsInput, textSnapshot == nil,
                 !quickActionPresentation.isPresented, linkPresentation.present(url) else { return }
+            publishLinkOrAlertPresentation()
             onInputPresentationChange(currentInputPresentation)
             coordinator.terminalState?.cancelCursorNavigation?()
             UIApplication.shared.sendAction(
                 #selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil
             )
+        }
+
+        private func linkDidDismiss() {
+            linkPresentation.didDismiss()
+            publishLinkOrAlertPresentation()
+        }
+
+        private func setFileLinkActions(_ actions: FileLinkActions?) {
+            fileLinkActions = actions
+            publishLinkOrAlertPresentation()
+        }
+
+        private func setEmptySnapshotAlert(_ presented: Bool) {
+            showsEmptySnapshotAlert = presented
+            publishLinkOrAlertPresentation()
+        }
+
+        private func setPasteError(_ message: String?) {
+            coordinator.pasteError = message
+            publishLinkOrAlertPresentation()
+        }
+
+        private func publishLinkOrAlertPresentation() {
+            onLinkOrAlertPresentationChange(isLinkOrAlertPresented)
         }
 
         private func terminalVoiceInputContext() -> VoiceInputContextSnapshot? {
@@ -537,6 +580,7 @@
         }
 
         private func restoreTerminalInputAfterCopy() {
+            onCopyPresentationChange(false)
             defer { restoresTerminalInputAfterCopy = false }
             guard restoresTerminalInputAfterCopy, isActive else { return }
             isInteractive = true
@@ -605,7 +649,7 @@
                         onPasteText: { text in
                             guard canSendTerminalInput, coordinator.isReadyForToolbarInput else { return }
                             guard text.utf8.count <= PasteTerminalText.maximumUTF8Bytes else {
-                                coordinator.pasteError = "Clipboard text exceeds 64 KiB."
+                                setPasteError("Clipboard text exceeds 64 KiB.")
                                 return
                             }
                             phraseInputRevision &+= 1
@@ -620,7 +664,7 @@
                             presentedTerminal = state
                         },
                         onOpenPath: openPathAction,
-                        onFileLinkActions: { fileLinkActions = .init(path: $0, binding: relayClient.workspaceInputState.binding(paneID: paneId)) },
+                        onFileLinkActions: { setFileLinkActions(.init(path: $0, binding: relayClient.workspaceInputState.binding(paneID: paneId))) },
                         onOpenURL: presentLink,
                         onSwitchWindow: isActive && !inputSuspension.suspendsInput && textSnapshot == nil
                             && !linkPresentation.suspendsTerminalInput && scenePhase == .active

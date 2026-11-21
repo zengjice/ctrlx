@@ -98,6 +98,11 @@ uses at most its height from before presentation. This keeps the terminal text
 in place when the keyboard closes and the available height increases.
 Pending Fit requests wait for fresh pane measurements after that limit is
 released, including when the new measurements round to the previous grid.
+Agent completions stay unread while Tabs, file previews, link menus, the camera,
+or an attachment picker cover the terminal. This also applies to window action
+alerts and terminal or attachment input errors. Completions stay unread while
+captured or selected images are prepared and reviewed, or while a link opens in
+Files or on the Host.
 Refreshing SwiftUI callbacks does not reset a running recognizer or change its
 captured action; disabling the gesture drops that action. Package tests cover
 direction, distance and both list boundaries; UIKit regression sources cover

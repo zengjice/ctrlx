@@ -31,6 +31,13 @@ struct TerminalCloseConfirmationTests {
         #expect(confirmation.message == "The following processes are still running:\nTerminal 0: codex")
     }
 
+    @Test("A renewed confirmation can describe an idle tab without a process warning")
+    func idleTab() {
+        let confirmation = TerminalCloseConfirmation(target: "window", runningProcesses: [], inputBinding: .legacy(pairID: "office"))
+        #expect(confirmation.title == "Close Tab?")
+        #expect(confirmation.message == "Close this terminal tab?")
+    }
+
     @Test("Process warnings are grouped, sorted, and deduplicated")
     func processMessage() {
         let confirmation = TerminalCloseConfirmation(

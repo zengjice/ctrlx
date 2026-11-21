@@ -1102,6 +1102,30 @@ public struct KillTmuxSession: CommandSpec, Equatable {
     }
 }
 
+/// Close a terminal tab only within the requested scope.
+public struct CloseTerminalTab: CommandSpec, Equatable {
+    public typealias Response = CommandResponseMessage
+
+    public enum Scope: String, Codable, Sendable {
+        case window
+        case session
+    }
+
+    public let sessionName: String
+    public let windowID: String
+    public let scope: Scope
+
+    public init(sessionName: String, windowID: String, scope: Scope) {
+        self.sessionName = sessionName
+        self.windowID = windowID
+        self.scope = scope
+    }
+
+    public var commandType: CommandType {
+        .closeTerminalTab(self)
+    }
+}
+
 /// Submit edited prompt content from a viewer. Returns success/failure.
 public struct SubmitEditorContent: CommandSpec, Equatable {
     public typealias Response = CommandResponseMessage
@@ -1239,6 +1263,7 @@ public enum CommandType: Codable, Sendable, Equatable {
     case killTmuxWindow(KillTmuxWindow)
     /// Kill (close) a tmux session
     case killTmuxSession(KillTmuxSession)
+    case closeTerminalTab(CloseTerminalTab)
     /// Forward a Finder file drop or Cmd+V image paste from a Mac viewer; host
     /// saves the bytes to `$TMPDIR` and pastes the resolved paths into the
     /// target tmux pane via tmux's bracketed-paste buffer.

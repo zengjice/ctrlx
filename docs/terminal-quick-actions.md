@@ -40,12 +40,15 @@ Agent actions appear first in this order: **Trust and Refresh Hooks** (Codex),
 logout-and-resume flow and requires its advertised support; custom API Providers
 show the Host's "Do not log out" message and keep the Agent running.
 
-The terminal toolbar's **More** menu compares only its action targets, labels,
-availability and selection state. Terminal activity, layout refreshes and Browser
-loading updates are excluded so they do not request a native menu rebuild during scrolling. Host,
-pane, conversation and process identity changes still refresh the actions, as do
-connection/capability changes and resource-tab changes. Restart request IDs are
-created when an action is chosen, not when the menu renders.
+The terminal toolbar's **More** button opens a scrollable action list. Secondary
+choices such as **Fork** open from their list rows. The list refreshes when
+action targets, labels, availability or selection change. It closes before
+opening the next form or running the chosen action, and closes if its source
+terminal goes away. Yolo actions, Copy Terminal Text and Session Info use the
+pane selected by the user. Closing a tab asks for a fresh confirmation if its
+scope changes between tab and session. Agent completions remain unread until
+the live terminal is visible again, including while its text snapshot is open.
+Restart request IDs are created when an action is chosen.
 
 ## Mac terminal content menu
 
@@ -122,11 +125,13 @@ terminal tab in that strip, ahead of any interleaved Files or browser tabs.
 On iOS, selection and input follow pane/window identities across tmux renumbering
 and either ordering of the close reply and state push. Background tab closes
 preserve the selection; split panes and detached workbenches keep their own
-eligible tabs. Closing the final
-terminal window in the entire session always asks to close the session, including
-an idle shell. Cancel leaves it intact; confirmation closes the session and exits
-its page. Running-process warnings remain in the same dialog. Files and browser
-tabs retain their existing source/parent return behavior.
+eligible tabs. Closing the final terminal asks to close the session when no
+independent resource remains. The Host checks the requested scope when closing
+the tab. If closing only the tab would now end the session, the session stays
+open and iOS refreshes it for a new confirmation. If another terminal or
+independent resource appears after a session close was confirmed, the Host also
+requires a new confirmation. Closing a terminal tab requires an updated Host.
+Running-process warnings remain in the same dialog.
 
 The iOS recovery cache distinguishes a previously observed window disappearing
 within the same Host/tmux incarnation from a pending window after restart. A live

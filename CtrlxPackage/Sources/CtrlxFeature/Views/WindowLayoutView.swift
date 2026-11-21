@@ -31,6 +31,7 @@
         @State private var didPrepareEntrySelection = false
         @State private var pendingFileLink: TerminalFileLinkRequest?
         @State private var artifactPreview: TerminalArtifactPreview?
+        @State private var artifactPreviewIsPresented = false
         @State private var previewFilesLink: TerminalFileLinkRequest?
         @State private var previewKeyboardRestore = ArtifactPreviewKeyboardRestore()
         private struct FilesOpenRequest: Equatable {
@@ -72,9 +73,13 @@
         @State private var isResourceAnnotating = false
         @State private var resourceNavigationFeedback = 0
         @State private var showsWindowTabs = false
+        @State private var windowTabsArePresented = false
         @State private var pendingWindowTabAction: WindowTabAction?
+        @State private var showsWindowActions = false
+        @State private var windowActionsSource: TmuxWindow?
+        @State private var pendingWindowMenuAction: (@MainActor () -> Void)?
         @State private var terminalContentHeight: CGFloat?
-        @State private var terminalHeightWhileShowingTabs: CGFloat?
+        @State private var terminalHeightWhileShowingTabPanel: CGFloat?
 
         /// The currently selected pane (receives keyboard input)
         @State private var activePaneId: String?
@@ -91,6 +96,10 @@
         @State private var terminalInputReadiness: [String: @MainActor () -> Bool] = [:]
         @State private var keyboardDismissalInputs = TerminalKeyboardDismissalInputs()
         @State private var terminalCopyActions: [String: @MainActor () -> Void] = [:]
+        @State private var copySnapshotPaneID: String?
+        @State private var terminalLinkOrAlertPaneIDs: Set<String> = []
+        // The attachment toolbar keeps this state while the full-screen camera covers the page.
+        @State private var attachmentPresentationIsActive = false
         @State private var terminalInputRevision: UInt64 = 0
         @State private var voiceSession = TerminalVoiceInputSession()
         @State private var quickActionPresentation = TerminalQuickActionPresentation()
@@ -99,9 +108,17 @@
         @State private var activeService: SessionDetailService?
         @State private var isViewVisible = false
 
-        /// Whether to show the session info popover
-        @State private var showSessionInfo = false
+        @State private var sessionInfoSource: SessionInfoSource?
         @State private var isApprovingHooks = false
+
+        private struct SessionInfoSource: Identifiable {
+            let pane: PaneState
+            let service: SessionDetailService
+
+            var id: String {
+                pane.paneId
+            }
+        }
 
         @State private var isResizing = false
         @State private var viewportGrids: [String: TerminalViewportSizing.Grid] = [:]
@@ -298,7 +315,7 @@
         }
 
         private func selectAdjacentLinkedTab(_ source: PaneLinkedTabID, direction: Int) {
-            guard !showsWindowTabs, !creationSheetIsPresented, !quickActionPresentation.suspendsTerminalInput else { return }
+            guard !showsTabPanel, !creationSheetIsPresented, !quickActionPresentation.suspendsTerminalInput else { return }
             if linkedTabs.sourcePaneID(source) == nil || sharedTabLayout?.groups[source.sessionTabID] != nil {
                 selectAdjacentTopLevel(.resource(source), direction: direction)
                 return
@@ -371,6 +388,24 @@
             selectedBrowser == nil && selectedSimulator == nil && fileWorkspace.selected == nil
         }
 
+        private var visibleTerminalWindow: TmuxWindow? {
+            terminalIsVisible ? window : nil
+        }
+
+        private func containsVisiblePane(_ pane: PaneState) -> Bool {
+            guard let current = visibleTerminalWindow?.panes.first(where: { $0.paneId == pane.paneId }) else { return false }
+            return pane.workspaceIdentity?.isSamePane(as: current.workspaceIdentity) ?? true
+        }
+
+        private var isSessionInfoSourceVisible: Bool {
+            sessionInfoSource.map { containsVisiblePane($0.pane) } == true
+        }
+
+        private var matchesWindowActionsSource: Bool {
+            guard let windowActionsSource else { return false }
+            return visibleTerminalWindow?.matchesActionSource(windowActionsSource) == true
+        }
+
         private var terminalInputSuspension: TerminalInputSuspension {
             .init(
                 external: !terminalIsVisible || artifactPreview != nil,
@@ -378,17 +413,25 @@
             )
         }
 
+        private var showsTabPanel: Bool {
+            windowTabsArePresented || windowActionsSource != nil
+        }
+
         private var canFitAfterKeyboardDismissal: Bool {
             guard
                 isViewVisible, terminalIsVisible, scenePhase == .active,
                 !isKeyboardActive, !terminalInputSuspension.suspendsInput,
-                !showsWindowTabs, !creationSheetIsPresented,
+                !showsTabPanel, !creationSheetIsPresented,
                 let activePaneId else { return false }
             return keyboardDismissalInputs.allowsFit(paneID: activePaneId)
         }
 
         private var canAcknowledgeCompletion: Bool {
-            isViewVisible && terminalIsVisible && scenePhase == .active
+            isViewVisible && visibleTerminalWindow != nil && scenePhase == .active
+                && !showsTabPanel && copySnapshotPaneID == nil && !creationSheetIsPresented && sessionInfoSource == nil
+                && !artifactPreviewIsPresented && pendingFileLink == nil && renamingWindow == nil
+                && closeConfirmation == nil && commandError == nil && hookTrustMessage == nil
+                && terminalLinkOrAlertPaneIDs.isEmpty && !attachmentPresentationIsActive && pendingBrowserLink == nil
         }
 
         private var annotationSource: AnnotationTerminalHandoff.Source? {
@@ -421,7 +464,7 @@
                         .onGeometryChange(for: CGFloat.self, of: \.size.height) { height in
                             terminalContentHeight = height > 0 ? height : nil
                         }
-                        .frame(maxHeight: terminalHeightWhileShowingTabs)
+                        .frame(maxHeight: terminalHeightWhileShowingTabPanel)
                         .frame(maxHeight: .infinity, alignment: .top)
                         .allowsHitTesting(terminalIsVisible)
                         .accessibilityHidden(!terminalIsVisible)
@@ -521,7 +564,8 @@
                         sendCustomButton: sendCustomButton,
                         agentCommandContext: activeAgentCommandContext,
                         agentPluginID: activeAgentPluginID,
-                        agentPane: activeModelPane
+                        agentPane: activeModelPane,
+                        onAttachmentPresentationChange: { attachmentPresentationIsActive = $0 }
                     )
                     .gesture(terminalBarSwipe)
                 } else if let tab = selectedLinkedTab {
@@ -728,11 +772,12 @@
                 .task(id: pendingBrowserLink) {
                     guard let request = pendingBrowserLink else { return }
                     await openTerminalBrowser(request)
+                    if pendingBrowserLink == request {
+                        pendingBrowserLink = nil
+                    }
                 }
                 .environment(\.openTerminalFileLink) { request in pendingFileLink = request }
-                .terminalFileLinkTask($pendingFileLink) { request in
-                    await openTerminalFile(request)
-                }
+                .terminalFileLinkTask($pendingFileLink, perform: openTerminalFile)
                 .onChange(of: window?.id) { pendingFileLink = nil
                     pendingFilesRequest = nil
                     pendingBrowserLink = nil
@@ -780,14 +825,7 @@
                     }
                 }
                 .onDisappear(perform: saveFileWorkspace)
-                .sheet(item: $artifactPreview, onDismiss: {
-                    if let link = previewFilesLink {
-                        previewFilesLink = nil
-                        pendingFileLink = link
-                    } else {
-                        restorePreviewKeyboard()
-                    }
-                }) { preview in
+                .sheet(item: $artifactPreview, onDismiss: artifactPreviewDidDismiss) { preview in
                     TerminalArtifactPreviewSheet(preview: preview) { request in
                         previewFilesLink = request
                         artifactPreview = nil
@@ -826,6 +864,13 @@
                     )
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
+                }
+                .sheet(isPresented: $showsWindowActions, onDismiss: windowActionsDidDismiss) {
+                    if matchesWindowActionsSource, let window = visibleTerminalWindow {
+                        windowActionsMenu(window)
+                            .presentationDetents([.large])
+                            .presentationDragIndicator(.visible)
+                    }
                 }
                 .sheet(item: $newAgentConfiguration, onDismiss: creationSheetDidDismiss) { configuration in
                     NewAgentTabPanel(configuration: configuration)
@@ -983,6 +1028,7 @@
                     if let activePaneId {
                         previewKeyboardRestore.captureIfNeeded(paneID: activePaneId, keyboardIsActive: isKeyboardActive)
                     }
+                    artifactPreviewIsPresented = true
                     artifactPreview = .init(link: request, context: fileContext, source: source, path: path)
                 } else if let descriptor {
                     previewKeyboardRestore.discard()
@@ -1004,6 +1050,17 @@
                     commandError = "Cannot open Host path: \(error.localizedDescription)"
                 }
             }
+        }
+
+        private func artifactPreviewDidDismiss() {
+            if let link = previewFilesLink {
+                previewFilesLink = nil
+                pendingFileLink = link
+            } else {
+                restorePreviewKeyboard()
+            }
+            // A nil sheet item can arrive before the dismissal finishes.
+            artifactPreviewIsPresented = false
         }
 
         private func restorePreviewKeyboard() {
@@ -1091,6 +1148,16 @@
                         automaticTabFit.cancel()
                     }
                 }
+                .onChange(of: matchesWindowActionsSource) { _, matches in
+                    guard windowActionsSource != nil, !matches else { return }
+                    pendingWindowMenuAction = nil
+                    showsWindowActions = false
+                }
+                .onChange(of: isSessionInfoSourceVisible) { _, isVisible in
+                    if sessionInfoSource != nil, !isVisible {
+                        sessionInfoSource = nil
+                    }
+                }
                 .onChange(of: canAcknowledgeCompletion, initial: true) { _, canAcknowledge in
                     if canAcknowledge {
                         markVisibleTerminalHandled()
@@ -1158,11 +1225,21 @@
                     wasBackgrounded = false
                     annotationHandoff.cancel()
                     pendingWindowTabAction = nil
+                    pendingWindowMenuAction = nil
                     pendingResourceRequest = nil
                     pendingBrowserLink = nil
                     pendingFileLink = nil
+                    artifactPreview = nil
+                    artifactPreviewIsPresented = false
+                    previewFilesLink = nil
                     showsWindowTabs = false
-                    terminalHeightWhileShowingTabs = nil
+                    windowTabsArePresented = false
+                    showsWindowActions = false
+                    windowActionsSource = nil
+                    copySnapshotPaneID = nil
+                    terminalLinkOrAlertPaneIDs.removeAll()
+                    sessionInfoSource = nil
+                    terminalHeightWhileShowingTabPanel = nil
                 }
                 .onChange(of: activeService?.session?.state) {
                     if activeSessionHasBlockingForm {
@@ -1235,23 +1312,29 @@
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    windowActionsMenu(window)
-                        .popover(isPresented: $showSessionInfo) {
-                            sessionInfoPopover
-                        }
+                    Button(action: openWindowActions) {
+                        Label("More", symbol: .ellipsisCircle)
+                    }
+                    .accessibilityIdentifier("window-actions-\(window.stableId)")
+                    .tint(activeService?.isYoloModeEnabled == true ? .red : nil)
+                    .popover(item: $sessionInfoSource) { source in
+                        sessionInfoPopover(source.service)
+                    }
                 }
             }
         }
 
         private func windowActionsMenu(_ window: TmuxWindow) -> some View {
-            let actions = windowActions(window, includesWindowManagement: true)
+            let actions = windowActions(window, includesWindowManagement: true, choose: { action in
+                chooseWindowMenuAction { performWindowTabAction(action, closeSource: window) }
+            })
             let pane = window.panes.first(where: { $0.paneId == activePaneId }) ?? window.activePane
-            let service = activeService
+            let service = activeService.flatMap { $0.paneId == pane?.paneId ? $0 : nil }
             var state = actions.menuState(hostID: hostId)
             state.showsHookTrust = relayClient.hostSupportsAgentHookTrust && pane?.agentSession?.pluginID == "codex"
             state.canTrustHooks = !isApprovingHooks && relayClient.isHostConnected && pane.map(AgentHookTrustMenu.isReady) == true
             state.showsWorkflow = workflowNavigation != nil && relayClient.hostAgentWorkflowVersion == AgentWorkflowWire.version && pane?.agentSession != nil
-            state.canCopy = activeCopyAction != nil
+            state.canCopy = pane.map { terminalCopyActions[$0.paneId] != nil } == true
             state.sendsMouseEvents = activePaneId.map(mouseReportingPaneIDs.contains) == true
             state.hasActiveSession = service?.session != nil
             state.isYoloModeEnabled = service?.isYoloModeEnabled == true
@@ -1268,7 +1351,10 @@
                         openWorkflow(for: pane)
                     }
                 },
-                copyText: { activeCopyAction?() },
+                copyText: {
+                    guard let pane, containsVisiblePane(pane) else { return }
+                    terminalCopyActions[pane.paneId]?()
+                },
                 setMouseReporting: { enabled in
                     guard let paneID = state.focusedPaneID else { return }
                     if enabled {
@@ -1277,12 +1363,18 @@
                         mouseReportingPaneIDs.remove(paneID)
                     }
                 },
-                toggleYolo: {
-                    guard let service = activeService else { return }
-                    let newValue = !service.isYoloModeEnabled
-                    Task { await service.sendCommand(.setYoloMode(enabled: newValue)) }
+                setYoloMode: { enabled in
+                    guard let service else { return }
+                    Task {
+                        guard service.session != nil else { return }
+                        await service.sendCommand(.setYoloMode(enabled: enabled))
+                    }
                 },
-                showSessionInfo: { showSessionInfo = true }
+                showSessionInfo: {
+                    guard let pane, let service, containsVisiblePane(pane) else { return }
+                    sessionInfoSource = SessionInfoSource(pane: pane, service: service)
+                },
+                choose: chooseWindowMenuAction
             )
             .equatable()
         }
@@ -1361,7 +1453,8 @@
         private func windowActions(
             _ window: TmuxWindow?,
             includesWindowManagement: Bool = false,
-            scope: WindowShortcutScope = .terminal
+            scope: WindowShortcutScope = .terminal,
+            choose: ((WindowTabAction) -> Void)? = nil
         ) -> WindowTabActions {
             WindowTabActions(
                 window: window,
@@ -1384,7 +1477,7 @@
                 restartUnavailableReason: sessionStore.agentRestartUnavailableReason(hostID: hostId, isConnected: relayClient.isHostConnected),
                 logoutUnavailableReason: sessionStore.agentRestartUnavailableReason(hostID: hostId, isConnected: relayClient.isHostConnected, logoutBeforeResume: true),
                 restartingAgentPaneIDs: restartingAgentPaneIDs,
-                choose: { action in
+                choose: choose ?? { action in
                     performWindowTabAction(action, preferredPaneID: scope.sourcePaneID)
                 }
             )
@@ -1404,15 +1497,42 @@
         }
 
         private func openWindowTabs() {
-            guard !showsWindowTabs else { return }
+            guard !showsTabPanel else { return }
             pendingWindowTabAction = nil
             // The sheet can hide the keyboard. Keep that space from shifting the bottom-aligned terminal behind it.
-            terminalHeightWhileShowingTabs = terminalIsVisible ? terminalContentHeight : nil
+            terminalHeightWhileShowingTabPanel = terminalIsVisible ? terminalContentHeight : nil
+            windowTabsArePresented = true
             showsWindowTabs = true
         }
 
+        private func openWindowActions() {
+            guard !showsTabPanel, let visibleTerminalWindow else { return }
+            pendingWindowMenuAction = nil
+            windowActionsSource = visibleTerminalWindow
+            terminalHeightWhileShowingTabPanel = terminalContentHeight
+            showsWindowActions = true
+        }
+
+        private func chooseWindowMenuAction(_ action: @escaping @MainActor () -> Void) {
+            guard showsWindowActions else { return }
+            pendingWindowMenuAction = action
+            showsWindowActions = false
+        }
+
+        private func windowActionsDidDismiss() {
+            releaseTabPanelViewport()
+            let action = matchesWindowActionsSource ? pendingWindowMenuAction : nil
+            pendingWindowMenuAction = nil
+            action?()
+            // The selected action may replace the terminal with a different tab or sheet.
+            windowActionsSource = nil
+            if action == nil {
+                fitTerminalIfReady()
+            }
+        }
+
         private var resourceNavigationEnabled: Bool {
-            scenePhase == .active && !isResourceAnnotating && !showsWindowTabs && !creationSheetIsPresented
+            scenePhase == .active && !isResourceAnnotating && !showsTabPanel && !creationSheetIsPresented
                 && !quickActionPresentation.suspendsTerminalInput && !voiceSession.isPresented
         }
 
@@ -1440,7 +1560,7 @@
 
         private var terminalBarSwipe: TerminalBarSwipeGesture {
             TerminalBarSwipeGesture(
-                isEnabled: terminalIsVisible && !showsWindowTabs && !creationSheetIsPresented
+                isEnabled: terminalIsVisible && !showsTabPanel && !creationSheetIsPresented
                     && !quickActionPresentation.isPresented && !voiceSession.isPresented
             ) { direction in
                 switch direction {
@@ -1452,21 +1572,28 @@
             }
         }
 
-        private func windowTabsDidDismiss() {
-            if terminalHeightWhileShowingTabs != nil {
-                // Resume Fit with the grids measured after the height limit is removed.
-                viewportGrids.removeAll()
-                terminalHeightWhileShowingTabs = nil
-            }
-            guard let action = pendingWindowTabAction else {
-                fitTerminalIfReady()
-                return
-            }
-            pendingWindowTabAction = nil
-            performWindowTabAction(action)
+        private func releaseTabPanelViewport() {
+            guard terminalHeightWhileShowingTabPanel != nil else { return }
+            // Resume Fit with the grids measured after the height limit is removed.
+            viewportGrids.removeAll()
+            terminalHeightWhileShowingTabPanel = nil
         }
 
-        private func performWindowTabAction(_ action: WindowTabAction, preferredPaneID: String? = nil) {
+        private func windowTabsDidDismiss() {
+            releaseTabPanelViewport()
+            let action = pendingWindowTabAction
+            pendingWindowTabAction = nil
+            if let action {
+                performWindowTabAction(action)
+            }
+            // Keep the previous terminal covered until the selected tab takes over.
+            windowTabsArePresented = false
+            if action == nil {
+                fitTerminalIfReady()
+            }
+        }
+
+        private func performWindowTabAction(_ action: WindowTabAction, preferredPaneID: String? = nil, closeSource: TmuxWindow? = nil) {
             pendingSimulatorRequest = nil
             pendingResourceRequest = nil
             switch action {
@@ -1552,7 +1679,7 @@
                     renamingWindowBinding = relayClient.workspaceInputState.windowBinding(target: target.stableId)
                     renamingWindow = target
                 case .close:
-                    requestCloseWindow(target)
+                    requestCloseWindow(closeSource ?? target)
                 }
             case let .selectFiles(id):
                 browserSelection.selectedID = nil
@@ -1694,7 +1821,7 @@
         private func selectAdjacentWindow(from sourceWindowID: String, direction: TerminalWindowSwipePolicy.Direction) {
             guard
                 let window, window.id == sourceWindowID, terminalIsVisible,
-                !showsWindowTabs, !creationSheetIsPresented, !quickActionPresentation.suspendsTerminalInput else { return }
+                !showsTabPanel, !creationSheetIsPresented, !quickActionPresentation.suspendsTerminalInput else { return }
             selectAdjacentTopLevel(IOSTopLevelTabID(window: window), direction: direction == .next ? 1 : -1)
         }
 
@@ -2081,11 +2208,6 @@
 
         // MARK: - Pane Terminal
 
-        private var activeCopyAction: (@MainActor () -> Void)? {
-            guard let activePaneId else { return nil }
-            return terminalCopyActions[activePaneId]
-        }
-
         private func paneTerminal(pane: PaneState, windowName: String, windowID: String) -> some View {
             let preparationID = annotationHandoff.request?.id
             let fitWindowID = window?.stableId
@@ -2112,7 +2234,7 @@
                     isActive: terminalIsVisible && pane.paneId == activePaneId,
                     isInputSuspended: terminalInputSuspension.external,
                     isQuickActionInputSuspended: terminalInputSuspension.quickActionEditor,
-                    isViewportMeasurementSuspended: terminalHeightWhileShowingTabs != nil,
+                    isViewportMeasurementSuspended: terminalHeightWhileShowingTabPanel != nil,
                     parentKeyboardRequested: isKeyboardActive,
                     mouseReportingEnabled: mouseReportingPaneIDs.contains(pane.paneId),
                     onKeyboardRequest: { requested in
@@ -2159,6 +2281,20 @@
                     },
                     onCopyActionChange: { action in
                         terminalCopyActions[pane.paneId] = action
+                    },
+                    onCopyPresentationChange: { presented in
+                        if presented {
+                            copySnapshotPaneID = pane.paneId
+                        } else if copySnapshotPaneID == pane.paneId {
+                            copySnapshotPaneID = nil
+                        }
+                    },
+                    onLinkOrAlertPresentationChange: { presented in
+                        if presented {
+                            terminalLinkOrAlertPaneIDs.insert(pane.paneId)
+                        } else {
+                            terminalLinkOrAlertPaneIDs.remove(pane.paneId)
+                        }
                     },
                     onViewportGridChange: { grid in
                         if viewportGrids[pane.paneId] != grid {
@@ -2221,7 +2357,7 @@
 
         private var resizeToFitRequest: ResizeTmuxPane? {
             guard
-                terminalHeightWhileShowingTabs == nil,
+                terminalHeightWhileShowingTabPanel == nil,
                 relayClient.hostSupportsTerminalFit,
                 let window, let layout = TmuxLayoutParser.parse(window.windowLayout),
                 relayClient.workspaceInputState.windowBinding(target: window.stableId) != .unavailable else { return nil }
@@ -2265,7 +2401,7 @@
             let request = automaticTabFit.takeRequest(
                 for: .init(hostID: hostId, sessionName: sessionName, windowID: window?.stableId),
                 isAvailable: relayClient.isHostConnected && relayClient.hostSupportsTerminalFit,
-                isPresentationReady: !creationSheetIsPresented && !showsWindowTabs && scenePhase == .active,
+                isPresentationReady: !creationSheetIsPresented && !showsTabPanel && scenePhase == .active,
                 measuredRequest: resizeToFitRequest
             )
             guard let request, let windowID = window?.stableId else { return }
@@ -2280,7 +2416,7 @@
                 isAvailable: relayClient.isHostConnected && relayClient.hostSupportsTerminalFit,
                 paneIDs: window?.panes.map(\.paneId),
                 measuredRequest: resizeToFitRequest,
-                isPresentationReady: !creationSheetIsPresented && !showsWindowTabs,
+                isPresentationReady: !creationSheetIsPresented && !showsTabPanel,
                 currentSessionBinding: relayClient.workspaceInputState.sessionBinding(name: sessionName)
             )
             // Consume before dispatch, including failures; never retry on later
@@ -2314,8 +2450,8 @@
         }
 
         private func markVisibleTerminalHandled() {
-            guard canAcknowledgeCompletion else { return }
-            activeService?.markHandledIfNeeded()
+            guard canAcknowledgeCompletion, let activeService, activeService.paneId == activePaneId else { return }
+            activeService.markHandledIfNeeded()
         }
 
         /// Creates or clears the SessionDetailService when the active pane changes
@@ -2342,25 +2478,23 @@
             }
         }
 
-        @ViewBuilder private var sessionInfoPopover: some View {
-            if let activeService {
-                NavigationStack {
-                    SessionInfoView(
-                        session: activeService.session,
-                        paneId: activeService.paneId,
-                        isPaneActive: activeService.isPaneActive,
-                        telemetry: activeService.telemetry,
-                        permissionMode: activeService.permissionMode,
-                        permissionModeTrigger: activeService.permissionModeTrigger,
-                        recap: activeService.recap
-                    )
-                    .navigationTitle("Session Info")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Done") {
-                                showSessionInfo = false
-                            }
+        private func sessionInfoPopover(_ service: SessionDetailService) -> some View {
+            NavigationStack {
+                SessionInfoView(
+                    session: service.session,
+                    paneId: service.paneId,
+                    isPaneActive: service.isPaneActive,
+                    telemetry: service.telemetry,
+                    permissionMode: service.permissionMode,
+                    permissionModeTrigger: service.permissionModeTrigger,
+                    recap: service.recap
+                )
+                .navigationTitle("Session Info")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") {
+                            sessionInfoSource = nil
                         }
                     }
                 }
@@ -2520,25 +2654,23 @@
 
         // MARK: - Close Window
 
-        private func requestCloseWindow(_ window: TmuxWindow) {
+        private func requestCloseWindow(_ window: TmuxWindow, requiresConfirmation: Bool = false) {
             let binding = relayClient.workspaceInputState.windowBinding(target: window.stableId)
-            let sessionBinding = relayClient.workspaceInputState.sessionBinding(name: window.sessionName)
             Task {
+                guard validateCloseTarget(window) else { return }
                 let spec = CheckRunningProcesses(target: .window(window.stableId))
                 let result = await relayClient.sendCommand(spec, paneId: "", inputBinding: binding)
                 if case let .success(response) = result {
+                    guard validateCloseTarget(window) else { return }
                     let processes = response.runningProcesses ?? []
-                    let hasResources = fileWorkspace.tabs.contains { $0.hostTab?.resourceSessionID != nil }
-                        || sessionBrowsers.contains { $0.resourceSessionID != nil }
-                        || sessionSimulators.contains { $0.resourceSessionID != nil }
-                    let closesSession = sessionWindows.count == 1 && sessionWindows.first?.stableId == window.stableId && !hasResources
-                    if processes.isEmpty, !closesSession {
+                    let closesSession = closesEntireSession(window)
+                    if processes.isEmpty, !closesSession, !requiresConfirmation {
                         performCloseWindow(window, inputBinding: binding)
                     } else {
                         closeConfirmation = TerminalCloseConfirmation(
                             target: window,
                             runningProcesses: processes,
-                            inputBinding: closesSession ? sessionBinding : binding,
+                            inputBinding: binding,
                             closesSession: closesSession
                         )
                     }
@@ -2551,34 +2683,51 @@
         private func performCloseWindow(_ window: TmuxWindow, inputBinding: ViewerWorkspaceInputBinding, closesSession: Bool = false) {
             let previousCandidates = windowSelectionCandidates
             Task {
-                if closesSession {
-                    let result = await relayClient.sendCommand(
-                        KillTmuxSession(sessionName: window.sessionName), paneId: "", inputBinding: inputBinding
-                    )
-                    if case .success = result {
-                        // Identity-aware destinations leave when the Host removes
-                        // the session from its catalog, including external closes.
-                        if fileWorkspace.recoveryReference == nil {
-                            dismiss()
-                        }
-                    } else if case let .failure(error) = result {
+                guard validateCloseTarget(window) else { return }
+                guard closesSession == closesEntireSession(window) else {
+                    requestCloseWindow(window, requiresConfirmation: true)
+                    return
+                }
+                let spec = CloseTerminalTab(sessionName: window.sessionName, windowID: window.stableId, scope: closesSession ? .session : .window)
+                let result = await relayClient.sendCommand(spec, paneId: "", inputBinding: inputBinding)
+                if case let .failure(error) = result {
+                    if visibleTerminalWindow?.matchesActionSource(window) == true, closesSession != closesEntireSession(window) {
+                        requestCloseWindow(window, requiresConfirmation: true)
+                    } else {
                         commandError = error.localizedDescription
                     }
                     return
                 }
-                let spec = KillTmuxWindow(windowId: window.stableId)
-                let result = await relayClient.sendCommand(spec, paneId: "", inputBinding: inputBinding)
-                if case .success = result {
+                if closesSession {
+                    // Identity-aware destinations leave when the Host removes
+                    // the session from its catalog, including external closes.
+                    if fileWorkspace.recoveryReference == nil {
+                        dismiss()
+                    }
+                } else {
                     // The push may precede the reply and reuse the closed index.
                     // Reconcile by the pre-command identities, preserving a new manual selection.
                     reconcileWindowSelection(
                         candidates: windowSelectionCandidates.filter { $0.stableWindowId != window.stableId },
                         previousCandidates: previousCandidates
                     )
-                } else if case let .failure(error) = result {
-                    commandError = error.localizedDescription
                 }
             }
+        }
+
+        private func closesEntireSession(_ window: TmuxWindow) -> Bool {
+            sessionWindows.count == 1 && sessionWindows.first?.matchesActionSource(window) == true
+                && !fileWorkspace.tabs.contains { $0.hostTab?.resourceSessionID != nil }
+                && !sessionBrowsers.contains { $0.resourceSessionID != nil }
+                && !sessionSimulators.contains { $0.resourceSessionID != nil }
+        }
+
+        private func validateCloseTarget(_ source: TmuxWindow) -> Bool {
+            guard sessionWindows.contains(where: { $0.matchesActionSource(source) }) else {
+                commandError = "The terminal changed. Reopen the tab menu and try again."
+                return false
+            }
+            return true
         }
     }
 

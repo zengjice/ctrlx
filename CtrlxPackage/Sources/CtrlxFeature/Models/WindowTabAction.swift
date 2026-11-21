@@ -2,6 +2,17 @@ import CtrlxCommon
 import CtrlxNetworking
 import Foundation
 
+extension TmuxWindow {
+    func matchesActionSource(_ source: TmuxWindow) -> Bool {
+        guard stableId == source.stableId else { return false }
+        if let identity = source.panes.first?.workspaceIdentity {
+            return identity.isSameWindow(as: panes.first?.workspaceIdentity)
+        }
+        // Legacy window indexes can be reassigned when a window closes.
+        return source.stableId != source.id || !Set(source.panes.map(\.paneId)).isDisjoint(with: panes.map(\.paneId))
+    }
+}
+
 enum WindowTabAction: Equatable, Sendable {
     enum WindowOperation: Equatable, Sendable {
         case select
