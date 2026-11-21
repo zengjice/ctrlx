@@ -54,6 +54,7 @@
         let isActive: Bool
         let isInputSuspended: Bool
         let isQuickActionInputSuspended: Bool
+        let isViewportMeasurementSuspended: Bool
 
         /// Whether a parent-managed multi-pane layout wants the software keyboard.
         /// The selected pane keeps its shortcut bar available even when this is false.
@@ -164,6 +165,7 @@
             isActive: Bool = true,
             isInputSuspended: Bool = false,
             isQuickActionInputSuspended: Bool = false,
+            isViewportMeasurementSuspended: Bool = false,
             parentKeyboardRequested: Bool = false,
             mouseReportingEnabled: Bool = false,
             onKeyboardRequest: (@MainActor (Bool) -> Void)? = nil,
@@ -204,6 +206,7 @@
             self.isActive = isActive
             self.isInputSuspended = isInputSuspended
             self.isQuickActionInputSuspended = isQuickActionInputSuspended
+            self.isViewportMeasurementSuspended = isViewportMeasurementSuspended
             self.parentKeyboardRequested = parentKeyboardRequested
             self.mouseReportingEnabled = mouseReportingEnabled
             self.onKeyboardRequest = onKeyboardRequest
@@ -578,6 +581,7 @@
                         keyboardRequested: inputPresentation.keyboardRequested,
                         onKeyboardRequest: setKeyboardRequested,
                         keyboardIsTransitioning: keyboardIsTransitioning,
+                        isViewportMeasurementSuspended: isViewportMeasurementSuspended,
                         questionExpansionEnabled: scenePhase == .active && isConnected && !inputSuspension.suspendsInput
                             && relayClient.hostSupportsCodexQuestionAcknowledgement
                             && !linkPresentation.suspendsTerminalInput
@@ -1518,6 +1522,7 @@
         let keyboardRequested: Bool
         let onKeyboardRequest: (@MainActor (Bool) -> Void)?
         let keyboardIsTransitioning: Bool
+        var isViewportMeasurementSuspended = false
 
         let questionExpansionEnabled: Bool
         let onExpandCodexQuestions: @MainActor (Int, @escaping @MainActor (Bool) -> Void) -> Bool
@@ -1678,6 +1683,7 @@
             scrollView.onViewportChange = { [weak coordinator = context.coordinator] size in
                 coordinator?.reportViewport(size)
             }
+            context.coordinator.setViewportMeasurementSuspended(isViewportMeasurementSuspended)
             terminalView.onInputPresentationChange = { [weak scrollView] in
                 scrollView?.setNeedsLayout()
             }
@@ -1786,6 +1792,7 @@
             context.coordinator.onKeyboardDismissed = onKeyboardDismissed
             context.coordinator.onInitialPresentation = onInitialPresentation
             context.coordinator.windowSwipe?.onSwitchWindow = onSwitchWindow
+            context.coordinator.setViewportMeasurementSuspended(isViewportMeasurementSuspended)
             (scrollView as? BottomAnchoredTerminalScrollView)?.setKeyboardTransitioning(keyboardIsTransitioning)
 
             context.coordinator.updateInteraction(
@@ -1826,6 +1833,7 @@
             var keyboardDismissalFit = TerminalKeyboardDismissalFit()
             var onInitialPresentation: (@MainActor () -> Void)?
             private(set) var presentationTask: Task<Void, Never>?
+            private var isViewportMeasurementSuspended = false
             private var reportedGrid: TerminalViewportSizing.Grid?
             private var pendingGrid: TerminalViewportSizing.Grid?
             private(set) var viewportReportTask: Task<Void, Never>?
@@ -1837,8 +1845,17 @@
 
             func keyboardTransitionDidFinish(keyboardRequested: Bool) {
                 guard !keyboardRequested, keyboardDismissalFit.keyboardDidHide() else { return }
-                // Reject queued pre-animation measurements and force a fresh
-                // report even when the final cell grid is unchanged.
+                resetViewportMeasurement()
+            }
+
+            func setViewportMeasurementSuspended(_ suspended: Bool) {
+                guard isViewportMeasurementSuspended != suspended else { return }
+                isViewportMeasurementSuspended = suspended
+                resetViewportMeasurement()
+            }
+
+            private func resetViewportMeasurement() {
+                // Drop queued measurements and report again even if the grid is unchanged.
                 viewportReportTask?.cancel()
                 viewportReportTask = nil
                 pendingGrid = nil
@@ -1847,6 +1864,7 @@
             }
 
             func reportViewport(_ size: CGSize?) {
+                guard !isViewportMeasurementSuspended else { return }
                 let grid = size.flatMap { TerminalViewportSizing.grid(viewport: $0, cellSize: cellSize) }
                 guard grid != pendingGrid else { return }
                 pendingGrid = grid

@@ -73,6 +73,8 @@
         @State private var resourceNavigationFeedback = 0
         @State private var showsWindowTabs = false
         @State private var pendingWindowTabAction: WindowTabAction?
+        @State private var terminalContentHeight: CGFloat?
+        @State private var terminalHeightWhileShowingTabs: CGFloat?
 
         /// The currently selected pane (receives keyboard input)
         @State private var activePaneId: String?
@@ -416,6 +418,11 @@
                 if let terminalWindow = displayedTerminalWindow {
                     windowContent(terminalWindow)
                         .id(terminalWindow.id)
+                        .onGeometryChange(for: CGFloat.self, of: \.size.height) { height in
+                            terminalContentHeight = height > 0 ? height : nil
+                        }
+                        .frame(maxHeight: terminalHeightWhileShowingTabs)
+                        .frame(maxHeight: .infinity, alignment: .top)
                         .allowsHitTesting(terminalIsVisible)
                         .accessibilityHidden(!terminalIsVisible)
                 }
@@ -1155,6 +1162,7 @@
                     pendingBrowserLink = nil
                     pendingFileLink = nil
                     showsWindowTabs = false
+                    terminalHeightWhileShowingTabs = nil
                 }
                 .onChange(of: activeService?.session?.state) {
                     if activeSessionHasBlockingForm {
@@ -1396,7 +1404,10 @@
         }
 
         private func openWindowTabs() {
+            guard !showsWindowTabs else { return }
             pendingWindowTabAction = nil
+            // The sheet can hide the keyboard. Keep that space from shifting the bottom-aligned terminal behind it.
+            terminalHeightWhileShowingTabs = terminalIsVisible ? terminalContentHeight : nil
             showsWindowTabs = true
         }
 
@@ -1442,6 +1453,11 @@
         }
 
         private func windowTabsDidDismiss() {
+            if terminalHeightWhileShowingTabs != nil {
+                // Resume Fit with the grids measured after the height limit is removed.
+                viewportGrids.removeAll()
+                terminalHeightWhileShowingTabs = nil
+            }
             guard let action = pendingWindowTabAction else {
                 fitTerminalIfReady()
                 return
@@ -2096,6 +2112,7 @@
                     isActive: terminalIsVisible && pane.paneId == activePaneId,
                     isInputSuspended: terminalInputSuspension.external,
                     isQuickActionInputSuspended: terminalInputSuspension.quickActionEditor,
+                    isViewportMeasurementSuspended: terminalHeightWhileShowingTabs != nil,
                     parentKeyboardRequested: isKeyboardActive,
                     mouseReportingEnabled: mouseReportingPaneIDs.contains(pane.paneId),
                     onKeyboardRequest: { requested in
@@ -2204,6 +2221,7 @@
 
         private var resizeToFitRequest: ResizeTmuxPane? {
             guard
+                terminalHeightWhileShowingTabs == nil,
                 relayClient.hostSupportsTerminalFit,
                 let window, let layout = TmuxLayoutParser.parse(window.windowLayout),
                 relayClient.workspaceInputState.windowBinding(target: window.stableId) != .unavailable else { return nil }
