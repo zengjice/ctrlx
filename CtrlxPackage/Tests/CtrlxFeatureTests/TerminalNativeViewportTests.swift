@@ -216,6 +216,37 @@ struct TerminalNativeViewportTests {
         #expect(grid.rows == 28)
     }
 
+    @Test("Closing Tabs publishes the uncapped viewport even if the grid is unchanged", arguments: [30, 50])
+    func viewportRefreshesAfterTabs(restoredRows: Int) async {
+        let fixture = makeViewport(rows: 57)
+        defer { fixture.close() }
+        let coordinator = TerminalStreamContainerView.Coordinator()
+        coordinator.outerScrollView = fixture.viewport
+        coordinator.cellSize = CGSize(width: 6, height: 13)
+        fixture.viewport.onViewportChange = { coordinator.reportViewport($0) }
+        var rows: [Int] = []
+        coordinator.onViewportGridChange = { rows.append($0?.rows ?? 0) }
+
+        fixture.viewport.frame.size.height = 390
+        fixture.layout()
+        await coordinator.viewportReportTask?.value
+        #expect(rows == [30])
+
+        coordinator.reportViewport(CGSize(width: 414, height: 416))
+        let queuedMeasurement = coordinator.viewportReportTask
+        coordinator.setViewportMeasurementSuspended(true)
+        fixture.layout()
+        await queuedMeasurement?.value
+        #expect(coordinator.viewportReportTask == nil)
+        #expect(rows == [30])
+
+        fixture.viewport.frame.size.height = CGFloat(restoredRows * 13)
+        coordinator.setViewportMeasurementSuspended(false)
+        fixture.viewport.layoutIfNeeded()
+        await coordinator.viewportReportTask?.value
+        #expect(rows == [30, restoredRows])
+    }
+
     @Test("Cursor coordinates include normal-screen scrollback")
     func scrollbackCoordinates() throws {
         let fixture = makeViewport(rows: 57)

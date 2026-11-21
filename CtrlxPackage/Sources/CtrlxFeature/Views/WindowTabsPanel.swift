@@ -53,14 +53,14 @@
                     ScrollView {
                         VStack(spacing: 16) {
                             LazyVStack(spacing: 0) { sharedTabs(layout) }
-                                .background(.background, in: .rect(cornerRadius: 12))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(.background)
                             VStack(alignment: .leading, spacing: 0) { newTabButtons }
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 8)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(.background, in: .rect(cornerRadius: 12))
+                                .background(.background)
                         }
-                        .padding(.horizontal, 16)
                         .padding(.bottom, 16)
                     }
                     .background(Color(uiColor: .systemGroupedBackground))
@@ -69,6 +69,7 @@
                         legacyTabs
                         Section { newTabButtons }
                     }
+                    .listStyle(.grouped)
                 }
             }
             .accessibilityIdentifier("window-tabs-panel")
