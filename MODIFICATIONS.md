@@ -68,6 +68,33 @@
   Intelligence evaluations were not rerun. Unrelated README and temporary-work
   edits are preserved.
 
+## 3.0.176 — Reliable iOS terminal actions and scoped Fork
+
+- Stabilize the iOS terminal viewport around the Tabs sheet. Suspend viewport
+  measurement while the sheet is presented, discard stale queued measurements,
+  and restore from the final layout when it closes. Keep the Needs Attention
+  badge inside its button. Sources: `3ef41750`, `becd948e`.
+- Make iOS More and terminal actions scrollable and bound to the pane and window
+  captured when the menu opened. Add Host-advertised terminal-close support that
+  revalidates the session and window before mutation, protects independently
+  referenced sessions, and keeps completion state unread while the terminal is
+  covered. Source: `5925fa59`.
+- Require explicit Window and Branch names for Mac/iOS Agent Fork, start the Host
+  directory browser at Home, and cancel outstanding photo reads with their
+  operation. See [terminal actions](docs/terminal-quick-actions.md) and
+  [iOS scrolling](docs/swiftterm-ios-scrolling.md).
+- Validation: the focused Swift suites for Fork configuration, viewer workspace
+  input, photo cancellation, close confirmation, native viewport, window tab
+  actions, close commands and tmux recovery passed. Both iOS UI fixtures passed,
+  as did the CtrlX brand and technical boundary checks and diff checks.
+  SwiftFormat lint passed for 30 changed Swift files; the modified
+  `TerminalNativeViewportTests.swift` retains its pre-existing full-file
+  conditional-block indentation violation and was not reformatted into a
+  600-line cosmetic diff.
+- This release builds macOS only. iOS device packaging, real-iPhone interaction,
+  the full E2E suite, the unfiltered unit suite and Apple Intelligence
+  evaluations were not rerun.
+
 ## 3.0.173 — Shared Agent CLI version admission
 
 - Use one version policy for built-in Agent workflow input and automatic resume,
