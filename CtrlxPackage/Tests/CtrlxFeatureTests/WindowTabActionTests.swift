@@ -50,6 +50,28 @@ struct WindowTabActionTests {
         #expect(action.targetWindow(in: windows().filter { $0.stableId == "@1" }) == nil)
     }
 
+    @Test("More actions reject a legacy window that reused the original index")
+    func legacyActionSource() throws {
+        let originalPane = PaneState(paneId: "%2", sessionName: "work", windowIndex: 1)
+        let splitPane = PaneState(paneId: "%3", sessionName: "work", windowIndex: 1, paneIndex: 1)
+        let replacementPane = PaneState(paneId: "%4", sessionName: "work", windowIndex: 1)
+        let original = try #require(TmuxWindow.groupPanes([originalPane, splitPane]).first)
+        let survivingSplit = try #require(TmuxWindow.groupPanes([splitPane]).first)
+        let replacement = try #require(TmuxWindow.groupPanes([replacementPane]).first)
+
+        #expect(replacement.stableId == original.stableId)
+        #expect(!replacement.matchesActionSource(original))
+        #expect(survivingSplit.matchesActionSource(original))
+    }
+
+    @Test("More actions retain a modern window after its index moves")
+    func stableActionSource() throws {
+        let original = try #require(windows().first { $0.stableId == "@2" })
+        let reordered = try #require(windows(5).first { $0.stableId == "@2" })
+        #expect(reordered.id != original.id)
+        #expect(reordered.matchesActionSource(original))
+    }
+
     @Test("Files and Fork use only the chosen window even if focus remains elsewhere")
     func sourcesStayInTarget() throws {
         let action = WindowTabAction.window(stableID: "@2", operation: .openFiles)

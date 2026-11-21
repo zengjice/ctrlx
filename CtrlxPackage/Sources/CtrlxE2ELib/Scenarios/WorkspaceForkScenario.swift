@@ -61,6 +61,8 @@ public enum WorkspaceForkScenario {
             TestStep.macWaitForElementQuery(.identifier("terminal-%0"), timeout: 15, instance: instance)
             TestStep.macCGClickElement(query: .identifier("terminal-%0"), instance: instance)
             openFork(instance: instance)
+            TestStep.macFocusElement(titled: "Fork Name", instance: instance)
+            TestStep.macSetFocusedText("fork-rejected", instance: instance)
             TestStep.tmuxCommand(arguments: ["set-option", "-t", "restore-agents", "@ctrlx-recovery-session", UUID().uuidString])
             TestStep.wait(seconds: 3)
             TestStep.macCGClickElement(query: .allOf([.role("AXButton"), .label("Fork")]), instance: instance)

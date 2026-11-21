@@ -28,7 +28,7 @@ struct TerminalCloseConfirmation<Target>: Identifiable {
             return "Terminal \(paneIndex): \(names)"
         }
         let processes = "The following processes are still running:\n\(descriptions.joined(separator: "\n"))"
-        guard closesSession else { return processes }
+        guard closesSession else { return runningProcesses.isEmpty ? "Close this terminal tab?" : processes }
         let warning = "This is the last terminal tab. Closing it will close the entire session."
         return runningProcesses.isEmpty ? warning : "\(warning)\n\n\(processes)"
     }

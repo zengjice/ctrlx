@@ -4062,6 +4062,10 @@
                         connectionManager: connectionManager
                     )
                 }
+                if case let .closeTerminalTab(spec) = command.command {
+                    guard let self else { return .failure(for: command.id, error: "Host is shutting down.") }
+                    return await handleCloseTerminalTab(command: command, spec: spec)
+                }
 
                 // Handle remote editor submit
                 if case let .submitEditorContent(spec) = command.command {
@@ -4177,6 +4181,7 @@
                     workspaceIdentity: workspaceIdentity,
                     supportsWorkspaceInputIdentity: recoveryHostID != nil,
                     supportsTerminalStreamIdentity: true,
+                    supportsGuardedTerminalTabClose: true,
                     supportsCtrlXAppUpdate: await self?.ctrlXAppUpdateService.isConfigured == true,
                     supportsCtrlXAppUpdateCheck: await self?.ctrlXAppUpdateService.isConfigured == true,
                     ctrlXAppUpdate: await self?.ctrlXAppUpdateService.state,
@@ -4715,6 +4720,27 @@
             } catch {
                 return .failure(for: command.id, error: error.localizedDescription)
             }
+        }
+
+        private func handleCloseTerminalTab(command: CommandMessage, spec: CloseTerminalTab) async -> CommandResponseMessage {
+            let response: CommandResponseMessage
+            do {
+                try await tmuxService.closeTerminalTab(spec, expectedWorkspacePane: command.expectedWorkspacePane) { sessionID in
+                    let catalog = self.independentResourceCatalog
+                    return catalog.files.contains { $0.resourceSessionID == sessionID }
+                        || catalog.browsers.contains { $0.resourceSessionID == sessionID }
+                        || catalog.simulators.contains { $0.resourceSessionID == sessionID }
+                }
+                response = .success(for: command.id)
+            } catch {
+                await tmuxService.refreshPanes()
+                response = .failure(for: command.id, error: error.localizedDescription)
+            }
+            let panes = tmuxService.panes
+            updateResourceSessions(panes)
+            windowManager.updatePaneStates(from: panes)
+            await connectedViewerManager?.pushSessionStateToAll()
+            return response
         }
 
         /// Removes any `$TMPDIR/ctrlx-drop-*` directories left over

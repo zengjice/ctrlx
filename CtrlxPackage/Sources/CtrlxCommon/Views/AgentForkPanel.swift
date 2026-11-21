@@ -159,7 +159,7 @@ public struct AgentForkPanel: View {
     @Environment(\.dismiss) private var dismiss
     @State private var sourceID: String
     @State private var preparation: AgentForkPreparation?
-    @State private var forkName: String
+    @State private var forkName = ""
     @State private var directory = ""
     @State private var targetProviderID: String?
     @State private var acceptsCleanWorktree = false
@@ -174,12 +174,6 @@ public struct AgentForkPanel: View {
         self.configuration = configuration
         self._sourceID = State(initialValue: configuration.sources.first?.paneID ?? "")
         self._showsDirectoryBrowser = State(initialValue: configuration.destination == .otherDirectory)
-        let agentName = switch configuration.sources.first?.pluginID {
-        case "codex": "codex"
-        case "traex": "traex"
-        default: "claude"
-        }
-        self._forkName = State(initialValue: configuration.destination == .worktree ? "" : "\(agentName) fork")
     }
 
     private var source: AgentForkSource? {
@@ -306,7 +300,8 @@ public struct AgentForkPanel: View {
                             DisclosureGroup("Choose Directory…", isExpanded: $showsDirectoryBrowser) {
                                 if showsDirectoryBrowser {
                                     SessionDirectoryBrowser(
-                                        path: $directory, source: directorySource, isCreatingDirectory: $isCreatingDirectory
+                                        path: Binding(get: { directory.isEmpty ? "~/" : directory }, set: { directory = $0 }),
+                                        source: directorySource, isCreatingDirectory: $isCreatingDirectory
                                     )
                                     .padding(.top, 8)
                                 }
@@ -339,7 +334,7 @@ public struct AgentForkPanel: View {
                     Text(configuration.destination == .worktree ? "Window / Worktree Name" : "Window Name")
                         .font(.subheadline.weight(.semibold))
                 #endif
-                TextField("Name", text: $forkName, prompt: configuration.destination == .worktree ? Text("Branch name (required)") : nil)
+                TextField("Name", text: $forkName, prompt: configuration.destination == .worktree ? Text("Branch name (required)") : Text("Window name (required)"))
                     .disabled(isLaunching)
                     .autocorrectionDisabled()
                 #if os(iOS)

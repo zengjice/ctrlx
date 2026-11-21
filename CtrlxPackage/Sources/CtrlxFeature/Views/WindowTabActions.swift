@@ -56,7 +56,6 @@
                     Label("Close Tab", symbol: .rectangleBadgeMinus)
                 }
                 .disabled(!isConnected)
-                Divider()
             }
             openFilesButton(window)
             openBrowserButton(window)

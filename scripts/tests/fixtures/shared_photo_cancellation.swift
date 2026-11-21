@@ -47,6 +47,11 @@ private enum StubBinding { case unavailable }
     @State private var targetBinding = StubBinding.unavailable
     @State private var draftImages: [Int] = []
     @State private var isPreviewPresented = false
+    @State private var attachmentSelectionIsActive = false
+    private let previewCoversTerminal = false
+    private let sourceErrorMessage: String? = nil
+
+    private func onAttachmentPresentationChange(_: Bool) {}
 
     private var canStartInput: Bool {
         operationID == nil

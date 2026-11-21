@@ -26,6 +26,7 @@
         var agentCommandContext: AgentCommandContext? = nil
         var agentPluginID: String? = nil
         var agentPane: WorkspacePaneIdentity? = nil
+        var onAttachmentPresentationChange: @MainActor (Bool) -> Void = { _ in }
 
         /// Editing disables terminal keystrokes, not the panel toggles.
         private var terminalInputEnabled: Bool {
@@ -84,7 +85,8 @@
                     relayClient: relayClient,
                     clipboardPaste: $clipboardPaste,
                     sharedContext: agentPluginID == nil ? nil : phraseContext,
-                    shareReceiverID: shareReceiverID
+                    shareReceiverID: shareReceiverID,
+                    onAttachmentPresentationChange: onAttachmentPresentationChange
                 )
 
                 TerminalVoiceInputButton(

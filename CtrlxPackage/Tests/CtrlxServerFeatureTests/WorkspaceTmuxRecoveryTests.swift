@@ -404,7 +404,7 @@ struct WorkspaceTmuxRecoveryTests {
             let window = try #require(session.windows.first)
             let pane = try #require(window.panes.first)
             let expected: WorkspaceRecoveryClosedTarget = kind == .session ? .session(session.id) : (kind == .window ? .window(window.id) : .pane(pane.id))
-            #expect(try await request.closedTarget(run(request.arguments)) == expected)
+            #expect(try await request.closedTarget(run(request.arguments())) == expected)
             #expect(try await recovery.capture().sessions.isEmpty)
         }
     }
@@ -426,10 +426,145 @@ struct WorkspaceTmuxRecoveryTests {
                 #expect(try await run(["set-option"] + scope + ["-t", request.runtimeID, kind.identityKey, UUID().uuidString]).isSuccess)
             }
             let pid = try await run(["display-message", "-p", "-t", "project:0", "#{pane_pid}"]).stdoutString
-            let result = try await run(request.arguments)
+            let result = try await run(request.arguments())
             #expect(result.isSuccess && result.stdoutString.contains(WorkspaceRecoveryCloseRequest.rejection))
             #expect(throws: WorkspaceRecoveryError.self) { try request.closedTarget(result) }
             #expect(try await run(["display-message", "-p", "-t", "project:0", "#{pane_pid}"]).stdoutString == pid)
+        }
+    }
+
+    enum LastWindowChange: CaseIterable {
+        case unchanged
+        case duplicateLink
+        case added
+        case replaced
+        case resourceAdded
+    }
+
+    @MainActor
+    @Test("Close from the final tab checks the sole window when tmux executes the request", arguments: LastWindowChange.allCases)
+    func guardedLastWindowClose(change: LastWindowChange) async throws {
+        try await withTmux { recovery, run, directory in
+            try #require(try await run(["new-session", "-d", "-s", "project", "/bin/sh"]).isSuccess)
+            let session = try #require(try await recovery.capture().sessions.first)
+            let original = try #require(session.windows.first?.runtimeID)
+            let executable = try #require(TmuxBinaryLocator.liveValue.find())
+            try await withDependencies {
+                $0[ProcessRunner.self] = .liveValue
+                $0.continuousClock = ContinuousClock()
+            } operation: {
+                let service = TmuxService(tmuxPath: executable, socketPath: directory.appendingPathComponent("tmux.sock").path)
+                var expected = [original]
+                var hasResource = false
+                service.workspaceCloseHandler = { operation in
+                    if change == .duplicateLink {
+                        try #require(try await run(["link-window", "-d", "-s", original, "-t", "project:1"]).isSuccess)
+                        let windows = try await run(["list-windows", "-t", "project:", "-F", "#{window_id}"])
+                        #expect(windows.stdoutString.split(separator: "\n").map(String.init) == [original, original])
+                    }
+                    if change == .added || change == .replaced {
+                        let created = try await run(["new-window", "-d", "-P", "-F", "#{window_id}", "-t", "project:", "/bin/sh"])
+                        try #require(created.isSuccess)
+                        expected.append(created.stdoutString.trimmingCharacters(in: .newlines))
+                    }
+                    if change == .replaced {
+                        try #require(try await run(["kill-window", "-t", original]).isSuccess)
+                        expected.removeFirst()
+                    }
+                    hasResource = change == .resourceAdded
+                    _ = try await operation()
+                }
+                let spec = CloseTerminalTab(sessionName: "project", windowID: original, scope: .session)
+                let hasIndependentResources: @MainActor (UUID) -> Bool = { $0 == session.id && hasResource }
+                if change == .unchanged || change == .duplicateLink {
+                    try await service.closeTerminalTab(spec, expectedWorkspacePane: nil, hasIndependentResources: hasIndependentResources)
+                    #expect(try await recovery.capture().sessions.isEmpty)
+                } else {
+                    await #expect(throws: WorkspaceRecoveryCloseRequest.scopeChanged) {
+                        try await service.closeTerminalTab(spec, expectedWorkspacePane: nil, hasIndependentResources: hasIndependentResources)
+                    }
+                    let current = try #require(try await recovery.capture().sessions.first)
+                    #expect(Set(current.windows.map(\.runtimeID)) == Set(expected))
+                }
+            }
+        }
+    }
+
+    enum WindowCloseChange: CaseIterable {
+        case unchanged
+        case lastTerminal
+        case resourceRemains
+        case lastResourceClosed
+        case linkedToSoleWindow
+        case linkedToDuplicateWindow
+        case linkedWithOtherWindow
+    }
+
+    @MainActor
+    @Test("Closing a tab preserves every session unless independent resources keep the requested session open", arguments: WindowCloseChange.allCases)
+    func guardedWindowClose(change: WindowCloseChange) async throws {
+        try await withTmux { recovery, run, directory in
+            try #require(try await run(["new-session", "-d", "-s", "project", "/bin/sh"]).isSuccess)
+            try #require(try await run(["new-window", "-d", "-t", "project:", "-n", "other", "/bin/sh"]).isSuccess)
+            let session = try #require(try await recovery.capture().sessions.first)
+            let original = try #require(session.windows.first?.runtimeID)
+            let other = try #require(session.windows.last?.runtimeID)
+            let executable = try #require(TmuxBinaryLocator.liveValue.find())
+            try await withDependencies {
+                $0[ProcessRunner.self] = .liveValue
+                $0.continuousClock = ContinuousClock()
+            } operation: {
+                let service = TmuxService(tmuxPath: executable, socketPath: directory.appendingPathComponent("tmux.sock").path)
+                let linked = change == .linkedToSoleWindow || change == .linkedToDuplicateWindow || change == .linkedWithOtherWindow
+                var hasResource = change == .lastResourceClosed || change == .resourceRemains
+                service.workspaceCloseHandler = { operation in
+                    if linked {
+                        try #require(try await run(["new-session", "-d", "-s", "linked", "/bin/sh"]).isSuccess)
+                        let placeholder = try await run(["display-message", "-p", "-t", "linked:", "#{window_id}"]).stdoutString.trimmingCharacters(in: .newlines)
+                        try #require(try await run(["link-window", "-d", "-s", original, "-t", "linked:1"]).isSuccess)
+                        if change != .linkedToSoleWindow {
+                            try #require(try await run(["link-window", "-d", "-s", original, "-t", "linked:2"]).isSuccess)
+                        }
+                        if change != .linkedWithOtherWindow {
+                            try #require(try await run(["kill-window", "-t", placeholder]).isSuccess)
+                        }
+                    } else if change != .unchanged {
+                        try #require(try await run(["kill-window", "-t", other]).isSuccess)
+                    }
+                    if change == .lastResourceClosed {
+                        hasResource = false
+                    }
+                    _ = try await operation()
+                }
+                let spec = CloseTerminalTab(sessionName: "project", windowID: original, scope: .window)
+                let hasIndependentResources: @MainActor (UUID) -> Bool = { $0 == session.id && hasResource }
+                if change == .unchanged || change == .resourceRemains || change == .linkedWithOtherWindow {
+                    try await service.closeTerminalTab(spec, expectedWorkspacePane: nil, hasIndependentResources: hasIndependentResources)
+                    let live = try await recovery.capture()
+                    if change == .resourceRemains {
+                        #expect(live.sessions.isEmpty)
+                    } else {
+                        #expect(live.sessions.first(where: { $0.id == session.id })?.windows.map(\.runtimeID) == [other])
+                        if change == .linkedWithOtherWindow {
+                            let linked = try #require(live.sessions.first { $0.name == "linked" })
+                            #expect(linked.windows.count == 1)
+                            #expect(linked.windows.first?.runtimeID != original)
+                        }
+                    }
+                } else {
+                    await #expect(throws: WorkspaceRecoveryCloseRequest.scopeChanged) {
+                        try await service.closeTerminalTab(spec, expectedWorkspacePane: nil, hasIndependentResources: hasIndependentResources)
+                    }
+                    let survivors = try await recovery.capture().sessions
+                    let project = try #require(survivors.first { $0.id == session.id })
+                    #expect(project.windows.map(\.runtimeID) == (linked ? [original, other] : [original]))
+                    if linked {
+                        let windows = try await run(["list-windows", "-t", "linked:", "-F", "#{window_id}"])
+                        try #require(windows.isSuccess)
+                        #expect(windows.stdoutString.split(separator: "\n").map(String.init) == (change == .linkedToDuplicateWindow ? [original, original] : [original]))
+                    }
+                }
+            }
         }
     }
 
@@ -443,7 +578,7 @@ struct WorkspaceTmuxRecoveryTests {
             let request = try WorkspaceRecoveryCloseRequest(kind: .window, output: queried.stdoutString)
             #expect(try await run(["move-window", "-s", "project:0", "-t", "project:7", ";", "new-window", "-d", "-t", "project:0", "/bin/sh"]).isSuccess)
             let pid = try await run(["display-message", "-p", "-t", "project:0", "#{pane_pid}"]).stdoutString
-            #expect(try await request.closedTarget(run(request.arguments)) == .window(window.id))
+            #expect(try await request.closedTarget(run(request.arguments())) == .window(window.id))
             let after = try await recovery.capture()
             #expect(after.sessions.first?.windows.map(\.index) == [0])
             #expect(try await run(["display-message", "-p", "-t", "project:0", "#{pane_pid}"]).stdoutString == pid)

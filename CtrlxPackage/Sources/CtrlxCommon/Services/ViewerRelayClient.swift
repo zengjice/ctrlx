@@ -641,6 +641,8 @@ final public class ViewerRelayClient {
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to paste clipboard text"))
         case let .resizeTmuxPane(spec) where spec.userInitiated == true && !hostSupportsTerminalFit:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to fit terminal panes"))
+        case .closeTerminalTab where !workspaceInputState.supportsGuardedTerminalTabClose:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to close terminal tabs from this device."))
         default:
             break
         }
@@ -670,6 +672,8 @@ final public class ViewerRelayClient {
             targetBinding = workspaceInputState.windowBinding(target: spec.windowId)
         case let .killTmuxSession(spec):
             targetBinding = workspaceInputState.sessionBinding(name: spec.sessionName)
+        case let .closeTerminalTab(spec):
+            targetBinding = workspaceInputState.windowBinding(target: spec.windowID)
         case let .renameTmuxSession(spec):
             targetBinding = workspaceInputState.sessionBinding(name: spec.sessionName)
         case let .setSessionDescription(spec):
@@ -904,6 +908,8 @@ final public class ViewerRelayClient {
         case let .killTmuxWindow(spec):
             return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .killTmuxSession(spec):
+            return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
+        case let .closeTerminalTab(spec):
             return (try? await sendCommand(spec, paneId: "", inputBinding: inputBinding).get()) != nil
         case let .sendDroppedFiles(spec):
             return (try? await sendCommand(spec, paneId: paneId, inputBinding: inputBinding).get()) != nil

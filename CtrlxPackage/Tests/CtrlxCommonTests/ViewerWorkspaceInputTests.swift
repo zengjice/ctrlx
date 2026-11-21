@@ -4,6 +4,21 @@ import Testing
 @testable import CtrlxCommon
 
 struct ViewerWorkspaceInputTests {
+    @Test("Guarded terminal tab closure requires the connected Host to advertise support")
+    func guardedTerminalTabCloseCapability() throws {
+        var input = ViewerWorkspaceInputState()
+        #expect(!input.supportsGuardedTerminalTabClose)
+        let state = SessionStateMessage(pairId: "", paneStates: [:], supportsGuardedTerminalTabClose: true).withPairId("pair")
+        let encoded = try JSONEncoder().encode(state)
+        try input.update(JSONDecoder().decode(SessionStateMessage.self, from: encoded))
+        #expect(input.supportsGuardedTerminalTabClose)
+        input.invalidate()
+        #expect(!input.supportsGuardedTerminalTabClose)
+        input.update(state)
+        input.update(.init(pairId: "older Host", paneStates: [:]))
+        #expect(!input.supportsGuardedTerminalTabClose)
+    }
+
     @Test("Creation replies wait for their own Host incarnation and cannot select recycled pane IDs")
     func createdSessionBinding() {
         var input = ViewerWorkspaceInputState()

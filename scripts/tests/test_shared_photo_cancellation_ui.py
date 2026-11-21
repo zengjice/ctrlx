@@ -31,6 +31,7 @@ class SharedPhotoCancellationUITests(unittest.TestCase):
             "private func receiveSharedPhotos()", "private func beginOperation()",
             "private func finishOperation(", "private func cancelOperation()",
             "private func finishSharedImport()",
+            "private func setAttachmentSelectionActive(", "private func publishAttachmentPresentation()",
         ))
         reservation = "@MainActor\n" + declaration(source, "final private class SharedPhotoImport")
         context = (SOURCES / "CtrlxCommon/Models/TerminalPhraseContext.swift").read_text()

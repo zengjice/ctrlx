@@ -17,6 +17,7 @@
         @Binding var clipboardPaste: TerminalImagePasteRequest?
         var sharedContext: TerminalPhraseContext? = nil
         var shareReceiverID: UUID? = nil
+        var onAttachmentPresentationChange: @MainActor (Bool) -> Void = { _ in }
         @Environment(IOSSettings.self) private var settings
         @Environment(IOSShareInbox.self) private var shareInbox
 
@@ -24,11 +25,14 @@
 
         @State private var targetPaneId: String?
         @State private var targetBinding = ViewerWorkspaceInputBinding.unavailable
-        @State private var selectedPhotos: [PhotosPickerItem] = []
+        @State private var selectedPhotos: [NSItemProvider] = []
         @State private var isPhotoPickerPresented = false
         @State private var isFileImporterPresented = false
         @State private var isCameraPresented = false
+        @State private var capturedPhoto: Data?
+        @State private var attachmentSelectionIsActive = false
         @State private var isPreviewPresented = false
+        @State private var previewCoversTerminal = false
         @State private var draftImages: [ImageUploadDraftItem] = []
         @State private var operationTask: Task<Void, Never>?
         @State private var operationID: UUID?
@@ -71,35 +75,30 @@
             .opacity(canStartInput ? 1 : 0.4)
             .accessibilityLabel("Attachments")
             .accessibilityIdentifier("terminal-attachment-control")
-            .photosPicker(
-                isPresented: $isPhotoPickerPresented,
-                selection: $selectedPhotos,
-                maxSelectionCount: Self.maximumImages,
-                matching: .images,
-                preferredItemEncoding: .automatic
-            )
+            .sheet(isPresented: $isPhotoPickerPresented, onDismiss: photoPickerDidDismiss) {
+                AttachmentPhotoPicker(selectionLimit: Self.maximumImages) { results in
+                    selectedPhotos = results.map(\.itemProvider)
+                    isPhotoPickerPresented = false
+                }
+            }
             .fileImporter(
                 isPresented: $isFileImporterPresented,
                 allowedContentTypes: [.image],
                 allowsMultipleSelection: true,
-                onCompletion: handleFileSelection
+                onCompletion: handleFileSelection,
+                onCancellation: cancelAttachmentSelection
             )
-            .fullScreenCover(isPresented: $isCameraPresented) {
+            .fullScreenCover(isPresented: $isCameraPresented, onDismiss: cameraDidDismiss) {
                 CameraImagePicker(
                     onCapture: { data in
+                        capturedPhoto = data
                         isCameraPresented = false
-                        startPreparation([
-                            ImageUploadSource(displayName: "Camera Photo", data: data),
-                        ])
                     },
-                    onCancel: {
-                        isCameraPresented = false
-                        targetPaneId = nil
-                    }
+                    onCancel: { isCameraPresented = false }
                 )
                 .ignoresSafeArea()
             }
-            .sheet(isPresented: $isPreviewPresented, onDismiss: clearDraft) {
+            .sheet(isPresented: $isPreviewPresented, onDismiss: previewDidDismiss) {
                 ImageUploadPreviewSheet(
                     images: $draftImages,
                     isUploading: operationID != nil,
@@ -110,24 +109,15 @@
                 )
                 .interactiveDismissDisabled(operationID != nil)
             }
-            .onChange(of: selectedPhotos) { _, items in
-                guard !items.isEmpty else { return }
-                selectedPhotos = []
-                loadPhotos(items)
-            }
             .onChange(of: clipboardPaste?.id) { _, _ in
                 guard let request = clipboardPaste else { return }
                 clipboardPaste = nil
                 guard canStartInput, request.paneId == paneId, captureTargetPane() else { return }
                 prepareClipboardImage(request.image)
             }
+            .onAppear(perform: publishAttachmentPresentation)
             .onDisappear(perform: handleDisappear)
             .onChange(of: shareInbox.photoRequest?.id) { receiveSharedPhotos() }
-            .onChange(of: isPreviewPresented) {
-                if !isPreviewPresented {
-                    receiveSharedPhotos()
-                }
-            }
             .onChange(of: canStartInput) {
                 if canStartInput {
                     receiveSharedPhotos()
@@ -143,11 +133,11 @@
                 get: { sourceErrorMessage != nil },
                 set: {
                     if !$0 {
-                        sourceErrorMessage = nil
+                        setSourceErrorMessage(nil)
                     }
                 }
             )) {
-                Button("OK") { sourceErrorMessage = nil }
+                Button("OK") { setSourceErrorMessage(nil) }
             } message: {
                 if let sourceErrorMessage {
                     Text(sourceErrorMessage)
@@ -157,6 +147,7 @@
 
         private var canStartInput: Bool {
             relayClient.isHostConnected && paneId != nil && operationID == nil
+                && !attachmentSelectionIsActive && !previewCoversTerminal
         }
 
         private func receiveSharedPhotos() {
@@ -187,20 +178,33 @@
 
         private func choosePhotos() {
             guard captureTargetPane() else { return }
+            setAttachmentSelectionActive(true)
             isPhotoPickerPresented = true
         }
 
         private func chooseFiles() {
             guard captureTargetPane() else { return }
+            setAttachmentSelectionActive(true)
             isFileImporterPresented = true
         }
 
         private func takePhoto() {
             guard
-                captureTargetPane(),
-                UIImagePickerController.isSourceTypeAvailable(.camera)
+                UIImagePickerController.isSourceTypeAvailable(.camera),
+                captureTargetPane()
             else { return }
+            setAttachmentSelectionActive(true)
             isCameraPresented = true
+        }
+
+        private func cameraDidDismiss() {
+            let photo = capturedPhoto
+            capturedPhoto = nil
+            guard let photo, targetPaneId != nil else {
+                cancelAttachmentSelection()
+                return
+            }
+            startPreparation([ImageUploadSource(displayName: "Camera Photo", data: photo)])
         }
 
         private func pasteImage() {
@@ -211,7 +215,7 @@
         private func prepareClipboardImage(_ image: ClipboardImage?) {
             guard let image else {
                 targetPaneId = nil
-                sourceErrorMessage = ImageUploadError.noClipboardImage.localizedDescription
+                setSourceErrorMessage(ImageUploadError.noClipboardImage.localizedDescription)
                 return
             }
             startPreparation([
@@ -224,13 +228,18 @@
             guard relayClient.isHostConnected, let paneId else { return false }
             targetPaneId = paneId
             targetBinding = relayClient.workspaceInputState.binding(paneID: paneId)
-            sourceErrorMessage = nil
+            setSourceErrorMessage(nil)
             uploadErrorMessage = nil
             return true
         }
 
-        private func loadPhotos(_ items: [PhotosPickerItem]) {
-            guard let currentOperationID = beginOperation() else { return }
+        private func photoPickerDidDismiss() {
+            let items = selectedPhotos
+            selectedPhotos = []
+            guard !items.isEmpty, let currentOperationID = beginOperation() else {
+                cancelAttachmentSelection()
+                return
+            }
 
             operationTask = Task { @MainActor in
                 do {
@@ -238,11 +247,10 @@
                     sources.reserveCapacity(items.count)
                     for (index, item) in items.enumerated() {
                         try Task.checkCancellation()
-                        guard let data = try await item.loadTransferable(type: Data.self) else {
-                            throw ImageUploadError.unreadable("Photo \(index + 1)")
-                        }
+                        let name = "Photo \(index + 1)"
+                        let data = try await loadPhoto(item, name: name)
                         sources.append(ImageUploadSource(
-                            displayName: "Photo \(index + 1)",
+                            displayName: name,
                             data: data
                         ))
                     }
@@ -256,14 +264,29 @@
             }
         }
 
+        private func loadPhoto(_ provider: NSItemProvider, name: String) async throws -> Data {
+            guard let type = provider.registeredTypeIdentifiers.first(where: { UTType($0)?.conforms(to: .image) == true }) else {
+                throw ImageUploadError.unreadable(name)
+            }
+            return try await AttachmentPhotoRead().load(provider, type: type, missingData: ImageUploadError.unreadable(name))
+        }
+
         private func handleFileSelection(_ result: Result<[URL], Error>) {
             switch result {
             case let .success(urls):
                 loadFiles(urls)
             case let .failure(error):
-                targetPaneId = nil
-                sourceErrorMessage = error.localizedDescription
+                setSourceErrorMessage(error.localizedDescription)
             }
+            if operationID == nil {
+                cancelAttachmentSelection()
+            }
+        }
+
+        private func cancelAttachmentSelection() {
+            targetPaneId = nil
+            targetBinding = .unavailable
+            setAttachmentSelectionActive(false)
         }
 
         private func loadFiles(_ urls: [URL]) {
@@ -273,7 +296,7 @@
             }
             guard urls.count <= Self.maximumImages else {
                 targetPaneId = nil
-                sourceErrorMessage = ImageUploadError.tooManyImages.localizedDescription
+                setSourceErrorMessage(ImageUploadError.tooManyImages.localizedDescription)
                 return
             }
             guard let currentOperationID = beginOperation() else { return }
@@ -325,6 +348,7 @@
             _ sources: [ImageUploadSource],
             operationID: UUID
         ) async throws {
+            try Task.checkCancellation()
             guard !sources.isEmpty, sources.count <= Self.maximumImages else {
                 throw ImageUploadError.tooManyImages
             }
@@ -352,8 +376,9 @@
                 )
             }
             if settings.confirmImageUploads {
-                isPreviewPresented = true
+                presentPreview()
             } else {
+                setAttachmentSelectionActive(false)
                 await uploadDraft(operationID: operationID)
             }
         }
@@ -431,7 +456,27 @@
 
         private func presentUploadError(_ error: Error) {
             uploadErrorMessage = error.localizedDescription
+            presentPreview()
+        }
+
+        private func presentPreview() {
+            previewCoversTerminal = true
+            publishAttachmentPresentation()
             isPreviewPresented = true
+        }
+
+        private func setAttachmentSelectionActive(_ active: Bool) {
+            attachmentSelectionIsActive = active
+            publishAttachmentPresentation()
+        }
+
+        private func setSourceErrorMessage(_ message: String?) {
+            sourceErrorMessage = message
+            publishAttachmentPresentation()
+        }
+
+        private func publishAttachmentPresentation() {
+            onAttachmentPresentationChange(attachmentSelectionIsActive || previewCoversTerminal || sourceErrorMessage != nil)
         }
 
         private func beginOperation() -> UUID? {
@@ -445,16 +490,20 @@
             guard operationID == id else { return }
             operationTask = nil
             operationID = nil
+            setAttachmentSelectionActive(false)
         }
 
         private func presentSourceError(_ error: Error, operationID: UUID) {
             guard self.operationID == operationID else { return }
-            sourceErrorMessage = error.localizedDescription
+            setSourceErrorMessage(error.localizedDescription)
             targetPaneId = nil
             finishSharedImport()
         }
 
-        private func clearDraft() {
+        private func previewDidDismiss() {
+            guard !isPreviewPresented else { return }
+            previewCoversTerminal = false
+            publishAttachmentPresentation()
             guard operationID == nil else { return }
             draftImages = []
             targetPaneId = nil
@@ -469,12 +518,14 @@
                 !isPhotoPickerPresented,
                 !isFileImporterPresented,
                 !isCameraPresented,
-                !isPreviewPresented
+                !previewCoversTerminal
             else { return }
             cancelOperation()
+            setSourceErrorMessage(nil)
         }
 
         private func cancelOperation() {
+            let wasPreparing = operationID != nil
             operationTask?.cancel()
             operationTask = nil
             operationID = nil
@@ -482,10 +533,47 @@
             targetPaneId = nil
             targetBinding = .unavailable
             finishSharedImport()
+            if wasPreparing {
+                setAttachmentSelectionActive(false)
+            }
         }
 
         private func finishSharedImport() {
             sharedImport = nil
+        }
+    }
+
+    /// Both confirmation and cancellation arrive through the same delegate callback.
+    private struct AttachmentPhotoPicker: UIViewControllerRepresentable {
+        let selectionLimit: Int
+        let onSelection: @MainActor ([PHPickerResult]) -> Void
+
+        func makeCoordinator() -> Coordinator {
+            Coordinator(onSelection: onSelection)
+        }
+
+        func makeUIViewController(context: Context) -> PHPickerViewController {
+            var configuration = PHPickerConfiguration()
+            configuration.filter = .images
+            configuration.selectionLimit = selectionLimit
+            configuration.preferredAssetRepresentationMode = .automatic
+            let picker = PHPickerViewController(configuration: configuration)
+            picker.delegate = context.coordinator
+            return picker
+        }
+
+        func updateUIViewController(_: PHPickerViewController, context _: Context) { }
+
+        final class Coordinator: NSObject, PHPickerViewControllerDelegate {
+            let onSelection: @MainActor ([PHPickerResult]) -> Void
+
+            init(onSelection: @escaping @MainActor ([PHPickerResult]) -> Void) {
+                self.onSelection = onSelection
+            }
+
+            func picker(_: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+                onSelection(results)
+            }
         }
     }
 

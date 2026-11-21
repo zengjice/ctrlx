@@ -3112,27 +3112,52 @@ final public class TmuxService {
         try await closeTarget(.window, target: windowTarget, expected: expectedWorkspacePane)
     }
 
-    func workspaceCloseRequest(_ kind: WorkspaceRecoveryCloseRequest.Kind, target: String, expected: WorkspacePaneIdentity?) async throws -> WorkspaceRecoveryCloseRequest {
-        let identity = try await runTmuxCommand(["display-message", "-p", "-t", target, kind.captureFormat])
+    func closeTerminalTab(
+        _ spec: CloseTerminalTab,
+        expectedWorkspacePane: WorkspacePaneIdentity?,
+        hasIndependentResources: @escaping @MainActor (UUID) -> Bool
+    ) async throws {
+        let kind: WorkspaceRecoveryCloseRequest.Kind = spec.scope == .session ? .session : .window
+        let target = Self.sessionTarget(spec.sessionName) + spec.windowID
+        let request = try await workspaceCloseRequest(kind, target: target, expected: expectedWorkspacePane, tabWindowID: spec.windowID)
+        try await performWorkspaceClose { [self] in
+            let keepsResources = request.resourceSessionID.map(hasIndependentResources) == true
+            if spec.scope == .session, keepsResources {
+                throw WorkspaceRecoveryCloseRequest.scopeChanged
+            }
+            return try await request.closedTarget(runTmuxCommand(request.arguments(keepingResourceSession: keepsResources)))
+        }
+        await refreshPanes()
+    }
+
+    func workspaceCloseRequest(
+        _ kind: WorkspaceRecoveryCloseRequest.Kind, target: String, expected: WorkspacePaneIdentity?, tabWindowID: String? = nil
+    ) async throws -> WorkspaceRecoveryCloseRequest {
+        let format = kind.captureFormat + (tabWindowID == nil ? "" : WorkspaceRecoveryCloseRequest.terminalTabContextFormat)
+        let identity = try await runTmuxCommand(["display-message", "-p", "-t", target, format])
         guard identity.isSuccess else { throw TmuxError.commandFailed(message: identity.stderrString) }
-        return try WorkspaceRecoveryCloseRequest(kind: kind, output: identity.stdoutString, expected: expected)
+        return try WorkspaceRecoveryCloseRequest(kind: kind, output: identity.stdoutString, expected: expected, tabWindowID: tabWindowID)
     }
 
     private func closeTarget(_ kind: WorkspaceRecoveryCloseRequest.Kind, target: String, expected: WorkspacePaneIdentity?) async throws {
         if workspaceCloseHandler != nil || expected != nil {
             let request = try await workspaceCloseRequest(kind, target: target, expected: expected)
-            if let handler = workspaceCloseHandler {
-                try await handler { [self] in
-                    try await request.closedTarget(runTmuxCommand(request.arguments))
-                }
-            } else {
-                _ = try await request.closedTarget(runTmuxCommand(request.arguments))
+            try await performWorkspaceClose { [self] in
+                try await request.closedTarget(runTmuxCommand(request.arguments()))
             }
         } else {
             let result = try await runTmuxCommand(["kill-\(kind.rawValue)", "-t", target])
             guard result.isSuccess else { throw TmuxError.commandFailed(message: result.stderrString) }
         }
         await refreshPanes()
+    }
+
+    private func performWorkspaceClose(_ operation: WorkspaceRecoveryCloseOperation) async throws {
+        if let handler = workspaceCloseHandler {
+            try await handler(operation)
+        } else {
+            _ = try await operation()
+        }
     }
 
     // MARK: - Custom Descriptions and Colors

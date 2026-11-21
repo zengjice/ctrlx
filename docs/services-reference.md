@@ -1074,16 +1074,17 @@ the same source and process incarnation. A failed native-history lookup remains
 visible in the saved pane and is retried on later checkpoints, because the
 history file may be written after the Agent's initial lifecycle notification.
 
-On iOS, open the window-title menu → **Fork → In Current Directory / In Other
+On iOS, open the terminal's **More** list → **Fork → In Current Directory / In Other
 Directory… / In New Worktree…**. The selected pane is the default source when
 there are multiple recognized Agents. Mac and iOS share `AgentForkPanel`,
 including separate current/other-directory destinations, worktree review,
 dirty-file acknowledgement, target-directory browsing and retrying the same
-request UUID. The iPhone sends the captured source to its specific Host; it
-never expands `~`, constructs an Agent command or touches local Git. Creation is
-serialized with New Terminal/New Agent. The returned pane is selected when state
-arrives, unless the user has manually changed windows or left the screen while
-creation was pending.
+request UUID. Enter a window or worktree name for each Fork. The other-directory
+browser initially lists the Host's home. Choose a folder or type a path to set
+the required destination. The iPhone sends the captured source to its specific
+Host, which resolves `~`, constructs the Agent command and performs any Git
+operations. Creation is serialized with New Terminal and New Agent. The returned
+pane is selected when state arrives if the user is still on the original window.
 
 `AgentForkService` rechecks the captured pane/window/session/Agent UUID/cwd and
 workspace incarnation through preparation, checkout and cached retries. Sources
