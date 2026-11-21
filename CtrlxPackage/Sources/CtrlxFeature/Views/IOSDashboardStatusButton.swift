@@ -59,20 +59,19 @@
 
         var body: some View {
             Button(action: openAttention) {
-                Symbols.bellFill.image
-                    .foregroundStyle(status.pendingCount > 0 ? Color.accentColor : .primary)
-                    .overlay(alignment: .topTrailing) {
-                        if let count = status.pendingText {
-                            Text(count)
-                                .font(.caption2.weight(.semibold))
-                                .monospacedDigit()
-                                .padding(.horizontal, 3)
-                                .foregroundStyle(.white)
-                                .background(Color.accentColor, in: .capsule)
-                                .fixedSize()
-                                .offset(x: 10, y: -6)
-                        }
+                HStack(alignment: .top, spacing: 2) {
+                    Symbols.bellFill.image
+                        .foregroundStyle(status.pendingCount > 0 ? Color.accentColor : .primary)
+                    if let count = status.pendingText {
+                        Text(count)
+                            .font(.caption2.weight(.semibold))
+                            .monospacedDigit()
+                            .padding(.horizontal, 3)
+                            .foregroundStyle(.white)
+                            .background(Color.accentColor, in: .capsule)
+                            .fixedSize()
                     }
+                }
             }
             .accessibilityLabel("Needs Attention")
             .accessibilityValue(status.attentionAccessibilityValue)
