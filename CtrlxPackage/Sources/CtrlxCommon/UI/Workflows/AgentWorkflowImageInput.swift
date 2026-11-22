@@ -33,8 +33,9 @@ struct AgentWorkflowImageInput: View {
     @State private var progress = 0.0
     @State private var error: String?
     @State private var showingFiles = false
+    @State private var showingPhotoLibrary = false
     #if os(iOS)
-        @State private var showingPhotos = false
+        @State private var showingSystemPhotoPicker = false
         @State private var photos: [PhotosPickerItem] = []
     #endif
 
@@ -47,7 +48,8 @@ struct AgentWorkflowImageInput: View {
         VStack(alignment: .leading, spacing: 8) {
             AgentWorkflowTaskInput(
                 title: title, text: $text, ids: ids, attachments: attachments,
-                add: { showingFiles = true }, photos: photoAction,
+                add: { showingFiles = true }, photos: { showingPhotoLibrary = true },
+                systemPhotoPicker: systemPhotoAction, canAddPhotos: remainingPhotoSlots > 0,
                 receive: receive, remove: { id in ids.removeAll { $0 == id } },
                 progress: request == nil ? nil : (name, progress), error: error,
                 thumbnails: thumbnails
@@ -73,6 +75,11 @@ struct AgentWorkflowImageInput: View {
                 }
             }
         }
+        .sheet(isPresented: $showingPhotoLibrary) {
+            PhotoLibraryPicker(limit: remainingPhotoSlots) { photos in
+                receive(photos.map(AgentWorkflowImageSource.libraryPhoto))
+            }
+        }
         .fileImporter(isPresented: $showingFiles, allowedContentTypes: [.image], allowsMultipleSelection: true) { result in
             switch result {
             case let .success(urls): receive(urls.map(AgentWorkflowImageSource.file))
@@ -80,7 +87,7 @@ struct AgentWorkflowImageInput: View {
             }
         }
         #if os(iOS)
-        .photosPicker(isPresented: $showingPhotos, selection: $photos, maxSelectionCount: max(1, AgentWorkflowWire.maximumAttachments - ids.count), matching: .images)
+        .photosPicker(isPresented: $showingSystemPhotoPicker, selection: $photos, maxSelectionCount: max(1, remainingPhotoSlots), matching: .images)
         .onChange(of: photos) {
             guard !photos.isEmpty else { return }
             receive(photos.map(AgentWorkflowImageSource.photo))
@@ -99,9 +106,13 @@ struct AgentWorkflowImageInput: View {
         }
     }
 
-    private var photoAction: (() -> Void)? {
+    private var remainingPhotoSlots: Int {
+        max(0, AgentWorkflowWire.maximumAttachments - max(ids.count, totalImageCount ?? ids.count) - pendingCount - queuedSources.count)
+    }
+
+    private var systemPhotoAction: (() -> Void)? {
         #if os(iOS)
-            { showingPhotos = true }
+            { showingSystemPhotoPicker = true }
         #else
             nil
         #endif

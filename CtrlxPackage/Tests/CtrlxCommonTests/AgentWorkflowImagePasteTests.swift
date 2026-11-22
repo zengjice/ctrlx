@@ -44,7 +44,8 @@
             var pasted: [AgentWorkflowImageSource] = []
             let root = AgentWorkflowTaskInput(
                 title: "Initial task", text: Binding(get: { text }, set: { text = $0 }), ids: [], attachments: [:],
-                add: { }, photos: nil, receive: { pasted = $0 }, remove: { _ in }, progress: nil, error: nil
+                add: { }, photos: { }, systemPhotoPicker: nil, canAddPhotos: true,
+                receive: { pasted = $0 }, remove: { _ in }, progress: nil, error: nil
             ).padding().frame(width: 500, height: 300)
             let host = NSHostingView(rootView: root)
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 300), styleMask: [.titled], backing: .buffered, defer: false)

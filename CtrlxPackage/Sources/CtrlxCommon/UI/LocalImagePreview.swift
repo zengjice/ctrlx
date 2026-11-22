@@ -4,14 +4,22 @@
 
     /// Local viewing only; this surface never sends input to a Host.
     struct LocalImagePreview: UIViewRepresentable {
-        let image: CGImage
+        let image: UIImage
+
+        init(image: CGImage) {
+            self.image = UIImage(cgImage: image)
+        }
+
+        init(photo: UIImage) {
+            self.image = photo
+        }
 
         func makeUIView(context: Context) -> LocalImageScrollView {
             LocalImageScrollView()
         }
 
         func updateUIView(_ view: LocalImageScrollView, context: Context) {
-            view.update(image: image, identity: "file")
+            view.update(photo: image, identity: "file")
         }
     }
 
@@ -59,14 +67,18 @@
         }
 
         func update(image: CGImage?, identity: String) {
-            let ratio = image.map { CGFloat($0.width) / CGFloat($0.height) } ?? 0
+            update(photo: image.map { UIImage(cgImage: $0) }, identity: identity)
+        }
+
+        func update(photo: UIImage?, identity: String) {
+            let ratio = photo.map { $0.size.width / $0.size.height } ?? 0
             // Tolerate thumbnail rounding against the actual layout, never the previous frame.
             // Controlled input must track every ratio change to preserve its coordinate mapping.
             let tolerance = zoomEnabled ? max(ratio, layoutAspectRatio) * 0.01 : 0
             let changed = self.identity != identity || abs(ratio - layoutAspectRatio) > tolerance
             self.identity = identity
             aspectRatio = ratio
-            picture.image = image.map { UIImage(cgImage: $0) }
+            picture.image = photo
             // New frames (including higher-resolution ones) keep the viewing position.
             if changed {
                 resetZoom()

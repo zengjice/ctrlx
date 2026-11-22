@@ -364,7 +364,9 @@ show/hide, the copy page and exit/re-entry; check for new AttributeGraph cycles.
 
 The bottom input toolbar always shows the complete control row. Its first
 control is **+ / Attachments**, opening Photo Library, image files, Camera and
-Paste Image with the same preview and captured-pane upload flow. Voice input
+Paste Image with the same preview and captured-pane upload flow. In **Photo
+Library…**, tap a thumbnail to pinch or double-tap to zoom before selecting it.
+**System Photo Picker…** is also available. Voice input
 lives in this row, and tapping an empty terminal input area toggles the software
 keyboard through the existing tap routing. The native shortcut accessory keeps
 its keyboard switch. There is no **Top Right** mode or **Button Position** setting;

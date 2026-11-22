@@ -13,6 +13,8 @@
 	<string>CtrlX uses Bluetooth for passkey sign-in with nearby devices in its browser.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>CtrlX uses the microphone to turn your speech into terminal input.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>CtrlX shows and enlarges your photos so you can choose images to attach.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>CtrlX recognizes your speech on this Mac to compose terminal input.</string>
 

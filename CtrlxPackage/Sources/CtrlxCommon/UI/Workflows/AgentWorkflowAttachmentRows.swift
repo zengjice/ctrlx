@@ -7,12 +7,28 @@ struct AgentWorkflowAttachmentRows: View {
     let attachments: [UUID: AgentWorkflowAttachment]
     let remove: (UUID) -> Void
     var thumbnails: [UUID: Data] = [:]
+    @State private var preview: Preview?
+
+    private struct Preview: Identifiable {
+        let id: UUID
+        let name: String
+        let image: PhotoPreviewImage
+    }
 
     var body: some View {
         ForEach(ids, id: \.self) { id in
             HStack {
                 if let data = thumbnails[id] {
-                    AgentWorkflowImageThumbnail(data: data).frame(width: 52, height: 52)
+                    let name = attachments[id]?.name ?? "Image"
+                    Button {
+                        if let image = PhotoPreviewImage(data: data) {
+                            preview = Preview(id: id, name: name, image: image)
+                        }
+                    } label: {
+                        AgentWorkflowImageThumbnail(data: data).frame(width: 52, height: 52)
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Preview \(name)")
                 }
                 AgentWorkflowAttachmentLabel(attachment: attachments[id])
                 Spacer()
@@ -21,6 +37,20 @@ struct AgentWorkflowAttachmentRows: View {
                     .accessibilityLabel("Remove \(attachments[id]?.name ?? "attachment")")
                     .accessibilityIdentifier("workflow-remove-attachment-\(id)")
             }
+        }
+        .sheet(item: $preview) { item in
+            VStack(spacing: 8) {
+                HStack {
+                    Text(item.name).font(.headline).lineLimit(1)
+                    Spacer()
+                    Button("Done") { preview = nil }.keyboardShortcut(.cancelAction)
+                }
+                .padding()
+                ZoomablePhotoPreview(image: item.image)
+            }
+            #if os(macOS)
+            .frame(minWidth: 520, idealWidth: 680, minHeight: 430, idealHeight: 580)
+            #endif
         }
     }
 }

@@ -25,8 +25,9 @@
 
         @State private var targetPaneId: String?
         @State private var targetBinding = ViewerWorkspaceInputBinding.unavailable
-        @State private var selectedPhotos: [NSItemProvider] = []
+        @State private var selectedPhotos: [PhotoSelection] = []
         @State private var isPhotoPickerPresented = false
+        @State private var usesSystemPhotoPicker = false
         @State private var isFileImporterPresented = false
         @State private var isCameraPresented = false
         @State private var capturedPhoto: Data?
@@ -40,10 +41,22 @@
         @State private var uploadErrorMessage: String?
         @State private var sharedImport: SharedPhotoImport?
 
+        private enum PhotoSelection {
+            case library(PhotoLibraryPhoto)
+            case provider(NSItemProvider)
+        }
+
         var body: some View {
             Menu {
                 Button(action: choosePhotos) {
-                    Label("Photo Library", symbol: .photoBadgePlus)
+                    Label("Photo Library…", symbol: .photoBadgePlus)
+                }
+
+                Button {
+                    choosePhotos()
+                    usesSystemPhotoPicker = isPhotoPickerPresented
+                } label: {
+                    Label("System Photo Picker…", symbol: .photo)
                 }
 
                 Button(action: chooseFiles) {
@@ -76,9 +89,15 @@
             .accessibilityLabel("Attachments")
             .accessibilityIdentifier("terminal-attachment-control")
             .sheet(isPresented: $isPhotoPickerPresented, onDismiss: photoPickerDidDismiss) {
-                AttachmentPhotoPicker(selectionLimit: Self.maximumImages) { results in
-                    selectedPhotos = results.map(\.itemProvider)
-                    isPhotoPickerPresented = false
+                if usesSystemPhotoPicker {
+                    AttachmentPhotoPicker(selectionLimit: Self.maximumImages) { results in
+                        selectedPhotos = results.map { .provider($0.itemProvider) }
+                        isPhotoPickerPresented = false
+                    }
+                } else {
+                    PhotoLibraryPicker(limit: Self.maximumImages) { photos in
+                        selectedPhotos = photos.map(PhotoSelection.library)
+                    }
                 }
             }
             .fileImporter(
@@ -236,6 +255,7 @@
         private func photoPickerDidDismiss() {
             let items = selectedPhotos
             selectedPhotos = []
+            usesSystemPhotoPicker = false
             guard !items.isEmpty, let currentOperationID = beginOperation() else {
                 cancelAttachmentSelection()
                 return
@@ -248,7 +268,10 @@
                     for (index, item) in items.enumerated() {
                         try Task.checkCancellation()
                         let name = "Photo \(index + 1)"
-                        let data = try await loadPhoto(item, name: name)
+                        let data = switch item {
+                        case let .library(photo): try await photo.load()
+                        case let .provider(provider): try await loadPhoto(provider, name: name)
+                        }
                         sources.append(ImageUploadSource(
                             displayName: name,
                             data: data

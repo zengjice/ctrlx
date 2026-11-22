@@ -9,7 +9,9 @@ struct AgentWorkflowTaskInput: View {
     let ids: [UUID]
     let attachments: [UUID: AgentWorkflowAttachment]
     let add: () -> Void
-    let photos: (() -> Void)?
+    let photos: () -> Void
+    let systemPhotoPicker: (() -> Void)?
+    let canAddPhotos: Bool
     let receive: ([AgentWorkflowImageSource]) -> Void
     let remove: (UUID) -> Void
     let progress: (name: String, value: Double)?
@@ -27,14 +29,13 @@ struct AgentWorkflowTaskInput: View {
                 }
             AgentWorkflowAttachmentRows(ids: ids, attachments: attachments, remove: remove, thumbnails: thumbnails)
             HStack(spacing: 16) {
-                if let photos {
-                    Menu {
-                        Button("Photo Library", action: photos)
-                        Button("Choose image files…", action: add)
-                    } label: { Label("Add images", symbol: .photoBadgePlus) }
-                } else {
-                    Button(action: add) { Label("Add images", symbol: .photoBadgePlus) }
-                }
+                Menu {
+                    Button("Photo Library…", action: photos).disabled(!canAddPhotos)
+                    if let systemPhotoPicker {
+                        Button("System Photo Picker…", action: systemPhotoPicker).disabled(!canAddPhotos)
+                    }
+                    Button("Choose image files…", action: add)
+                } label: { Label("Add images", symbol: .photoBadgePlus) }
                 #if os(macOS)
                     PasteButton(supportedContentTypes: AgentWorkflowImageSource.contentTypes) {
                         receiveProviders($0)

@@ -367,6 +367,8 @@ public struct MainView: View {
     @State private var pendingAgentFork: AgentForkConfiguration?
     @State private var restartingAgents: Set<PaneKey> = []
     @State private var pendingTerminalAgent: NewAgentTabConfiguration?
+    @State private var pendingTerminalPhotos: TerminalPhotoDestination?
+    @State private var terminalPhotosAreSubmitting = false
     @State private var showingNewLocalSession = false
     @State private var detailPaneSize: CGSize = .zero
     @State private var automaticTabFit = TerminalTabFit()
@@ -790,7 +792,17 @@ public struct MainView: View {
         .sheet(item: $pendingTerminalAgent) { configuration in
             NewAgentTabPanel(configuration: configuration)
         }
-        .onChange(of: sidebarSessionSelection.wrappedValue) { pendingTerminalAgent = nil }
+        .sheet(item: $pendingTerminalPhotos) { destination in
+            PhotoLibraryPicker(limit: 5, isSubmitting: $terminalPhotosAreSubmitting) { photos in
+                try await addTerminalPhotos(photos, to: destination)
+            }
+        }
+        .onChange(of: sidebarSessionSelection.wrappedValue) {
+            pendingTerminalAgent = nil
+            if !terminalPhotosAreSubmitting {
+                pendingTerminalPhotos = nil
+            }
+        }
         // Consent dialog for the editor-override conflict (issue #591). Deferred
         // to the first session so "Ctrl-G" has context; fires on whichever of
         // {session appears, probe finishes} happens last.
@@ -3836,6 +3848,54 @@ public struct MainView: View {
         return coordinator.workspaceRecoveryReady && target.workspacePane != nil
     }
 
+    private struct TerminalPhotoDestination: Identifiable {
+        let id = UUID()
+        let target: TerminalContentMenuTarget
+        let inputBinding: ViewerWorkspaceInputBinding
+    }
+
+    private func addTerminalPhotos(_ photos: [PhotoLibraryPhoto], to destination: TerminalPhotoDestination) async throws {
+        var data: [Data] = []
+        for photo in photos {
+            try data.append(await photo.load())
+        }
+        let originals = data
+        let images = await Task.detached(priority: .userInitiated) {
+            RelayImagePreparer.prepareBatch(originals, maxTotalBytes: SendDroppedFiles.maxRawBytes)
+        }.value
+        try Task.checkCancellation()
+        guard let images else {
+            throw AgentImageError.message("These photos could not be prepared for the terminal. Try selecting fewer photos.")
+        }
+        let target = destination.target
+        guard terminalMenuTargetIsCurrent(target, binding: destination.inputBinding) else {
+            throw AgentImageError.message("The terminal changed or disconnected. Reopen its menu to add photos.")
+        }
+        let files = images.enumerated().map { index, image in
+            DroppedFile(name: "photo-\(index + 1).\(image.format.fileExtension)", data: image.data)
+        }
+        let command = SendDroppedFiles(files: files)
+        terminalPhotosAreSubmitting = true
+        defer { terminalPhotosAreSubmitting = false }
+        let response: CommandResponseMessage
+        if let hostID = target.hostID {
+            guard let client = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient else {
+                throw AgentImageError.message("The Host disconnected. Reconnect and try again.")
+            }
+            do {
+                response = try await client.sendCommand(command, paneId: target.paneID, timeout: 30, inputBinding: destination.inputBinding).get()
+            } catch ViewerRelayClientError.timeout {
+                throw AgentImageError.message("The Host did not confirm the photo upload. Check the terminal before adding the photos again.")
+            }
+        } else {
+            response = await AppCoordinator.handleSendDroppedFiles(
+                command: .init(paneId: target.paneID, command: command.commandType, expectedWorkspacePane: target.workspacePane),
+                spec: command, tmuxService: tmuxService, currentPane: { [windowManager] in windowManager.paneStates[$0] }
+            )
+        }
+        guard response.success else { throw AgentImageError.message(response.error ?? "Could not add the photos.") }
+    }
+
     private func terminalContentMenuItems(hostID: String?, paneID: String) -> [ContextMenuItem] {
         guard let pane = terminalMenuPane(hostID: hostID, paneID: paneID), let target = TerminalContentMenuTarget(hostID: hostID, pane: pane) else { return [] }
         let client = hostID.flatMap { coordinator.viewerConnectionManager?.connection(for: $0)?.relayClient }
@@ -3883,6 +3943,13 @@ public struct MainView: View {
             width: effectiveTerminalWidth(tabs: currentSessionTabs, windowId: target.windowID)
         )
         items.append(.divider)
+        items.append(.button(title: "Add Photos…", isEnabled: available) {
+            guard terminalMenuTargetIsCurrent(target, binding: binding) else {
+                attachError = "This terminal changed or disconnected. Reopen its menu."
+                return
+            }
+            pendingTerminalPhotos = TerminalPhotoDestination(target: target, inputBinding: binding)
+        })
         items.append(.button(title: "Fit Terminal", isEnabled: available && (hostID == nil || client?.hostSupportsTerminalFit == true)) {
             guard terminalMenuTargetIsCurrent(target, binding: binding) else {
                 attachError = "This terminal changed or disconnected. Reopen its menu."

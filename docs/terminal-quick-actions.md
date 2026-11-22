@@ -54,7 +54,7 @@ Restart request IDs are created when an action is chosen.
 
 Right-click the content of an Agent or Terminal tab to open **New Agent…**,
 **New Terminal**, **New Files**, **New Browser**, **New iOS Simulator**, and
-**Open Git**, followed by **Fit Terminal**. Creation uses the same actions and
+**Open Git**, followed by **Add Photos…** and **Fit Terminal**. Creation uses the same actions and
 Host capabilities as the tab strip's **＋** picker; Open Git remains local-only.
 This works in the main workbench, split panes and detached workbenches on Mac
 Host and Viewer. The clicked pane supplies the Host, session and current directory,
@@ -62,6 +62,10 @@ even when another pane has keyboard focus. New tabs follow the existing picker�
 placement and selection rules. Fit targets the clicked terminal's tmux window.
 Open Git retains the explicitly chosen directory for rendering, changed-file
 counts and background refresh; another pane's directory cannot retarget it.
+In **Add Photos…**, click a thumbnail to zoom in and use its checkmark to select it.
+**Add** inserts the selected photos into the clicked terminal's input. You can
+cancel while CtrlX prepares the images. Once it starts sending, the picker
+stays open until CtrlX receives a result or times out.
 
 Opening the native menu preserves text selection and sends no terminal input.
 Hold **Option** while right-clicking to bypass it and pass the click to a terminal

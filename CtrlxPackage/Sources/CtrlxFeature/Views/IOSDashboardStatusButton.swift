@@ -12,14 +12,12 @@
                 HStack(spacing: 4) {
                     connectionIndicator.accessibilityHidden(true)
                     Symbols.gaugeWithDotsNeedle50percent.image
-                        .overlay(alignment: .topTrailing) {
-                            if status.lowQuotaCount > 0 {
-                                Symbols.exclamationmarkTriangle.image
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .foregroundStyle(.orange)
-                                    .offset(x: 6, y: -5)
-                            }
-                        }
+                    if status.lowQuotaCount > 0 {
+                        Symbols.exclamationmarkTriangle.image
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.orange)
+                            .accessibilityHidden(true)
+                    }
                 }
             }
             .accessibilityLabel("Dashboard")

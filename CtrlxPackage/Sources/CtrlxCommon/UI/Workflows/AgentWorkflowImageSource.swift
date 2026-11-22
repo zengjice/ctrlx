@@ -13,6 +13,7 @@ enum AgentWorkflowImageSource {
     case file(URL)
     case image(ClipboardImage)
     case provider(NSItemProvider)
+    case libraryPhoto(PhotoLibraryPhoto)
     #if os(iOS)
         case photo(PhotosPickerItem)
     #endif
@@ -29,6 +30,7 @@ enum AgentWorkflowImageSource {
         switch self {
         case let .file(url): return try await AgentWorkflowImage.read(url)
         case let .image(image): return try await AgentWorkflowImage.prepare(image.data, name: "Image")
+        case let .libraryPhoto(photo): return try await AgentWorkflowImage.prepare(photo.load(), name: "Photo")
         case let .provider(provider):
             if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
                 let data = try await representation(provider, type: UTType.fileURL.identifier)

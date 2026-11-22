@@ -10,6 +10,8 @@
 	<false/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>CtrlX uses the microphone only while you hold the voice input button.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>CtrlX shows and enlarges your photos so you can choose images to attach.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>CtrlX converts speech into editable text on your device.</string>
 	<key>UIBackgroundModes</key>
