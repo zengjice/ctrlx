@@ -81,6 +81,81 @@ struct CodexProcessSessionReaderTests {
         #expect(await !reader.turnCompleted(processID: pid, runtimeID: runtime))
     }
 
+    @Test("Abort verification selects the named writer while a previous conversation is still open")
+    func abortWithPreviousWriterOpen() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-abort-writers-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let previous = root.appendingPathComponent("rollout-\(parentID).jsonl")
+        let current = root.appendingPathComponent("rollout-\(childID).jsonl")
+        try (header(parentID) + Data("\n".utf8) + event("task_started") + event("task_complete")).write(to: previous)
+        try (header(childID) + Data("\n".utf8) + event("task_started") + event("turn_aborted")).write(to: current)
+        let previousWriter = try FileHandle(forWritingTo: previous)
+        defer { try? previousWriter.close() }
+        let currentWriter = try FileHandle(forWritingTo: current)
+        defer { try? currentWriter.close() }
+        let reader = CodexProcessSessionReader()
+        let pid = String(getpid())
+        let runtime = try #require(AgentSessionIdentityClient.processRuntimeID(pid))
+        let interruptedTurn = try #require(UUID(uuidString: childID))
+        #expect(await reader.turnAborted(processID: pid, runtimeID: runtime, conversationID: childID, turnID: interruptedTurn))
+        #expect(await !reader.turnAborted(processID: pid, runtimeID: runtime, conversationID: parentID, turnID: interruptedTurn))
+        #expect(await !reader.turnAborted(processID: pid, runtimeID: "reused-pid", conversationID: childID, turnID: interruptedTurn))
+        #expect(await !reader.turnCompleted(processID: pid, runtimeID: runtime))
+        try currentWriter.close()
+        #expect(await !reader.turnAborted(processID: pid, runtimeID: runtime, conversationID: childID, turnID: interruptedTurn))
+    }
+
+    @Test("Abort verification reads across large image or text records", arguments: [false, true])
+    func abortAfterLargeRecord(isText: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-abort-large-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("rollout-\(childID).jsonl")
+        let start = header(childID) + Data("\n".utf8) + event("task_started")
+        let prefix = isText
+            ? #"{"type":"event_msg","payload":{"type":"user_message","message":""#
+            : #"{"type":"response_item","payload":{"type":"message","content":[{"type":"input_image","image_url":"data:image/png;base64,"#
+        let chunkSize = CodexProcessSessionReader.completionLimit
+        var body = Data(prefix.utf8) + Data(repeating: 65, count: chunkSize - prefix.utf8.count - 1)
+        if isText {
+            body.append(contentsOf: "中".utf8)
+        }
+        body.append(Data(repeating: 65, count: chunkSize + chunkSize / 3))
+        let end = Data((isText ? "\",\"turn_id\":\"\(childID)\"}}\n" : "\"}]}}\n").utf8)
+        let abort = event("turn_aborted")
+        try (start + body + end + abort).write(to: file)
+        let writer = try FileHandle(forWritingTo: file)
+        defer { try? writer.close() }
+        let pid = String(getpid())
+        let runtime = try #require(AgentSessionIdentityClient.processRuntimeID(pid))
+        let turn = try #require(UUID(uuidString: childID))
+        let reader = CodexProcessSessionReader()
+
+        #expect(await reader.turnAborted(processID: pid, runtimeID: runtime, conversationID: childID, turnID: turn))
+        try writer.seekToEnd()
+        try writer.write(contentsOf: Data("{partial".utf8))
+        #expect(await !reader.turnAborted(processID: pid, runtimeID: runtime, conversationID: childID, turnID: turn))
+        try writer.truncate(atOffset: UInt64(start.count + body.count))
+        try writer.seekToEnd()
+        try writer.write(contentsOf: Data(#"\q"#.utf8) + end + abort)
+        #expect(await !reader.turnAborted(processID: pid, runtimeID: runtime, conversationID: childID, turnID: turn))
+        if isText {
+            try writer.truncate(atOffset: UInt64(start.count + body.count))
+            try writer.seekToEnd()
+            try writer.write(contentsOf: Data([0xE0, 0x80, 0x80]) + end + abort)
+            #expect(await !reader.turnAborted(processID: pid, runtimeID: runtime, conversationID: childID, turnID: turn))
+            try writer.truncate(atOffset: UInt64(start.count + body.count))
+            try writer.seekToEnd()
+            try writer.write(contentsOf: Data("\",\"turn_id\":\"\(parentID)\"}}\n".utf8) + abort)
+            #expect(await !reader.turnAborted(processID: pid, runtimeID: runtime, conversationID: childID, turnID: turn))
+        }
+        try writer.truncate(atOffset: UInt64(start.count))
+        try writer.seekToEnd()
+        try writer.write(contentsOf: event("task_started", turn: parentID) + body + end + abort)
+        #expect(await !reader.turnAborted(processID: pid, runtimeID: runtime, conversationID: childID, turnID: turn))
+    }
+
     @Test(
         "Only matching CLI session metadata identifies a rollout; forked_from_id is never the active ID",
         arguments: ["child", "parent-mismatch", "subagent", "event", "incomplete", "oversized", "wrong-name"]

@@ -460,6 +460,15 @@ dropping them silently rather than reporting a stale end. Because an end is emit
 once the process is genuinely gone, that *is* the clean-exit condition, so `closePaneEligible`
 folds in the pref exactly as the hook path does.
 
+Cancelling the active turn can leave the CLI running and write a
+`turn_aborted` rollout record without delivering a Stop hook. On its next
+agent reconciliation (normally within ten seconds), the Host returns Working
+to Idle when the live process's writable rollout for that conversation confirms
+the latest submitted turn was aborted. The Host reads backward in chunks to
+verify the turn boundary, including for turns with large attachments or pasted
+text. The conversation remains open, and cancellation emits no completion
+notification.
+
 ## Response delivery
 Identical keystroke mapping to Claude Code (`deliverResponse` → `sendText`/`sendKeys`,
 including the AskUserQuestion arrow-navigation builder).

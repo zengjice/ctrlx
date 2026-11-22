@@ -469,7 +469,7 @@ final public class MirrorWindowManager {
 
                 guard !Task.isCancelled, let self else { break }
                 await self.refreshDetectedAgentSessions(processNamesByPlugin: processNamesProvider())
-                if await self.reconcileInterruptedTraexTurns() {
+                if await self.reconcileInterruptedTurns() {
                     await self.onAgentProcessReconciliationChanged?()
                 }
             }
@@ -522,7 +522,7 @@ final public class MirrorWindowManager {
             }
             conversationEvidence[binding.paneID] = .init(runtimeID: binding.runtimeID, conversationID: event.sessionID, latestSource: peer.processes.first, latestSequence: event.sourceSequence)
         }
-        if event.pluginID == "traex", let workflow = event.workflow, workflow.kind == .submitted {
+        if CodexProcessSessionReader.supports(pluginID: event.pluginID), let workflow = event.workflow, workflow.kind == .submitted {
             conversationEvidence[binding.paneID]?.submittedTurnID = UUID(uuidString: workflow.nativeTurnID)
         }
         if pane.claudeSessionID != event.sessionID {
@@ -561,17 +561,17 @@ final public class MirrorWindowManager {
         paneStates[paneID]?.claudeSessionID = sessionID
     }
 
-    func reconcileInterruptedTraexTurns() async -> Bool {
+    func reconcileInterruptedTurns() async -> Bool {
         @Dependency(CodexTurnStateClient.self) var turns
         var changed = false
         for (paneID, evidence) in conversationEvidence {
             guard
                 !Task.isCancelled,
                 paneStates[paneID]?.agentSession?.state == .working,
-                let binding = currentAgentBinding(forPane: paneID), binding.pluginID == "traex",
+                let binding = currentAgentBinding(forPane: paneID), CodexProcessSessionReader.supports(pluginID: binding.pluginID),
                 binding.runtimeID == evidence.runtimeID, let turnID = evidence.submittedTurnID else { continue }
             let context = AgentEventContext(binding: binding, conversationID: evidence.conversationID)
-            // Traex records Esc in its rollout without a Stop hook. A newer
+            // Codex and Traex can record Esc in the rollout without a Stop hook. A newer
             // submission can arrive while the reader is checking the old turn.
             guard
                 context.matches(paneStates[paneID], runtimeID: agentIdentities.runtimeID),

@@ -1,9 +1,8 @@
 import CtrlxNetworking
 import Foundation
 
-/// Native images are not completion evidence. Strip their JSON string payloads
-/// while retaining the entire message envelope, including Claude's ancestry.
-/// All other strings and JSON syntax still go through the provider's parser.
+/// Streams away image strings while retaining the message envelope. The
+/// turn-metadata mode also drops strings unrelated to native turn verification.
 struct AgentWorkflowTranscriptRecord {
     private struct Container {
         let object: Bool
@@ -11,18 +10,25 @@ struct AgentWorkflowTranscriptRecord {
         var key: String?
     }
 
-    private enum StringKind { case key, text, image, imageURL }
+    private enum StringKind { case key, text, image, imageURL, discardedText }
     private static let maximumRetainedBytes = 2 * 1_024 * 1_024
     // 32 legal 20 MiB images, Base64 with every slash escaped, plus metadata.
     private static let maximumRecordBytes = maximumRetainedBytes + AgentWorkflowWire.maximumAttachments * ((20 * 1_024 * 1_024 + 2) / 3 * 8 + 1_024)
+    private let turnMetadataOnly: Bool
     private var containers: [Container] = []
     private var stringKind: StringKind?
     private var keyBytes: [UInt8] = []
     private var urlPrefix: [UInt8] = []
     private var escaped = false
     private var unicodeDigits = 0
+    private var utf8Remaining = 0
+    private var utf8Next: ClosedRange<UInt8> = 0x80...0xBF
     private var rawBytes = 0
     private(set) var retained = Data()
+
+    init(turnMetadataOnly: Bool = false) {
+        self.turnMetadataOnly = turnMetadataOnly
+    }
 
     mutating func append(_ bytes: Data.SubSequence) throws {
         rawBytes += bytes.count
@@ -45,11 +51,14 @@ struct AgentWorkflowTranscriptRecord {
                         urlPrefix.removeAll(keepingCapacity: true)
                         stringKind = .image
                     }
-                } else if kind != .image || closing {
+                } else if (kind != .image && kind != .discardedText) || closing {
                     retained.append(byte)
                 }
                 if kind == .image, byte >= 128 {
                     throw invalidString()
+                }
+                if kind == .discardedText, byte >= 128 || utf8Remaining != 0 {
+                    try validateUTF8(byte)
                 }
                 // Even discarded payloads must be well-formed JSON strings.
                 if unicodeDigits > 0 {
@@ -81,7 +90,11 @@ struct AgentWorkflowTranscriptRecord {
                     } else {
                         let key = containers.last?.key
                         let parentKey = containers.dropLast().last?.key
-                        if key == "data", parentKey == "source" {
+                        if turnMetadataOnly {
+                            let isRecordType = containers.count == 1 && key == "type"
+                            let isTurnField = containers.count == 2 && parentKey == "payload" && (key == "type" || key == "turn_id")
+                            stringKind = isRecordType || isTurnField ? .text : .discardedText
+                        } else if key == "data", parentKey == "source" {
                             stringKind = .image
                         } else if
                             key == "image_url" || (key == "url" && parentKey == "image_url")
@@ -119,6 +132,27 @@ struct AgentWorkflowTranscriptRecord {
     func finish() throws -> Data {
         guard stringKind == nil else { throw invalidString() }
         return retained
+    }
+
+    /// A discarded string still has to contain valid UTF-8, including across reads.
+    private mutating func validateUTF8(_ byte: UInt8) throws {
+        if utf8Remaining > 0 {
+            guard utf8Next.contains(byte) else { throw invalidString() }
+            utf8Remaining -= 1
+            utf8Next = 0x80...0xBF
+            return
+        }
+        switch byte {
+        case 0xC2...0xDF: utf8Remaining = 1
+        case 0xE0: (utf8Remaining, utf8Next) = (2, 0xA0...0xBF)
+        case 0xE1...0xEC,
+             0xEE...0xEF: utf8Remaining = 2
+        case 0xED: (utf8Remaining, utf8Next) = (2, 0x80...0x9F)
+        case 0xF0: (utf8Remaining, utf8Next) = (3, 0x90...0xBF)
+        case 0xF1...0xF3: utf8Remaining = 3
+        case 0xF4: (utf8Remaining, utf8Next) = (3, 0x80...0x8F)
+        default: throw invalidString()
+        }
     }
 
     private func tooLarge() -> AgentWorkflowError {

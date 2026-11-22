@@ -31,21 +31,23 @@ actor CodexProcessSessionReader {
     }
 
     func turnAborted(processID: String, runtimeID: String, conversationID: String, turnID: UUID) -> Bool {
-        hasCompletedTurn(processID: processID, runtimeID: runtimeID, conversationID: conversationID, abortedTurnID: turnID)
+        guard let sessionID = UUID(uuidString: conversationID) else { return false }
+        return hasCompletedTurn(processID: processID, runtimeID: runtimeID, conversationID: sessionID, abortedTurnID: turnID)
     }
 
-    private func hasCompletedTurn(processID: String, runtimeID: String, conversationID: String? = nil, abortedTurnID: UUID? = nil) -> Bool {
+    private func hasCompletedTurn(processID: String, runtimeID: String, conversationID: UUID? = nil, abortedTurnID: UUID? = nil) -> Bool {
         guard
             !Task.isCancelled, let pid = Int32(processID),
             AgentSessionIdentityClient.processRuntimeID(processID) == runtimeID,
-            let writer = activeRollout(pid: pid),
+            let writer = activeRollout(pid: pid, conversationID: conversationID),
             let header = readHeader(writer),
             let sessionID = Self.sessionID(header: header, path: writer.path),
-            conversationID == nil || sessionID == conversationID,
+            conversationID == nil || UUID(uuidString: sessionID) == conversationID,
             readCompletion(writer, abortedTurnID: abortedTurnID),
             !Task.isCancelled,
             AgentSessionIdentityClient.processRuntimeID(processID) == runtimeID,
-            activeRollout(pid: pid) == writer
+            activeRollout(pid: pid, conversationID: conversationID) == writer,
+            conversationID == nil || readHeader(writer) == header
         else { return false }
         return true
     }
@@ -56,13 +58,12 @@ actor CodexProcessSessionReader {
         guard
             !Task.isCancelled, let pid = Int32(processID), let id = UUID(uuidString: conversationID),
             AgentSessionIdentityClient.processRuntimeID(processID) == runtimeID,
-            let writers = writableRollouts(pid: pid),
-            let writer = writers.first(where: { Self.filenameID($0.path) == id }),
+            let writer = activeRollout(pid: pid, conversationID: id),
             let header = readHeader(writer),
             Self.sessionID(header: header, path: writer.path) == conversationID,
             !Task.isCancelled,
             AgentSessionIdentityClient.processRuntimeID(processID) == runtimeID,
-            writableRollouts(pid: pid)?.contains(writer) == true
+            activeRollout(pid: pid, conversationID: id) == writer
         else { return false }
         return true
     }
@@ -73,10 +74,10 @@ actor CodexProcessSessionReader {
         let inode: UInt64
     }
 
-    private func activeRollout(pid: Int32) -> Rollout? {
-        guard
-            let writers = writableRollouts(pid: pid), let first = writers.first,
-            writers.allSatisfy({ $0 == first }) else { return nil }
+    private func activeRollout(pid: Int32, conversationID: UUID? = nil) -> Rollout? {
+        guard let writers = writableRollouts(pid: pid) else { return nil }
+        let matches = writers.filter { conversationID == nil || Self.filenameID($0.path) == conversationID }
+        guard let first = matches.first, matches.allSatisfy({ $0 == first }) else { return nil }
         return first
     }
 
@@ -134,23 +135,90 @@ actor CodexProcessSessionReader {
         defer { close(fd) }
         var before = stat()
         guard fstat(fd, &before) == 0, before.st_size > 0 else { return false }
-        let count = Int(min(before.st_size, off_t(Self.completionLimit)))
-        let offset = before.st_size - off_t(count)
-        var bytes = [UInt8](repeating: 0, count: count)
-        let size = bytes.withUnsafeMutableBytes { pread(fd, $0.baseAddress, $0.count, offset) }
+        let matches: Bool
+        if let abortedTurnID {
+            matches = readAbortedTurn(fd, end: before.st_size, turnID: abortedTurnID)
+        } else {
+            let offset = max(0, before.st_size - off_t(Self.completionLimit))
+            guard let bytes = readChunk(fd, from: offset, to: before.st_size) else { return false }
+            matches = Self.lastTurnCompleted(bytes, startsAtBeginning: offset == 0)
+        }
         var after = stat()
-        guard
-            size == count, fstat(fd, &after) == 0, after.st_size == before.st_size,
-            Self.lastTurnCompleted(Data(bytes), startsAtBeginning: offset == 0, abortedTurnID: abortedTurnID)
-        else { return false }
-        return true
+        return matches && fstat(fd, &after) == 0 && after.st_size == before.st_size
+            && after.st_mtimespec.tv_sec == before.st_mtimespec.tv_sec
+            && after.st_mtimespec.tv_nsec == before.st_mtimespec.tv_nsec
+    }
+
+    private func readAbortedTurn(_ fd: Int32, end: off_t, turnID: UUID) -> Bool {
+        var scan = TurnCompletion(abortedTurnID: turnID)
+        var chunkEnd = end
+        var recordEnd: off_t?
+        while chunkEnd > 0 {
+            let offset = max(0, chunkEnd - off_t(Self.completionLimit))
+            guard !Task.isCancelled, let bytes = readChunk(fd, from: offset, to: chunkEnd) else { return false }
+            if chunkEnd == end, bytes.last != 10 {
+                return false
+            }
+            for index in bytes.indices.reversed() where bytes[index] == 10 {
+                let newline = offset + off_t(index)
+                defer { recordEnd = newline }
+                guard let recordEnd, newline + 1 < recordEnd else { continue }
+                // Reread a split record from its start to validate the JSON while discarding large bodies.
+                let line = recordEnd <= chunkEnd
+                    ? bytes[(index + 1)..<Int(recordEnd - offset)]
+                    : readSplitRecord(fd, from: newline + 1, to: recordEnd)
+                guard let line else { return false }
+                if let result = scan.consume(line) {
+                    return result
+                }
+            }
+            chunkEnd = offset
+        }
+        // The first line is the separately verified session header.
+        return false
+    }
+
+    private func readSplitRecord(_ fd: Int32, from start: off_t, to end: off_t) -> Data? {
+        var record = AgentWorkflowTranscriptRecord(turnMetadataOnly: true)
+        var offset = start
+        do {
+            while offset < end {
+                let next = min(end, offset + off_t(Self.completionLimit))
+                guard !Task.isCancelled, let bytes = readChunk(fd, from: offset, to: next) else { return nil }
+                try record.append(bytes)
+                offset = next
+            }
+            return try record.finish()
+        } catch {
+            return nil
+        }
+    }
+
+    private func readChunk(_ fd: Int32, from offset: off_t, to end: off_t) -> Data? {
+        var bytes = Data(count: Int(end - offset))
+        let count = bytes.withUnsafeMutableBytes { pread(fd, $0.baseAddress, $0.count, offset) }
+        return count == bytes.count ? bytes : nil
     }
 
     static func lastTurnCompleted(_ data: Data, startsAtBeginning: Bool = true, abortedTurnID: UUID? = nil) -> Bool {
         // A partial append may be a newer task start. Never fall back to an
         // older completion when the latest record is incomplete or malformed.
         guard data.count <= completionLimit, data.last == 10 else { return false }
-        struct Record: Decodable {
+        var lines = data.split(separator: 10)
+        if !startsAtBeginning, !lines.isEmpty {
+            lines.removeFirst()
+        }
+        var scan = TurnCompletion(abortedTurnID: abortedTurnID)
+        for line in lines.reversed() {
+            if let result = scan.consume(line) {
+                return result
+            }
+        }
+        return false
+    }
+
+    private struct TurnCompletion {
+        private struct Record: Decodable {
             struct Payload: Decodable {
                 let type: String?
                 let turn_id: String?
@@ -159,19 +227,19 @@ actor CodexProcessSessionReader {
             let type: String
             let payload: Payload
         }
-        var lines = data.split(separator: 10)
-        if !startsAtBeginning, !lines.isEmpty {
-            lines.removeFirst()
-        }
+
+        let abortedTurnID: UUID?
         var completedTurn: UUID?
-        for line in lines.reversed() {
+
+        /// Continue only until the latest turn boundary or contradictory evidence.
+        mutating func consume(_ line: Data) -> Bool? {
             guard let record = try? JSONDecoder().decode(Record.self, from: line) else { return false }
             if record.type == "turn_context" {
                 guard let id = record.payload.turn_id.flatMap(UUID.init(uuidString:)), id == completedTurn else { return false }
             }
             guard record.type == "event_msg" else {
                 guard completedTurn != nil else { return false }
-                continue
+                return nil
             }
             switch record.payload.type {
             case "task_complete",
@@ -191,8 +259,8 @@ actor CodexProcessSessionReader {
                     guard let id = UUID(uuidString: raw), id == completedTurn else { return false }
                 }
             }
+            return nil
         }
-        return false
     }
 
     static func sessionID(header: Data, path: String) -> String? {
