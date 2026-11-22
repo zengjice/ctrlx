@@ -11,15 +11,15 @@
             Button(action: openDashboard) {
                 HStack(spacing: 4) {
                     connectionIndicator.accessibilityHidden(true)
-                    Symbols.gaugeWithDotsNeedle50percent.image
-                        .overlay(alignment: .topTrailing) {
-                            if status.lowQuotaCount > 0 {
-                                Symbols.exclamationmarkTriangle.image
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .foregroundStyle(.orange)
-                                    .offset(x: 6, y: -5)
-                            }
+                    HStack(alignment: .top, spacing: 3) {
+                        Symbols.gaugeWithDotsNeedle50percent.image
+                        if status.lowQuotaCount > 0 {
+                            Symbols.exclamationmarkTriangle.image
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.orange)
+                                .accessibilityHidden(true)
                         }
+                    }
                 }
             }
             .accessibilityLabel("Dashboard")
