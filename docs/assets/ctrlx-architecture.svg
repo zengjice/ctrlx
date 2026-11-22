@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
-  <title id="title">CtrlX tmux continuity and end-to-end encrypted relay architecture</title>
-  <desc id="desc">A persistent tmux workspace on each Host Mac runs agents and terminals without interruption. Local terminals attach directly, while Mac and iPhone viewers reconnect through an end-to-end encrypted relay that routes ciphertext only.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="464" viewBox="0 0 1000 464" role="img" aria-labelledby="title desc">
+  <title id="title">Your CtrlX workspace on Mac and iPhone</title>
+  <desc id="desc">The Host Mac runs agents and shells in tmux. It also offers conversation forks, workflows, Orbie, and tools to inspect files, diffs, web pages and iOS apps. A local terminal can attach to the same session. An iPhone or another Mac can use the workspace through a relay that forwards end-to-end encrypted traffic. Sessions keep running when a viewer disconnects.</desc>
 
   <defs>
     <linearGradient id="canvas" x1="0" y1="0" x2="1" y2="1">
@@ -30,142 +30,82 @@
         <feMergeNode in="SourceGraphic"/>
       </feMerge>
     </filter>
-    <marker id="arrowCyan" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#62D8FF"/>
-    </marker>
-    <marker id="arrowGreen" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#61E294"/>
+    <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+      <path d="M0 0 8 4 0 8Z" fill="#62D8FF"/>
     </marker>
   </defs>
 
-  <rect width="1600" height="900" rx="32" fill="url(#canvas)"/>
-  <rect width="1600" height="900" rx="32" fill="url(#grid)"/>
+  <rect width="1000" height="464" rx="22" fill="url(#canvas)"/>
+  <rect width="1000" height="464" rx="22" fill="url(#grid)"/>
 
-  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-    <text x="72" y="62" fill="#62D8FF" font-size="15" font-weight="700" letter-spacing="3.6">CTRLX ARCHITECTURE</text>
-    <text x="72" y="118" fill="#F5F7FA" font-size="42" font-weight="760">tmux stays. You move.</text>
-    <text x="72" y="154" fill="#9EABB9" font-size="19">Persistent sessions · native reuse · agents run unchanged · E2EE across devices</text>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" fill="#F2F5F8">
+    <text x="32" y="46" font-size="30" font-weight="700">Your workspace on Mac and iPhone</text>
 
-    <!-- Stacked cards imply many independent Host Macs. -->
-    <rect x="52" y="208" width="770" height="554" rx="28" fill="#0E1218" stroke="#34404D" stroke-width="1.5"/>
-    <rect x="61" y="199" width="770" height="554" rx="28" fill="#11161D" stroke="#3B4754" stroke-width="1.5"/>
-    <rect x="72" y="188" width="770" height="554" rx="28" fill="url(#hostPanel)" stroke="#556271" stroke-width="1.5"/>
+    <!-- Each Host owns its sessions and project tools. -->
+    <rect x="24" y="78" width="426" height="361" rx="20" fill="#0E1218" stroke="#34404D"/>
+    <rect x="29" y="73" width="426" height="361" rx="20" fill="#11161D" stroke="#3B4754"/>
+    <rect x="34" y="68" width="426" height="361" rx="20" fill="url(#hostPanel)" stroke="#556271"/>
+    <circle cx="62" cy="100" r="5" fill="#61E294"/>
+    <text x="78" y="110" font-size="28" font-weight="700">Host Mac</text>
+    <text x="440" y="107" text-anchor="end" font-size="17" fill="#A8B4BF">home or office</text>
 
-    <circle cx="106" cy="226" r="7" fill="#61E294" filter="url(#softGlow)"/>
-    <text x="126" y="232" fill="#F2F5F8" font-size="18" font-weight="700">HOST MAC</text>
-    <text x="235" y="232" fill="#8E9BA9" font-size="16">one of many</text>
-    <rect x="670" y="207" width="136" height="36" rx="18" fill="#202832" stroke="#3D4A58"/>
-    <text x="738" y="231" text-anchor="middle" fill="#BAC4CE" font-size="14" font-weight="650">+ MORE HOSTS</text>
+    <rect x="52" y="128" width="390" height="136" rx="13" fill="url(#tmuxPanel)" stroke="#4C6870"/>
+    <rect x="52" y="139" width="4" height="114" rx="2" fill="#61E294"/>
+    <text x="70" y="159" font-size="23" font-weight="700" fill="#76E8A5">tmux sessions</text>
 
-    <!-- tmux is the source of truth and owns the long-running sessions. -->
-    <rect x="108" y="267" width="698" height="286" rx="22" fill="url(#tmuxPanel)" stroke="#4C6870" stroke-width="1.5"/>
-    <rect x="108" y="267" width="7" height="286" rx="3.5" fill="#61E294"/>
-    <text x="140" y="310" fill="#61E294" font-size="24" font-weight="780">tmux</text>
-    <text x="205" y="310" fill="#F3F6F8" font-size="22" font-weight="680">persistent workspace</text>
-    <text x="140" y="338" fill="#91A0AE" font-size="15">SOURCE OF TRUTH · SESSION / WINDOW / PANE</text>
+    <rect x="70" y="175" width="89" height="34" rx="8" fill="#13252E" stroke="#315F70"/>
+    <text x="114.5" y="198" text-anchor="middle" font-size="18" font-weight="600" fill="#CDF2FF">Codex</text>
+    <rect x="168" y="175" width="143" height="34" rx="8" fill="#211D2F" stroke="#54477C"/>
+    <text x="239.5" y="198" text-anchor="middle" font-size="18" font-weight="600" fill="#E6DDFF">Claude Code</text>
+    <rect x="320" y="175" width="104" height="34" rx="8" fill="#272318" stroke="#6D5B31"/>
+    <text x="372" y="198" text-anchor="middle" font-size="18" font-weight="600" fill="#FCE7AE">Shell</text>
 
-    <g>
-      <rect x="140" y="365" width="194" height="125" rx="16" fill="#101820" stroke="#315F70"/>
-      <circle cx="168" cy="394" r="12" fill="#62D8FF" fill-opacity="0.16" stroke="#62D8FF"/>
-      <path d="M 162 390 L 168 395 L 162 400 M 172 400 H 178" fill="none" stroke="#62D8FF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-      <text x="192" y="400" fill="#EAF6FA" font-size="18" font-weight="700">Codex</text>
-      <text x="160" y="434" fill="#A8B4BF" font-size="15">Agent TUI</text>
-      <text x="160" y="461" fill="#6F8190" font-size="14">runs unchanged</text>
+    <text x="70" y="231" font-size="17" fill="#DDE8EE">Sessions keep running if you disconnect.</text>
+    <text x="70" y="252" font-size="15" fill="#A8B4BF">Reattach in CtrlX or Terminal.</text>
+
+    <rect x="52" y="276" width="390" height="136" rx="13" fill="#111820" stroke="#344651"/>
+    <text x="70" y="303" font-size="21" font-weight="650">Work with agents</text>
+    <text x="70" y="330" font-size="18" fill="#B8C5D0">Fork · Workflows · Orbie</text>
+    <path d="M70 344H424" stroke="#32424E"/>
+    <text x="70" y="372" font-size="21" font-weight="650">Inspect changes</text>
+    <text x="70" y="398" font-size="18" fill="#B8C5D0">Files · Git · Browser · iOS Simulator</text>
+
+  </g>
+  <g transform="translate(0 24)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" fill="#F2F5F8">
+    <!-- The Relay forwards traffic between the paired endpoints. -->
+    <g fill="none" stroke="#62D8FF" stroke-width="2.5">
+      <path d="M463 221H501" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+      <path d="M676 221H701" marker-start="url(#arrow)"/>
+      <path d="M701 149V293"/>
+      <path d="M701 149H729" marker-end="url(#arrow)"/>
+      <path d="M701 293H729" marker-end="url(#arrow)"/>
     </g>
 
-    <g>
-      <rect x="357" y="365" width="194" height="125" rx="16" fill="#15151F" stroke="#54477C"/>
-      <circle cx="385" cy="394" r="12" fill="#A78BFA" fill-opacity="0.16" stroke="#A78BFA"/>
-      <path d="M 379 394 H 391 M 385 388 V 400" fill="none" stroke="#A78BFA" stroke-width="2" stroke-linecap="round"/>
-      <text x="409" y="400" fill="#F0ECFF" font-size="18" font-weight="700">Claude Code</text>
-      <text x="377" y="434" fill="#A8B4BF" font-size="15">Agent TUI</text>
-      <text x="377" y="461" fill="#6F8190" font-size="14">runs unchanged</text>
+    <rect x="504" y="131" width="169" height="179" rx="19" fill="url(#relayPanel)" stroke="#3B6A7B"/>
+    <circle cx="588.5" cy="168" r="21" fill="#132B35" stroke="#62D8FF" filter="url(#softGlow)"/>
+    <path d="M581 166V162a7.5 7.5 0 0 1 15 0v4 M578 166h21v14h-21z" fill="none" stroke="#62D8FF" stroke-width="2" stroke-linejoin="round"/>
+    <text x="588.5" y="226" text-anchor="middle" font-size="28" font-weight="700">Relay</text>
+    <text x="588.5" y="255" text-anchor="middle" font-size="17" fill="#B8C5D0">Forwards ciphertext</text>
+    <path d="M526 269H651" stroke="#32424E"/>
+    <text x="588.5" y="293" text-anchor="middle" font-size="16" fill="#88E2FF">End-to-end encrypted</text>
+
+    <!-- The same workspace is interactive from either Viewer. -->
+    <text x="734" y="78" font-size="14" font-weight="650" letter-spacing="1.3" fill="#88E2FF">PAIRED VIEWERS</text>
+    <rect x="732" y="90" width="239" height="118" rx="17" fill="url(#hostPanel)" stroke="#475665"/>
+    <g fill="none" stroke="#C5D2DD" stroke-width="2" stroke-linecap="round">
+      <rect x="751" y="113" width="32" height="22" rx="3"/>
+      <path d="M767 135v6m-7 0h14"/>
     </g>
+    <text x="796" y="138" font-size="25" font-weight="700">Another Mac</text>
+    <text x="752" y="179" font-size="18" fill="#B8C5D0">Open the same terminal</text>
 
-    <g>
-      <rect x="574" y="365" width="194" height="125" rx="16" fill="#1A1812" stroke="#6D5B31"/>
-      <circle cx="602" cy="394" r="12" fill="#F6C85F" fill-opacity="0.16" stroke="#F6C85F"/>
-      <path d="M 596 390 L 602 395 L 596 400 M 606 400 H 612" fill="none" stroke="#F6C85F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-      <text x="626" y="400" fill="#FFF7E2" font-size="18" font-weight="700">Any TUI</text>
-      <text x="594" y="434" fill="#A8B4BF" font-size="15">Shell · tools</text>
-      <text x="594" y="461" fill="#6F8190" font-size="14">no wrapper required</text>
+    <rect x="732" y="234" width="239" height="118" rx="17" fill="url(#hostPanel)" stroke="#475665"/>
+    <g fill="none" stroke="#C5D2DD" stroke-width="2" stroke-linecap="round">
+      <rect x="758" y="252" width="19" height="32" rx="4"/>
+      <path d="M765 256h5m-5 24h5"/>
     </g>
-
-    <rect x="140" y="510" width="628" height="26" rx="13" fill="#182129"/>
-    <circle cx="160" cy="523" r="4" fill="#61E294"/>
-    <text x="176" y="528" fill="#8FA0AD" font-size="13" font-family="SFMono-Regular, Menlo, monospace">session: coding  ·  window: 3  ·  pane: 7  ·  alive</text>
-
-    <!-- Continuity: CtrlX can disappear; tmux remains alive. -->
-    <rect x="108" y="574" width="698" height="100" rx="20" fill="#111820" stroke="#344651"/>
-    <text x="138" y="605" fill="#F2F5F8" font-size="17" font-weight="700">CONTINUITY</text>
-    <text x="138" y="633" fill="#81909E" font-size="14">CtrlX reconnects. tmux never stops.</text>
-    <text x="350" y="600" fill="#98A6B3" font-size="13">App closes</text>
-    <text x="466" y="600" fill="#98A6B3" font-size="13">Network drops</text>
-    <text x="586" y="600" fill="#98A6B3" font-size="13">Viewer changes</text>
-    <path d="M 349 640 C 395 608, 468 608, 512 640 C 552 670, 623 670, 665 640" fill="none" stroke="#61E294" stroke-width="3" stroke-linecap="round" marker-end="url(#arrowGreen)"/>
-    <circle cx="372" cy="626" r="5" fill="#61E294"/>
-    <circle cx="510" cy="639" r="5" fill="#61E294"/>
-    <circle cx="640" cy="652" r="5" fill="#61E294"/>
-    <rect x="668" y="620" width="112" height="42" rx="21" fill="#173127" stroke="#3E9B6B"/>
-    <text x="724" y="647" text-anchor="middle" fill="#76E8A5" font-size="14" font-weight="750">STILL RUNNING</text>
-
-    <!-- Native local reuse. -->
-    <rect x="108" y="695" width="698" height="38" rx="19" fill="#1B222B"/>
-    <rect x="126" y="706" width="18" height="14" rx="2" fill="none" stroke="#B7C1CB" stroke-width="1.5"/>
-    <path d="M 130 711 L 134 714 L 130 717 M 137 717 H 141" fill="none" stroke="#B7C1CB" stroke-width="1.4" stroke-linecap="round"/>
-    <text x="158" y="720" fill="#C6CFD7" font-size="14" font-weight="650">SYSTEM TERMINAL</text>
-    <path d="M 302 714 H 370" stroke="#62D8FF" stroke-width="1.5" stroke-dasharray="4 5" marker-end="url(#arrowCyan)"/>
-    <text x="390" y="720" fill="#8E9BA8" font-size="14">attaches to the same tmux session</text>
-
-    <!-- E2EE boundary from Host to Relay. -->
-    <line x1="842" y1="438" x2="902" y2="438" stroke="#62D8FF" stroke-width="2.5" marker-start="url(#arrowCyan)" marker-end="url(#arrowCyan)"/>
-    <rect x="848" y="394" width="48" height="25" rx="12.5" fill="#112630" stroke="#2F7186"/>
-    <path d="M 866 405 V 402 A 6 6 0 0 1 878 402 V 405 M 864 405 H 880 V 414 H 864 Z" fill="none" stroke="#62D8FF" stroke-width="1.5"/>
-    <text x="872" y="467" text-anchor="middle" fill="#62D8FF" font-size="13" font-weight="700">E2EE</text>
-
-    <!-- Relay only routes ciphertext. -->
-    <rect x="902" y="300" width="260" height="286" rx="28" fill="url(#relayPanel)" stroke="#3B6A7B" stroke-width="1.5"/>
-    <circle cx="1032" cy="363" r="36" fill="#132B35" stroke="#62D8FF" stroke-width="1.5" filter="url(#softGlow)"/>
-    <path d="M 1018 358 V 349 A 14 14 0 0 1 1046 349 V 358 M 1013 358 H 1051 V 380 H 1013 Z" fill="none" stroke="#62D8FF" stroke-width="2.5" stroke-linejoin="round"/>
-    <circle cx="1032" cy="369" r="3" fill="#62D8FF"/>
-    <text x="1032" y="432" text-anchor="middle" fill="#F2F7FA" font-size="20" font-weight="750">E2EE RELAY</text>
-    <text x="1032" y="465" text-anchor="middle" fill="#9DAAB7" font-size="15">pairs devices</text>
-    <text x="1032" y="490" text-anchor="middle" fill="#9DAAB7" font-size="15">routes ciphertext</text>
-    <line x1="950" y1="514" x2="1114" y2="514" stroke="#32424E"/>
-    <text x="1032" y="545" text-anchor="middle" fill="#61E294" font-size="14" font-weight="700">NO TERMINAL ACCESS</text>
-
-    <!-- One encrypted path fans out to supported viewers. -->
-    <line x1="1162" y1="438" x2="1204" y2="438" stroke="#62D8FF" stroke-width="2.5" marker-start="url(#arrowCyan)" marker-end="url(#arrowCyan)"/>
-    <line x1="1204" y1="330" x2="1204" y2="548" stroke="#62D8FF" stroke-width="2"/>
-    <line x1="1204" y1="330" x2="1230" y2="330" stroke="#62D8FF" stroke-width="2" marker-end="url(#arrowCyan)"/>
-    <line x1="1204" y1="548" x2="1230" y2="548" stroke="#62D8FF" stroke-width="2" marker-end="url(#arrowCyan)"/>
-
-    <rect x="1230" y="244" width="300" height="172" rx="24" fill="#171D25" stroke="#475665" stroke-width="1.5"/>
-    <rect x="1261" y="278" width="52" height="38" rx="5" fill="none" stroke="#BFC9D3" stroke-width="2"/>
-    <path d="M 1279 324 H 1295 M 1287 316 V 324" stroke="#BFC9D3" stroke-width="2" stroke-linecap="round"/>
-    <text x="1335" y="291" fill="#F3F6F8" font-size="19" font-weight="720">CtrlX for Mac</text>
-    <text x="1335" y="319" fill="#8E9CAA" font-size="14">Host + Viewer</text>
-    <rect x="1261" y="349" width="233" height="38" rx="19" fill="#1C2730"/>
-    <text x="1377" y="374" text-anchor="middle" fill="#B9C5CE" font-size="14">view · type · switch Host</text>
-
-    <rect x="1230" y="462" width="300" height="172" rx="24" fill="#171D25" stroke="#475665" stroke-width="1.5"/>
-    <rect x="1270" y="492" width="34" height="55" rx="7" fill="none" stroke="#BFC9D3" stroke-width="2"/>
-    <line x1="1281" y1="498" x2="1293" y2="498" stroke="#BFC9D3" stroke-width="2" stroke-linecap="round"/>
-    <circle cx="1287" cy="540" r="2" fill="#BFC9D3"/>
-    <text x="1335" y="509" fill="#F3F6F8" font-size="19" font-weight="720">CtrlX for iPhone</text>
-    <text x="1335" y="537" fill="#8E9CAA" font-size="14">Viewer</text>
-    <rect x="1261" y="567" width="233" height="38" rx="19" fill="#1C2730"/>
-    <text x="1377" y="592" text-anchor="middle" fill="#B9C5CE" font-size="14">view · type · get notified</text>
-
-    <text x="1379" y="674" text-anchor="middle" fill="#62D8FF" font-size="14" font-weight="700">ANY PAIRED HOST</text>
-    <text x="1379" y="700" text-anchor="middle" fill="#8493A0" font-size="14">one workspace across screens</text>
-
-    <line x1="72" y1="800" x2="1528" y2="800" stroke="#27323D"/>
-    <circle cx="352" cy="838" r="4" fill="#61E294"/>
-    <text x="368" y="844" fill="#9BA8B4" font-size="14" font-weight="650">NO PUBLIC IP</text>
-    <circle cx="650" cy="838" r="4" fill="#61E294"/>
-    <text x="666" y="844" fill="#9BA8B4" font-size="14" font-weight="650">NO INBOUND PORT</text>
-    <circle cx="990" cy="838" r="4" fill="#61E294"/>
-    <text x="1006" y="844" fill="#9BA8B4" font-size="14" font-weight="650">NO PROPRIETARY SESSION MODEL</text>
+    <text x="796" y="278" font-size="25" font-weight="700">iPhone</text>
+    <text x="752" y="309" font-size="18" fill="#B8C5D0">Answer an agent</text>
+    <text x="752" y="332" font-size="18" fill="#B8C5D0">Try the result</text>
   </g>
 </svg>

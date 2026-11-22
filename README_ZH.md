@@ -1,129 +1,84 @@
-<p align="center">
-  <img src="Brand/CtrlX-AppIcon.png" width="80" alt="CtrlX 应用图标" />
-</p>
-
 # CtrlX
 
-[English](README.md) · [开始使用](#开始使用) · [使用文档](docs/README.md)
+[English](README.md) · [在 Mac 上试一次](#在-mac-上打开第一个项目) · [使用文档](docs/README.md)
 
-> **AI 在 Mac 上工作，你用电脑或手机接着做。**
+CtrlX 也是一款 AI 编程工作台。你可以带着已有的**上下文**换设备、换工具、分头试方案，也可以把多轮开发、评审和返修串成一项**长程任务**。
 
-CtrlX 让你在 Mac 和 iPhone 上跟进 Codex、Claude Code 等编程 Agent 的工作：
-交代需求、回答问题、检查成果，再把反馈交回去。
-项目和 Agent 都留在原来的 Mac 上，换设备后继续的是同一段对话、同一份工作。
+## 上下文
 
-如果你同时推进几个项目，或经常在等待 AI 时离开工位，CtrlX 可以帮你看清谁在工作、
-谁在等你，以及该打开哪段对话继续。
+| 特点 | 你能做什么 |
+| --- | --- |
+| **完整性** | • **把需求说准。** 用手机口述带英文分支名的需求时，语音纠错可对照当前终端里的拼写。 |
+| | • **把证据带上。** 附上原文件，或在截图上圈出报错的那一行，连同需求发给 Agent。 |
+| | • **带上验收要求。** 把「先补一个回归测试」存成快捷短语，下次提需求时一点就能用。 |
+| **连贯性** | • **跨设备接着做。** Mac 上开始的对话，拿起 iPhone 或换到另一台 Mac，都能回到同一标签。 |
+| | • **跨操作区给反馈。** 在文件、网页或模拟器里圈出问题，把标注带回原对话的输入框。 |
+| | • **跨 Agent 分头试方案。** 在 Mac 的 Codex 或 Claude Code 标签按 ⌘F 快速 Fork，让新 Agent 带着已有对话试另一条路。要隔离改动，可从 Fork 菜单选独立的 Git worktree。[Fork 用法](docs/services-reference.md#fork-a-native-agent-conversation-macios) |
+| | • **跨 App 唤起 Orbie。** 在 Mac 其他 App 里也能用全局快捷键接着聊，或从这段讨论 Fork 一个 Orbiter 去做支线。[Orbie 与 Orbiter](docs/global-agent-design.md) |
+| | • **跨用户协作（规划中）。** 希望你的 Agent 能把商定的接口交给同事的 Agent，让它接着做联调。 |
+| **可恢复性** | • **找回工作现场。** 启用工作区恢复后，Mac 重启可找回标签、分屏和 CtrlX 编辑器中未发送的草稿。 |
+| | • **接回原对话。** 受支持的 Codex 和 Claude Code 版本可自动恢复已核实的对话。需要确认时，也能在 iPhone 上点 **Resume**。[工作区恢复](docs/workspace-recovery-design.md) |
 
-[安装 Mac 版](#开始使用) · [iPhone 安装方式](RELEASE.md#local-overwrite-installation)
+## 长程任务
 
-## 交代清楚，然后去忙别的
+| 环节 | 你能做什么 |
+| --- | --- |
+| **持续运行** | • **手机离线，任务照常跑。** Agent 在开发机上工作，还可开启「保持 Mac 唤醒」以防空闲睡眠。 |
+| **人工介入** | • **回到需要你拍板的标签。** 在 iPhone 点提问或审批通知，就能找到正在等答复的 Agent。 |
+| **Workflow** | • **等开发做完，再交给评审。** 即使讨论了好几轮，也可等 Codex 明确完成，才把结果交给同一台 Mac 上的 Claude Code。 |
+| | • **并行评审，意见到齐再改。** 让两个 Agent 分别检查实现和测试，再把两份意见一起交给修复步骤。 |
+| | • **重启后接着做。** 开发机重启后可查看已完成步骤的结果，点 **Continue** 恢复工作流。[工作流](docs/multi-agent-design.md) |
 
-给 Agent 一段需求、一张截图，或者直接说出你的想法。语音输入会尝试结合当前项目的终端上下文
-纠正技术词和中英文混合表达，你可以检查文字后再发送。经常重复的要求可以存成快捷短语。
+## 产品架构
 
-任务开始后，可以离开电脑。Agent 完成工作、提出问题或请求许可时，CtrlX 会提醒你。
-从 iPhone 点开通知，回到相应的对话，补充一句话或处理确认，让工作继续。
-用手机拍下的照片、从其他 App 分享来的文件，也可以带回项目。
+![CtrlX 产品架构。左侧的 Host Mac 在 tmux 中运行 Agent 和终端，负责工作流，也提供文件、Git、浏览器和 iOS 模拟器。右侧的另一台 Mac 和 iPhone 通过中间的 Relay 加密连接这个工作区。](docs/assets/ctrlx-architecture.svg)
 
-你仍然可以随时打开完整终端，查看过程、补充指令或接手操作。
+项目和 tmux 会话留在开发机（**Host**）。iPhone 或另一台 Mac（**Viewer**）通过 **Relay** 接入，工作区内容端到端加密。
 
-## 它说「做好了」，你能马上试一试
+## 比如，给报表加一个导出按钮
 
-验收一个结果，往往需要亲自打开它。即使人在外面，也可以从手机查看 Mac 上的成果：
+1. **在 Mac 上提需求。** 附上报表截图，口述「在筛选器旁边加一个导出 PDF 的按钮，保留列顺序」。看一眼草稿再发。[上下文语音输入](docs/terminal-quick-actions.md#context-aware-voice-input)
+2. **用 iPhone 验收。** 点通知回到提问的标签，答「导出所有符合筛选条件的记录」。在 **Browser** 接手 Agent 打开的 `localhost` 页面，点导出，从下载记录进入 **Files** 查看 PDF。[浏览器下载](docs/agent-browser.md#human-downloads)
+3. **把问题指给原 Agent。** 如果最右一列被截断，在 PDF 上圈出那一列。点 **Choose Agent** 选回原对话，再点 **Add to Input**，补一句「长列名也要显示完整」再发。[文件标注](docs/file-browser.md#in-place-preview-annotation) · [网页标注](docs/agent-browser.md#in-place-screenshot-annotation) · [模拟器标注](docs/agent-simulator-design.md#三端截图标注)
+4. **让另一个 Agent 验收。** 在 Workflow 里让 Claude Code 按筛选条件和列顺序评审，再把发现的问题交回给 Codex 修复。
 
-- **做网页时**，打开 Mac 正在运行的本地页面，点按钮、填表单、播放声音，看看实际效果。
-  页面沿用 Mac 上的运行环境和登录状态，不需要先把开发服务发布到公网。
-- **做 iOS App 时**，查看并操作 Mac 上的模拟器，走一遍用户流程。模拟器仍在 Mac 上运行。
-- **写文档或生成文件时**，点开 Agent 给出的文件链接，阅读 Markdown、查看图片和 PDF、播放视频，
-  或把文件下载到当前设备。回到 Mac 后，还可以在终端旁查看代码差异。
+## 常用操作
 
-看到需要调整的地方，直接在截图上圈出来、画箭头，附上一句说明交给 Agent。
-它也可以使用 CtrlX 提供的浏览器和模拟器工具自行检查；你可以看到操作过程，并在需要时接管。
-
-## 几件事一起做，也能各自跟进
-
-让一个 Agent 开发，另一个评审，同时保留日常终端。在一个地方查看它们的状态和用量，
-按项目整理对话，选择适合各项工作的模型；需要对照时，在 Mac 上分栏或打开独立窗口。
-
-遇到值得试的新方向，可以 **Fork 当前对话**，让新的 Agent 带着已有上下文继续探索，
-原来的讨论仍然保留。需要隔离代码改动时，可以把不同工作安排到独立的 Git worktree 中。
-
-对于经常重复的开发、评审、修复，可以把交接关系保存成 **工作流**。
-例如让开发结果交给评审 Agent，再把意见交回修复；也可以让多个评审者并行检查，最后汇总。
-你决定由谁做哪一步，并可以从电脑或手机暂停、继续或停止流程。
-当前一个工作流的 Agent 在同一台 Mac 上运行。
-
-[如何安排 Agent 协作](docs/multi-agent-design.md)
-
-## 换个地方，继续原来的工作
-
-办公室的 Mac、家里的 Mac，可以从同一个入口连接。换设备时回到已有会话，
-不用把项目和开发环境搬到手机上。关闭查看窗口或临时断网，Mac 上的终端进程仍会继续运行。
-
-启用工作区恢复后，重启 Mac 可以恢复保存的布局和受支持的 Agent 对话；
-需要人工处理时，也能从远端找到恢复入口。
-
-如果你还想有一段随时能唤起的固定对话，可以试用 **Orbie**：在 Mac 上按全局快捷键叫出它，
-接着之前的对话讨论，查找相关工作，再回到相应的 Agent 标签。专门的工作可以新建 **Orbiter**，
-或者从 Orbie Fork，带上对话上下文后独立继续。Orbie 目前是本机 Mac 上的早期功能。
+- **少打几个字。** 用 **Commands** 选 `/diff` 看改动。两台设备都启用同步后，**Quick Phrases** 里的常用短语也能共用。[快捷指令](docs/terminal-quick-actions.md#curated-command-catalogs) · [短语同步](docs/terminal-quick-actions.md#optional-device-sync)
+- **换模型或账号。** 每个标签可保留常用模型和推理强度按钮。**Dashboard** 可查服务商提供的额度和重置时间。用 Codex 或 Claude Code 官方账号时，**Log Out and Log In** 会登出 Host 上该 CLI 配置共用的账号，重开原对话供你手动登录。[模型快捷按钮](docs/terminal-quick-actions.md#status-bar) · [切换账号](docs/services-reference.md#exit-and-resume-an-agent-macios)
 
 ## 开始使用
 
-先在一台 Mac 上完成第一次对话，再连接其他设备。
+### 在 Mac 上打开第一个项目
 
-### 在 Mac 上试一次
-
-需要 Apple Silicon Mac、**macOS 26 或更新版本**，以及已安装、登录的 Agent CLI。
-CtrlX 内置 Codex 和 Claude Code 集成，也可通过插件连接 OpenCode、pi 和 omp；
-具体交互能力随 Agent 而异。
-
-安装 tmux 和 CtrlX：
+在运行 **macOS 26 或更新版本的 Apple Silicon Mac** 上安装 tmux 和 CtrlX。
 
 ```bash
 brew install tmux
 curl -fsSL https://ctrlx-1256844776.cos.ap-guangzhou.myqcloud.com/macos/mac.sh | bash
 ```
 
-打开 CtrlX，在 **Settings → Agents** 配置集成，再从 **New Session → Start in Directory…**
-选择项目目录和 Agent，启动第一次对话。可以先交给它一件小事，例如「阅读这个项目的 README，
-告诉我该从哪里开始，先不要修改代码」。
+打开 CtrlX 就能看到已有的 tmux 会话，只用普通终端也可以。要使用 Agent，先在这台 Mac 上安装并登录它的 CLI，在 **Settings → Agents** 配置集成，然后选 **New Session → Start in Directory…** 打开项目。已有会话里用 **+ → New Agent…** 添加标签。
 
-已有 tmux 会话会自动显示；在会话的标签栏点击 **+ → New Agent…** 可以增加 Agent，
-也可以新建普通终端。
+第一次可以点麦克风问「这个项目怎么在本地跑起来？」再点一下结束录音，核对草稿后发送。
 
-正式 Mac 安装包已签名并经过 Apple 公证。Agent 继续使用你配置的 AI 账号或 API 服务。
+CtrlX 内置 Codex、Claude Code 和 Traex 集成，另有 OpenCode、pi 和 omp 插件。提问和 Fork 等操作取决于所用 Agent。正式 Mac 安装包经过 Developer ID 签名和 Apple 公证。
 
-### 在手机或另一台 Mac 上接着做
+### 从 iPhone 或另一台 Mac 连接
 
-1. 在另一台设备安装 CtrlX。iPhone 需要 **iOS 18 或更新版本**，目前通过
-   [本地签名安装](RELEASE.md#local-overwrite-installation)，尚未提供 App Store 下载。
-2. 两端使用同一个 Relay（连接设备的中继服务）。可以填写 `wss://ctrlx.zengjice.com:7001`，
-   或[自行部署](docs/self-hosting.md)。若所选服务要求访问密钥，请在运行项目的 Mac 上打开
-   **Settings → Relay → This Mac · Relay Traffic → Access Key**，填写后点击 **Save Access Key**。
-3. 在运行项目的 Mac 上生成配对码，在另一台设备输入。打开刚才的对话，继续下一句话。
+1. 在第二台设备安装 CtrlX。iPhone 需要 **iOS 18 或更新版本**，目前通过 Xcode 本地签名安装。[iPhone 安装说明](RELEASE.md#local-overwrite-installation)
+2. 两端选择同一 Relay。可以使用 `wss://ctrlx.zengjice.com:7001`，也可以自建。若服务要求访问密钥，在 Host 的 **Settings → Relay → This Mac · Relay Traffic → Access Key** 填写，再点 **Save Access Key**。
+3. 在 Host 生成配对码，在另一台设备输入。选择刚才的项目和标签就能继续输入。远程使用期间，Host 需要保持唤醒、联网并运行 CtrlX。
 
-远程使用时，运行项目的 Mac 需要保持唤醒、联网并运行 CtrlX。
-iOS 后台提醒还需要中继服务配置匹配的 APNs 推送，详见[推送配置](docs/push-notifications-plan.md)。
-查看 iOS 模拟器时，运行项目的 Mac 还需要 Xcode 和相应的模拟器运行时。
+如需在锁屏时收到 iPhone 通知，Relay 的 APNs 配置要与安装的 iOS App 匹配。[推送配置](docs/self-hosting.md#apns)
 
-## 项目和对话放在哪里
+## 隐私与开源
 
-项目、开发环境和 Agent 的原生对话历史仍在你的 Mac 上。跨设备的工作区通信采用端到端加密，
-中继服务能处理连接元数据，但无法读取终端内容。你可以自行部署中继，默认开放模式无需 CtrlX
-账号或订阅，也不需要为 Mac 开放 SSH 入站端口。
+两端都主动连接 Relay，Host 无需开放入站端口。工作区内容只有配对设备能解密。自托管 Relay 的默认开放模式无需 CtrlX 账号或订阅。[架构与加密](docs/architecture.md) · [自托管指南](docs/self-hosting.md)
 
-如果启用云端语音纠错，语音候选和有限的终端上下文会直接发送给你选择的服务提供方。
-更多说明见[连接与加密](docs/architecture.md)和[自托管指南](docs/self-hosting.md)。
+Agent 使用你配置的 AI 服务。若开启云端语音纠错，候选文本和当前终端的一小段上下文会直接发送到你选择的服务。[语音与快捷操作](docs/terminal-quick-actions.md)
 
-## 文档与开源
-
-[文件与分享](docs/file-browser.md) · [浏览网页](docs/agent-browser.md) ·
-[测试 iOS App](docs/agent-simulator-design.md) · [语音与快捷操作](docs/terminal-quick-actions.md) ·
-[Orbie](docs/global-agent-design.md)
-
-Mac App、iOS App 和中继服务均开源。查看[版本记录](MODIFICATIONS.md)、
-[技术文档](docs/README.md)、[贡献指南](CONTRIBUTING.md)和[构建说明](AGENTS.md)。
+Mac App、iOS App 和 Relay 均开源。[技术文档](docs/README.md) · [贡献指南](CONTRIBUTING.md) · [构建说明](AGENTS.md)
 
 ## 许可证与来源
 

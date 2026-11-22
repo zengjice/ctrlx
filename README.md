@@ -1,161 +1,84 @@
-<p align="center">
-  <img src="Brand/CtrlX-AppIcon.png" width="80" alt="CtrlX app icon" />
-</p>
-
 # CtrlX
 
-[简体中文](README_ZH.md) · [Get started](#get-started) · [Documentation](docs/README.md)
+[简体中文](README_ZH.md) · [Try it on your Mac](#open-your-first-project-on-mac) · [Documentation](docs/README.md)
 
-> **Your AI works on your Mac. You can keep going from your phone.**
+CtrlX is another AI coding workbench. Take your **context** with you when you switch devices, inspect a file or fork a conversation. For **long-running tasks**, let agents implement, review and revise in turn.
 
-CtrlX lets you work with Codex, Claude Code and other coding agents from your Mac
-or iPhone: explain what you need, answer questions, check the result and send
-feedback. Your project and agents stay on the original Mac. Switching devices
-brings you back to the same conversation and the same work.
+## Context
 
-If you juggle several projects or step away while AI is working, CtrlX helps you
-see who is busy, who needs you and which conversation to return to.
+| Quality | What you can do |
+| --- | --- |
+| **Completeness** | • **Get the names right.** Dictate a branch name on iPhone and voice correction can check its spelling against your terminal. |
+| | • **Show the evidence.** Send the original file with your request, or circle the line that failed in a screenshot. |
+| | • **Include your acceptance criteria.** Save “Add a regression test first” as a quick phrase and reuse it with a tap. |
+| **Continuity** | • **Pick up on another device.** Start on your Mac and return to the same tab on iPhone or another Mac. |
+| | • **Send feedback across tools.** Mark up a file, web page or simulator screen and drop the annotation into the original conversation’s draft. |
+| | • **Let another agent try an idea.** Press ⌘F in a Codex or Claude Code tab on Mac. The new agent starts with the conversation so far. Choose a new Git worktree from the Fork menu to isolate its edits. [Fork a conversation](docs/services-reference.md#fork-a-native-agent-conversation-macios) |
+| | • **Call up Orbie from other apps.** Use a global Mac shortcut to pick up the discussion, or fork an Orbiter to explore a side question. [Orbie and Orbiters](docs/global-agent-design.md) |
+| | • **Work with a teammate’s agent (planned).** We’d like your agent to be able to pass an agreed API design to a colleague’s agent so it can start the integration. |
+| **Recoverability** | • **Get your workspace back.** Enable workspace recovery to restore tabs, splits and unsent drafts in the CtrlX editor after your Mac restarts. |
+| | • **Reopen the original conversation.** Supported Codex and Claude Code versions can resume a verified conversation automatically. If confirmation is needed, tap **Resume** on iPhone. [Workspace recovery](docs/workspace-recovery-design.md) |
 
-[Install for Mac](#get-started) · [iPhone installation](RELEASE.md#local-overwrite-installation)
+## Long-running tasks
 
-## Explain the task, then get on with your day
+| Stage | What you can do |
+| --- | --- |
+| **While agents work** | • **Put your phone away.** Agents keep running on the development Mac if your phone disconnects. You can also enable **Keep this Mac awake** to prevent idle sleep. |
+| **When agents need you** | • **Go straight to the decision.** Tap a question or approval notification on iPhone to open the tab that needs your answer. |
+| **Workflows** | • **Start review when the implementation is ready.** A step can span several turns. Have Codex mark it complete before its final reply goes to Claude Code on the same Mac. |
+| | • **Review in parallel, then revise.** Ask one agent to check the implementation and another to check the tests. Pass both reviews to the same revision step. |
+| | • **Continue after a restart.** When the Mac restarts, review the results of completed steps and choose **Continue**. [Agent workflows](docs/multi-agent-design.md) |
 
-Give an Agent a request, attach a screenshot or speak your idea. Voice input can
-use terminal context to correct technical terms and mixed-language speech. Check
-the text before sending it, and save frequent instructions as quick phrases.
+## Product architecture
 
-Once work starts, you can leave your desk. CtrlX notifies you when an Agent
-finishes, asks a question or needs permission. Open the notification on your
-iPhone, return to that conversation and provide what it needs to continue. Photos
-you take and files shared from other apps can come back into the project too.
+![CtrlX architecture. The Host Mac runs agents in tmux, coordinates workflows and provides files, Git, a browser and the iOS Simulator. A paired Mac or iPhone uses that workspace through an end-to-end encrypted connection via the Relay.](docs/assets/ctrlx-architecture.svg)
 
-The full terminal is always available when you want to inspect the process,
-add instructions or take over.
+Your project and tmux sessions stay on the development Mac (the **Host**). A paired iPhone or another Mac (the **Viewer**) connects through the **Relay** with end-to-end encryption.
 
-## When it says “done,” try the result yourself
+## An export button, from request to review
 
-Checking a result often means opening it. You can do that from your phone while
-the project is still running on your Mac:
+1. **Describe the change on Mac.** Attach a screenshot of the report and dictate “Add an Export PDF button next to the filters and keep the column order.” Check the draft and send it. [Context-aware voice input](docs/terminal-quick-actions.md#context-aware-voice-input)
+2. **Try it on iPhone.** Tap the agent’s notification to return to its question and reply “Export all matching records.” In **Browser**, take over the `localhost` page the agent opened. Export the PDF and open it in **Files** from the downloads list. [Browser downloads](docs/agent-browser.md#human-downloads)
+3. **Show the agent what needs fixing.** If the last column is cut off, circle it in the PDF. Use **Choose Agent** to select the original conversation, then tap **Add to Input** and send it with “Keep long headings visible.” [File annotations](docs/file-browser.md#in-place-preview-annotation) · [Browser annotations](docs/agent-browser.md#in-place-screenshot-annotation) · [Simulator annotations](docs/agent-simulator-design.md#三端截图标注)
+4. **Ask another agent to check the result.** In a workflow, have Claude Code review the export against the filters and column order, then send its findings back to Codex for fixes.
 
-- **Building a website?** Open the Mac's local development page, click buttons,
-  fill in forms and play audio. The page keeps its Mac environment and login
-  state; your development server does not need a public address.
-- **Building an iOS app?** View and interact with the Mac's Simulator to walk
-  through a user flow. The Simulator continues running on the Mac.
-- **Writing documents or producing files?** Follow the Agent's file links to
-  read Markdown, view images and PDFs, play videos or download a file to your
-  device. Back on your Mac, inspect code diffs beside the terminal.
+## Everyday actions
 
-Spot something to change? Mark up a screenshot with a box or an arrow, add a
-sentence and give it back to the Agent. Agents can also use CtrlX's Browser and
-Simulator tools to check their own work. You can watch and take control when needed.
-
-## Follow several pieces of work at once
-
-Have one Agent develop, another review and an ordinary terminal ready alongside
-them. See their status and usage together, organize conversations by project and
-choose a model for each job. On Mac, use split views or separate windows when you
-need to compare work.
-
-**Fork a conversation** when you want to explore another direction. The new Agent
-starts with the existing context, while the original discussion stays available.
-When changes need their own working copies, start the work in separate Git worktrees.
-
-For repeated development, review and repair, save the handoffs as a **Workflow**.
-Send a developer's result to a reviewer, then pass the feedback into a repair
-step. You can also have reviewers work in parallel and combine their findings.
-You choose who does each step and can pause, continue or stop from your computer
-or phone. Agents in a workflow currently run on the same Mac.
-
-[Arrange Agent collaboration](docs/multi-agent-design.md)
-
-## Pick up where you left off
-
-Connect to your office Mac and your home Mac from one place. Return to an existing
-session when switching devices; your project and development environment stay on
-the Mac. Closing a viewing window or briefly losing the connection leaves its
-terminal processes running.
-
-With workspace recovery enabled, a Mac restart can restore saved layouts and
-supported Agent conversations. Remote clients also offer recovery controls when
-you need to intervene.
-
-For an ongoing conversation you can summon with a global shortcut on Mac, try
-**Orbie**. Continue your conversation, find related work and return to its Agent
-tab. Create an **Orbiter** for a focused job, or fork from Orbie to carry its
-conversation context into a separate Agent. Orbie is currently an early-stage
-feature on the local Mac.
+- **Save some typing.** Choose `/diff` in **Commands** to inspect changes. Enable sync on both devices to share your **Quick Phrases** library. [Quick commands](docs/terminal-quick-actions.md#curated-command-catalogs) · [Phrase sync](docs/terminal-quick-actions.md#optional-device-sync)
+- **Switch models or accounts.** Choose model and reasoning effort shortcuts per tab. **Dashboard** shows quota and reset times when the provider reports them. For official Codex or Claude Code accounts, **Log Out and Log In** signs out the account shared by that CLI configuration on the Host and reopens the conversation for manual sign-in. [Model shortcuts](docs/terminal-quick-actions.md#status-bar) · [Account changes](docs/services-reference.md#exit-and-resume-an-agent-macios)
 
 ## Get started
 
-Start with one conversation on your Mac, then connect another device.
+### Open your first project on Mac
 
-### Try it on your Mac
-
-You need an Apple Silicon Mac running **macOS 26 or later**, with an Agent CLI
-installed and signed in. CtrlX includes Codex and Claude Code integrations;
-OpenCode, pi and omp are available through plugins. Interactive features depend
-on the Agent.
-
-Install tmux and CtrlX:
+Install tmux and CtrlX on an **Apple Silicon Mac running macOS 26 or later**.
 
 ```bash
 brew install tmux
 curl -fsSL https://ctrlx-1256844776.cos.ap-guangzhou.myqcloud.com/macos/mac.sh | bash
 ```
 
-Open CtrlX and configure the integration in **Settings → Agents**. Choose
-**New Session → Start in Directory…**, pick your project and Agent, and start a
-conversation. Try a small request such as “Read this project's README and tell me
-where to start. Don't change any code yet.”
+Open CtrlX to see your existing tmux sessions. An ordinary shell works on its own. To add an agent, install its CLI on that Mac, sign in and configure the integration under **Settings → Agents**. Choose **New Session → Start in Directory…** to open a project, or **+ → New Agent…** to add a tab to an existing session.
 
-Existing tmux sessions appear automatically. Inside a session, use
-**+ → New Agent…** to add another Agent, or open an ordinary terminal.
+For a first request, click the microphone and ask “How do I run this project locally?” Click again to finish, then check the draft and send it.
 
-Published Mac packages are signed with the publisher's Developer ID Application
-identity and notarized by Apple. Agents use the AI accounts or API services you
-configure for them.
+Codex, Claude Code and Traex have built-in integrations. Plugins are available for OpenCode, pi and omp. Actions such as answering structured questions and forking depend on the agent. Published Mac packages are Developer ID signed and notarized by Apple.
 
-### Continue on your phone or another Mac
+### Connect an iPhone or another Mac
 
-1. Install CtrlX on the other device. iPhone requires **iOS 18 or later** and
-   currently uses [locally signed builds](RELEASE.md#local-overwrite-installation);
-   there is no App Store download yet.
-2. Use the same Relay—the service connecting your devices—on both ends. Enter
-   `wss://ctrlx.zengjice.com:7001` or [host your own](docs/self-hosting.md).
-   If the service requires an access key, enter it on the Mac running your project
-   under **Settings → Relay → This Mac · Relay Traffic → Access Key**, then choose
-   **Save Access Key**.
-3. Generate a pairing code on the Mac running your project and enter it on the
-   other device. Open your conversation and continue with the next message.
+1. Install CtrlX on the second device. iPhone requires **iOS 18 or later** and currently uses a locally signed Xcode build. [iPhone installation](RELEASE.md#local-overwrite-installation)
+2. Select the same Relay on both devices. Use `wss://ctrlx.zengjice.com:7001` or host your own. If the service requires an access key, enter it on the Host under **Settings → Relay → This Mac · Relay Traffic → Access Key**, then choose **Save Access Key**.
+3. Generate a pairing code on the Host and enter it on the other device. Select the project and tab you just opened and continue typing. Keep the Host awake, online and running CtrlX while you work remotely.
 
-For remote use, the Mac running your project must stay awake, online and running
-CtrlX. Background iPhone alerts also require matching APNs configuration on the
-Relay; see [push setup](docs/push-notifications-plan.md). Viewing an iOS Simulator
-requires Xcode and an installed Simulator runtime on that Mac.
+For lock-screen notifications on iPhone, the Relay’s APNs settings must match the installed iOS app. [Push configuration](docs/self-hosting.md#apns)
 
-## Where your work lives
+## Privacy and open source
 
-Your project, development environment and the Agent's native conversation history
-stay on your Mac. Workspace traffic between devices is end-to-end encrypted. The
-Relay handles connection metadata but cannot read terminal content. You can host
-it yourself; its default open mode needs no CtrlX account or subscription, and
-you do not need to open an inbound SSH port on your Mac.
+Both devices connect outbound to the Relay, so the Host needs no open inbound port. Only the paired devices can decrypt workspace content. A self-hosted Relay in its default open mode requires no CtrlX account or subscription. [Architecture and encryption](docs/architecture.md) · [Self-hosting guide](docs/self-hosting.md)
 
-Optional cloud voice correction sends speech candidates and a limited amount of
-terminal context directly to your chosen provider. See
-[connections and encryption](docs/architecture.md) and the
-[self-hosting guide](docs/self-hosting.md).
+Agents use the AI service you configure. Optional cloud voice correction sends speech candidates and a short excerpt of terminal context directly to your chosen provider. [Voice input and shortcuts](docs/terminal-quick-actions.md)
 
-## Documentation and open source
-
-[Files and sharing](docs/file-browser.md) · [Browsing websites](docs/agent-browser.md) ·
-[Testing iOS apps](docs/agent-simulator-design.md) · [Voice and shortcuts](docs/terminal-quick-actions.md) ·
-[Orbie](docs/global-agent-design.md)
-
-The Mac app, iOS app and Relay are open source. See the
-[release notes](MODIFICATIONS.md), [technical documentation](docs/README.md),
-[contribution guide](CONTRIBUTING.md) and [build instructions](AGENTS.md).
+The Mac app, iOS app and Relay are open source. [Technical documentation](docs/README.md) · [Contributing](CONTRIBUTING.md) · [Build instructions](AGENTS.md)
 
 ## License and origin
 
