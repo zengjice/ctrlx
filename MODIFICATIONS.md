@@ -7,6 +7,25 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.178 — Clearer iOS Tabs and uninterrupted Codex activity
+
+- Keep Codex's current turn state when context compaction starts a new session
+  segment, so the terminal does not appear idle while the Agent is still active.
+  See [Codex plugins](docs/plugins/codex.md).
+- Keep the iOS Dashboard quota warning visually separate from the gauge icon,
+  preserving both the connection indicator and warning at compact sizes.
+- Make iOS Tabs reordering easier to follow with row separators, a projected
+  insertion line and highlighted grouping targets. Preserve drag and drop
+  between iPad windows connected to the same Host. See
+  [terminal quick actions](docs/terminal-quick-actions.md).
+
+- Validation: 27 focused Swift tests across `CodexTranslatorTests` and
+  `IOSPaneLinkedTabsTests` passed, including post-compaction session start and
+  shared tab insertion, grouping and cross-window model behavior.
+- This release builds macOS only. The iOS behavior changes were not rerun as a
+  physical-device acceptance pass for this version; the final artifact is
+  Developer ID signed and notarized by the release workflow.
+
 ## 3.0.177 — Photo previews and reliable Agent continuity
 
 - Add zoomable photo previews to terminal and workflow attachments on Mac and
