@@ -6,6 +6,7 @@
     struct ResourceTabNavigationBar: View {
         let sourceName: String?
         let isAgentSource: Bool
+        let navigatesWithinGroup: Bool
         let isEnabled: Bool
         let onAction: (ResourceTabNavigationPolicy.Action) -> Void
 
@@ -53,11 +54,11 @@
                     .contentShape(Rectangle())
                 }
                 .accessibilityLabel(sourceName.map { "Return to \($0)" } ?? "Show Tabs")
-                .accessibilityHint(sourceName == nil ? "Swipe left or right to switch tabs. Swipe up to show tabs." : "Swipe left or right to switch within this group. Swipe up to show tabs.")
+                .accessibilityHint(navigatesWithinGroup ? "Swipe left or right to switch within this group. Swipe up to show tabs." : "Swipe left or right to switch tabs. Swipe up to show tabs.")
                 .accessibilityIdentifier("resource-navigation-source")
                 .accessibilityActions {
-                    Button(sourceName == nil ? "Previous Tab" : "Previous Tab in Group") { onAction(.previous) }
-                    Button(sourceName == nil ? "Next Tab" : "Next Tab in Group") { onAction(.next) }
+                    Button(navigatesWithinGroup ? "Previous Tab in Group" : "Previous Tab") { onAction(.previous) }
+                    Button(navigatesWithinGroup ? "Next Tab in Group" : "Next Tab") { onAction(.next) }
                 }
                 .disabled(!isEnabled)
                 if sourceName != nil {

@@ -6,6 +6,26 @@ import Testing
 
 @MainActor
 struct IOSPaneLinkedTabsTests {
+    @Test("Return navigation follows the latest terminal origin without making the resource pane-bound")
+    func independentResourceReturnTarget() throws {
+        let current = windows([UUID(), UUID()])
+        let a = try #require(current[0].panes.first?.workspaceIdentity)
+        let b = try #require(current[1].panes.first?.workspaceIdentity)
+        let independent = FileBrowserTab(hostTab: .init(sessionName: "work", initialDirectory: "/Shared", resourceSessionID: a.sessionID))
+        let linked = FileBrowserTab(hostTab: .init(sessionName: "work", sourcePaneID: "%0", initialDirectory: "/Agent"))
+        let tabs = IOSPaneLinkedTabs(files: [independent, linked], browsers: [], simulators: [], windows: current, storedOrder: [])
+        let file = PaneLinkedTabID.file(independent.id)
+        #expect(tabs.returnTarget(for: file, openedFrom: nil) == nil)
+        #expect(tabs.returnTarget(for: file, openedFrom: a)?.paneID == "%0")
+        #expect(tabs.returnTarget(for: file, openedFrom: b)?.paneID == "%1")
+        #expect(tabs.sourcePaneID(file) == nil)
+        #expect(tabs.topLevel(stored: []).contains(.resource(file)))
+        #expect(tabs.returnTarget(for: .file(linked.id), openedFrom: b)?.paneID == "%0")
+
+        let replacement = IOSPaneLinkedTabs(files: [independent], browsers: [], simulators: [], windows: windows([UUID(), UUID()]), storedOrder: [])
+        #expect(replacement.returnTarget(for: file, openedFrom: a) == nil)
+    }
+
     @Test("Ungrouping or adding a terminal keeps automatic groups after iOS top-level rows")
     func sharedOrderKeepsAutomaticGroupsBehindTopLevelRows() {
         let aID = UUID(), bID = UUID(), cID = UUID()

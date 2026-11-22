@@ -46,6 +46,11 @@
             let inputBinding: ViewerWorkspaceInputBinding
         }
 
+        private struct ResourceOpenRequest: Equatable {
+            let request: ResourceTabRequest
+            let returnPane: WorkspacePaneIdentity?
+        }
+
         private enum WindowShortcutScope {
             case terminal
             case linkedTab(sourcePaneID: String?)
@@ -64,7 +69,7 @@
         @State private var pendingSimulatorRequest: SimulatorOpenRequest?
         @State private var pendingFilesRequest: FilesOpenRequest?
         @State private var pendingBrowserDownload: String?
-        @State private var pendingResourceRequest: ResourceTabRequest?
+        @State private var pendingResourceRequest: ResourceOpenRequest?
         @State private var pendingFilesCloseID: UUID?
         @State private var pendingBrowserLink: TerminalBrowserLinkRequest?
         @State private var browserSelection = IOSHostTabSelection()
@@ -298,19 +303,16 @@
 
         private var selectedLinkedTabShortcuts: (window: TmuxWindow?, scope: WindowShortcutScope)? {
             guard let selectedLinkedTab else { return nil }
-            let source = linkedTabSource(selectedLinkedTab)
+            let source = linkedTabs.returnTarget(for: selectedLinkedTab, openedFrom: nil)
             return (source?.window, .linkedTab(sourcePaneID: source?.paneID))
         }
 
-        private func linkedTabSource(_ tab: PaneLinkedTabID) -> (paneID: String, window: TmuxWindow)? {
-            guard
-                let paneID = linkedTabs.sourcePaneID(tab),
-                let window = linkedTabs.sourceWindow(for: tab) else { return nil }
-            return (paneID, window)
+        private func resourceReturnTarget(_ tab: PaneLinkedTabID) -> (paneID: String, window: TmuxWindow)? {
+            linkedTabs.returnTarget(for: tab, openedFrom: fileWorkspace.resourceReturnPanes[tab])
         }
 
         private func returnToLinkedTabSource(_ tab: PaneLinkedTabID) {
-            guard let source = linkedTabSource(tab) else { return }
+            guard selectedLinkedTab == tab, let source = resourceReturnTarget(tab) else { return }
             selectTerminalWindow(source.window, preferredPaneID: source.paneID)
         }
 
@@ -649,7 +651,7 @@
         private var fileLinkContent: some View {
             browserContent
                 .safeAreaInset(edge: .bottom) {
-                    if pendingSimulatorRequest != nil || pendingResourceRequest?.operation == .open(kind: .simulator, location: nil) {
+                    if pendingSimulatorRequest != nil || pendingResourceRequest?.request.operation == .open(kind: .simulator, location: nil) {
                         HStack {
                             ProgressView()
                             Text("Opening iOS Simulator on Host…").font(.callout)
@@ -712,7 +714,7 @@
                     guard let request = pendingResourceRequest else { return }
                     let origin = (window?.stableId, activePaneId, fileWorkspace.selectedID, browserSelection.selectedID, simulatorSelection.selectedID)
                     do {
-                        let result = try await ResourceTabClient.request(request, client: relayClient)
+                        let result = try await ResourceTabClient.request(request.request, client: relayClient)
                         try Task.checkCancellation()
                         guard
                             pendingResourceRequest == request,
@@ -724,12 +726,15 @@
                         if let file = result.file {
                             let tab = fileWorkspace.adopt(file)
                             tab.lastSelectedAt = Date()
+                            fileWorkspace.resourceReturnPanes[.file(tab.id)] = request.returnPane
                             fileWorkspace.selectedID = tab.id
                         }
                         if let browser = result.browser {
+                            fileWorkspace.resourceReturnPanes[.browser(browser.id)] = request.returnPane
                             browserSelection.selectedID = browser.id
                         }
                         if let simulator = result.simulator {
+                            fileWorkspace.resourceReturnPanes[.simulator(simulator.id)] = request.returnPane
                             simulatorSelection.selectedID = simulator.id
                         }
                     } catch is CancellationError { }
@@ -970,7 +975,7 @@
             return .init(sessionID: session.id, operation: .open(kind: kind, location: location))
         }
 
-        private func openResource(_ kind: ResourceTabKind) {
+        private func openResource(_ kind: ResourceTabKind, returnPane: WorkspacePaneIdentity?) {
             do {
                 let request = try resourceRequest(kind, location: kind == .files && newWindowDirectory.hasPrefix("/") ? newWindowDirectory : nil)
                 pendingFileLink = nil
@@ -980,7 +985,7 @@
                 cancelCreationFollowUp()
                 isKeyboardActive = false
                 quickActionPresentation.dismiss()
-                pendingResourceRequest = request
+                pendingResourceRequest = .init(request: request, returnPane: returnPane)
             } catch { commandError = error.localizedDescription }
         }
 
@@ -1035,6 +1040,9 @@
                     let tab = fileWorkspace.adopt(descriptor)
                     tab.lastSelectedAt = Date()
                     tab.openTerminalFile(destination, paneID: request.paneID)
+                    if descriptor.resourceSessionID != nil {
+                        fileWorkspace.resourceReturnPanes[.file(tab.id)] = pane.workspaceIdentity
+                    }
                     fileWorkspace.selectedID = tab.id
                     cancelCreationFollowUp()
                 } else {
@@ -1074,7 +1082,7 @@
         private func openTerminalBrowser(_ request: TerminalBrowserLinkRequest) async {
             guard
                 request.hostID == hostId,
-                sessionWindows.contains(where: { $0.panes.contains { $0.paneId == request.paneID } }) else { return }
+                let pane = sessionWindows.lazy.flatMap(\.panes).first(where: { $0.paneId == request.paneID }) else { return }
             let originWindowID = window?.id
             do {
                 let tab: RemoteBrowserTab
@@ -1087,6 +1095,9 @@
                 }
                 try Task.checkCancellation()
                 guard pendingBrowserLink == request, window?.id == originWindowID else { return }
+                if tab.resourceSessionID != nil {
+                    fileWorkspace.resourceReturnPanes[.browser(tab.id)] = pane.workspaceIdentity
+                }
                 browserSelection.selectedID = tab.id
                 simulatorSelection.selectedID = nil
                 fileWorkspace.selectedID = nil
@@ -1326,7 +1337,8 @@
 
         private func windowActionsMenu(_ window: TmuxWindow) -> some View {
             let actions = windowActions(window, includesWindowManagement: true, choose: { action in
-                chooseWindowMenuAction { performWindowTabAction(action, closeSource: window) }
+                let returnPane = activeResourceReturnPane
+                chooseWindowMenuAction { performWindowTabAction(action, closeSource: window, returnPane: returnPane) }
             })
             let pane = window.panes.first(where: { $0.paneId == activePaneId }) ?? window.activePane
             let service = activeService.flatMap { $0.paneId == pane?.paneId ? $0 : nil }
@@ -1423,12 +1435,11 @@
         private func windowShortcutButtons(_ window: TmuxWindow?, scope: WindowShortcutScope) -> some View {
             HStack(spacing: 8) {
                 Group {
-                    if let paneID = scope.sourcePaneID {
-                        LinkedTabSourceButton(isAgentSource: sessionStore.paneState(for: paneID, hostId: hostId)?.agentSession != nil) {
-                            if let selectedLinkedTab {
-                                returnToLinkedTabSource(selectedLinkedTab)
-                            }
+                    if case .linkedTab = scope, let selectedLinkedTab, let source = resourceReturnTarget(selectedLinkedTab) {
+                        LinkedTabSourceButton(isAgentSource: sessionStore.paneState(for: source.paneID, hostId: hostId)?.agentSession != nil) {
+                            returnToLinkedTabSource(selectedLinkedTab)
                         }
+                        .disabled(!resourceNavigationEnabled)
                     }
                     if window != nil || relayClient.hostSupportsIndependentResources {
                         windowActions(window, scope: scope)
@@ -1478,7 +1489,11 @@
                 logoutUnavailableReason: sessionStore.agentRestartUnavailableReason(hostID: hostId, isConnected: relayClient.isHostConnected, logoutBeforeResume: true),
                 restartingAgentPaneIDs: restartingAgentPaneIDs,
                 choose: choose ?? { action in
-                    performWindowTabAction(action, preferredPaneID: scope.sourcePaneID)
+                    let returnPane: WorkspacePaneIdentity? = switch scope {
+                    case .terminal: activeResourceReturnPane
+                    case .linkedTab: nil
+                    }
+                    performWindowTabAction(action, preferredPaneID: scope.sourcePaneID, returnPane: returnPane)
                 }
             )
         }
@@ -1537,10 +1552,11 @@
         }
 
         private func resourceNavigationBar(_ tab: PaneLinkedTabID) -> some View {
-            let source = linkedTabSource(tab)
+            let source = resourceReturnTarget(tab)
             return ResourceTabNavigationBar(
                 sourceName: source.map { linkedTabs.title(for: $0.paneID) },
                 isAgentSource: source.map { sessionStore.paneState(for: $0.paneID, hostId: hostId)?.agentSession != nil } ?? false,
+                navigatesWithinGroup: linkedTabs.sourcePaneID(tab) != nil && sharedTabLayout?.groups[tab.sessionTabID] == nil,
                 isEnabled: resourceNavigationEnabled
             ) { action in
                 guard resourceNavigationEnabled, selectedLinkedTab == tab else { return }
@@ -1593,12 +1609,20 @@
             }
         }
 
-        private func performWindowTabAction(_ action: WindowTabAction, preferredPaneID: String? = nil, closeSource: TmuxWindow? = nil) {
+        private var activeResourceReturnPane: WorkspacePaneIdentity? {
+            guard terminalIsVisible, let window, let paneID = actionPaneID(in: window, preferredPaneID: nil) else { return nil }
+            return window.panes.first { $0.paneId == paneID }?.workspaceIdentity
+        }
+
+        private func performWindowTabAction(
+            _ action: WindowTabAction, preferredPaneID: String? = nil, closeSource: TmuxWindow? = nil,
+            returnPane: WorkspacePaneIdentity? = nil
+        ) {
             pendingSimulatorRequest = nil
             pendingResourceRequest = nil
             switch action {
             case let .newResource(kind):
-                openResource(kind)
+                openResource(kind, returnPane: returnPane)
             case let .restartAgent(source):
                 restartAgent(source)
             case let .window(_, operation):
@@ -1616,7 +1640,7 @@
                 case .openFiles,
                      .openAnotherFiles:
                     if relayClient.hostSupportsIndependentResources {
-                        openResource(.files)
+                        openResource(.files, returnPane: returnPane)
                         return
                     }
                     guard
@@ -1632,7 +1656,7 @@
                 case .openSimulator,
                      .openNewSimulator:
                     if relayClient.hostSupportsIndependentResources {
-                        openResource(.simulator)
+                        openResource(.simulator, returnPane: returnPane)
                         return
                     }
                     guard
@@ -1658,7 +1682,7 @@
                     )
                 case .openBrowser:
                     if relayClient.hostSupportsIndependentResources {
-                        openResource(.browser)
+                        openResource(.browser, returnPane: returnPane)
                         return
                     }
                     guard let paneID = actionPaneID(in: target, preferredPaneID: preferredPaneID) else {
@@ -1744,6 +1768,7 @@
                 Task {
                     do {
                         try await RemoteSimulatorSession.close(tab: tab, client: relayClient)
+                        fileWorkspace.resourceReturnPanes.removeValue(forKey: .simulator(id))
                     } catch {
                         simulatorSelection.cancelClosing(id)
                         commandError = error.localizedDescription
@@ -1755,6 +1780,7 @@
                 Task {
                     do {
                         try await RemoteBrowserSession.close(tab: tab, client: relayClient)
+                        fileWorkspace.resourceReturnPanes.removeValue(forKey: .browser(id))
                     } catch {
                         browserSelection.cancelClosing(id)
                         commandError = error.localizedDescription

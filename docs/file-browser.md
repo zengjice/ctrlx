@@ -217,8 +217,9 @@ medium/large tab-list sheet without a nested navigation stack. List selections a
 applied after dismissing the sheet; toolbar actions run directly for the current
 window, resolving its stable ID again before opening a sheet or alert.
 On iOS, Files, Host Browser and iOS Simulator tabs expose **Close Tab** directly
-in the shortcut row, with no top-right **More** menu. Only pane-bound resources
-show source navigation; independent human resources have no source button.
+in the shortcut row, with no top-right **More** menu. Pane-bound resources and
+resources opened from a terminal show a return button. Opening a path in a reused
+Files tab updates its return destination to the latest source pane on this iPhone.
 Closing uses the current resource's stable tab ID. The source action is unavailable if
 that terminal is gone; Close stays in the row. The tab list keeps its per-resource close menus, including
 Simulator. Host-backed close actions require a connection; simulator closing also

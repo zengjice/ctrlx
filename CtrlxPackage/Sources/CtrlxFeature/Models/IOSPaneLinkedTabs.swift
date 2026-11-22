@@ -127,6 +127,19 @@ struct IOSPaneLinkedTabs {
         return windows.first { $0.panes.contains { $0.paneId == sourcePaneID } }
     }
 
+    func returnTarget(for item: PaneLinkedTabID, openedFrom origin: WorkspacePaneIdentity?) -> (paneID: String, window: TmuxWindow)? {
+        if let paneID = sourcePaneID(item) {
+            return sourceWindow(for: item).map { (paneID, $0) }
+        }
+        guard let origin else { return nil }
+        for window in windows {
+            if let pane = window.panes.first(where: { origin.isSamePane(as: $0.workspaceIdentity) }) {
+                return (pane.paneId, window)
+            }
+        }
+        return nil
+    }
+
     func title(for source: String?) -> String {
         guard let source else { return "Other" }
         guard

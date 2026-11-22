@@ -1,11 +1,25 @@
 import AppKit
 import SwiftUI
 
-// Only transport and unrelated UI state are stubbed. The task, selection
-// callbacks and Files routing method are extracted from WindowLayoutView.
+// The fixture substitutes transport and presentation around production routing.
 struct ResourceTabRequest: Equatable { let id = UUID() }
-enum ResourceTabKind { case files }
-struct ViewerWorkspaceInputBinding { }
+enum ResourceTabKind: Equatable { case files, browser, simulator }
+enum WindowTabAction { case newResource(ResourceTabKind) }
+struct WorkspacePaneIdentity: Equatable {
+    let id = UUID()
+    func isSamePane(as other: Self?) -> Bool {
+        self == other
+    }
+}
+
+enum PaneLinkedTabID: Hashable { case file(UUID), browser(UUID), simulator(UUID) }
+/// PRODUCTION_DECLARATIONS
+struct ViewerWorkspaceInputBinding {
+    func binding(paneID _: String) -> Self {
+        self
+    }
+}
+
 struct HostFileTab: Equatable { let id: UUID
     var resourceSessionID: UUID?
 }
@@ -16,57 +30,122 @@ struct ResourceResult { var file: HostFileTab?
 }
 
 enum FileBrowserError: Error { case message(String) }
-struct Window { let id: String
+struct Pane {
+    let paneId: String
+    let workspaceIdentity: WorkspacePaneIdentity? = .init()
+}
+
+struct TmuxWindow {
+    let id: String
+    var panes: [Pane] = []
+    var activePane: Pane? {
+        panes.first
+    }
+
     var stableId: String {
         id
     }
 }
 
-struct ConnectionManager { func connection(for _: String) { } }
+struct ConnectionManager { func connection(for _: String) {} }
+
+struct RepositoryFileContext: Equatable {
+    init?(pane _: Pane) {}
+}
+
+enum FileBrowserSource { case remote(hostID: String, paneID: String, connection: Void) }
+
+struct TerminalFileDestination {
+    let file: String?
+    static func resolve(path: String, context _: RepositoryFileContext?, source _: FileBrowserSource) async throws -> Self {
+        .init(file: path)
+    }
+}
+
+struct TerminalArtifactPreview {
+    init(link _: TerminalFileLinkRequest, context _: RepositoryFileContext, source _: FileBrowserSource, path _: String) {}
+    static func supports(path _: String?) -> Bool {
+        false
+    }
+}
+
+struct PreviewKeyboardRestore {
+    func captureIfNeeded(paneID _: String, keyboardIsActive _: Bool) {}
+    func discard() {}
+}
+
+struct QuickActionPresentation { func dismiss() {} }
+
+struct LinkedTabs {
+    let windows: [TmuxWindow]
+    func sourcePaneID(_: PaneLinkedTabID) -> String? {
+        nil
+    }
+
+    func sourceWindow(for _: PaneLinkedTabID) -> TmuxWindow? {
+        nil
+    }
+    // PRODUCTION_RETURN_TARGET
+}
 
 @MainActor @Observable
 final class Selection { var selectedID: UUID? }
 @MainActor @Observable
-final class FileTab {
-    let hostTab: HostFileTab?
+final class FileBrowserTab {
+    private(set) var hostTab: HostFileTab?
     var id: UUID {
         hostTab!.id
     }
 
     var lastSelectedAt = Date()
-    init(_ tab: HostFileTab) {
-        self.hostTab = tab
+    var openedFile: String?
+    init(hostTab tab: HostFileTab) {
+        hostTab = tab
+    }
+
+    func updateHostTab(_ tab: HostFileTab) {
+        hostTab = tab
+    }
+
+    func releaseResources() {}
+    func openTerminalFile(_ destination: TerminalFileDestination, paneID _: String) {
+        openedFile = destination.file
     }
 }
 
 @MainActor @Observable
 final class Workspace {
     var selectedID: UUID?
-    var tabs: [FileTab] = []
-    func adopt(_ tab: HostFileTab) -> FileTab {
-        let file = FileTab(tab)
-        tabs.append(file)
-        return file
-    }
+    var tabs: [FileBrowserTab] = []
+    func save() {}
+    // PRODUCTION_WORKSPACE
 }
 
 @MainActor @Observable
 final class FixtureState {
-    var pending: ResourceTabRequest?
-    var window: Window? = .init(id: "@1")
+    var pending: ResourceOpenRequest?
+    var window: TmuxWindow? = .init(id: "@1")
     var pane: String? = "%1"
     var error: String?
-    var fileLink: String?
+    var fileLink: TerminalFileLinkRequest?
     var filesRequest: String?
     var browserLink: String?
     var simulatorRequest: String?
-    let files = Workspace()
+    let files: Workspace
     let browser = Selection()
     let simulator = Selection()
-    let hostSupportsIndependentResources = false
+    var hostSupportsIndependentResources = false
+    let workspaceInputState = ViewerWorkspaceInputBinding()
+    var artifactPreview: TerminalArtifactPreview?
+    var artifactPreviewIsPresented = false
+    var isKeyboardActive = false
     var continuations: [UUID: CheckedContinuation<ResourceResult, any Error>] = [:]
-    var selection: String {
-        "\(window?.id ?? "nil")|\(pane ?? "nil")|\(files.selectedID)|\(browser.selectedID)|\(simulator.selectedID)"
+    init(files: Workspace = Workspace()) {
+        self.files = files
+    }
+
+    var selection: (String?, String?, UUID?, UUID?, UUID?) {
+        (window?.id, pane, files.selectedID, browser.selectedID, simulator.selectedID)
     }
 }
 
@@ -110,7 +189,7 @@ struct FixtureView: View {
         state.simulator
     }
 
-    var window: Window? {
+    var window: TmuxWindow? {
         state.window
     }
 
@@ -118,11 +197,11 @@ struct FixtureView: View {
         state.pane
     }
 
-    var pendingResourceRequest: ResourceTabRequest? {
+    var pendingResourceRequest: ResourceOpenRequest? {
         get { state.pending } nonmutating set { state.pending = newValue }
     }
 
-    var pendingFileLink: String? {
+    var pendingFileLink: TerminalFileLinkRequest? {
         get { state.fileLink } nonmutating set { state.fileLink = newValue }
     }
 
@@ -145,15 +224,65 @@ struct FixtureView: View {
     let connectionManager = ConnectionManager()
     let hostId = "host"
     let sessionName = "work"
-    func resourceRequest(_: ResourceTabKind) throws -> ResourceTabRequest {
+    let newWindowDirectory = "/work"
+    let quickActionPresentation = QuickActionPresentation()
+    let previewKeyboardRestore = PreviewKeyboardRestore()
+
+    var artifactPreview: TerminalArtifactPreview? {
+        get { state.artifactPreview } nonmutating set { state.artifactPreview = newValue }
+    }
+
+    var artifactPreviewIsPresented: Bool {
+        get { state.artifactPreviewIsPresented } nonmutating set { state.artifactPreviewIsPresented = newValue }
+    }
+
+    var isKeyboardActive: Bool {
+        get { state.isKeyboardActive } nonmutating set { state.isKeyboardActive = newValue }
+    }
+
+    var terminalIsVisible: Bool {
+        fileWorkspace.selectedID == nil && browserSelection.selectedID == nil && simulatorSelection.selectedID == nil
+    }
+
+    var selectedLinkedTab: PaneLinkedTabID? {
+        fileWorkspace.selectedID.map(PaneLinkedTabID.file)
+    }
+
+    var linkedTabs: LinkedTabs {
+        .init(windows: window.map { [$0] } ?? [])
+    }
+
+    func actionPaneID(in window: TmuxWindow, preferredPaneID: String?) -> String? {
+        preferredPaneID ?? activePaneId ?? window.activePane?.paneId
+    }
+
+    func selectTerminalWindow(_ target: TmuxWindow, preferredPaneID: String?) {
+        state.window = target
+        state.pane = preferredPaneID
+        fileWorkspace.selectedID = nil
+        browserSelection.selectedID = nil
+        simulatorSelection.selectedID = nil
+    }
+
+    func restorePreviewKeyboard() {}
+    func cancelCreationFollowUp() {}
+    func resourceRequest(_: ResourceTabKind, location _: String? = nil) throws -> ResourceTabRequest {
         .init()
+    }
+
+    // swiftformat:disable:next unusedArguments
+    func performWindowTabAction(_ action: WindowTabAction, preferredPaneID _: String? = nil, returnPane: WorkspacePaneIdentity? = nil) {
+        switch action {
+            // PRODUCTION_NEW_RESOURCE
+        }
     }
 
     var body: some View {
         Text("Resource selection fixture")
         // PRODUCTION_MODIFIERS
     }
-    // PRODUCTION_METHOD
+    // PRODUCTION_METHODS
+    // PRODUCTION_SHORTCUT
 }
 
 @MainActor
@@ -165,7 +294,7 @@ func require(_ condition: @autoclosure () -> Bool, _ message: String) throws {
 
 @MainActor
 func waitUntil(_ message: String, _ condition: () -> Bool) async throws {
-    for _ in 0..<150 {
+    for _ in 0 ..< 150 {
         if condition() {
             return
         }
@@ -181,7 +310,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
         let view = FixtureView(state: state)
         let host = NSHostingView(rootView: view)
         let window = NSWindow(
-            contentRect: .init(x: -10_000, y: -10_000, width: 400, height: 200),
+            contentRect: .init(x: -10000, y: -10000, width: 400, height: 200),
             styleMask: [.titled],
             backing: .buffered,
             defer: false
@@ -192,9 +321,9 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor in
             do {
                 try await Task.sleep(for: .milliseconds(200))
-                for selection in 0..<5 {
+                for selection in 0 ..< 5 {
                     let request = ResourceTabRequest()
-                    state.pending = request
+                    state.pending = .init(request: request, returnPane: .init())
                     try await waitUntil("request started") { state.continuations[request.id] != nil }
                     switch selection {
                     case 0: state.window = .init(id: "@2")
@@ -209,11 +338,17 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
                     try await Task.sleep(for: .milliseconds(120))
                     try require(state.selection == expected, "Late result stole selection \(selection)")
                     try require(state.error == nil, "Cancelled open reported an error")
+                    try require(state.files.resourceReturnPanes.isEmpty, "Late result recorded a return pane")
                 }
                 print("PASS: 5 selection changes ignore late resource results")
-                let request = ResourceTabRequest()
+                let first = Pane(paneId: "%1"), second = Pane(paneId: "%2")
+                let split = TmuxWindow(id: "@1", panes: [first, second])
+                view.selectTerminalWindow(split, preferredPaneID: first.paneId)
+                try await Task.sleep(for: .milliseconds(100))
+
                 let newTab = HostFileTab(id: UUID())
-                state.pending = request
+                view.chooseShortcut(.newResource(.simulator), scope: .terminal)
+                guard let request = state.pending?.request else { throw FileBrowserError.message("Terminal shortcut did not start an open") }
                 try await waitUntil("unchanged request started") { state.continuations[request.id] != nil }
                 state.continuations.removeValue(forKey: request.id)?.resume(returning: .init(simulator: newTab))
                 try await waitUntil("new tab selected") { state.simulator.selectedID == newTab.id }
@@ -222,10 +357,55 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
                     "Successful open left another resource selected"
                 )
                 print("PASS: unchanged selection opens the resource")
+                try require(state.files.resourceReturnPanes[.simulator(newTab.id)] == first.workspaceIdentity, "Terminal shortcut lost its return pane")
+                view.selectTerminalWindow(split, preferredPaneID: first.paneId)
+                try await Task.sleep(for: .milliseconds(100))
+                let browser = HostFileTab(id: UUID())
+                view.performWindowTabAction(.newResource(.browser))
+                guard let fromTabs = state.pending?.request else { throw FileBrowserError.message("Tabs did not start an open") }
+                try await waitUntil("Tabs request started") { state.continuations[fromTabs.id] != nil }
+                state.continuations.removeValue(forKey: fromTabs.id)?.resume(returning: .init(browser: browser))
+                try await waitUntil("Tabs resource selected") { state.browser.selectedID == browser.id }
+                try require(state.files.resourceReturnPanes[.browser(browser.id)] == nil, "Tabs creation inherited a return pane")
+                print("PASS: terminal shortcut retains its return pane; Tabs creation has no return pane")
                 let reused = try await view.fileTabForTerminalLink(paneID: "%1", inputBinding: .init())
                 let created = try await view.fileTabForTerminalLink(paneID: "%1", new: true, inputBinding: .init())
                 try require(reused == HostFileTabClient.existing && created.id != reused.id, "Legacy new Files reused existing tab")
                 print("PASS: legacy Host receives explicit new Files intent")
+
+                state.hostSupportsIndependentResources = true
+                let sharedFile = HostFileTab(id: UUID(), resourceSessionID: UUID())
+                let fileTab = state.files.adopt(sharedFile)
+                for pane in [first, second] {
+                    view.selectTerminalWindow(split, preferredPaneID: pane.paneId)
+                    try await Task.sleep(for: .milliseconds(100))
+                    let link = TerminalFileLinkRequest(path: "/work/\(pane.paneId).txt", paneID: pane.paneId, hostID: view.hostId)
+                    state.fileLink = link
+                    await view.openTerminalFile(link)
+                    try require(state.files.selectedID == fileTab.id && fileTab.openedFile == link.path, "Terminal link did not reuse Files")
+                    try require(view.resourceReturnTarget(.file(fileTab.id))?.paneID == pane.paneId, "Files did not record the opening pane")
+                }
+
+                // A catalog can omit a tab and then publish the same UUID again.
+                state.files.syncHostTabs([])
+                try await Task.sleep(for: .milliseconds(100))
+                state.files.syncHostTabs([sharedFile])
+                state.files.selectedID = fileTab.id
+                try require(view.resourceReturnTarget(.file(fileTab.id))?.paneID == second.paneId, "Catalog gap cleared the second pane")
+
+                // Re-entering resets view selection while keeping the session workspace.
+                let reentered = FixtureState(files: state.files)
+                let reopened = FixtureView(state: reentered)
+                window.contentView = NSHostingView(rootView: reopened)
+                reopened.selectTerminalWindow(split, preferredPaneID: first.paneId)
+                reentered.files.selectedID = fileTab.id
+                reopened.returnToLinkedTabSource(.file(fileTab.id))
+                try require(reentered.pane == second.paneId && reentered.files.selectedID == nil, "Return did not select the second pane")
+                try require(reentered.files.tabs.contains { $0.id == fileTab.id }, "Return closed Files")
+                print("PASS: reused Files returns to the second pane after a catalog gap and session re-entry")
+                reentered.files.close(fileTab.id)
+                try require(reentered.files.resourceReturnPanes[.file(fileTab.id)] == nil, "Confirmed close kept a return pane")
+
                 window.close()
                 NSApplication.shared.terminate(nil)
             } catch {
@@ -245,6 +425,6 @@ struct ResourceSelectionProbe {
         let delegate = FixtureDelegate()
         app.delegate = delegate
         app.run()
-        withExtendedLifetime(delegate) { }
+        withExtendedLifetime(delegate) {}
     }
 }

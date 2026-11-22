@@ -38,6 +38,8 @@ final class IOSFileBrowserWorkspace {
 
     var linkedTabOrder: [PaneLinkedTabID] = []
     var topLevelTabOrder: [IOSTopLevelTabID] = []
+    // A temporarily incomplete Host catalog does not end a return route.
+    var resourceReturnPanes: [PaneLinkedTabID: WorkspacePaneIdentity] = [:]
     var didRestoreLinkedTabOrder = false
     let recoveryID = UUID()
     var recoveryReference: ViewerWorkspaceReference?
@@ -136,6 +138,7 @@ final class IOSFileBrowserWorkspace {
     }
 
     func close(_ id: UUID) {
+        resourceReturnPanes.removeValue(forKey: .file(id))
         tabs.first { $0.id == id }?.releaseResources()
         tabs.removeAll { $0.id == id }
         if selectedID == id {

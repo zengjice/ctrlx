@@ -401,8 +401,10 @@ separate from their content gestures. Tap the source Agent/Terminal name to retu
 to its exact pane, swipe horizontally to follow the existing group order (left:
 next, right: previous), or swipe up / tap Tabs to open the existing tab picker.
 Moving past either group edge returns to the source. Independent tabs follow the
-mixed top-level tab order and offer Tabs; they never join an arbitrary source group.
-The original top controls remain.
+mixed top-level tab order and offer Tabs. Opening one from a terminal link or
+shortcut remembers that pane in the iOS session workspace, including when you
+leave and re-enter the session. The return button leaves
+the resource open, with its Host ownership and permissions intact.
 The bar keeps its space during control/readonly changes and annotation; annotation
 and modal presentation suspend its actions. It sits above the keyboard and system
 Home area. Completed single-finger swipes cancel the touched button; short,
