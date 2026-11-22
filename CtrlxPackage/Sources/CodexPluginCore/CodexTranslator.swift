@@ -83,6 +83,7 @@ enum CodexTranslator {
     ) -> Output? {
         let body = action.body
         let sessionID = body.sessionId
+        let sessionStart = isSessionStart(action)
 
         // Project path: prefer the harvested project-dir context, fall back to
         // the payload `cwd`. Codex doesn't expose a project-dir env var, so the
@@ -126,12 +127,12 @@ enum CodexTranslator {
             closePaneOnSessionEnd: closePaneOnSessionEnd
         )
 
-        // Drop frames that produce no state change at all, so the dispatcher
-        // no-ops (spec §5 — `handleIngress` returns nil for log-and-ignore).
+        // A post-compaction SessionStart still carries conversation identity.
         if
             state == nil,
             notification == nil,
-            appActions.isEmpty {
+            appActions.isEmpty,
+            !sessionStart {
             return nil
         }
 
@@ -155,7 +156,7 @@ enum CodexTranslator {
                 approvalsReviewer: approvalsReviewer
             )
         )
-        if case .sessionStart = action {
+        if sessionStart {
             event.conversationStarted = true
         }
         return Output(event: event, pending: pending, guardianHandled: guardianHandled)
@@ -230,7 +231,8 @@ enum CodexTranslator {
     /// and the `PendingRequest` to retain for an opened form. Identical to the
     /// Claude core's rule (Codex shares `HookAction` and `HookEvent.isWorking`).
     /// Priority order: blocking forms (permission / question / plan) win; then
-    /// Stop / StopFailure → `.doneWorking`; SessionStart → `.idle`; otherwise the
+    /// Stop / StopFailure → `.doneWorking`; SessionStart → `.idle` unless it
+    /// follows context compaction; otherwise the
     /// working bit (`true → .working`, `false`/`nil → nil` "no opinion").
     ///
     /// `requestID` is unique per opened form via the core-supplied `occurrenceID`
@@ -277,8 +279,8 @@ enum CodexTranslator {
         case let .stopFailure(body):
             return (.doneWorking(summary: body.errorType), nil)
 
-        case .sessionStart:
-            return (.idle, nil)
+        case let .sessionStart(body):
+            return (body.source == "compact" ? nil : .idle, nil)
 
         case .setup,
              .sessionEnd,

@@ -346,7 +346,7 @@ struct CodexTranslatorTests {
 
     // MARK: - SessionStart
 
-    @Test("sessionStart initializes idle state without a notification", arguments: ["startup", "resume", "clear", "compact"])
+    @Test("sessionStart initializes idle state without a notification", arguments: ["startup", "resume", "clear"])
     func sessionStart(source: String) async throws {
         let (core, _) = try await makeCore()
         let json = """
@@ -365,6 +365,19 @@ struct CodexTranslatorTests {
         #expect(event.notification == nil)
         #expect(event.sessionID == "sess-start")
         #expect(event.tmuxPane == "%1")
+    }
+
+    @Test("Post-compaction SessionStart keeps the current turn state")
+    func sessionStartAfterCompaction() async throws {
+        let (core, _) = try await makeCore()
+        let event = try #require(await core.handleIngress(frame("""
+        {"hook_event_name":"SessionStart","session_id":"sess-start","source":"compact"}
+        """)))
+        #expect(event.conversationStarted == true)
+        #expect(event.sessionID == "sess-start")
+        #expect(event.tmuxPane == "%1")
+        #expect(event.state == nil)
+        #expect(event.notification == nil)
     }
 
     // MARK: - PostToolUse Write markdown

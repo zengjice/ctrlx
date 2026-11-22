@@ -322,6 +322,8 @@ differences:
   copy reads "Codex …".
 - `tmuxPane` is resolved via the frame, falling back to the correlation file by `session_id`.
 - `contextProjectDir` comes from `CODEX_PROJECT_DIR` when present, else the payload `cwd`.
+- `SessionStart` after context compaction refreshes conversation identity while
+  preserving the current turn state.
 - Guardian (auto-review) posture suppresses permission notifications AND forms — see below.
 - `tool_input` decoding is tolerant (#717): MCP payloads carry the tool's RAW arguments
   (no `{server, tool, input}` wrapper), so `ClaudeCodeTool.decode` recovers server/tool
