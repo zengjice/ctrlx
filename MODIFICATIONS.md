@@ -7,6 +7,94 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.175 — Session synchronization and workflow notifications
+
+- Share session tab order and manual groups between Mac and iOS while retaining
+  automatic groups, private tab placement, tmux indices and navigation behavior.
+  Keep tab cycling and drag/drop ordering consistent across local and remote
+  windows. Source: `44321c61`.
+- Unify Orbie and Orbiter creation and labels. Keep Orbiter creation available
+  during background refresh, expose model and effort controls, refresh the Codex
+  conversation identity before resume, and add Command-F Fork actions for eligible
+  Mac terminals. Source: `9ad2ab98`, `ef916d50`, `03557f4f`, `44321c61`.
+- Enable Workflow completion notifications by default. Preserve workflow IDs in
+  native completion events, defer navigation until the target pane is ready and
+  keep notification delivery categories and actions consistent.
+  Source: `45af6be6`.
+- Route Chromium extension settings input through the authorized page and wait
+  for acknowledgements, preserving the order of keyboard and background actions.
+  Source: `7230fa9c`.
+- Add a dedicated iOS Needs Attention menu shared with the app badge, including
+  cross-Host and split-pane targets, direct navigation for one confirmed target
+  and a list that does not change read state. Source: `4dd2207a`.
+- Require explicit Host directories for other-directory Fork and explicit branch
+  names for new worktrees, while keeping current-directory Fork unchanged.
+  Source: `508bd1bd`.
+- Keep the Mac awake by default while CtrlX runs, release the idle-sleep assertion
+  on quit or opt-out, and preserve the previous disabled preference.
+  Source: `b15dc7de`.
+
+- Validation: 19 focused Swift test suites, 21 browser-probe Python tests,
+  format lint for 91 changed Swift files, both boundary checks and 55 packaging
+  and local-installer tests passed. A signed isolated CEF options probe confirmed
+  real click, Select All, multiline replacement, ordered acknowledgement and
+  fixture persistence; its broader run later stopped at an unrelated popup-window
+  ownership focus gate. The final rebuild also passed 30 tests across four
+  suites covering Fork validation, iOS attention state, notification navigation
+  and sleep prevention.
+- This release builds macOS only. Full E2E, the unfiltered unit suite and Apple
+  Intelligence evaluations were not rerun. The native probe does not establish
+  physical-device or cross-machine UI acceptance.
+
+## 3.0.174 — Multiple models for custom Agent Providers
+
+- Let Codex, Claude Code and Traex custom Providers store a default model plus
+  additional model IDs. Existing single-model settings remain valid, while the
+  Provider editor validates, trims and deduplicates the combined list. Each
+  model continues to use its Provider's endpoint, credential and defaults.
+  Source: `8bf493e2`.
+- Generate Codex and Traex model catalogs from every configured model and use
+  separate Traex Keychain accounts. New Agent and Fork open with the default
+  model, while recovery rebuilds the current Provider model list. Claude Code
+  exposes the same list through its native process-local `modelPicker`, without
+  editing native settings or replaying unrelated inline settings.
+  See [Provider services](docs/services-reference.md).
+
+- Validation: 19 focused unit tests across four suites, two native Codex 0.170.0
+  and Traex 0.213.1 catalog cases, lint for 18 Swift files, both boundary checks
+  and diff checks passed. The native CLIs ran with isolated `HOME` and
+  configuration directories and read both the default and secondary model IDs.
+- This release builds macOS only. Full E2E, the unfiltered unit suite and Apple
+  Intelligence evaluations were not rerun. Unrelated README and temporary-work
+  edits are preserved.
+
+## 3.0.176 — Reliable iOS terminal actions and scoped Fork
+
+- Stabilize the iOS terminal viewport around the Tabs sheet. Suspend viewport
+  measurement while the sheet is presented, discard stale queued measurements,
+  and restore from the final layout when it closes. Keep the Needs Attention
+  badge inside its button. Sources: `3ef41750`, `becd948e`.
+- Make iOS More and terminal actions scrollable and bound to the pane and window
+  captured when the menu opened. Add Host-advertised terminal-close support that
+  revalidates the session and window before mutation, protects independently
+  referenced sessions, and keeps completion state unread while the terminal is
+  covered. Source: `5925fa59`.
+- Require explicit Window and Branch names for Mac/iOS Agent Fork, start the Host
+  directory browser at Home, and cancel outstanding photo reads with their
+  operation. See [terminal actions](docs/terminal-quick-actions.md) and
+  [iOS scrolling](docs/swiftterm-ios-scrolling.md).
+- Validation: the focused Swift suites for Fork configuration, viewer workspace
+  input, photo cancellation, close confirmation, native viewport, window tab
+  actions, close commands and tmux recovery passed. Both iOS UI fixtures passed,
+  as did the CtrlX brand and technical boundary checks and diff checks.
+  SwiftFormat lint passed for 30 changed Swift files; the modified
+  `TerminalNativeViewportTests.swift` retains its pre-existing full-file
+  conditional-block indentation violation and was not reformatted into a
+  600-line cosmetic diff.
+- This release builds macOS only. iOS device packaging, real-iPhone interaction,
+  the full E2E suite, the unfiltered unit suite and Apple Intelligence
+  evaluations were not rerun.
+
 ## 3.0.173 — Shared Agent CLI version admission
 
 - Use one version policy for built-in Agent workflow input and automatic resume,

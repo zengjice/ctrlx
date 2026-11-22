@@ -29,7 +29,9 @@ public struct TerminalOnlySession: Equatable, Sendable, Identifiable {
     /// name when no description is set. `nil` when tmux hasn't reported one.
     public let currentPath: String?
 
-    public var id: String { sessionName }
+    public var id: String {
+        sessionName
+    }
 
     public init(
         sessionName: String,
@@ -91,13 +93,15 @@ public extension Collection where Element == PaneState {
     func terminalOnlySessions() -> [TerminalOnlySession] {
         Dictionary(grouping: self, by: \.sessionName)
             .compactMap { sessionName, panes -> TerminalOnlySession? in
-                guard !sessionName.isEmpty,
-                      panes.allSatisfy({ $0.agentSession == nil })
+                guard
+                    !sessionName.isEmpty,
+                    panes.allSatisfy({ $0.agentSession == nil })
                 else { return nil }
                 let ordered = panes.sorted {
                     ($0.windowIndex, $0.paneIndex) < ($1.windowIndex, $1.paneIndex)
                 }
-                guard let representative = ordered.first(where: { $0.isWindowActive && $0.isActive })
+                guard
+                    let representative = ordered.first(where: { $0.isWindowActive && $0.isActive })
                     ?? ordered.first
                 else { return nil }
                 return TerminalOnlySession(
