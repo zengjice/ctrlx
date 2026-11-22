@@ -71,13 +71,38 @@ struct IOSPaneLinkedTabsTests {
 
         let move = try #require(model.sharedMove(a, before: nil, layout: layout))
         #expect(move == .moveToEnd(a, after: b))
+        let before = model.sharedEntries(layout)
         let applied = layout.apply(move, catalog: catalog)
         #expect(applied)
-        #expect(model.sharedEntries(layout).flatMap(\.tabs) == [b, a, x, y, z])
+        let after = model.sharedEntries(layout)
+        #expect(after.flatMap(\.tabs) == [b, a, x, y, z])
+        #expect(IOSPaneLinkedTabs.insertionLine(for: a, from: before, to: after, expandedGroup: nil) == .after(.tab(b)))
+
+        let pane = SessionTabGroup.pane("%1")
+        let moveWithinPane = try #require(model.sharedMove(x, before: nil, layout: layout))
+        let movedWithinPane = layout.apply(moveWithinPane, catalog: catalog)
+        #expect(movedWithinPane)
+        let afterPaneMove = model.sharedEntries(layout)
+        #expect(IOSPaneLinkedTabs.insertionLine(for: x, from: after, to: afterPaneMove, expandedGroup: pane) == .after(.tab(y)))
+        #expect(IOSPaneLinkedTabs.insertionLine(for: x, from: after, to: afterPaneMove, expandedGroup: nil) == .after(.group(pane)))
 
         let group = UUID()
-        let manual = SessionTabLayout(order: catalog, groups: [x: group, z: group], revision: 1)
+        var manual = SessionTabLayout(order: [a, b, z, y, x], groups: [x: group, z: group], revision: 1)
         #expect(model.sharedMove(x, before: b, layout: manual) == .move(x, before: b))
+        let beforeLeavingGroup = model.sharedEntries(manual)
+        let leaveGroup = try #require(model.sharedMove(x, before: nil, layout: manual))
+        let leftGroup = manual.apply(leaveGroup, catalog: catalog)
+        #expect(leftGroup)
+        let afterLeavingGroup = model.sharedEntries(manual)
+        #expect(IOSPaneLinkedTabs.insertionLine(for: x, from: beforeLeavingGroup, to: afterLeavingGroup, expandedGroup: pane) == .after(.group(pane)))
+
+        var collapsed = SessionTabLayout(order: catalog, groups: [a: group, b: group], revision: 1)
+        let beforeCollapsedMove = model.sharedEntries(collapsed)
+        let leaveCollapsed = try #require(model.sharedMove(a, before: nil, layout: collapsed))
+        let leftCollapsed = collapsed.apply(leaveCollapsed, catalog: catalog)
+        #expect(leftCollapsed)
+        let afterCollapsedMove = model.sharedEntries(collapsed)
+        #expect(IOSPaneLinkedTabs.insertionLine(for: a, from: beforeCollapsedMove, to: afterCollapsedMove, expandedGroup: nil) == .after(.group(.manual(group))))
     }
 
     @Test("First shared edit starts from visible saved order, and a source group keeps its swipe boundary")
@@ -110,11 +135,22 @@ struct IOSPaneLinkedTabsTests {
         let saved: [IOSTopLevelTabID] = [.window(a), privateSlot, .window(b)]
         let host = SessionTabLayout(order: [.window(b), .window(a)], revision: 1)
 
-        #expect(model.sharedEntries(host, topLevelOrder: saved).flatMap(\.tabs) == [.window(b), privateTab, .window(a)])
+        let current = model.sharedEntries(host, topLevelOrder: saved)
+        #expect(current.flatMap(\.tabs) == [.window(b), privateTab, .window(a)])
         #expect(model.initialSharedOrder(topLevelOrder: saved) == [.window(a), .window(b)])
 
         let atEnd = try #require(model.movingPrivateTab(privateTab, before: [], layout: host, stored: saved))
-        #expect(model.sharedEntries(host, topLevelOrder: atEnd).flatMap(\.tabs) == [.window(b), .window(a), privateTab])
+        let reordered = model.sharedEntries(host, topLevelOrder: atEnd)
+        #expect(reordered.flatMap(\.tabs) == [.window(b), .window(a), privateTab])
+        #expect(IOSPaneLinkedTabs.insertionLine(for: privateTab, from: current, to: reordered, expandedGroup: nil) == .after(.tab(.window(a))))
+
+        let move = try #require(model.sharedMove(.window(b), before: nil, layout: host, topLevelOrder: saved))
+        var movedHost = host
+        let applied = movedHost.apply(move, catalog: host.order)
+        #expect(applied)
+        let sharedReordered = model.sharedEntries(movedHost, topLevelOrder: saved)
+        #expect(sharedReordered.flatMap(\.tabs) == [.window(a), privateTab, .window(b)])
+        #expect(IOSPaneLinkedTabs.insertionLine(for: .window(b), from: current, to: sharedReordered, expandedGroup: nil) == .after(.tab(.window(a))))
         let beforeA = try #require(model.movingPrivateTab(privateTab, before: [.window(a)], layout: host, stored: atEnd))
         #expect(model.sharedEntries(host, topLevelOrder: beforeA).flatMap(\.tabs) == [.window(b), privateTab, .window(a)])
 
@@ -140,9 +176,145 @@ struct IOSPaneLinkedTabsTests {
         let moved = try #require(model.movingPrivateMember(p.sessionTabID, before: second.sessionTabID, layout: host))
         #expect(moved == [first, p, second])
         let restored = IOSPaneLinkedTabs(files: files, browsers: [], simulators: [], windows: [], storedOrder: moved)
+        let movedEntries = restored.sharedEntries(host)
+        #expect(IOSPaneLinkedTabs.insertionLine(for: p.sessionTabID, from: model.sharedEntries(host), to: movedEntries, expandedGroup: .pane("%1")) == .after(.tab(first.sessionTabID)))
         let swapped = SessionTabLayout(order: [second.sessionTabID, first.sessionTabID], revision: 2)
-        #expect(restored.sharedEntries(swapped).flatMap(\.tabs) == [second, p, first].map(\.sessionTabID))
+        let swappedEntries = restored.sharedEntries(swapped)
+        #expect(swappedEntries.flatMap(\.tabs) == [second, p, first].map(\.sessionTabID))
+        #expect(IOSPaneLinkedTabs.insertionLine(for: first.sessionTabID, from: movedEntries, to: swappedEntries, expandedGroup: .pane("%1")) == .after(.tab(second.sessionTabID)))
         #expect(restored.adjacentLinkedTab(p, direction: 1, layout: swapped) == .tab(first))
+    }
+
+    @Test("A shared row drop marks its final slot in the current mixed order", arguments: [false, true])
+    func rowDropLineFollowsPrivateFileSlots(privateFileBeforeB: Bool) throws {
+        let a = UUID(), b = UUID(), c = UUID()
+        let file = FileBrowserTab(path: "/Private")
+        let privateTab = SessionTabID.file(file.id)
+        let privateSlot = IOSTopLevelTabID.resource(.file(file.id))
+        let middle: [IOSTopLevelTabID] = privateFileBeforeB ? [privateSlot, .window(b)] : [.window(b), privateSlot]
+        let saved = [.window(a)] + middle + [.window(c)]
+        let model = IOSPaneLinkedTabs(files: [file], browsers: [], simulators: [], windows: windows([a, b, c]), storedOrder: [])
+        let catalog = model.initialSharedOrder(topLevelOrder: saved)
+        var layout = SessionTabLayout(order: catalog, revision: 1)
+        let before = model.sharedEntries(layout, topLevelOrder: saved)
+        let original: [SessionTabID] = privateFileBeforeB ? [.window(a), privateTab, .window(b), .window(c)] : [.window(a), .window(b), privateTab, .window(c)]
+        #expect(before.flatMap(\.tabs) == original)
+
+        let move = try #require(model.sharedMove(.window(a), before: .window(c), layout: layout, topLevelOrder: saved))
+        let applied = layout.apply(move, catalog: catalog)
+        #expect(applied)
+        let after = model.sharedEntries(layout, topLevelOrder: saved)
+        let expected: [SessionTabID] = privateFileBeforeB ? [.window(b), privateTab, .window(a), .window(c)] : [.window(b), .window(a), privateTab, .window(c)]
+        #expect(after.flatMap(\.tabs) == expected)
+        #expect(IOSPaneLinkedTabs.insertionLine(for: .window(a), from: before, to: after, expandedGroup: nil) == .after(.tab(.window(b))))
+    }
+
+    @Test("Leaving a manual group marks the final slot in the current mixed list", arguments: [2, 3])
+    func dropLineWhenLeavingManualGroup(memberCount: Int) throws {
+        let group = UUID(), trailing = UUID()
+        let groupedWindows = (0..<memberCount).map { _ in UUID() }
+        let members = groupedWindows.map(SessionTabID.window)
+        let source = try #require(members.first)
+        let local = FileBrowserTab(path: "/Private")
+        let privateTab = SessionTabID.file(local.id)
+        let saved = groupedWindows.map(IOSTopLevelTabID.window) + [.resource(.file(local.id)), .window(trailing)]
+        let model = IOSPaneLinkedTabs(files: [local], browsers: [], simulators: [], windows: windows(groupedWindows + [trailing]), storedOrder: [])
+        let catalog = model.initialSharedOrder(topLevelOrder: saved)
+        let groups = Dictionary(uniqueKeysWithValues: members.map { ($0, group) })
+        var layout = SessionTabLayout(order: catalog, groups: groups, revision: 1)
+        let before = model.sharedEntries(layout, topLevelOrder: saved)
+        #expect(before.map(\.id) == [.group(.manual(group)), .tab(privateTab), .tab(.window(trailing))])
+
+        let move = try #require(model.sharedMove(source, before: nil, layout: layout, topLevelOrder: saved))
+        let applied = layout.apply(move, catalog: catalog)
+        #expect(applied)
+        let after = model.sharedEntries(layout, topLevelOrder: saved)
+        #expect(after.flatMap(\.tabs) == Array(members.dropFirst()) + [.window(trailing), privateTab, source])
+        #expect(IOSPaneLinkedTabs.insertionLine(for: source, from: before, to: after, expandedGroup: .manual(group)) == .after(.tab(.window(trailing))))
+    }
+
+    @Test("Restoring an automatic group leaves the insertion line at the top-level slot", arguments: [0, 2])
+    func dropLineWhenDissolvingAGroupWithLinkedFiles(otherWindowCount: Int) throws {
+        let window = UUID(), group = UUID()
+        let file = FileBrowserTab(hostTab: .init(sessionName: "work", sourcePaneID: "%0", initialDirectory: "/Project"))
+        let otherWindows = (0..<otherWindowCount).map { _ in UUID() }
+        let otherTabs = otherWindows.map(SessionTabID.window)
+        let model = IOSPaneLinkedTabs(files: [file], browsers: [], simulators: [], windows: windows([window] + otherWindows), storedOrder: [])
+        let source = SessionTabID.window(window)
+        let fileTab = SessionTabID.file(file.id)
+        let manual = SessionTabGroup.manual(group)
+        let catalog = model.initialSharedOrder(topLevelOrder: [])
+        var layout = SessionTabLayout(order: [source, fileTab] + otherTabs, groups: [source: group, fileTab: group], revision: 1)
+        let before = model.sharedEntries(layout)
+        let otherRows = otherTabs.map(IOSPaneLinkedTabs.RowID.tab)
+        #expect(before.map(\.id) == [.group(manual)] + otherRows)
+
+        let move = try #require(model.sharedMove(source, before: nil, layout: layout))
+        let applied = layout.apply(move, catalog: catalog)
+        #expect(applied)
+        let after = model.sharedEntries(layout)
+        #expect(after.map(\.id) == otherRows + [.tab(source), .group(.pane("%0"))])
+        let expected = otherRows.last.map(IOSPaneLinkedTabs.InsertionLine.after) ?? .before(.group(manual))
+        #expect(IOSPaneLinkedTabs.insertionLine(for: source, from: before, to: after, expandedGroup: manual) == expected)
+        #expect(IOSPaneLinkedTabs.insertionLine(for: source, from: before, to: after, expandedGroup: nil) == expected)
+    }
+
+    @Test("Dropping into an expanded automatic group counts its original members", arguments: [false, true])
+    func dropLineWhenRestoringTwoLinkedMembers(originalMemberFirst: Bool) throws {
+        let window = UUID(), group = UUID()
+        let files = ["X", "Y", "R"].map { FileBrowserTab(hostTab: .init(sessionName: "work", sourcePaneID: "%0", initialDirectory: "/\($0)")) }
+        let x = SessionTabID.file(files[0].id), y = SessionTabID.file(files[1].id), r = SessionTabID.file(files[2].id)
+        let model = IOSPaneLinkedTabs(files: files, browsers: [], simulators: [], windows: windows([window]), storedOrder: [])
+        let pane = SessionTabGroup.pane("%0")
+        let fileOrder = originalMemberFirst ? [r, x, y] : [x, y, r]
+        let catalog = model.initialSharedOrder(topLevelOrder: [])
+        var layout = SessionTabLayout(order: [.window(window)] + fileOrder, groups: [x: group, y: group], revision: 1)
+        let before = model.sharedEntries(layout)
+        #expect(before.map(\.id) == [.tab(.window(window)), .group(.manual(group)), .group(pane)])
+        #expect(before.last?.tabs == [r])
+
+        let move = try #require(model.sharedMove(x, before: nil, layout: layout))
+        let applied = layout.apply(move, catalog: catalog)
+        #expect(applied)
+        let after = model.sharedEntries(layout)
+        #expect(after.map(\.id) == [.tab(.window(window)), .group(pane)])
+        #expect(after.last?.tabs == (originalMemberFirst ? [r, y, x] : [y, x, r]))
+        let expected: IOSPaneLinkedTabs.InsertionLine = originalMemberFirst ? .after(.tab(r)) : .after(.group(pane))
+        #expect(IOSPaneLinkedTabs.insertionLine(for: x, from: before, to: after, expandedGroup: pane) == expected)
+    }
+
+    @Test("A restored automatic group uses surviving rows to mark its pane order", arguments: [["R", "X", "Y"], ["X", "Y", "R"], ["Y", "X"]])
+    func dropLineWhenRestoringSeparatePaneGroups(panes: [String]) throws {
+        let windowIDs = panes.map { _ in UUID() }
+        let terminals = windowIDs.map(SessionTabID.window)
+        let paneIDs = panes.indices.map { "%\($0)" }
+        let files = paneIDs.map { FileBrowserTab(hostTab: .init(sessionName: "work", sourcePaneID: $0, initialDirectory: "/Project")) }
+        let tabs = files.map { SessionTabID.file($0.id) }
+        let xIndex = try #require(panes.firstIndex(of: "X"))
+        let yIndex = try #require(panes.firstIndex(of: "Y"))
+        let source = tabs[xIndex], group = UUID()
+        let model = IOSPaneLinkedTabs(files: files, browsers: [], simulators: [], windows: windows(windowIDs), storedOrder: [])
+        let catalog = model.initialSharedOrder(topLevelOrder: [])
+        var layout = SessionTabLayout(order: terminals + tabs, groups: [source: group, tabs[yIndex]: group], revision: 1)
+        let before = model.sharedEntries(layout)
+        #expect(before.compactMap(\.sourcePaneID) == paneIDs.enumerated().filter { $0.offset != xIndex && $0.offset != yIndex }.map(\.element))
+
+        let move = try #require(model.sharedMove(source, before: nil, layout: layout))
+        let applied = layout.apply(move, catalog: catalog)
+        #expect(applied)
+        let after = model.sharedEntries(layout)
+        #expect(after.compactMap(\.sourcePaneID) == paneIDs)
+
+        if let rIndex = panes.firstIndex(of: "R") {
+            let retained = SessionTabGroup.pane(paneIDs[rIndex])
+            let expected: IOSPaneLinkedTabs.InsertionLine = xIndex < rIndex ? .before(.group(retained)) : .after(.group(retained))
+            let expanded: IOSPaneLinkedTabs.InsertionLine = xIndex < rIndex ? expected : .after(.tab(tabs[rIndex]))
+            #expect(IOSPaneLinkedTabs.insertionLine(for: source, from: before, to: after, expandedGroup: nil) == expected)
+            #expect(IOSPaneLinkedTabs.insertionLine(for: source, from: before, to: after, expandedGroup: retained) == expanded)
+        } else {
+            let lastTerminal = try #require(terminals.last)
+            #expect(IOSPaneLinkedTabs.insertionLine(for: source, from: before, to: after, expandedGroup: .manual(group)) == .after(.tab(lastTerminal)))
+        }
     }
 
     @Test("A group of source-linked tabs is a visible drop target for a private row")

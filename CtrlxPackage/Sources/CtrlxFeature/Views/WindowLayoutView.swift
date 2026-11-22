@@ -839,6 +839,7 @@
                 }
                 .sheet(isPresented: $showsWindowTabs, onDismiss: windowTabsDidDismiss) {
                     WindowTabsPanel(
+                        hostID: hostId,
                         windows: sessionWindows,
                         files: fileWorkspace.tabs,
                         browsers: sessionBrowsers,

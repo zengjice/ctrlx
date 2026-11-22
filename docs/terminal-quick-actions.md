@@ -396,6 +396,11 @@ moves show an error. Files ordering is viewer-local and saved with its workspace
 Recovery applies that order to matching Host tab UUIDs as their catalog arrives;
 new tabs follow the saved tabs without resetting live reorders.
 
+With shared tab layouts, the insertion line marks where a tab will land in its
+ordering level, including when you drag it to the bottom of the list. A
+highlighted row or group header marks a drop that groups the dragged tab. On
+iPad, two Tabs sheets for the same Host session can accept each other's drags.
+
 On iOS, Files, Browser and Simulator tabs have a fixed bottom navigation bar,
 separate from their content gestures. Tap the source Agent/Terminal name to return
 to its exact pane, swipe horizontally to follow the existing group order (left:
