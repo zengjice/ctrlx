@@ -9,15 +9,20 @@ extension UTType {
     }
 }
 
-struct WorkbenchTabDrag: Codable, Transferable {
+struct WorkbenchTabDrag: Codable, Sendable {
+    @MainActor static var active: (tab: TabDragPayload, context: Self?)?
+
     let workspaceID: UUID?
     let hostID: String?
     let sessionName: String
     let tab: TabDragPayload
+}
 
-    static var transferRepresentation: some TransferRepresentation {
-        CodableRepresentation(contentType: .ctrlxWorkbenchTab)
-    }
+struct WorkbenchTabHover: Equatable {
+    let tab: TabDragPayload
+    let placement: WorkbenchTabDropPlacement
+    let sourcePaneID: String?
+    var sharedTabID: SessionTabID? = nil
 }
 
 extension TabDragPayload {
@@ -34,12 +39,14 @@ extension TabDragPayload {
 
 enum WorkbenchTabDropPlacement: Equatable, Sendable {
     case before(TabDragPayload, within: [TabDragPayload]? = nil)
+    case after(TabDragPayload, within: [TabDragPayload]? = nil)
     case group([TabDragPayload])
     case end([TabDragPayload])
 
     var targets: [TabDragPayload] {
         switch self {
-        case let .before(target, _): [target]
+        case let .before(target, _),
+             let .after(target, _): [target]
         case let .group(targets),
              let .end(targets): targets
         }
@@ -49,6 +56,7 @@ enum WorkbenchTabDropPlacement: Equatable, Sendable {
         var result = order.filter { $0 != source }
         let index: Int? = switch self {
         case let .before(target, _): result.firstIndex(of: target)
+        case let .after(target, _): result.firstIndex(of: target).map { $0 + 1 }
         case let .group(targets): result.lastIndex(where: targets.contains).map { $0 + 1 }
         case let .end(targets):
             targets.reversed().lazy.compactMap { result.firstIndex(of: $0) }.first.map { $0 + 1 }
@@ -59,10 +67,15 @@ enum WorkbenchTabDropPlacement: Equatable, Sendable {
     }
 
     func accepts(_ source: TabDragPayload) -> Bool {
-        if case let .before(target, members) = self {
-            return source != target && (members?.contains(source) ?? true)
+        switch self {
+        case let .before(target, members),
+             let .after(target, members):
+            source != target && (members?.contains(source) ?? true)
+        case let .group(targets):
+            !targets.contains(source)
+        case .end:
+            true
         }
-        return true
     }
 }
 
@@ -76,6 +89,9 @@ struct WorkbenchTabContext {
     var returnToMain: ((WorkbenchTabDrag) -> Void)? = nil
     var sharedTabLayout: SharedWorkbenchTabLayout? = nil
     var sourcePaneGroup: (WorkbenchTabDrag) -> String? = { _ in nil }
+    var sourcePaneID: (WorkbenchTabDrag) -> String? = { _ in nil }
+    var incomingSharedTabID: (WorkbenchTabDrag) -> SessionTabID? = { _ in nil }
+    var canTransfer: (WorkbenchTabDrag) -> Bool = { _ in true }
     let receive: (WorkbenchTabDrag, WorkbenchTabDropPlacement, Bool) -> Bool
 
     func detachmentMenuItems(for tab: TabDragPayload) -> [ContextMenuItem] {
@@ -91,29 +107,42 @@ struct WorkbenchTabContext {
         drag.hostID == hostID && drag.sessionName == sessionName
     }
 
-    func drop(_ drag: WorkbenchTabDrag, at placement: WorkbenchTabDropPlacement, rightSide: Bool, reorder: (WorkbenchTabDropPlacement) -> Bool) -> Bool {
-        guard accepts(drag) else {
-            onRejected()
-            // Consume the drop without moving a tab. An unhandled drop makes the
-            // native terminal drag source fall back to creating a new window.
-            return true
-        }
-        guard placement.accepts(drag.tab) else { return true }
+    func resolvedPlacement(_ drag: WorkbenchTabDrag, at placement: WorkbenchTabDropPlacement) -> WorkbenchTabDropPlacement? {
+        guard
+            accepts(drag), placement.accepts(drag.tab),
+            drag.workspaceID == workspaceID || canTransfer(drag) else { return nil }
         let group = sourcePaneGroup(drag)
-        let destination: WorkbenchTabDropPlacement
         switch placement {
-        case let .before(target, _):
-            guard sourcePaneGroup(self.drag(target)) == group else { return true }
-            destination = placement
+        case let .before(target, _),
+             let .after(target, _):
+            return sourcePaneGroup(self.drag(target)) == group ? placement : nil
         case .group:
-            destination = placement
+            return placement
         case let .end(tabs):
-            destination = .end(tabs.filter { sourcePaneGroup(self.drag($0)) == group })
+            return .end(tabs.filter { sourcePaneGroup(self.drag($0)) == group })
+        }
+    }
+
+    func drop(_ drag: WorkbenchTabDrag, at placement: WorkbenchTabDropPlacement, rightSide: Bool, reorder: (WorkbenchTabDropPlacement) -> Bool) -> Bool {
+        guard let destination = resolvedPlacement(drag, at: placement) else {
+            if !accepts(drag) {
+                onRejected()
+            }
+            // Consume the drop so AppKit does not detach the rejected tab.
+            return true
         }
         if drag.workspaceID != workspaceID {
             return receive(drag, destination, rightSide)
         }
         return reorder(destination)
+    }
+
+    func hover(_ drag: WorkbenchTabDrag, at placement: WorkbenchTabDropPlacement) -> WorkbenchTabHover? {
+        guard let destination = resolvedPlacement(drag, at: placement) else { return nil }
+        return WorkbenchTabHover(
+            tab: drag.tab, placement: destination, sourcePaneID: sourcePaneID(drag),
+            sharedTabID: sharedTabLayout?.snapshot.ids[drag.tab] ?? incomingSharedTabID(drag)
+        )
     }
 }
 
@@ -132,35 +161,87 @@ private struct WorkbenchDragModifier<Preview: View>: ViewModifier {
             content.background(WindowTabDragSource(tab: payload, label: label ?? "Tab") { point in
                 detach(context.drag(payload), point)
             })
-        } else if let context {
-            content.draggable(context.drag(payload)) { preview }
         } else {
-            content.draggable(payload) { preview }
+            content.onDrag {
+                let drag = context?.drag(payload)
+                let type: UTType = drag == nil ? .ctrlxTabDrag : .ctrlxWorkbenchTab
+                WorkbenchTabDrag.active = (payload, drag)
+                let provider = NSItemProvider()
+                provider.registerDataRepresentation(forTypeIdentifier: type.identifier, visibility: .ownProcess) { complete in
+                    do {
+                        let encoder = JSONEncoder()
+                        let data = try drag.map(encoder.encode) ?? encoder.encode(payload)
+                        complete(data, nil)
+                    } catch { complete(nil, error) }
+                    return nil
+                }
+                return provider
+            } preview: { preview }
         }
     }
 }
 
-private struct WorkbenchDropModifier: ViewModifier {
+private struct WorkbenchDropModifier: ViewModifier, DropDelegate {
     let placement: (CGPoint) -> WorkbenchTabDropPlacement
     let rightSide: Bool
     let action: ([TabDragPayload], WorkbenchTabDropPlacement) -> Bool
-    let targeted: (Bool) -> Void
+    let onHover: (WorkbenchTabHover?) -> Void
     @Environment(\.workbenchTabContext) private var context
 
     func body(content: Content) -> some View {
-        if let context {
-            content.dropDestination(for: WorkbenchTabDrag.self) { values, point in
-                guard values.count == 1, let value = values.first else { return false }
-                return context.drop(value, at: placement(point), rightSide: rightSide) { destination in
-                    action([value.tab], destination)
-                }
-            } isTargeted: { targeted($0) }
-        } else {
-            content.dropDestination(for: TabDragPayload.self) { tabs, point in
-                let destination = placement(point)
-                guard tabs.allSatisfy(destination.accepts) else { return false }
-                return action(tabs, destination)
-            } isTargeted: { targeted($0) }
+        content.onDrop(of: [contentType], delegate: self)
+            .onDisappear { onHover(nil) }
+    }
+
+    private var contentType: UTType {
+        context == nil ? .ctrlxTabDrag : .ctrlxWorkbenchTab
+    }
+
+    func dropEntered(info: DropInfo) {
+        _ = dropUpdated(info: info)
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        onHover(hover(at: placement(info.location)))
+        // Keep rejected drops consumable so they cannot accidentally detach a tab.
+        return DropProposal(operation: .copy)
+    }
+
+    private func hover(at placement: WorkbenchTabDropPlacement) -> WorkbenchTabHover? {
+        guard let active = WorkbenchTabDrag.active else { return nil }
+        if let context, let drag = active.context {
+            return context.hover(drag, at: placement)
+        }
+        guard context == nil, active.context == nil, placement.accepts(active.tab) else { return nil }
+        return WorkbenchTabHover(tab: active.tab, placement: placement, sourcePaneID: nil)
+    }
+
+    func dropExited(info: DropInfo) {
+        onHover(nil)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        defer {
+            onHover(nil)
+            WorkbenchTabDrag.active = nil
+        }
+        let providers = info.itemProviders(for: [contentType])
+        guard providers.count == 1, let provider = providers.first else { return false }
+        let destination = placement(info.location)
+        provider.loadDataRepresentation(forTypeIdentifier: contentType.identifier) { data, _ in
+            guard let data else { return }
+            Task { @MainActor in apply(data, to: destination) }
+        }
+        return true
+    }
+
+    private func apply(_ data: Data, to destination: WorkbenchTabDropPlacement) {
+        if let context, let drag = try? JSONDecoder().decode(WorkbenchTabDrag.self, from: data) {
+            _ = context.drop(drag, at: destination, rightSide: rightSide) { placement in
+                action([drag.tab], placement)
+            }
+        } else if context == nil, let tab = try? JSONDecoder().decode(TabDragPayload.self, from: data), destination.accepts(tab) {
+            _ = action([tab], destination)
         }
     }
 }
@@ -201,9 +282,9 @@ extension View {
         rightSide: Bool = false,
         placement: @escaping (CGPoint) -> WorkbenchTabDropPlacement,
         action: @escaping ([TabDragPayload], WorkbenchTabDropPlacement) -> Bool,
-        isTargeted: @escaping (Bool) -> Void
+        onHover: @escaping (WorkbenchTabHover?) -> Void
     ) -> some View {
-        modifier(WorkbenchDropModifier(placement: placement, rightSide: rightSide, action: action, targeted: isTargeted))
+        modifier(WorkbenchDropModifier(placement: placement, rightSide: rightSide, action: action, onHover: onHover))
     }
 }
 
@@ -241,34 +322,35 @@ struct SharedWorkbenchTabLayout {
         var affected = [source]
         var proposed = placement.placing(source, in: order).compactMap { snapshot.ids[$0] }
         switch placement {
-        case let .before(target, members):
+        case let .before(_, members),
+             let .after(_, members):
             guard placement.accepts(source) else { return false }
-            let groupMembership: SessionTabLayout.GroupMembership = members == nil ? .leave : .keep
             if members != nil {
                 affected = []
             }
-            if let targetID = snapshot.ids[target] {
-                edit = .move(sourceID, before: targetID, groupMembership: groupMembership)
-            } else {
-                guard let relative = relativeMove(sourceID, from: sharedOrder, to: proposed, groupMembership: groupMembership) else {
-                    onSuccess()
-                    return true
-                }
-                edit = relative
+            guard let move = edgeMove(sourceID, at: placement, from: sharedOrder, to: proposed) else {
+                onSuccess()
+                return true
             }
+            edit = move
         case let .group(targets):
             let targetIDs = targets.compactMap { snapshot.ids[$0] }
             guard !targets.contains(source), !targets.isEmpty, targets.count == targetIDs.count else { return false }
             edit = .group(sourceID, with: targetIDs)
             affected = targets + [source]
         case let .end(tabs):
-            if let anchor = tabs.reversed().lazy.filter({ $0 != source }).compactMap({ snapshot.ids[$0] }).first {
-                edit = .moveToEnd(sourceID, after: anchor)
+            let anchor = tabs.last { $0 != source && order.contains($0) }
+            if let anchor, let id = snapshot.ids[anchor] {
+                edit = .moveToEnd(sourceID, after: id)
             } else {
-                // An empty section or a private-only anchor can change local placement.
-                // Keep the shared rank, including when leaving a manual group.
-                proposed = snapshot.layout.order
-                guard let relative = relativeMove(sourceID, from: proposed, to: proposed, groupMembership: .leave) else {
+                var previous = order.contains(source) || snapshot.layout.revision == 0
+                    ? sharedOrder : snapshot.layout.ordered(proposed)
+                if anchor == nil || proposed.count < 2 || previous == proposed {
+                    // Preserve the Host rank when the drop only changes local positions or group membership.
+                    previous = snapshot.layout.order
+                    proposed = previous
+                }
+                guard let relative = relativeMove(sourceID, from: previous, to: proposed, groupMembership: .leave) else {
                     onSuccess()
                     return true
                 }
@@ -288,6 +370,44 @@ struct SharedWorkbenchTabLayout {
         }
         send(edit, snapshot.layout.revision == 0 ? sharedOrder : nil, windows, affected, onSuccess)
         return true
+    }
+
+    func leavesGroupOnDrop(
+        _ source: TabDragPayload, at placement: WorkbenchTabDropPlacement, order: [TabDragPayload], incomingID: SessionTabID? = nil
+    ) -> Bool {
+        guard let sourceID = incomingID ?? snapshot.ids[source] else { return false }
+        switch placement {
+        case .before(_, nil),
+             .after(_, nil):
+            return edgeMove(
+                sourceID, at: placement, from: order.compactMap { snapshot.ids[$0] },
+                to: placement.placing(source, in: order).compactMap { $0 == source ? sourceID : snapshot.ids[$0] }
+            ) != nil
+        case .end:
+            return snapshot.layout.groups[sourceID] != nil
+        case .before,
+             .after,
+             .group: return false
+        }
+    }
+
+    private func edgeMove(
+        _ source: SessionTabID, at placement: WorkbenchTabDropPlacement, from previous: [SessionTabID], to next: [SessionTabID]
+    ) -> SessionTabLayout.Edit? {
+        switch placement {
+        case let .before(target, members),
+             let .after(target, members):
+            let membership: SessionTabLayout.GroupMembership = members == nil ? .leave : .keep
+            if let targetID = snapshot.ids[target] {
+                if case .after = placement {
+                    return .moveToEnd(source, after: targetID, groupMembership: membership)
+                }
+                return .move(source, before: targetID, groupMembership: membership)
+            }
+            return relativeMove(source, from: previous, to: next, groupMembership: membership)
+        case .group,
+             .end: return nil
+        }
     }
 
     private func relativeMove(

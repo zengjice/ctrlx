@@ -281,6 +281,120 @@ struct DetachedTerminalWindowsTests {
         #expect(manager.workspace(containing: a)?.id != group.id)
     }
 
+    @Test("Returning a terminal after Git uses the shared order of the destination", arguments: [false, true])
+    func returningTerminalToPrivateLane(alreadyOrdered: Bool) throws {
+        let manager = DetachedTerminalWindows()
+        let target = try #require(DetachedTerminalTarget(hostID: nil, windowID: "@1"))
+        let session: (DetachedTerminalTarget) -> String? = { _ in "work" }
+        let detached = try #require(manager.detach(target, position: nil, session: session))
+        let tabs = manager.mainTabs.tabs(hostID: nil, session: "work")
+        let a = TabDragPayload.window("@1"), b = TabDragPayload.window("@2")
+        let aID = SessionTabID.window(UUID()), bID = SessionTabID.window(UUID())
+        let ids = [a: aID, b: bID]
+        let catalog = [aID, bID]
+        var layout = SessionTabLayout(order: alreadyOrdered ? [bID, aID] : catalog, revision: 1)
+        tabs.tabOrder = [b, .git]
+        tabs.rightSide = [.git]
+        var edits = 0
+        let shared = SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: layout)) { edit, _, windows, _, confirm in
+            edits += 1
+            #expect(edit == .moveToEnd(aID, after: bID, groupMembership: .leave))
+            #expect(windows == [bID, aID])
+            let applied = layout.apply(edit, catalog: catalog)
+            #expect(applied)
+            confirm()
+        }
+        let context = WorkbenchTabContext(
+            workspaceID: nil, hostID: nil, sessionName: "work", onRejected: { },
+            canTransfer: { manager.canTransfer($0, to: nil, session: session) },
+            receive: { drag, placement, right in
+                shared.drop(drag.tab, at: placement, order: tabs.tabOrder) {
+                    let transferred = manager.transfer(drag, to: nil, session: session)
+                    #expect(transferred)
+                    tabs.recordTabDrop(drag.tab, at: placement)
+                    #expect(right)
+                    tabs.rightSide.insert(drag.tab)
+                }
+            }
+        )
+        let drag = WorkbenchTabDrag(workspaceID: detached.id, hostID: nil, sessionName: "work", tab: a)
+        #expect(context.drop(drag, at: .end([.git]), rightSide: true) { _ in false })
+
+        let displayed = tabs.presentedTabOrder(tabs.tabOrder, panes: [], layout: .init(ids: ids, layout: layout))
+        #expect(edits == (alreadyOrdered ? 0 : 1))
+        #expect(displayed.filter(tabs.rightSide.contains) == [.git, a])
+        #expect(manager.owner(hostID: nil, windowID: "@1") == nil)
+    }
+
+    @Test("A returning shared Files tab previews the dissolution of its source group", arguments: [false, true], [nil, 1, 3] as [Int?])
+    func returningSharedFilePreviewsGroupRemoval(atEnd: Bool, sourcePane: Int?) throws {
+        let manager = DetachedTerminalWindows()
+        let linked = HostFileTab(sessionName: "work", windowID: "@2", sourcePaneID: "%2", initialDirectory: "/linked")
+        let returning = HostFileTab(
+            sessionName: "work", windowID: sourcePane.map { "@\($0)" }, sourcePaneID: sourcePane.map { "%\($0)" }, initialDirectory: "/returning"
+        )
+        let session: (DetachedTerminalTarget) -> String? = { _ in "work" }
+        manager.syncFileTabs(hostID: nil, descriptors: [linked, returning], sessionWindows: ["work": ["@1", "@2", "@3"]])
+        let tabs = manager.mainTabs.tabs(hostID: nil, session: "work")
+        let x = TabDragPayload.file(linked.id), z = TabDragPayload.file(returning.id)
+        tabs.tabOrder = [x, z]
+        let detached = try #require(manager.detach(
+            .init(workspaceID: nil, hostID: nil, sessionName: "work", tab: z),
+            anchor: nil, position: nil, session: session
+        ))
+        let xID = SessionTabID.file(linked.id), zID = SessionTabID.file(returning.id)
+        let group = UUID()
+        let catalog = [xID, zID]
+        var layout = SessionTabLayout(order: catalog, groups: [xID: group, zID: group], revision: 1)
+        let destination = SharedWorkbenchTabLayout(snapshot: .init(ids: [x: xID], layout: layout)) { _, _, _, _, _ in
+            Issue.record("A hover sent a Host edit")
+        }
+        tabs.sharedManualTabGroups = destination.snapshot.groups
+        detached.tabs.tabs(hostID: nil, session: "work").sharedManualTabGroups = [z: group]
+        func sourceTabs(_ drag: WorkbenchTabDrag) -> SessionFileTabsState? {
+            manager.store(for: drag.workspaceID)?.existing(hostID: drag.hostID, session: drag.sessionName)
+        }
+        let context = WorkbenchTabContext(
+            workspaceID: nil, hostID: nil, sessionName: "work", onRejected: { },
+            sharedTabLayout: destination,
+            sourcePaneGroup: { sourceTabs($0)?.groupID(for: $0.tab)?.paneID },
+            sourcePaneID: { sourceTabs($0)?.sourcePaneID(for: $0.tab) },
+            incomingSharedTabID: manager.sharedResourceTabID(for:),
+            canTransfer: { manager.canTransfer($0, to: nil, session: session) },
+            receive: { drag, placement, _ in
+                guard let id = manager.sharedResourceTabID(for: drag) else { return false }
+                let ids = [x: xID, z: id]
+                let incoming = SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: layout)) { edit, _, _, _, confirm in
+                    let applied = layout.apply(edit, catalog: catalog)
+                    #expect(applied)
+                    tabs.sharedManualTabGroups = SharedWorkbenchTabLayout.Snapshot(ids: ids, layout: layout).groups
+                    confirm()
+                }
+                return incoming.drop(drag.tab, at: placement, order: tabs.tabOrder) {
+                    let transferred = manager.transfer(drag, to: nil, session: session)
+                    #expect(transferred)
+                    tabs.recordTabDrop(drag.tab, at: placement)
+                }
+            }
+        )
+        let drag = WorkbenchTabDrag(workspaceID: detached.id, hostID: nil, sessionName: "work", tab: z)
+        let placement = atEnd ? WorkbenchTabDropPlacement.end([x]) : .after(x)
+        let panes = (1...3).map { index in
+            PaneState(paneId: "%\(index)", sessionName: "work", windowIndex: index, tmuxWindowId: "@\(index)", paneIndex: 0)
+        }
+        let hover = try #require(context.hover(drag, at: placement))
+        #expect(hover.sharedTabID == zID)
+        let insertAfter = sourcePane == 3
+        let marker = TabStripInsertion.resolve(hover, order: tabs.tabOrder, tabs: tabs, paneOrder: panes.map(\.paneId), shared: destination)
+        #expect(marker == .init(row: .tab(x), side: insertAfter ? .after : .before))
+
+        #expect(context.drop(drag, at: placement, rightSide: false) { _ in false })
+        let displayed = tabs.presentedTabOrder(tabs.tabOrder, panes: panes, layout: .init(ids: [x: xID, z: zID], layout: layout))
+        let xRow = SessionTabEntry<TabDragPayload>.ID.group(.pane("%2"))
+        let zRow = sourcePane.map { SessionTabEntry<TabDragPayload>.ID.group(.pane("%\($0)")) } ?? .tab(z)
+        #expect(tabs.tabStripEntries(displayed).map(\.id) == (insertAfter ? [xRow, zRow] : [zRow, xRow]))
+    }
+
     @Test
     func directoryAndBrowserStateMoveWithoutRecreationAndReturnOnNativeClose() throws {
         _ = NSApplication.shared

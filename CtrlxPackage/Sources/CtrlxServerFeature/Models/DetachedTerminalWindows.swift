@@ -346,6 +346,15 @@ final class DetachedTerminalWindows {
         }
     }
 
+    func sharedResourceTabID(for drag: WorkbenchTabDrag) -> SessionTabID? {
+        guard let tabs = store(for: drag.workspaceID)?.existing(hostID: drag.hostID, session: drag.sessionName) else { return nil }
+        return switch drag.tab {
+        case let .file(id) where tabs.directoryTabs[id]?.hostTab != nil: .file(id)
+        case let .browser(id) where tabs.openBrowserTabs.contains(where: { $0.id == id && $0.isTransient && !$0.isViewerLocal }): .browser(id)
+        default: nil
+        }
+    }
+
     func canTransfer(_ drag: WorkbenchTabDrag, to destinationID: UUID?, session: (DetachedTerminalTarget) -> String?) -> Bool {
         guard
             drag.workspaceID != destinationID,

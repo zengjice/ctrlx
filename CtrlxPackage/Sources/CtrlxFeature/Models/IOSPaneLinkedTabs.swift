@@ -44,7 +44,7 @@ struct IOSPaneLinkedTabs {
     }
 
     func sharedMove(
-        _ source: SessionTabID, before target: SessionTabID?, layout: SessionTabLayout,
+        _ source: SessionTabID, before target: SessionTabID?, side: InsertionSide = .before, layout: SessionTabLayout,
         topLevelOrder: [IOSTopLevelTabID] = []
     ) -> SessionTabLayout.Edit? {
         let entries = sharedEntries(layout, topLevelOrder: topLevelOrder)
@@ -62,6 +62,10 @@ struct IOSPaneLinkedTabs {
         }
         if let target {
             guard target != source, siblings.contains(target) else { return nil }
+            if side == .after {
+                let keepsGroup = layout.groups[source].map { $0 == layout.groups[target] } ?? false
+                return .moveToEnd(source, after: target, groupMembership: keepsGroup ? .keep : nil)
+            }
             return .move(source, before: target)
         }
         guard let anchor = siblings.last(where: { $0 != source && !isPrivateFile($0) }) else { return nil }
@@ -221,13 +225,13 @@ struct IOSPaneLinkedTabs {
         return mergingLinkedOrder(moved)
     }
 
-    func movingPrivateMember(_ source: SessionTabID, before target: SessionTabID, layout: SessionTabLayout) -> [PaneLinkedTabID]? {
+    func movingPrivateMember(_ source: SessionTabID, before target: SessionTabID, side: InsertionSide = .before, layout: SessionTabLayout) -> [PaneLinkedTabID]? {
         guard
             source != target, isPrivateFile(source) || isPrivateFile(target),
             case let .group(.pane, members)? = sharedEntries(layout).first(where: { $0.tabs.contains(source) }) else { return nil }
         var moved = members.filter { $0 != source }
         guard let index = moved.firstIndex(of: target) else { return nil }
-        moved.insert(source, at: index)
+        moved.insert(source, at: index + (side == .after ? 1 : 0))
         guard moved.filter({ !isPrivateFile($0) }) == members.filter({ !isPrivateFile($0) }) else { return nil }
         let resources = Dictionary(items.map { ($0.sessionTabID, $0) }, uniquingKeysWith: { first, _ in first })
         return mergingLinkedOrder(moved.compactMap { resources[$0] })

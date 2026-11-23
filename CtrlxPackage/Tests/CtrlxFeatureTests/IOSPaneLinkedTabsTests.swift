@@ -209,6 +209,25 @@ struct IOSPaneLinkedTabsTests {
         #expect(IOSPaneLinkedTabs.insertionLine(for: .window(a), from: before, to: after, expandedGroup: nil) == .after(.tab(.window(b))))
     }
 
+    @Test("The bottom edge moves a shared tab after its target without leaving a manual group")
+    func bottomEdgeKeepsManualGroup() throws {
+        let windowIDs = (0..<3).map { _ in UUID() }
+        let tabs = windowIDs.map(SessionTabID.window)
+        let group = UUID()
+        let groups = [tabs[0]: group, tabs[1]: group]
+        let model = IOSPaneLinkedTabs(files: [], browsers: [], simulators: [], windows: windows(windowIDs), storedOrder: [])
+        var layout = SessionTabLayout(order: tabs, groups: groups, revision: 1)
+        let before = model.sharedEntries(layout)
+        let move = try #require(model.sharedMove(tabs[0], before: tabs[1], side: .after, layout: layout))
+        #expect(move == .moveToEnd(tabs[0], after: tabs[1], groupMembership: .keep))
+        let applied = layout.apply(move, catalog: tabs)
+        #expect(applied)
+        #expect(layout.groups == groups)
+        let after = model.sharedEntries(layout)
+        #expect(after.flatMap(\.tabs) == [tabs[1], tabs[0], tabs[2]])
+        #expect(IOSPaneLinkedTabs.insertionLine(for: tabs[0], from: before, to: after, expandedGroup: .manual(group)) == .after(.tab(tabs[1])))
+    }
+
     @Test("Leaving a manual group marks the final slot in the current mixed list", arguments: [2, 3])
     func dropLineWhenLeavingManualGroup(memberCount: Int) throws {
         let group = UUID(), trailing = UUID()

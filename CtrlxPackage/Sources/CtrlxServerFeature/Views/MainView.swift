@@ -181,14 +181,13 @@ public struct MainView: View {
     }
 
     private func tabContext(hostID: String?, session: String) -> WorkbenchTabContext {
-        var context = WorkbenchTabContext(workspaceID: detachedWorkspace?.id, hostID: hostID, sessionName: session, onRejected: {
+        let destination = detachedWorkspace?.id
+        let workspaces = coordinator.detachedWindows
+        var context = WorkbenchTabContext(workspaceID: destination, hostID: hostID, sessionName: session, onRejected: {
             rejectedTabDropID = UUID()
+        }, canTransfer: { drag in
+            workspaces.canTransfer(drag, to: destination, session: terminalSession)
         }) { drag, placement, right in
-            let destination = detachedWorkspace?.id
-            let workspaces = coordinator.detachedWindows
-            guard
-                drag.hostID == hostID, drag.sessionName == session,
-                workspaces.canTransfer(drag, to: destination, session: terminalSession) else { return false }
             let tabs = tabStore.tabs(hostID: hostID, session: session)
             let shared = sharedTabLayout(hostID: hostID, session: session, incoming: drag)
             let finish: @MainActor (Bool) -> Bool = { local in
@@ -253,6 +252,11 @@ public struct MainView: View {
             coordinator.detachedWindows.store(for: drag.workspaceID)?.existing(hostID: hostID, session: session)?
                 .groupID(for: drag.tab)?.paneID
         }
+        context.sourcePaneID = { drag in
+            coordinator.detachedWindows.store(for: drag.workspaceID)?.existing(hostID: hostID, session: session)?
+                .sourcePaneID(for: drag.tab)
+        }
+        context.incomingSharedTabID = workspaces.sharedResourceTabID(for:)
         return context
     }
 
@@ -288,14 +292,8 @@ public struct MainView: View {
         for tab in tabs?.openBrowserTabs ?? [] where tab.isTransient && !tab.isViewerLocal {
             ids[.browser(tab.id)] = .browser(tab.id)
         }
-        if let incoming, let source = coordinator.detachedWindows.store(for: incoming.workspaceID)?.existing(hostID: hostID, session: session) {
-            switch incoming.tab {
-            case let .file(id) where source.directoryTabs[id]?.hostTab != nil:
-                ids[incoming.tab] = .file(id)
-            case let .browser(id) where source.openBrowserTabs.contains(where: { $0.id == id && $0.isTransient && !$0.isViewerLocal }):
-                ids[incoming.tab] = .browser(id)
-            default: break
-            }
+        if let incoming, let id = coordinator.detachedWindows.sharedResourceTabID(for: incoming) {
+            ids[incoming.tab] = id
         }
         return SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: layouts[sessionID] ?? .init())) { edit, initialOrder, visibleWindows, affected, onSuccess in
             let localGroups = tabs?.manualTabGroups.filter { affected.contains($0.key) } ?? [:]

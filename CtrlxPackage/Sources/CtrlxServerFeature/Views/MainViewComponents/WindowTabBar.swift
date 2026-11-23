@@ -84,9 +84,6 @@ struct WindowTabBar: View {
     @State private var hoveredFileTabId: UUID?
     @State private var isGitHovered = false
 
-    /// Which section's trailing drop zone is currently hovered.
-    @State private var trailingDropTargetedSection: TabSection?
-
     /// Read-only accessors that mirror `SessionFileTabsState`. Defined as
     /// computed properties (not stored) so observation tracking happens on
     /// every `body` evaluation.
@@ -218,11 +215,7 @@ struct WindowTabBar: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
                 newWindowButton
-                tabStrip(order: effectiveTabOrder)
-                if let suggestion = openSuggestionStore.suggestionsBySession[session.sessionName] {
-                    openSuggestionBar(suggestion)
-                }
-                trailingDropZone(for: .single)
+                tabStrip(order: effectiveTabOrder, section: .single)
             }
             .padding(.horizontal, 8)
             // Without this, the trailing drop zone's `maxWidth: .infinity`
@@ -240,11 +233,7 @@ struct WindowTabBar: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
                 newWindowButton
-                tabStrip(order: leftSectionOrder)
-                if let suggestion = openSuggestionStore.suggestionsBySession[session.sessionName] {
-                    openSuggestionBar(suggestion)
-                }
-                trailingDropZone(for: .left)
+                tabStrip(order: leftSectionOrder, section: .left)
             }
             .padding(.leading, 8)
             .fixedSize(horizontal: false, vertical: true)
@@ -256,60 +245,30 @@ struct WindowTabBar: View {
     private var rightSection: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 0) {
-                tabStrip(order: rightSectionOrder, rightSide: true)
-                trailingDropZone(for: .right)
+                tabStrip(order: rightSectionOrder, section: .right)
             }
             .padding(.trailing, 8)
             .fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    /// Trailing drop target that fills the rest of the tab strip so users can
-    /// drop a tab "past the last tab" to move it to the end of the section.
-    /// Acts as the layout `Spacer` would have — `maxWidth: .infinity` takes
-    /// the remaining horizontal slack. The surrounding HStack's
-    /// `fixedSize(vertical: true)` keeps the strip at its natural height so
-    /// the Color.clear hit area collapses to the same row height as the tabs.
-    ///
-    /// `.accessibilityElement()` + `.accessibilityIdentifier(...)` expose the
-    /// otherwise-decorative `Color.clear` to AX so E2E scenarios can drag onto
-    /// it via `macDragElement`. The label is the same for every section
-    /// because there's only one trailing zone visible at any time per HStack.
-    private func trailingDropZone(for section: TabSection) -> some View {
-        let isTargeted = trailingDropTargetedSection == section
-        let identifier = switch section {
-        case .single: "tab-trailing-drop-single"
-        case .left: "tab-trailing-drop-left"
-        case .right: "tab-trailing-drop-right"
-        }
-        let sectionOrder = effectiveTabOrder.filter { isOnRight($0) == (section == .right) }
-        let placement = WorkbenchTabDropPlacement.end(sessionTabs.tabStripEntries(sectionOrder).flatMap(\.tabs))
-        return Color.clear
-            .contentShape(Rectangle())
-            .frame(maxWidth: .infinity)
-            .overlay(alignment: .leading) {
-                DropIndicator(visible: isTargeted)
-                    .padding(.leading, 4)
-            }
-            .workbenchDropDestination(rightSide: section == .right, placement: { _ in placement }) { payloads, destination in
-                handleEndDrop(payloads: payloads, section: section, placement: destination)
-            } isTargeted: { hovering in
-                trailingDropTargetedSection = hovering ? section : (
-                    trailingDropTargetedSection == section ? nil : trailingDropTargetedSection
-                )
-            }
-            .accessibilityElement()
-            .accessibilityIdentifier(identifier)
-            .accessibilityLabel("Tab strip trailing drop zone")
-    }
-
-    private func tabStrip(order: [TabDragPayload], rightSide: Bool = false) -> some View {
+    private func tabStrip(order: [TabDragPayload], section: TabSection) -> some View {
+        let rightSide = section == .right
         let leftSelection: TabDragPayload? = sessionTabs.selectedFileTabId.map(TabDragPayload.file)
             ?? selectedBrowserTabId.map(TabDragPayload.browser) ?? (isGitBrowserSelected ? .git : nil) ?? (!isAnyFileViewActive ? selectedWindow.map { .window($0.stableId) } : nil)
         return PaneLinkedTabStrip(
-            order: order, tabs: sessionTabs, panes: groupPanes, selection: rightSide ? selectedRight : leftSelection,
-            rightSide: rightSide, title: tabTitle, onDrop: handleDrop, onUngroup: ungroup
-        ) { tabView(for: $0) }
+            order: order, sessionOrder: effectiveTabOrder, tabs: sessionTabs, panes: groupPanes,
+            paneOrder: SessionFileTabsState.paneOrder(for: effectiveTabOrder, panes: groupPanes), selection: rightSide ? selectedRight : leftSelection,
+            rightSide: rightSide, title: tabTitle, onDrop: handleDrop,
+            onEndDrop: { handleEndDrop(payloads: $0, section: section, placement: $1) },
+            onUngroup: ungroup, trailingDropID: "tab-trailing-drop-\(section.rawValue)"
+        ) {
+            tabView(for: $0)
+        } accessory: {
+            if section != .right, let suggestion = openSuggestionStore.suggestionsBySession[session.sessionName] {
+                openSuggestionBar(suggestion)
+            }
+        }
     }
 
     private func tabTitle(_ tab: TabDragPayload) -> String {
@@ -722,7 +681,7 @@ struct WindowTabBar: View {
 
     private func handleDrop(payloads: [TabDragPayload], placement: WorkbenchTabDropPlacement) -> Bool {
         let targets = placement.targets
-        guard let source = payloads.first, let target = targets.first, !targets.contains(source), effectiveTabOrder.contains(source) else { return false }
+        guard let source = payloads.first, let target = targets.first, !targets.contains(source), effectiveTabOrder.contains(source), effectiveTabOrder.contains(target) else { return false }
         let section = sectionOf(target)
         let applyPlacement: @MainActor () -> Void = {
             sessionTabs.recordTabDrop(source, at: placement)
@@ -739,7 +698,11 @@ struct WindowTabBar: View {
         guard sessionTabs.canReorder(source, before: target) else { return false }
 
         let previousOrder = effectiveTabOrder
-        guard let order = TabDragPayload.moving(source, before: target, in: previousOrder) else { return false }
+        let order = placement.placing(source, in: previousOrder)
+        if order == previousOrder, isOnRight(source) == (section == .right) {
+            sessionTabs.updateLocalGroup(for: source, at: placement)
+            return true
+        }
         let windowOrderChanged = order.windowIds != session.windows.map(\.stableId)
         guard !windowOrderChanged || !sessionTabs.isWindowReorderPending else { return false }
 
@@ -760,7 +723,6 @@ struct WindowTabBar: View {
 
     /// Apply the resolved trailing placement and move the tab to the destination section.
     private func handleEndDrop(payloads: [TabDragPayload], section: TabSection, placement: WorkbenchTabDropPlacement) -> Bool {
-        defer { trailingDropTargetedSection = nil }
         guard let source = payloads.first, effectiveTabOrder.contains(source) else { return false }
         if
             workbenchContext?.sharedTabLayout?.drop(source, at: placement, order: effectiveTabOrder, onSuccess: {

@@ -63,6 +63,20 @@ struct QuickPhraseReorderingTests {
         #expect(library.phrases.count == original.count)
     }
 
+    @Test("The drop edge determines which side of the phrase receives the move")
+    func insertionEdges() throws {
+        let library = try populated()
+        let a = library.phrases[0], b = library.phrases[1], c = library.phrases[2]
+        #expect(try !library.move(a.id, to: b.id, side: .before))
+        #expect(library.ordering == nil)
+        #expect(try library.move(c.id, to: a.id, side: .after))
+        #expect(library.phrases == [a, c, b])
+        #expect(try library.move(a.id, to: b.id, side: .after))
+        #expect(library.phrases == [c, b, a])
+        #expect(try library.move(b.id, to: c.id, side: .before))
+        #expect(library.phrases == [b, c, a])
+    }
+
     private struct OldLibrary: Codable {
         let version: Int
         let records: [QuickPhraseRecord]

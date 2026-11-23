@@ -104,6 +104,53 @@ struct WindowReorderTests {
         }
     }
 
+    @Test("A terminal returned after Git in a new session keeps its position after the next Host edit")
+    func firstTerminalReturnSurvivesSubsequentGrouping() async throws {
+        try await withDependencies {
+            $0[PreferencesService.self] = .inMemory()
+        } operation: {
+            let store = HostSessionTabLayouts()
+            let sessionID = UUID()
+            let a = TabDragPayload.window("@1"), b = TabDragPayload.window("@2")
+            let x = TabDragPayload.file(UUID()), y = TabDragPayload.file(UUID())
+            let aID = SessionTabID.window(UUID()), bID = SessionTabID.window(UUID())
+            let xID = SessionTabID.file(UUID()), yID = SessionTabID.file(UUID())
+            let ids = [a: aID, b: bID, x: xID, y: yID]
+            var catalog = [aID, bID, xID, yID]
+            let snapshot = store.snapshot(sessionID: sessionID, catalog: catalog)
+            var request: EditSessionTabLayout?
+            var complete: (@MainActor () -> Void)?
+            let shared = SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: snapshot)) { edit, baseline, windows, _, confirm in
+                request = .init(sessionID: sessionID, edit: edit, initialOrder: baseline, visibleWindows: windows)
+                complete = confirm
+            }
+            let tabs = SessionFileTabsState()
+            tabs.tabOrder = [b, .git, x, y]
+            tabs.rightSide = [.git]
+            let placement = WorkbenchTabDropPlacement.end([.git])
+            #expect(shared.drop(a, at: placement, order: tabs.tabOrder) {
+                tabs.tabOrder.append(a)
+                tabs.recordTabDrop(a, at: placement)
+                tabs.rightSide.insert(a)
+            })
+            let move = try #require(request)
+            #expect(snapshot.revision == 0)
+            #expect(move.visibleWindows == [bID, aID])
+            try await store.apply(move, catalog: catalog) { layout in
+                let windows = layout.order.filter { $0 == aID || $0 == bID }
+                catalog = windows + [xID, yID]
+                return windows
+            }
+            complete?()
+            try await store.apply(.init(sessionID: sessionID, edit: .group(xID, with: [yID])), catalog: catalog) { _ in nil }
+
+            let refreshed = store.snapshot(sessionID: sessionID, catalog: catalog)
+            let displayed = tabs.presentedTabOrder(tabs.tabOrder, panes: [], layout: .init(ids: ids, layout: refreshed))
+            #expect(refreshed.revision == 2)
+            #expect(displayed.filter(tabs.rightSide.contains) == [.git, a])
+        }
+    }
+
     @Test
     func permanentSessionRemovalCannotBeUndoneByAnInFlightLayoutEdit() async throws {
         try await withDependencies {

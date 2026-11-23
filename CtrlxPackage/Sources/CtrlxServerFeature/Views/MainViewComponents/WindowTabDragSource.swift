@@ -153,9 +153,11 @@ struct WindowTabDragSource: NSViewRepresentable {
                 } else {
                     let data = try JSONEncoder().encode(tab)
                     item.setData(data, forType: NSPasteboard.PasteboardType(UTType.ctrlxTabDrag.identifier))
-                    if let drag = dragContext?.drag(tab) {
+                    let drag = dragContext?.drag(tab)
+                    if let drag {
                         try item.setData(JSONEncoder().encode(drag), forType: NSPasteboard.PasteboardType(UTType.ctrlxWorkbenchTab.identifier))
                     }
+                    WorkbenchTabDrag.active = (tab, drag)
                 }
             } catch {
                 assertionFailure("Cannot encode a workbench tab: \(error)")
@@ -180,11 +182,15 @@ struct WindowTabDragSource: NSViewRepresentable {
         }
 
         func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
-            context == .withinApplication ? .move : []
+            guard context == .withinApplication else { return [] }
+            return sessionName == nil ? [.move, .copy] : .move
         }
 
         func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
             dragSession = nil
+            if sessionName == nil {
+                WorkbenchTabDrag.active = nil
+            }
             if
                 WindowTabDragSource.shouldDetach(
                     operation: operation,

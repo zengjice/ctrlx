@@ -362,9 +362,8 @@ send from the terminal. Existing terminal input is never cleared automatically.
   right-click a phrase on Mac or long-press it on iOS for **Edit** and **Delete**.
   Editing reuses the add editor with the saved text prefilled; Save keeps its
   current position without sending, while Cancel leaves it unchanged.
-  Drag a phrase onto another tile to move it
-  to that tile's position on both Mac and iOS. On iOS, the hovered tile gets an
-  accented dashed outline and a **Drop at #N** marker showing the final position.
+  Drag a phrase to the left or right half of another tile on Mac or iOS to
+  insert it before or after that tile. A vertical line marks the insertion edge.
   The marker is an overlay: hovering never changes layout or saves/syncs an order,
   and leaving the tile or completing a drop clears it. Reordering saves on drop, even
   offline, without sending terminal input or closing the panel. VoiceOver offers
@@ -396,10 +395,11 @@ moves show an error. Files ordering is viewer-local and saved with its workspace
 Recovery applies that order to matching Host tab UUIDs as their catalog arrives;
 new tabs follow the saved tabs without resetting live reorders.
 
-With shared tab layouts, the insertion line marks where a tab will land in its
-ordering level, including when you drag it to the bottom of the list. A
-highlighted row or group header marks a drop that groups the dragged tab. On
-iPad, two Tabs sheets for the same Host session can accept each other's drags.
+Use the left and right edges of a Mac tab, or the top and bottom edges of an iOS
+Tabs row, to reorder. The insertion line marks the resulting position in that
+ordering level, including drops at the end. A highlighted outline marks
+grouping over the center of a tab or over a group header. On iPad, two Tabs
+sheets for the same Host session can accept each other's drags.
 
 On iOS, Files, Browser and Simulator tabs have a fixed bottom navigation bar,
 separate from their content gestures. Tap the source Agent/Terminal name to return

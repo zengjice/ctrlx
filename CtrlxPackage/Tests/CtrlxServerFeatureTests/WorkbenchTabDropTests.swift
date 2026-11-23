@@ -47,6 +47,37 @@ struct WorkbenchTabDropTests {
         #expect(shared.snapshot.order(tabs.tabOrder) == [local, terminal])
     }
 
+    @Test("Dropping after a private tab in a split preserves the visible move after the Host refreshes", arguments: [false, true])
+    func privateTrailingAnchorUpdatesSharedOrder(hasSharedPeerOnLeft: Bool) {
+        let a = TabDragPayload.window("@1"), b = TabDragPayload.window("@2"), c = TabDragPayload.window("@3")
+        let aID = SessionTabID.window(UUID()), bID = SessionTabID.window(UUID()), cID = SessionTabID.window(UUID())
+        let ids = [a: aID, b: bID, c: cID]
+        let tabs = SessionFileTabsState()
+        tabs.tabOrder = hasSharedPeerOnLeft ? [a, b, c, .git] : [a, c, .git]
+        tabs.rightSide = [c]
+        let catalog = tabs.tabOrder.compactMap { ids[$0] }
+        var layout = SessionTabLayout(order: catalog, revision: 1)
+        var edits = 0
+        let shared = SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: layout)) { edit, initial, windows, _, confirm in
+            edits += 1
+            #expect(edit == .moveToEnd(aID, after: cID, groupMembership: .leave))
+            #expect(initial == nil && windows == (hasSharedPeerOnLeft ? [bID, cID, aID] : [cID, aID]))
+            let applied = layout.apply(edit, catalog: catalog)
+            #expect(applied)
+            confirm()
+        }
+
+        let placement = WorkbenchTabDropPlacement.end(tabs.tabOrder.filter { !tabs.rightSide.contains($0) })
+        #expect(shared.drop(a, at: placement, order: tabs.tabOrder) {
+            tabs.recordTabDrop(a, at: placement)
+        })
+        let refreshed = SharedWorkbenchTabLayout.Snapshot(ids: ids, layout: layout)
+        let displayed = tabs.presentedTabOrder(tabs.tabOrder, panes: [], layout: refreshed)
+        #expect(edits == 1)
+        #expect(displayed.filter { !tabs.rightSide.contains($0) } == (hasSharedPeerOnLeft ? [b, .git, a] : [.git, a]))
+        #expect(displayed.filter(tabs.rightSide.contains) == [c])
+    }
+
     @Test(arguments: [false, true])
     func privateLeadingEdgeSubmitsTheSharedOrderAndGroupMembership(withinGroup: Bool) {
         let a = TabDragPayload.file(UUID()), b = TabDragPayload.file(UUID()), x = TabDragPayload.browser(UUID())
@@ -68,6 +99,7 @@ struct WorkbenchTabDropTests {
             confirm()
         }
         let placement = WorkbenchTabDropPlacement.before(x, within: withinGroup ? tabs.tabOrder : nil)
+        #expect(shared.leavesGroupOnDrop(a, at: placement, order: tabs.tabOrder) == !withinGroup)
         #expect(shared.drop(a, at: placement, order: tabs.tabOrder) { tabs.recordTabDrop(a, at: placement) })
         let expectedOrder = withinGroup ? [b, a, x] : [a, x, b]
         #expect(SharedWorkbenchTabLayout.Snapshot(ids: ids, layout: layout).order(tabs.tabOrder) == expectedOrder)
@@ -80,6 +112,23 @@ struct WorkbenchTabDropTests {
         let placement = WorkbenchTabDropPlacement.before(c, within: [a, c])
         #expect(placement.accepts(a))
         #expect(!placement.accepts(b))
+    }
+
+    @Test("The trailing edge inserts after a shared tab and retains an expanded group's membership")
+    func trailingEdgeInsertsAfterTarget() {
+        let a = TabDragPayload.file(UUID()), b = TabDragPayload.file(UUID()), c = TabDragPayload.file(UUID())
+        let first = SessionTabID.file(UUID()), second = SessionTabID.file(UUID()), third = SessionTabID.file(UUID())
+        let group = UUID()
+        let ids = [a: first, b: second, c: third]
+        let layout = SessionTabLayout(order: [first, second, third], groups: [first: group, second: group], revision: 1)
+        let shared = SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: layout)) { edit, _, _, affected, _ in
+            #expect(edit == .moveToEnd(first, after: second, groupMembership: .keep))
+            #expect(affected.isEmpty)
+        }
+        let placement = WorkbenchTabDropPlacement.after(b, within: [a, b])
+        #expect(placement.placing(a, in: [a, b, c]) == [b, a, c])
+        #expect(!placement.accepts(c))
+        #expect(shared.drop(a, at: placement, order: [a, b, c]))
     }
 
     @Test("Leading-edge drops respect the displayed source group before sending a shared edit", arguments: [false, true])
@@ -120,6 +169,9 @@ struct WorkbenchTabDropTests {
 
         #expect(drop(.before(terminal)))
         #expect(sent.isEmpty)
+        #expect(context.resolvedPlacement(drag, at: .after(terminal)) == nil)
+        #expect(drop(.after(terminal)))
+        #expect(sent.isEmpty)
         #expect(drop(.before(peer, within: crossWindow ? [peer] : [source, peer])))
         #expect(sent == (crossWindow ? [] : [.move(.file(file.id), before: .file(sibling.id), groupMembership: .keep)]))
         sent.removeAll()
@@ -136,9 +188,10 @@ struct WorkbenchTabDropTests {
     }
 
     @Test("Trailing drops use same-level anchors in the destination section", arguments: [false, true])
-    func trailingDropSkipsAutomaticGroups(crossWindow: Bool) {
+    func trailingDropSkipsAutomaticGroups(crossWindow: Bool) throws {
         let a = TabDragPayload.window("@1"), b = TabDragPayload.window("@2")
-        let outside = TabDragPayload.window("@3"), child = TabDragPayload.file(UUID())
+        let file = FileBrowserTab(path: "/project", sourcePaneID: "%1")
+        let outside = TabDragPayload.window("@3"), child = TabDragPayload.file(file.id)
         let aID = SessionTabID.window(UUID()), bID = SessionTabID.window(UUID())
         let outsideID = SessionTabID.window(UUID()), childID = SessionTabID.file(UUID())
         let order = crossWindow ? [b, child] : [a, b, outside, child]
@@ -164,8 +217,42 @@ struct WorkbenchTabDropTests {
             receive: { _, destination, _ in apply(destination) }
         )
         let drag = WorkbenchTabDrag(workspaceID: crossWindow ? UUID() : workspace, hostID: nil, sessionName: "work", tab: a)
+        let placement = try #require(context.resolvedPlacement(drag, at: .end([b, child])))
+        let hover = WorkbenchTabHover(tab: a, placement: placement, sourcePaneID: nil)
+        let tabs = SessionFileTabsState()
+        tabs.directoryTabs[file.id] = file
+        let section = crossWindow ? [b, child] : [a, b, child]
+        #expect(TabStripInsertion.resolve(hover, order: section, tabs: tabs, paneOrder: ["%1"]) == .init(row: .tab(b), side: .after))
         #expect(context.drop(drag, at: .end([b, child]), rightSide: false, reorder: apply))
         #expect(layout.order == [bID, aID, outsideID, childID])
+    }
+
+    @Test("Only transferable tabs receive cross-window insertion feedback")
+    func detachedWindowHoverChecksTransfer() throws {
+        let manager = DetachedTerminalWindows()
+        let terminal = TabDragPayload.window("@2")
+        let target = try #require(DetachedTerminalTarget(hostID: nil, windowID: "@2"))
+        manager.reserve(target)
+        let workspace = try #require(manager.workspace(containing: target))
+        let context = WorkbenchTabContext(
+            workspaceID: workspace.id, hostID: nil, sessionName: "work", onRejected: { },
+            canTransfer: { manager.canTransfer($0, to: workspace.id, session: { _ in "work" }) },
+            receive: { _, _, _ in
+                Issue.record("An incompatible tab reached transfer")
+                return false
+            }
+        )
+        let placement = WorkbenchTabDropPlacement.before(terminal)
+        let git = WorkbenchTabDrag(workspaceID: nil, hostID: nil, sessionName: "work", tab: .git)
+        #expect(context.resolvedPlacement(git, at: placement) == nil)
+        #expect(context.drop(git, at: placement, rightSide: false) { _ in
+            Issue.record("A cross-window drag reached local reordering")
+            return false
+        })
+        #expect(context.resolvedPlacement(context.drag(.git), at: placement) == placement)
+
+        let transferable = WorkbenchTabDrag(workspaceID: nil, hostID: nil, sessionName: "work", tab: .window("@1"))
+        #expect(context.resolvedPlacement(transferable, at: placement) == placement)
     }
 
     @Test("A section with no same-level anchor keeps the shared rank")

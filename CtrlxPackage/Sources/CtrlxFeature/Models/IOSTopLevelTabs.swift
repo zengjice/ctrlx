@@ -39,7 +39,7 @@ extension IOSPaneLinkedTabs {
     }
 
     func movingPrivateTab(
-        _ source: SessionTabID, before targets: [SessionTabID],
+        _ source: SessionTabID, before targets: [SessionTabID], side: InsertionSide = .before,
         layout: SessionTabLayout, stored: [IOSTopLevelTabID]
     ) -> [IOSTopLevelTabID]? {
         guard isPrivateFile(source) || (targets.count == 1 && targets.contains(where: isPrivateFile)) else { return nil }
@@ -48,7 +48,7 @@ extension IOSPaneLinkedTabs {
         var moved = entries.filter { $0.id != entry.id }
         if let target = targets.first {
             guard let index = moved.firstIndex(where: { $0.tabs.contains(target) }) else { return nil }
-            moved.insert(entry, at: index)
+            moved.insert(entry, at: index + (side == .after ? 1 : 0))
         } else {
             moved.append(entry)
         }

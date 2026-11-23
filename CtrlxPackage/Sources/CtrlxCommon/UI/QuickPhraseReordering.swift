@@ -3,21 +3,21 @@ import UniformTypeIdentifiers
 
 package struct QuickPhraseDragPayload: Codable, Transferable, Sendable {
     package let id: UUID
+    fileprivate static let contentType = UTType(exportedAs: "com.jicezeng.ctrlx.quick-phrase")
 
     package static var transferRepresentation: some TransferRepresentation {
-        CodableRepresentation(contentType: UTType(exportedAs: "com.jicezeng.ctrlx.quick-phrase"))
+        CodableRepresentation(contentType: contentType)
     }
 }
 
 @MainActor
-private struct QuickPhraseReordering: ViewModifier {
+private struct QuickPhraseReordering: ViewModifier, DropDelegate {
     let phrase: QuickPhrase
     let store: QuickPhraseStore
     let reportError: (String) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    #if os(iOS)
-        @State private var isTargeted = false
-    #endif
+    @State private var width: CGFloat = 0
+    @State private var insertionSide: InsertionSide?
 
     func body(content: Content) -> some View {
         content
@@ -26,56 +26,50 @@ private struct QuickPhraseReordering: ViewModifier {
                     .padding(12)
                     .background(.regularMaterial, in: .rect(cornerRadius: 12))
             }
-            .dropDestination(for: QuickPhraseDragPayload.self) { items, _ in
-                #if os(iOS)
-                    isTargeted = false
-                #endif
-                guard items.count == 1, let item = items.first else { return false }
-                return move(item.id, to: phrase.id)
-            } isTargeted: { targeted in
-                #if os(iOS)
-                    if isTargeted != targeted { isTargeted = targeted }
-                #endif
-            }
-            #if os(iOS)
-                .overlay {
-                    dropIndicator
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
+            .overlay(alignment: insertionSide == .after ? .trailing : .leading) {
+                if insertionSide != nil {
+                    DropInsertionIndicator(axis: .horizontal)
                 }
-            #endif
+            }
+            .onGeometryChange(for: CGFloat.self, of: \.size.width) { width = $0 }
+            .onDrop(of: [QuickPhraseDragPayload.contentType], delegate: self)
             .accessibilityAction(named: "Move Earlier") { moveBy(-1) }
             .accessibilityAction(named: "Move Later") { moveBy(1) }
     }
 
-    #if os(iOS)
-        @ViewBuilder
-        private var dropIndicator: some View {
-            if isTargeted, let index = store.phrases.firstIndex(where: { $0.id == phrase.id }) {
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(Color.accentColor.opacity(0.15))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 12)
-                            .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 3, dash: [6, 3]))
-                    }
-                    .overlay(alignment: .topTrailing) {
-                        Text("Drop at #\(index + 1)")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(Color.accentColor)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(.background, in: .capsule)
-                            .offset(x: 4, y: -8)
-                    }
-                    .accessibilityIdentifier("quick-phrase-drop-target-\(phrase.id)")
-            }
-        }
-    #endif
+    func dropEntered(info: DropInfo) {
+        _ = dropUpdated(info: info)
+    }
 
-    private func move(_ id: UUID, to target: UUID) -> Bool {
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        let side = InsertionSide(position: info.location.x, length: width)
+        if insertionSide != side {
+            insertionSide = side
+        }
+        return DropProposal(operation: .copy)
+    }
+
+    func dropExited(info: DropInfo) {
+        insertionSide = nil
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        defer { insertionSide = nil }
+        let type = QuickPhraseDragPayload.contentType
+        let providers = info.itemProviders(for: [type])
+        guard providers.count == 1, let provider = providers.first else { return false }
+        let side = InsertionSide(position: info.location.x, length: width)
+        provider.loadDataRepresentation(forTypeIdentifier: type.identifier) { data, _ in
+            guard let data, let item = try? JSONDecoder().decode(QuickPhraseDragPayload.self, from: data) else { return }
+            Task { @MainActor in _ = move(item.id, to: phrase.id, side: side) }
+        }
+        return true
+    }
+
+    private func move(_ id: UUID, to target: UUID, side: InsertionSide? = nil) -> Bool {
         do {
             return try withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
-                try store.move(id, to: target)
+                try store.move(id, to: target, side: side)
             }
         } catch {
             reportError(error.localizedDescription)

@@ -41,6 +41,176 @@ struct PaneLinkedTabStripTests {
         #expect(displayed(layout, [a, b, c, local, x, y]) == [b, a, c, local, y, x])
     }
 
+    @Test("Leaving a manual group previews the file's restored automatic position")
+    func restoredPaneDropPreview() {
+        let tabs = SessionFileTabsState()
+        let a = TabDragPayload.window("@1"), b = TabDragPayload.window("@2"), c = TabDragPayload.window("@3")
+        let file = FileBrowserTab(path: "/project", sourcePaneID: "%1")
+        let source = TabDragPayload.file(file.id)
+        tabs.directoryTabs[file.id] = file
+        let group = UUID()
+        tabs.manualTabGroups = [source: group, c: group]
+        tabs.tabOrder = [a, b, source, c]
+        let hover = WorkbenchTabHover(tab: source, placement: .before(b), sourcePaneID: "%1")
+        let marker = TabStripInsertion.resolve(hover, order: tabs.tabOrder, tabs: tabs, paneOrder: ["%1", "%2", "%3"])
+        #expect(marker == TabStripInsertion(row: .group(.manual(group)), side: .after))
+        #expect(tabs.manualTabGroups == [source: group, c: group])
+
+        tabs.recordTabDrop(source, at: hover.placement)
+        #expect(tabs.tabStripEntries(tabs.tabOrder).map(\.id) == [.tab(a), .tab(b), .tab(c), .group(.pane("%1"))])
+    }
+
+    @Test("A cross-split drop next to a group member previews the group's new position")
+    func retainedManualGroupDropPreview() {
+        let tabs = SessionFileTabsState()
+        let file = FileBrowserTab(path: "/project", sourcePaneID: "%1")
+        let source = TabDragPayload.file(file.id), terminal = TabDragPayload.window("@2")
+        let right: [TabDragPayload] = [.git, terminal]
+        let group = UUID()
+        tabs.directoryTabs[file.id] = file
+        tabs.tabOrder = [source] + right
+        tabs.manualTabGroups = [source: group, .git: group]
+
+        let hover = WorkbenchTabHover(tab: source, placement: .before(.git), sourcePaneID: "%1")
+        #expect(TabStripInsertion.resolve(hover, order: right, tabs: tabs, paneOrder: ["%1"]) == .init(row: .tab(.git), side: .before))
+
+        tabs.recordTabDrop(source, at: hover.placement)
+        let entries = tabs.tabStripEntries(tabs.tabOrder)
+        #expect(entries.map(\.id) == [.group(.manual(group)), .tab(terminal)])
+        #expect(entries.first?.tabs == [source, .git])
+    }
+
+    @Test("A trailing drop skips the last group member when it returns to its source pane", arguments: [false, true], [false, true])
+    func trailingDropPreviewsDissolvingGroup(isShared: Bool, hasLeadingTab: Bool) {
+        let tabs = SessionFileTabsState()
+        let a = TabDragPayload.window("@1"), b = TabDragPayload.window("@2")
+        let file = FileBrowserTab(path: "/project", sourcePaneID: "%1")
+        let x = TabDragPayload.file(file.id)
+        let group = UUID()
+        let aID = SessionTabID.window(UUID()), xID = SessionTabID.file(file.id)
+        let ids = [a: aID, x: xID]
+        let catalog = [xID, aID]
+        var layout = SessionTabLayout(order: catalog, groups: [xID: group, aID: group], revision: 1)
+        let shared = SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: layout)) { edit, _, _, _, confirm in
+            let applied = layout.apply(edit, catalog: catalog)
+            #expect(applied)
+            tabs.sharedManualTabGroups = SharedWorkbenchTabLayout.Snapshot(ids: ids, layout: layout).groups
+            confirm()
+        }
+        if isShared {
+            tabs.sharedManualTabGroups = shared.snapshot.groups
+        } else {
+            tabs.manualTabGroups = [a: group, x: group]
+        }
+        tabs.directoryTabs[file.id] = file
+        let leading: [TabDragPayload] = hasLeadingTab ? [b] : []
+        tabs.tabOrder = leading + [x, a]
+
+        let placement = WorkbenchTabDropPlacement.end(tabs.tabStripEntries(tabs.tabOrder).flatMap(\.tabs))
+        let hover = WorkbenchTabHover(tab: a, placement: placement, sourcePaneID: nil)
+        let marker = TabStripInsertion.resolve(hover, order: tabs.tabOrder, tabs: tabs, paneOrder: ["%1"], shared: isShared ? shared : nil)
+        #expect(marker == (hasLeadingTab ? .init(row: .tab(b), side: .after) : .init(row: .group(.manual(group)), side: .before)))
+
+        if isShared {
+            #expect(shared.drop(a, at: placement, order: tabs.tabOrder) { tabs.recordTabDrop(a, at: placement) })
+        } else {
+            tabs.recordTabDrop(a, at: placement)
+        }
+        let displayed = tabs.tabStripEntries(tabs.tabOrder)
+        #expect(displayed.map(\.id) == leading.map { .tab($0) } + [.tab(a), .group(.pane("%1"))])
+    }
+
+    @Test("Restored pane groups preview their position after the surviving top-level tabs", arguments: [false, true], [false, true])
+    func restoredPaneInsertionStaysAfterTerminals(isShared: Bool, groupBeforeTerminal: Bool) {
+        let tabs = SessionFileTabsState()
+        let first = FileBrowserTab(path: "/first", sourcePaneID: "%1")
+        let second = FileBrowserTab(path: "/second", sourcePaneID: "%2")
+        let x = TabDragPayload.file(first.id), y = TabDragPayload.file(second.id), b = TabDragPayload.window("@2")
+        tabs.directoryTabs = [first.id: first, second.id: second]
+        tabs.tabOrder = groupBeforeTerminal ? [x, y, b] : [b, x, y]
+
+        let group = UUID()
+        let xID = SessionTabID.file(first.id), yID = SessionTabID.file(second.id), bID = SessionTabID.window(UUID())
+        let ids = [x: xID, y: yID, b: bID]
+        let catalog = tabs.tabOrder.compactMap { ids[$0] }
+        var layout = SessionTabLayout(order: catalog, groups: [xID: group, yID: group], revision: 1)
+        let shared = SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: layout)) { edit, _, _, _, confirm in
+            let applied = layout.apply(edit, catalog: catalog)
+            #expect(applied)
+            tabs.sharedManualTabGroups = SharedWorkbenchTabLayout.Snapshot(ids: ids, layout: layout).groups
+            confirm()
+        }
+        if isShared {
+            tabs.sharedManualTabGroups = shared.snapshot.groups
+        } else {
+            tabs.manualTabGroups = [x: group, y: group]
+        }
+
+        let placement = WorkbenchTabDropPlacement.end(tabs.tabStripEntries(tabs.tabOrder).flatMap(\.tabs))
+        let hover = WorkbenchTabHover(tab: x, placement: placement, sourcePaneID: "%1")
+        let marker = TabStripInsertion.resolve(hover, order: tabs.tabOrder, tabs: tabs, paneOrder: ["%1", "%2"], shared: isShared ? shared : nil)
+        let expected = groupBeforeTerminal ? TabStripInsertion(row: .tab(b), side: .after) : .init(row: .group(.manual(group)), side: .before)
+        #expect(marker == expected)
+
+        if isShared {
+            #expect(shared.drop(x, at: placement, order: tabs.tabOrder) { tabs.recordTabDrop(x, at: placement) })
+        } else {
+            tabs.recordTabDrop(x, at: placement)
+        }
+        let panes = (1...2).map { index in
+            PaneState(paneId: "%\(index)", sessionName: "work", windowIndex: 2, tmuxWindowId: "@2", paneIndex: index - 1)
+        }
+        let displayed = tabs.presentedTabOrder(tabs.tabOrder, panes: panes, layout: isShared ? .init(ids: ids, layout: layout) : nil)
+        #expect(tabs.tabStripEntries(displayed).map(\.id) == [.tab(b), .group(.pane("%1")), .group(.pane("%2"))])
+    }
+
+    @Test("A dissolving manual group uses a surviving pane group as its preview anchor", arguments: [false, true], [false, true])
+    func paneInsertionPrefersSurvivingGroup(isShared: Bool, anchorPrecedesSource: Bool) {
+        let tabs = SessionFileTabsState()
+        let anchorPane = anchorPrecedesSource ? "%1" : "%3"
+        let sourcePane = anchorPrecedesSource ? "%3" : "%1"
+        let anchor = FileBrowserTab(path: "/anchor", sourcePaneID: anchorPane)
+        let peer = FileBrowserTab(path: "/peer", sourcePaneID: "%2")
+        let source = FileBrowserTab(path: "/source", sourcePaneID: sourcePane)
+        let a = TabDragPayload.file(anchor.id), b = TabDragPayload.file(peer.id), c = TabDragPayload.file(source.id)
+        tabs.directoryTabs = [anchor.id: anchor, peer.id: peer, source.id: source]
+        tabs.tabOrder = [b, c, a]
+
+        let group = UUID()
+        let aID = SessionTabID.file(anchor.id), bID = SessionTabID.file(peer.id), cID = SessionTabID.file(source.id)
+        let ids = [a: aID, b: bID, c: cID]
+        let catalog = [bID, cID, aID]
+        var layout = SessionTabLayout(order: catalog, groups: [bID: group, cID: group], revision: 1)
+        let shared = SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: layout)) { edit, _, _, _, confirm in
+            let applied = layout.apply(edit, catalog: catalog)
+            #expect(applied)
+            tabs.sharedManualTabGroups = SharedWorkbenchTabLayout.Snapshot(ids: ids, layout: layout).groups
+            confirm()
+        }
+        if isShared {
+            tabs.sharedManualTabGroups = shared.snapshot.groups
+        } else {
+            tabs.manualTabGroups = [b: group, c: group]
+        }
+
+        let paneOrder = ["%1", "%2", "%3"]
+        let placement = WorkbenchTabDropPlacement.end([b, c])
+        let hover = WorkbenchTabHover(tab: c, placement: placement, sourcePaneID: sourcePane)
+        let marker = TabStripInsertion.resolve(hover, order: tabs.tabOrder, tabs: tabs, paneOrder: paneOrder, shared: isShared ? shared : nil)
+        #expect(marker == .init(row: .group(.pane(anchorPane)), side: anchorPrecedesSource ? .after : .before))
+
+        if isShared {
+            #expect(shared.drop(c, at: placement, order: tabs.tabOrder) { tabs.recordTabDrop(c, at: placement) })
+        } else {
+            tabs.recordTabDrop(c, at: placement)
+        }
+        let panes = paneOrder.enumerated().map { index, id in
+            PaneState(paneId: id, sessionName: "work", windowIndex: 1, tmuxWindowId: "@1", paneIndex: index)
+        }
+        let displayed = tabs.presentedTabOrder(tabs.tabOrder, panes: panes, layout: isShared ? .init(ids: ids, layout: layout) : nil)
+        #expect(tabs.tabStripEntries(displayed).map(\.id) == paneOrder.map { .group(.pane($0)) })
+    }
+
     @Test("Transient tab order restores without recreating content, including delayed catalogs")
     func restoredOrder() throws {
         let tabs = SessionFileTabsState()

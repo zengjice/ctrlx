@@ -136,14 +136,22 @@ package final class QuickPhraseStore {
         })
     }
 
-    /// Drop onto a phrase's current position; unknown/stale IDs are not moves.
+    /// A side inserts next to the target. The default moves to its current position.
     @discardableResult
-    package func move(_ id: QuickPhrase.ID, to targetID: QuickPhrase.ID) throws -> Bool {
-        guard id != targetID,
-              let source = phrases.firstIndex(where: { $0.id == id }),
-              let destination = phrases.firstIndex(where: { $0.id == targetID }) else { return false }
+    package func move(_ id: QuickPhrase.ID, to targetID: QuickPhrase.ID, side: InsertionSide? = nil) throws -> Bool {
+        guard
+            id != targetID,
+            let source = phrases.firstIndex(where: { $0.id == id }),
+            let destination = phrases.firstIndex(where: { $0.id == targetID }) else { return false }
+        let targetAfterRemoval = destination - (source < destination ? 1 : 0)
+        let insertion = switch side {
+        case .before: targetAfterRemoval
+        case .after: targetAfterRemoval + 1
+        case nil: destination
+        }
+        guard insertion != source else { return false }
         var moved = phrases
-        moved.insert(moved.remove(at: source), at: destination)
+        moved.insert(moved.remove(at: source), at: insertion)
         var aliases: [String: [UUID]] = [:]
         for record in records {
             if let text = record.text { aliases[text, default: []].append(record.id) }

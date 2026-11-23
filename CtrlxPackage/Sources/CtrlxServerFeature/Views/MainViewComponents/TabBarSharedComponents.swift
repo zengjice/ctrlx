@@ -56,29 +56,10 @@ func windowTabAccessibilityValue(isSelected: Bool, needsAttention: Bool, progres
     return values.joined(separator: ", ")
 }
 
-/// Identifies which trailing drop zone is being targeted. The single section
-/// is used when the tab bar is not split; left/right correspond to the two
-/// sections of the split-mode bar. Shared by `WindowTabBar` and
-/// `RemoteWindowTabBar` so any future drop-zone semantics stay aligned.
-enum TabSection: Hashable {
+enum TabSection: String {
     case single
     case left
     case right
-}
-
-/// Visual hint shown while a compatible drag is hovering a tab — a thin
-/// vertical accent line on the leading edge that previews the drop slot.
-struct DropIndicator: View {
-    let visible: Bool
-
-    var body: some View {
-        Rectangle()
-            .fill(Color.accentColor)
-            .frame(width: 2)
-            .opacity(visible ? 1 : 0)
-            .animation(.easeOut(duration: 0.1), value: visible)
-            .allowsHitTesting(false)
-    }
 }
 
 /// Compact preview view drawn under the cursor while a tab is being dragged.
