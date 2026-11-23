@@ -83,7 +83,7 @@
                 } catch is CancellationError { }
                 catch { reorderError = error.localizedDescription }
             }
-            .alert("Could Not Reorder Tabs", isPresented: .init(
+            .alert("Could Not Update Tabs", isPresented: .init(
                 get: { reorderError != nil },
                 set: {
                     if !$0 {
@@ -187,12 +187,12 @@
                 ForEach(entries) { entry in
                     switch entry {
                     case let .tab(tab):
-                        editTarget(tab) { sharedRow(tab, windows: windows, resources: resources) }
+                        editTarget(tab, layout: layout) { sharedRow(tab, windows: windows, resources: resources) }
                     case let .group(group, tabs):
                         if let first = tabs.first {
                             DisclosureGroup(isExpanded: expansion(group)) {
                                 ForEach(tabs, id: \.self) { tab in
-                                    editTarget(tab, members: tabs) { sharedRow(tab, windows: windows, resources: resources) }
+                                    editTarget(tab, layout: layout, members: tabs) { sharedRow(tab, windows: windows, resources: resources) }
                                 }
                             } label: {
                                 let title = group.paneID.map { linkedTabs.title(for: $0) } ?? tabTitle(first, windows: windows, resources: resources)
@@ -200,7 +200,7 @@
                                 groupLabel(title, count: tabs.count, colorKey: key).frame(minHeight: 44).contentShape(.rect)
                                     .tabSeparator()
                                     .tabInsertionLine(dropInsertion?.line, at: entry.id)
-                                    .modifier(dropTarget(at: entry.id, targets: tabs, intent: { _, _ in .group }))
+                                    .modifier(dropTarget(at: entry.id, layout: layout, destination: .group(tabs)))
                                     .contextMenu {
                                         if group.paneID == nil {
                                             Button("Ungroup Tabs") { edit(.ungroup(first)) }.disabled(!isConnected)
@@ -212,7 +212,7 @@
                     }
                 }
                 if
-                    (isConnected && tabs.filter(isShareable).count > 1)
+                    (isConnected && tabs.filter(linkedTabs.isShareable).count > 1)
                     || (entries.count > 1 && entries.contains { entry in
                         if case let .tab(tab) = entry {
                             return linkedTabs.isPrivateFile(tab)
@@ -220,30 +220,27 @@
                         return false
                     }) {
                     Color.clear.frame(height: 14).contentShape(.rect)
-                        .modifier(dropTarget(targets: [], intent: { _, _ in .insert(.after) }))
+                        .modifier(dropTarget(layout: layout, destination: .end))
                         .accessibilityHidden(true)
                 }
             }
         }
 
         @ViewBuilder
-        private func editTarget<Content: View>(_ tab: SessionTabID, members: [SessionTabID]? = nil, @ViewBuilder content: () -> Content) -> some View {
+        private func editTarget<Content: View>(
+            _ tab: SessionTabID, layout: SessionTabLayout, members: [SessionTabID]? = nil, @ViewBuilder content: () -> Content
+        ) -> some View {
             let row = content().frame(minHeight: 44).padding(.horizontal, 14).contentShape(.rect)
                 .tabSeparator()
                 .tabInsertionLine(dropInsertion?.line, at: .tab(tab))
-                .modifier(dropTarget(at: .tab(tab), targets: [tab], members: members) { point, height in
-                    if members != nil {
-                        return .insert(InsertionSide(position: point.y, length: height))
-                    }
-                    return InsertionSide.tabEdge(position: point.y, length: height).map(TabDropIntent.insert) ?? .group
-                })
-            if let sessionID = sharedSessionID, linkedTabs.isPrivateFile(tab) || (isConnected && isShareable(tab)) {
-                row.onDrag {
-                    SessionTabDrag(id: UUID(), hostID: hostID, sessionID: sessionID, tab: tab).begin()
+            Group {
+                if let sessionID = sharedSessionID, linkedTabs.isPrivateFile(tab) || (isConnected && linkedTabs.isShareable(tab)) {
+                    row.draggable(IOSSessionTabDrag.begin(hostID: hostID, sessionID: sessionID, tab: tab))
+                } else {
+                    row
                 }
-            } else {
-                row
             }
+            .modifier(dropTarget(at: .tab(tab), layout: layout, destination: .row(tab, members: members)))
         }
 
         @ViewBuilder
@@ -282,10 +279,13 @@
         }
 
         private func dropTarget(
-            at row: IOSPaneLinkedTabs.RowID? = nil, targets: [SessionTabID], members: [SessionTabID]? = nil,
-            intent: @escaping (CGPoint, CGFloat) -> TabDropIntent
-        ) -> TabDropTarget {
-            TabDropTarget { hover in
+            at row: IOSPaneLinkedTabs.RowID? = nil, layout: SessionTabLayout, destination: IOSSessionTabDrop.Destination
+        ) -> IOSTabDropTarget {
+            let drop = IOSSessionTabDrop(
+                hostID: hostID, sessionID: sharedSessionID, tabs: linkedTabs, layout: layout,
+                topLevelOrder: topLevelTabOrder, isConnected: isConnected, destination: destination
+            )
+            return IOSTabDropTarget(drop: drop) { hover in
                 if let hover {
                     let next = insertionLine(for: hover.source, action: hover.action).map { TabDropInsertion(target: row, line: $0) }
                     if dropInsertion != next {
@@ -294,20 +294,18 @@
                 } else if let dropInsertion, dropInsertion.target == row {
                     self.dropInsertion = nil
                 }
-            } plan: { drag, point, height in
-                planDrop(drag, targets: targets, intent: intent(point, height), members: members)
             } apply: { action in
                 switch action {
                 case let .moveTopLevel(order): onReorderTopLevel(order)
                 case let .moveLinked(order): onReorderLinkedTabs(order)
                 case let .shared(change): edit(change)
                 }
-            } onLoadFailure: {
-                reorderError = "Could not read the dragged tab. Try dragging it again."
+            } onFailure: {
+                reorderError = $0.localizedDescription
             }
         }
 
-        private func insertionLine(for source: SessionTabID, action: TabDropAction) -> IOSPaneLinkedTabs.InsertionLine? {
+        private func insertionLine(for source: SessionTabID, action: IOSSessionTabDrop.Action) -> IOSPaneLinkedTabs.InsertionLine? {
             guard !action.groupsTabs, let layout = sharedTabLayout else { return nil }
             var model = linkedTabs
             let entries = model.sharedEntries(layout, topLevelOrder: topLevelTabOrder)
@@ -323,38 +321,6 @@
             }
             let reordered = model.sharedEntries(projectedLayout, topLevelOrder: projectedOrder)
             return IOSPaneLinkedTabs.insertionLine(for: source, from: entries, to: reordered, expandedGroup: expandedGroup)
-        }
-
-        private func planDrop(_ drag: SessionTabDrag, targets: [SessionTabID], intent: TabDropIntent, members: [SessionTabID]?) -> TabDropAction? {
-            guard
-                drag.hostID == hostID, drag.sessionID == sharedSessionID,
-                sharedWindows[drag.tab] != nil || resources[drag.tab] != nil,
-                members?.contains(drag.tab) ?? true,
-                !targets.contains(drag.tab) else { return nil }
-            let side = intent.insertionSide
-            if linkedTabs.isPrivateFile(drag.tab) || (side != nil && targets.count == 1 && targets.contains(where: linkedTabs.isPrivateFile)) {
-                guard let layout = sharedTabLayout else { return nil }
-                if members != nil {
-                    guard
-                        let target = targets.first,
-                        let order = linkedTabs.movingPrivateMember(drag.tab, before: target, side: side ?? .before, layout: layout) else { return nil }
-                    return .moveLinked(order)
-                }
-                return linkedTabs.movingPrivateTab(drag.tab, before: targets, side: side ?? .before, layout: layout, stored: topLevelTabOrder).map(TabDropAction.moveTopLevel)
-            }
-            guard isConnected, isShareable(drag.tab), targets.allSatisfy(isShareable) else { return nil }
-            guard let side else {
-                return .shared(.group(drag.tab, with: targets))
-            }
-            guard let layout = sharedTabLayout else { return nil }
-            return linkedTabs.sharedMove(drag.tab, before: targets.first, side: side, layout: layout, topLevelOrder: topLevelTabOrder).map(TabDropAction.shared)
-        }
-
-        private func isShareable(_ tab: SessionTabID) -> Bool {
-            if case let .file(id) = tab {
-                return files.contains { $0.id == id && $0.hostTab != nil }
-            }
-            return true
         }
 
         private func edit(_ change: SessionTabLayout.Edit) {
@@ -485,113 +451,9 @@
         }
     }
 
-    private enum TabDropIntent {
-        case insert(InsertionSide)
-        case group
-
-        var insertionSide: InsertionSide? {
-            if case let .insert(side) = self {
-                return side
-            }
-            return nil
-        }
-    }
-
     private struct TabDropInsertion: Equatable {
         let target: IOSPaneLinkedTabs.RowID?
         let line: IOSPaneLinkedTabs.InsertionLine
-    }
-
-    private enum TabDropAction: Sendable {
-        case moveTopLevel([IOSTopLevelTabID])
-        case moveLinked([PaneLinkedTabID])
-        case shared(SessionTabLayout.Edit)
-
-        var groupsTabs: Bool {
-            if case .shared(.group) = self {
-                return true
-            }
-            return false
-        }
-    }
-
-    private struct TabDropTarget: ViewModifier, DropDelegate {
-        typealias HoverHandler = ((source: SessionTabID, action: TabDropAction)?) -> Void
-
-        let onHover: HoverHandler
-        let plan: (SessionTabDrag, CGPoint, CGFloat) -> TabDropAction?
-        let apply: @MainActor @Sendable (TabDropAction) -> Void
-        let onLoadFailure: @MainActor @Sendable () -> Void
-        @State private var height: CGFloat = 0
-        @State private var isGrouping = false
-
-        func body(content: Content) -> some View {
-            content
-                .background {
-                    if isGrouping {
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(Color.accentColor.opacity(0.15))
-                            .padding(.horizontal, 4)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                    }
-                }
-                .overlay {
-                    if isGrouping {
-                        RoundedRectangle(cornerRadius: 6)
-                            .strokeBorder(Color.accentColor, lineWidth: 2)
-                            .padding(.horizontal, 4)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                    }
-                }
-                .onGeometryChange(for: CGFloat.self, of: \.size.height) { height = $0 }
-                .onDrop(of: [SessionTabDrag.contentType], delegate: self)
-                .onDisappear { onHover(nil) }
-        }
-
-        func dropEntered(info: DropInfo) {
-            _ = dropUpdated(info: info)
-        }
-
-        func dropUpdated(info: DropInfo) -> DropProposal? {
-            let hover = SessionTabDrag.active.flatMap { drag in
-                plan(drag, info.location, height).map { (source: drag.tab, action: $0) }
-            }
-            let grouping = hover?.action.groupsTabs == true
-            if isGrouping != grouping {
-                isGrouping = grouping
-            }
-            onHover(hover)
-            // Transfer the identifier, then commit the move through the workspace layout.
-            return DropProposal(operation: hover == nil ? .forbidden : .copy)
-        }
-
-        func dropExited(info: DropInfo) {
-            isGrouping = false
-            onHover(nil)
-        }
-
-        func performDrop(info: DropInfo) -> Bool {
-            defer {
-                dropExited(info: info)
-                SessionTabDrag.active = nil
-            }
-            let providers = info.itemProviders(for: [SessionTabDrag.contentType])
-            guard
-                let drag = SessionTabDrag.active, providers.count == 1, let provider = providers.first,
-                let action = plan(drag, info.location, height) else { return false }
-            provider.loadDataRepresentation(forTypeIdentifier: SessionTabDrag.contentType.identifier) { data, _ in
-                guard
-                    let data, let dropped = try? JSONDecoder().decode(SessionTabDrag.self, from: data),
-                    dropped == drag else {
-                    Task { @MainActor in onLoadFailure() }
-                    return
-                }
-                Task { @MainActor in apply(action) }
-            }
-            return true
-        }
     }
 
     private extension View {
@@ -612,25 +474,4 @@
         }
     }
 
-    private struct SessionTabDrag: Codable, Equatable, Sendable {
-        // SwiftUI exposes the provider only at drop time. Both iPad scenes need the drag for hover feedback.
-        @MainActor static var active: Self?
-        static let contentType = UTType(exportedAs: "com.jicezeng.ctrlx.session-tab", conformingTo: .data)
-        let id: UUID
-        let hostID: String
-        let sessionID: UUID
-        let tab: SessionTabID
-
-        @MainActor
-        func begin() -> NSItemProvider {
-            Self.active = self
-            let provider = NSItemProvider()
-            provider.registerDataRepresentation(forTypeIdentifier: Self.contentType.identifier, visibility: .ownProcess) { complete in
-                do { try complete(JSONEncoder().encode(self), nil) }
-                catch { complete(nil, error) }
-                return nil
-            }
-            return provider
-        }
-    }
 #endif
