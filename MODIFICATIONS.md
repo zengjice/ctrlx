@@ -7,6 +7,39 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.179 — Live file previews and precise tab movement
+
+- Refresh open file previews from the Host, including terminal-linked previews,
+  while retaining an unsaved Markdown draft across refresh and reconnect. Add
+  sanitized SVG previews, transparent PNG export, and inline Markdown editing
+  with Host-side UTF-8, size, and concurrent-change checks. See
+  [files](docs/file-browser.md).
+- Align Mac and iOS tab and Quick Phrase drag previews with their final drop
+  targets. Use edge drops for insertion, center drops to group tabs, and preserve
+  shared layout movement between iPad windows connected to the same Host.
+- Preserve Fork source context and expose the same Fork, rename, and Files actions
+  from terminal content menus and tab menus. Start remote directory selection
+  from the selected Agent's working directory. See
+  [services](docs/services-reference.md).
+- Clear a displayed Codex Working state after a failed or interrupted turn only
+  when the active rollout proves the turn ended with an abort or error. Read the
+  rollout backward across large attachments without changing the conversation.
+  See [Codex plugins](docs/plugins/codex.md).
+- Refresh the bilingual README and architecture diagram around the planned Room
+  collaboration model while distinguishing available remote control from
+  planned cross-Host Agent collaboration.
+
+- Validation: 182 focused Swift tests across 15 suites passed, covering file
+  previews and Markdown editing, Fork context, Codex session reconciliation,
+  Quick Phrase ordering, shared tab movement and terminal input. The initial
+  parallel test run reported a nonzero server-test target after all selected
+  cases passed; the affected eight-suite server subset passed when rerun
+  sequentially. SwiftFormat, brand-boundary and technical-boundary checks passed.
+- This release builds macOS only. The full E2E suite, unfiltered unit suite,
+  Apple Intelligence evaluations and a physical-iPhone acceptance pass were not
+  rerun for this version. The final artifact is produced by the formal Developer
+  ID signed and notarized release workflow.
+
 ## 3.0.178 — Clearer iOS Tabs and uninterrupted Codex activity
 
 - Keep Codex's current turn state when context compaction starts a new session
