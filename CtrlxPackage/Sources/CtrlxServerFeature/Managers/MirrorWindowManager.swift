@@ -469,7 +469,7 @@ final public class MirrorWindowManager {
 
                 guard !Task.isCancelled, let self else { break }
                 await self.refreshDetectedAgentSessions(processNamesByPlugin: processNamesProvider())
-                if await self.reconcileInterruptedTurns() {
+                if await self.reconcileAbortedOrFailedTurns() {
                     await self.onAgentProcessReconciliationChanged?()
                 }
             }
@@ -561,7 +561,7 @@ final public class MirrorWindowManager {
         paneStates[paneID]?.claudeSessionID = sessionID
     }
 
-    func reconcileInterruptedTurns() async -> Bool {
+    func reconcileAbortedOrFailedTurns() async -> Bool {
         @Dependency(CodexTurnStateClient.self) var turns
         var changed = false
         for (paneID, evidence) in conversationEvidence {
@@ -571,11 +571,11 @@ final public class MirrorWindowManager {
                 let binding = currentAgentBinding(forPane: paneID), CodexProcessSessionReader.supports(pluginID: binding.pluginID),
                 binding.runtimeID == evidence.runtimeID, let turnID = evidence.submittedTurnID else { continue }
             let context = AgentEventContext(binding: binding, conversationID: evidence.conversationID)
-            // Codex and Traex can record Esc in the rollout without a Stop hook. A newer
-            // submission can arrive while the reader is checking the old turn.
+            // Aborted and failed turns can end without a Stop hook. A newer submission
+            // can arrive while the reader is checking the old turn.
             guard
                 context.matches(paneStates[paneID], runtimeID: agentIdentities.runtimeID),
-                await turns.wasAborted(binding.processID, binding.runtimeID, context.conversationID, turnID),
+                await turns.wasAbortedOrFailed(binding.processID, binding.runtimeID, context.conversationID, turnID),
                 !Task.isCancelled, conversationEvidence[paneID]?.submittedTurnID == turnID,
                 context.matches(paneStates[paneID], runtimeID: agentIdentities.runtimeID),
                 paneStates[paneID]?.agentSession?.state == .working else { continue }

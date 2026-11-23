@@ -363,6 +363,8 @@ public struct MainView: View {
     @State private var showingNewTabMenu = false
     @State private var showingSessionSwitcher = false
     @State private var pendingAgentFork: AgentForkConfiguration?
+    @State private var pendingTerminalRename: (@MainActor (String) -> Void)?
+    @State private var terminalRenameName = ""
     @State private var restartingAgents: Set<PaneKey> = []
     @State private var pendingTerminalAgent: NewAgentTabConfiguration?
     @State private var pendingTerminalPhotos: TerminalPhotoDestination?
@@ -787,6 +789,26 @@ public struct MainView: View {
         .sheet(item: $pendingAgentFork) { configuration in
             AgentForkPanel(configuration: configuration)
         }
+        .modifier(TextEntryPresentation(
+            isPresented: Binding(
+                get: { pendingTerminalRename != nil },
+                set: {
+                    if !$0 {
+                        pendingTerminalRename = nil
+                    }
+                }
+            ),
+            title: "Rename Tab",
+            message: "Enter a new name for this tab",
+            placeholder: "Tab Name",
+            text: $terminalRenameName,
+            onSave: { name in
+                let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    pendingTerminalRename?(trimmed)
+                }
+            }
+        ))
         .sheet(item: $pendingTerminalAgent) { configuration in
             NewAgentTabPanel(configuration: configuration)
         }
@@ -1712,32 +1734,11 @@ public struct MainView: View {
                         hostID: remote.hostId,
                         fallbackDirectory: window?.activePane?.currentPath
                     ),
-                    forkUnavailableReason: agentForkUnavailableReason(hostID: remote.hostId),
-                    supportsOtherDirectoryFork: coordinator.remoteSessionStore?.hostsSupportingAgentForkDirectory.contains(remote.hostId) == true,
-                    onForkWindow: { sourceWindow, destination in
-                        pendingAgentFork = agentForkConfiguration(panes: sourceWindow.panes, hostID: remote.hostId, destination: destination)
+                    windowMenuItems: { window in
+                        terminalTabMenuItems(hostID: remote.hostId, panes: window.panes)
                     },
-                    onOpenBrowser: { sourceWindow in
-                        openPaneBrowser(
-                            hostID: remote.hostId,
-                            sessionName: remote.sessionName,
-                            paneID: browserSourcePane(sessionName: remote.sessionName, hostID: remote.hostId, windowID: sourceWindow.id)
-                        )
-                    },
-                    onRenameWindow: { [inputState = connection.relayClient.workspaceInputState] windowToRename, newName in
-                        let binding = inputState.windowBinding(target: windowToRename.stableId)
-                        Task {
-                            let result = await connection.relayClient.sendCommand(
-                                SetWindowName(windowId: windowToRename.stableId, name: newName),
-                                paneId: "", inputBinding: binding
-                            )
-                            if case let .failure(error) = result {
-                                attachError = error.localizedDescription
-                            }
-                            if case let .success(response) = result, !response.success {
-                                attachError = response.error
-                            }
-                        }
+                    onRenameWindow: { window in
+                        beginTerminalTabRename(hostID: remote.hostId, pane: window.activePane)
                     },
                     onSelectBrowserTab: { tabId in
                         selectRemoteBrowserTab(
@@ -1778,26 +1779,11 @@ public struct MainView: View {
                     onCloseFileTab: { id in
                         closeRemoteFileTab(id, hostID: remote.hostId, sessionName: remote.sessionName)
                     },
-                    onOpenFiles: { sourceWindow, new in
-                        openDirectoryTab(
-                            sessionName: remote.sessionName,
-                            windowID: sourceWindow.id,
-                            hostID: remote.hostId,
-                            paneIDs: sourceWindow.panes.map(\.paneId),
-                            fallbackPaneID: sourceWindow.activePane?.paneId, new: new
-                        )
-                    },
                     linkedTabActions: linkedTabActions(hostID: remote.hostId, sessionName: remote.sessionName),
                     onNewResource: supportsIndependentResources(hostID: remote.hostId) ? { openIndependentResource($0, hostID: remote.hostId, sessionName: remote.sessionName) } : nil,
-                    onViewWorkflow: { pane in openWorkflow(for: pane, hostID: remote.hostId) },
-                    onTrustAgentHooks: connection.relayClient.hostSupportsAgentHookTrust ? { pane in trustAgentHooks(pane, hostID: remote.hostId) } : nil,
                     onDetachWindow: { sourceWindow, point in
                         detachTerminal(hostID: remote.hostId, windowID: sourceWindow.stableId, position: point)
-                    },
-                    onRestartAgent: { restartAgent($0, hostID: remote.hostId) },
-                    restartUnavailableReason: agentRestartUnavailableReason(hostID: remote.hostId),
-                    logoutUnavailableReason: agentRestartUnavailableReason(hostID: remote.hostId, logoutBeforeResume: true),
-                    restartingAgentPaneIDs: restartingAgentPaneIDs(hostID: remote.hostId)
+                    }
                 )
                 .environment(\.workbenchTabContext, tabContext(hostID: remote.hostId, session: remote.sessionName))
 
@@ -1886,31 +1872,12 @@ public struct MainView: View {
                             hostID: nil,
                             fallbackDirectory: directoryPath
                         ),
-                        onForkWindow: { sourceWindow, destination in
-                            let panes = sourceWindow.panes.compactMap { coordinator.windowManager.paneStates[$0.paneId] }
-                            pendingAgentFork = agentForkConfiguration(panes: panes, hostID: nil, destination: destination)
+                        windowMenuItems: { window in
+                            terminalTabMenuItems(hostID: nil, panes: localTerminalMenuPanes(for: window))
                         },
-                        onOpenBrowser: { sourceWindow in
-                            openPaneBrowser(
-                                hostID: nil,
-                                sessionName: session.sessionName,
-                                paneID: browserSourcePane(sessionName: session.sessionName, hostID: nil, windowID: sourceWindow.id)
-                            )
-                        },
-                        onRenameWindow: { windowToRename, newName in
-                            guard let identity = windowToRename.panes.first?.workspaceIdentity else {
-                                attachError = "The terminal is still being discovered. Try again in a moment."
-                                return
-                            }
-                            Task {
-                                do {
-                                    try await tmuxService.renameWindow(target: windowToRename.stableId, name: newName, expectedWorkspacePane: identity)
-                                    _ = await tmuxService.refreshPanes()
-                                    await coordinator.connectedViewerManager?.pushSessionStateToAll()
-                                } catch {
-                                    attachError = error.localizedDescription
-                                }
-                            }
+                        onRenameWindow: { window in
+                            let pane = localTerminalMenuPanes(for: window).first { $0.paneId == window.activePane?.paneId }
+                            beginTerminalTabRename(hostID: nil, pane: pane)
                         },
                         onSelectFileBrowser: {
                             if fileBrowserStates[session.sessionName] == nil {
@@ -1986,24 +1953,11 @@ public struct MainView: View {
                         onReorderBrowserTabs: { newOrder in
                             reorderBrowserTabs(in: session.sessionName, to: newOrder)
                         },
-                        onOpenFiles: { sourceWindow, new in
-                            openDirectoryTab(
-                                sessionName: session.sessionName,
-                                windowID: sourceWindow.id,
-                                hostID: nil,
-                                paneIDs: sourceWindow.panes.map(\.paneId),
-                                fallbackPaneID: sourceWindow.activePane?.paneId, new: new
-                            )
-                        },
                         linkedTabActions: linkedTabActions(hostID: nil, sessionName: session.sessionName),
                         onNewResource: { openIndependentResource($0, hostID: nil, sessionName: session.sessionName) },
-                        onViewWorkflow: { pane in openWorkflow(for: pane, hostID: nil) },
-                        onTrustAgentHooks: { pane in trustAgentHooks(pane, hostID: nil) },
                         onDetachWindow: { sourceWindow, point in
                             detachTerminal(hostID: nil, windowID: sourceWindow.stableId, position: point)
-                        },
-                        onRestartAgent: { restartAgent($0, hostID: nil) },
-                        restartingAgentPaneIDs: restartingAgentPaneIDs(hostID: nil)
+                        }
                     )
                     .environment(\.workbenchTabContext, tabContext(hostID: nil, session: session.sessionName))
                 }
@@ -3835,12 +3789,28 @@ public struct MainView: View {
         return windowManager.paneStates[paneID]
     }
 
+    private func localTerminalMenuPanes(for window: LocalTmuxWindow) -> [PaneState] {
+        window.panes.compactMap { pane in
+            guard
+                let state = windowManager.paneStates[pane.paneId], state.sessionName == window.sessionName,
+                state.stableWindowId == window.stableId, state.workspaceIdentity == pane.workspaceIdentity else { return nil }
+            return state
+        }
+    }
+
+    private func terminalMenuWindowMatches(_ target: TerminalContentMenuTarget) -> Bool {
+        target.hostID == selectedRemoteSession?.hostId
+            && target.sessionName == (selectedRemoteSession?.sessionName ?? currentLocalSession()?.sessionName)
+            && ownsTerminal(hostID: target.hostID, windowID: target.windowID)
+    }
+
+    private func terminalMenuTargetMatches(_ target: TerminalContentMenuTarget) -> Bool {
+        terminalMenuWindowMatches(target)
+            && target.matches(hostID: target.hostID, pane: terminalMenuPane(hostID: target.hostID, paneID: target.paneID))
+    }
+
     private func terminalMenuTargetIsCurrent(_ target: TerminalContentMenuTarget, binding: ViewerWorkspaceInputBinding) -> Bool {
-        guard
-            target.hostID == selectedRemoteSession?.hostId,
-            target.sessionName == (selectedRemoteSession?.sessionName ?? currentLocalSession()?.sessionName),
-            ownsTerminal(hostID: target.hostID, windowID: target.windowID),
-            target.matches(hostID: target.hostID, pane: terminalMenuPane(hostID: target.hostID, paneID: target.paneID)) else { return false }
+        guard terminalMenuTargetMatches(target) else { return false }
         if let hostID = target.hostID {
             guard let client = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient, client.isHostConnected else { return false }
             do { _ = try binding.expectedPane(current: client.workspaceInputState.binding(paneID: target.paneID)) }
@@ -3848,6 +3818,222 @@ public struct MainView: View {
             return true
         }
         return coordinator.workspaceRecoveryReady && target.workspacePane != nil
+    }
+
+    private func terminalMenuBinding(for target: TerminalContentMenuTarget) -> ViewerWorkspaceInputBinding {
+        let inputState = target.hostID.flatMap { coordinator.viewerConnectionManager?.connection(for: $0)?.relayClient.workspaceInputState }
+        return inputState?.binding(paneID: target.paneID) ?? .unavailable
+    }
+
+    private func terminalMenuWindowBinding(for target: TerminalContentMenuTarget) -> ViewerWorkspaceInputBinding {
+        let client = target.hostID.flatMap { coordinator.viewerConnectionManager?.connection(for: $0)?.relayClient }
+        return client?.workspaceInputState.windowBinding(target: target.windowID) ?? .unavailable
+    }
+
+    private func terminalMenuWindowIsCurrent(_ target: TerminalContentMenuTarget, binding: ViewerWorkspaceInputBinding) -> Bool {
+        guard terminalMenuWindowMatches(target) else { return false }
+        guard let hostID = target.hostID else {
+            return coordinator.workspaceRecoveryReady && windowManager.paneStates.values.contains { target.matchesWindow(pane: $0) }
+        }
+        guard
+            let client = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient,
+            client.isHostConnected else { return false }
+        if case .legacy = binding {
+            return false
+        }
+        if case let .window(_, _, identity) = binding, !identity.isSameWindow(as: target.workspacePane) {
+            return false
+        }
+        do {
+            _ = try binding.expectedPane(current: client.workspaceInputState.windowBinding(target: target.windowID))
+            return true
+        } catch { return false }
+    }
+
+    private func validateTerminalMenuWindow(_ target: TerminalContentMenuTarget, binding: ViewerWorkspaceInputBinding) -> Bool {
+        guard terminalMenuWindowIsCurrent(target, binding: binding) else {
+            attachError = "This terminal window changed. Reopen its menu."
+            return false
+        }
+        return true
+    }
+
+    private func performTerminalMenuAction(
+        _ target: TerminalContentMenuTarget, binding: ViewerWorkspaceInputBinding,
+        windowBinding: ViewerWorkspaceInputBinding, action: () -> Void
+    ) {
+        guard validateTerminalMenuWindow(target, binding: windowBinding) else { return }
+        guard terminalMenuTargetIsCurrent(target, binding: binding) else {
+            attachError = "This terminal changed or disconnected. Reopen its menu."
+            return
+        }
+        action()
+    }
+
+    private func beginTerminalTabRename(hostID: String?, pane: PaneState?) {
+        guard let pane, let target = TerminalContentMenuTarget(hostID: hostID, pane: pane) else { return }
+        let binding = terminalMenuBinding(for: target)
+        guard terminalMenuTargetIsCurrent(target, binding: binding) else { return }
+        let windowBinding = terminalMenuWindowBinding(for: target)
+        terminalTabRenameAction(target, binding: windowBinding, currentName: pane.windowName)()
+    }
+
+    private func terminalTabRenameAction(
+        _ target: TerminalContentMenuTarget, binding: ViewerWorkspaceInputBinding, currentName: String
+    ) -> @MainActor () -> Void {
+        let legacyEpoch: UUID? = if case .legacyWindow = binding, let hostID = target.hostID {
+            coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient.hostConnectionEpoch
+        } else {
+            nil
+        }
+
+        return {
+            guard validateTerminalMenuWindow(target, binding: binding) else { return }
+            terminalRenameName = currentName
+            pendingTerminalRename = { name in
+                guard validateTerminalMenuWindow(target, binding: binding) else { return }
+                renameTerminalTab(target, binding: binding, legacyEpoch: legacyEpoch, name: name)
+            }
+        }
+    }
+
+    private func renameTerminalTab(
+        _ target: TerminalContentMenuTarget, binding: ViewerWorkspaceInputBinding,
+        legacyEpoch: UUID?, name: String
+    ) {
+        if let hostID = target.hostID {
+            guard let client = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient else { return }
+            Task {
+                do {
+                    let response = try await client.sendCommand(
+                        SetWindowName(windowId: target.windowID, name: name), paneId: "", inputBinding: binding,
+                        expectedHostConnectionEpoch: legacyEpoch
+                    ).get()
+                    if !response.success {
+                        attachError = response.error
+                    }
+                } catch { attachError = error.localizedDescription }
+            }
+        } else if let identity = target.workspacePane {
+            Task {
+                do {
+                    try await tmuxService.renameWindow(target: target.windowID, name: name, expectedWorkspacePane: identity)
+                    _ = await tmuxService.refreshPanes()
+                    await coordinator.connectedViewerManager?.pushSessionStateToAll()
+                } catch { attachError = error.localizedDescription }
+            }
+        }
+    }
+
+    private func terminalTabMenuItems(hostID: String?, panes: [PaneState], clickedPane: PaneState? = nil) -> [ContextMenuItem] {
+        guard
+            let pane = clickedPane ?? panes.first(where: \.isActive) ?? panes.first,
+            let target = TerminalContentMenuTarget(hostID: hostID, pane: pane) else { return [] }
+        let binding = terminalMenuBinding(for: target)
+        let windowBinding = terminalMenuWindowBinding(for: target)
+        let available = terminalMenuTargetIsCurrent(target, binding: binding)
+        let client = hostID.flatMap { coordinator.viewerConnectionManager?.connection(for: $0)?.relayClient }
+        let store = coordinator.remoteSessionStore
+        let hasCurrentHostState = hostID.map { store?.hasReceivedState(for: $0) == true } ?? true
+        let unavailableReason = available ? nil : "This terminal changed or is not ready."
+        let restartReason = hostID.flatMap { agentRestartUnavailableReason(hostID: $0) } ?? unavailableReason
+        let logoutReason = hostID.flatMap { agentRestartUnavailableReason(hostID: $0, logoutBeforeResume: true) } ?? unavailableReason
+        let busyPaneIDs = restartingAgentPaneIDs(hostID: hostID)
+        func performInWindow(_ action: () -> Void) {
+            guard validateTerminalMenuWindow(target, binding: windowBinding) else { return }
+            action()
+        }
+        func performFromSource(_ action: () -> Void) {
+            if clickedPane == nil {
+                performInWindow(action)
+            } else {
+                performTerminalMenuAction(target, binding: binding, windowBinding: windowBinding, action: action)
+            }
+        }
+        func performOnAgent(_ source: PaneState, action: () -> Void) {
+            guard let sourceTarget = TerminalContentMenuTarget(hostID: hostID, pane: source) else { return }
+            performTerminalMenuAction(
+                sourceTarget, binding: terminalMenuBinding(for: sourceTarget), windowBinding: windowBinding, action: action
+            )
+        }
+        func currentSourcePanes() -> [PaneState] {
+            if let clickedPane {
+                return [clickedPane]
+            }
+            if hostID != nil {
+                return selectedRemoteSessionWindows.first { $0.stableId == target.windowID }?.panes ?? []
+            }
+            return windowManager.paneStates.values.filter { target.matchesWindow(pane: $0) }
+                .sorted { $0.paneIndex < $1.paneIndex }
+        }
+        func openFiles(new: Bool) {
+            performFromSource {
+                let livePanes = currentSourcePanes()
+                guard let source = livePanes.first(where: \.isActive) ?? livePanes.first else { return }
+                openDirectoryTab(
+                    sessionName: target.sessionName, windowID: source.windowId, hostID: hostID,
+                    paneIDs: livePanes.map(\.paneId), fallbackPaneID: source.paneId,
+                    path: supportsIndependentResources(hostID: hostID) ? clickedPane?.currentPath : nil, new: new
+                )
+            }
+        }
+        let rename = terminalTabRenameAction(target, binding: windowBinding, currentName: pane.windowName)
+        let items: [ContextMenuItem] = [
+            .button(title: "Rename Tab", symbol: .pencil, isEnabled: available, action: rename),
+            .button(
+                title: "Open in Separate Window",
+                isEnabled: DetachedTerminalTarget(hostID: hostID, windowID: target.windowID) != nil
+            ) {
+                performInWindow { detachTerminal(hostID: hostID, windowID: target.windowID, position: nil) }
+            },
+            .button(title: "Open Files", symbol: .folderBadgePlus, isEnabled: available) { openFiles(new: false) },
+            .button(title: "Open Another Files Tab", symbol: .folderBadgePlus, isEnabled: available) { openFiles(new: true) },
+            .button(title: hostID == nil ? "Open Browser" : "Open Browser on Host", symbol: .globe, isEnabled: available) {
+                performFromSource {
+                    let paneID = clickedPane?.paneId ?? browserSourcePane(sessionName: target.sessionName, hostID: hostID, windowID: target.windowID)
+                    openPaneBrowser(hostID: hostID, sessionName: target.sessionName, paneID: paneID)
+                }
+            },
+            AgentForkMenu(
+                sources: panes.compactMap(AgentForkSource.init(pane:)),
+                unavailableReason: hostID.flatMap { agentForkUnavailableReason(hostID: $0) } ?? unavailableReason,
+                sourceUnavailableReason: AgentForkSource.unavailableReason(panes: panes),
+                allowsOtherDirectory: hostID.map { store?.hostsSupportingAgentForkDirectory.contains($0) == true } ?? true,
+                choose: { destination in
+                    performFromSource {
+                        let sources = panes.compactMap { pane -> PaneState? in
+                            guard
+                                let expected = AgentForkSource(pane: pane),
+                                let live = terminalMenuPane(hostID: hostID, paneID: pane.paneId),
+                                let current = AgentForkSource(pane: live), expected.matches(current) else { return nil }
+                            return live
+                        }
+                        guard !sources.isEmpty else {
+                            attachError = "The source Agent is no longer available in this window. Reopen its menu to fork."
+                            return
+                        }
+                        pendingAgentFork = agentForkConfiguration(panes: sources, hostID: hostID, destination: destination, focusedPaneID: clickedPane?.paneId)
+                    }
+                }
+            ).contextMenuItem,
+        ]
+        let actionPanes = clickedPane.map { [$0] } ?? panes
+        let restartFromMenu: (RestartAgentSession) -> Void = { request in
+            guard let source = actionPanes.first(where: { $0.paneId == request.source.paneID }) else { return }
+            performOnAgent(source) { restartAgent(request, hostID: hostID) }
+        }
+        let restart = AgentRestartMenu(panes: actionPanes, unavailableReason: restartReason, busyPaneIDs: busyPaneIDs, choose: restartFromMenu)
+        let logout = AgentRestartMenu(panes: actionPanes, unavailableReason: logoutReason, busyPaneIDs: busyPaneIDs, logoutBeforeResume: true, choose: restartFromMenu)
+        let hooks = AgentHookTrustMenu.items(
+            panes: actionPanes, isEnabled: available && hasCurrentHostState,
+            approve: hostID == nil || client?.hostSupportsAgentHookTrust == true ? { pane in
+                performOnAgent(pane) { trustAgentHooks(pane, hostID: hostID) }
+            } : nil
+        )
+        let workflow = AgentWorkflowMenu.items(panes: panes, isEnabled: available && hasCurrentHostState) { pane in
+            performOnAgent(pane) { openWorkflow(for: pane, hostID: hostID) }
+        }
+        return items + restart.contextMenuItems + logout.contextMenuItems + hooks + workflow
     }
 
     private struct TerminalPhotoDestination: Identifiable {
@@ -3901,7 +4087,8 @@ public struct MainView: View {
     private func terminalContentMenuItems(hostID: String?, paneID: String) -> [ContextMenuItem] {
         guard let pane = terminalMenuPane(hostID: hostID, paneID: paneID), let target = TerminalContentMenuTarget(hostID: hostID, pane: pane) else { return [] }
         let client = hostID.flatMap { coordinator.viewerConnectionManager?.connection(for: $0)?.relayClient }
-        let binding = client?.workspaceInputState.binding(paneID: paneID) ?? .unavailable
+        let binding = terminalMenuBinding(for: target)
+        let windowBinding = terminalMenuWindowBinding(for: target)
         let available = terminalMenuTargetIsCurrent(target, binding: binding)
         let configuration = agentTabConfiguration(sessionName: target.sessionName, hostID: hostID, fallbackDirectory: target.directory, sourcePaneID: paneID)
         let resourceID = hostID == nil
@@ -3929,13 +4116,15 @@ public struct MainView: View {
             onNewTerminal: { createTerminalTab(source: target) },
             onNewResource: newResource, onOpenGit: openGit
         )
-        var items = actions.map { item in
+        let windowPanes = hostID.map { coordinator.remoteSessionStore?.windows(for: $0).flatMap(\.panes) ?? [] }
+            ?? Array(windowManager.paneStates.values)
+        let panes = windowPanes.filter { $0.sessionName == target.sessionName && $0.stableWindowId == target.windowID }
+            .sorted { $0.paneIndex < $1.paneIndex }
+        var items = terminalTabMenuItems(hostID: hostID, panes: panes, clickedPane: pane)
+        items.append(.divider)
+        items += actions.map { item in
             ContextMenuItem.button(title: item.title, isEnabled: available && item.isEnabled) {
-                guard terminalMenuTargetIsCurrent(target, binding: binding) else {
-                    attachError = "This terminal changed or disconnected. Reopen its menu."
-                    return
-                }
-                item.action()
+                performTerminalMenuAction(target, binding: binding, windowBinding: windowBinding, action: item.action)
             }
         }
         let fit = resizeRequest(
@@ -3946,19 +4135,15 @@ public struct MainView: View {
         )
         items.append(.divider)
         items.append(.button(title: "Add Photos…", isEnabled: available) {
-            guard terminalMenuTargetIsCurrent(target, binding: binding) else {
-                attachError = "This terminal changed or disconnected. Reopen its menu."
-                return
+            performTerminalMenuAction(target, binding: binding, windowBinding: windowBinding) {
+                pendingTerminalPhotos = TerminalPhotoDestination(target: target, inputBinding: binding)
             }
-            pendingTerminalPhotos = TerminalPhotoDestination(target: target, inputBinding: binding)
         })
         items.append(.button(title: "Fit Terminal", isEnabled: available && (hostID == nil || client?.hostSupportsTerminalFit == true)) {
-            guard terminalMenuTargetIsCurrent(target, binding: binding) else {
-                attachError = "This terminal changed or disconnected. Reopen its menu."
-                return
+            performTerminalMenuAction(target, binding: binding, windowBinding: windowBinding) {
+                automaticTabFit.cancel()
+                Task { await performResize([fit]) }
             }
-            automaticTabFit.cancel()
-            Task { await performResize([fit]) }
         })
         return items
     }

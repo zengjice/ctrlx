@@ -152,8 +152,11 @@ struct WorkspaceTerminalInputTests {
             }
             #expect(try await run(["display-message", "-p", "-t", "@0", "#{window_name}:#{pane_pid}"]).stdoutString == before)
 
-            // Replacing a pane inside the same physical window must not retire the window's editor.
-            _ = try await run(["set-option", "-p", "-t", "%0", WorkspaceTmuxRecovery.paneKey, UUID().uuidString])
+            // The original pane can exit while the same window remains open.
+            let split = try await run(["split-window", "-t", "@0", "-d", "/bin/cat"])
+            try #require(split.isSuccess)
+            let closed = try await run(["kill-pane", "-t", "%0"])
+            try #require(closed.isSuccess)
             let name = "rename 'quote' ; 中文"
             try await tmux.renameWindow(target: "@0", name: name, expectedWorkspacePane: current)
             #expect(try await run(["display-message", "-p", "-t", "@0", "#{window_name}"]).stdoutString.trimmingCharacters(in: .whitespacesAndNewlines) == name)

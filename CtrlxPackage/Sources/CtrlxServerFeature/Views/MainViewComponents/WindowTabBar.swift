@@ -32,9 +32,8 @@ struct WindowTabBar: View {
     let onNewWindow: () -> Void
     @Binding var isNewTabMenuPresented: Bool
     let agentConfiguration: NewAgentTabConfiguration
-    let onForkWindow: (LocalTmuxWindow, AgentForkDestination) -> Void
-    let onOpenBrowser: (LocalTmuxWindow) -> Void
-    let onRenameWindow: (LocalTmuxWindow, String) -> Void
+    let windowMenuItems: (LocalTmuxWindow) -> [ContextMenuItem]
+    let onRenameWindow: (LocalTmuxWindow) -> Void
     let onSelectFileBrowser: () -> Void
     /// Activates the Git tab for the current window (issue #258).
     let onSelectGitBrowser: () -> Void
@@ -61,14 +60,9 @@ struct WindowTabBar: View {
     let onReorderFileTabs: ([UUID]) -> Void
     /// Reorders the open browser tabs.
     let onReorderBrowserTabs: ([UUID]) -> Void
-    let onOpenFiles: (LocalTmuxWindow, Bool) -> Void
     let linkedTabActions: LinkedTabSourceActions
     var onNewResource: ((ResourceTabKind) -> Void)?
-    var onViewWorkflow: ((PaneState) -> Void)?
-    var onTrustAgentHooks: ((PaneState) -> Void)?
     var onDetachWindow: ((LocalTmuxWindow, CGPoint?) -> Void)?
-    var onRestartAgent: ((RestartAgentSession) -> Void)?
-    var restartingAgentPaneIDs: Set<String> = []
 
     @Environment(MirrorWindowManager.self) private var windowManager
     @Environment(MarkdownOpenSuggestionStore.self) private var openSuggestionStore
@@ -461,13 +455,8 @@ struct WindowTabBar: View {
             .background(WindowTabDragSource(windowID: window.stableId, label: windowName) { point in
                 onDetachWindow?(window, point)
             })
-            .modifier(WindowRenamingModifier(
-                currentName: window.windowName,
-                onRename: { newName in
-                    onRenameWindow(window, newName)
-                },
-                additionalMenu: { windowContextMenuItems(for: window) }
-            ))
+            .stableContextMenu { windowMenuItems(window) }
+            .simultaneousGesture(TapGesture(count: 2).onEnded { onRenameWindow(window) })
 
             TabReturnToMainButton(tab: payload, name: windowName)
 
@@ -491,40 +480,6 @@ struct WindowTabBar: View {
         .onHover { hovering in
             hoveredWindowId = hovering ? window.id : nil
         }
-    }
-
-    private func windowContextMenuItems(for window: LocalTmuxWindow) -> [ContextMenuItem] {
-        [
-            .button(
-                title: "Open in Separate Window",
-                isEnabled: onDetachWindow != nil && DetachedTerminalTarget(hostID: nil, windowID: window.stableId) != nil
-            ) {
-                onDetachWindow?(window, nil)
-            },
-            .button(title: "Open Files", symbol: .folderBadgePlus, isEnabled: !window.panes.isEmpty) {
-                onOpenFiles(window, false)
-            },
-            .button(title: "Open Another Files Tab", symbol: .folderBadgePlus, isEnabled: !window.panes.isEmpty) {
-                onOpenFiles(window, true)
-            },
-            .button(title: "Open Browser", symbol: .globe, isEnabled: !window.panes.isEmpty) {
-                onOpenBrowser(window)
-            },
-            AgentForkMenu(
-                sources: window.panes.compactMap { windowManager.paneStates[$0.paneId].flatMap(AgentForkSource.init(pane:)) },
-                unavailableReason: nil,
-                sourceUnavailableReason: AgentForkSource.unavailableReason(panes: window.panes.compactMap { windowManager.paneStates[$0.paneId] }),
-                allowsOtherDirectory: true,
-                choose: { onForkWindow(window, $0) }
-            ).contextMenuItem,
-        ] + restartMenuItems(for: window) + AgentHookTrustMenu.items(panes: window.panes.compactMap { windowManager.paneStates[$0.paneId] }, isEnabled: true, approve: onTrustAgentHooks) + AgentWorkflowMenu.items(panes: window.panes.compactMap { windowManager.paneStates[$0.paneId] }, isEnabled: true, open: onViewWorkflow)
-    }
-
-    private func restartMenuItems(for window: LocalTmuxWindow) -> [ContextMenuItem] {
-        guard let onRestartAgent else { return [] }
-        let panes = window.panes.compactMap { windowManager.paneStates[$0.paneId] }
-        return AgentRestartMenu(panes: panes, busyPaneIDs: restartingAgentPaneIDs, choose: onRestartAgent).contextMenuItems
-            + AgentRestartMenu(panes: panes, busyPaneIDs: restartingAgentPaneIDs, logoutBeforeResume: true, choose: onRestartAgent).contextMenuItems
     }
 
     @ViewBuilder

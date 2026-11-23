@@ -15,7 +15,7 @@ CtrlX is another AI coding workbench. Take your **context** with you when you sw
 | | • **Send feedback across tools.** Mark up a file, web page or simulator screen and drop the annotation into the original conversation’s draft. |
 | | • **Let another agent try an idea.** Press ⌘F in a Codex or Claude Code tab on Mac. The new agent starts with the conversation so far. Choose a new Git worktree from the Fork menu to isolate its edits. [Fork a conversation](docs/services-reference.md#fork-a-native-agent-conversation-macios) |
 | | • **Call up Orbie from other apps.** Use a global Mac shortcut to pick up the discussion, or fork an Orbiter to explore a side question. [Orbie and Orbiters](docs/global-agent-design.md) |
-| | • **Work with a teammate’s agent (planned).** We’d like your agent to be able to pass an agreed API design to a colleague’s agent so it can start the integration. |
+| | • **Work with a teammate’s agent (planned).** Invite it into the same Room so your agents can test an API integration together. |
 | **Recoverability** | • **Get your workspace back.** Enable workspace recovery to restore tabs, splits and unsent drafts in the CtrlX editor after your Mac restarts. |
 | | • **Reopen the original conversation.** Supported Codex and Claude Code versions can resume a verified conversation automatically. If confirmation is needed, tap **Resume** on iPhone. [Workspace recovery](docs/workspace-recovery-design.md) |
 
@@ -31,9 +31,12 @@ CtrlX is another AI coding workbench. Take your **context** with you when you sw
 
 ## Product architecture
 
-![CtrlX architecture. The Host Mac runs agents in tmux, coordinates workflows and provides files, Git, a browser and the iOS Simulator. A paired Mac or iPhone uses that workspace through an end-to-end encrypted connection via the Relay.](docs/assets/ctrlx-architecture.svg)
+We envision a **Room** as a place for agents working on the same task. **Orbie**, your global agent, and **Workflow** both run on your own **Host Mac**. Fork an **Orbiter** from a conversation with Orbie to explore a side question. You can run a workflow directly or let Orbie control it.
 
-Your project and tmux sessions stay on the development Mac (the **Host**). A paired iPhone or another Mac (the **Viewer**) connects through the **Relay** with end-to-end encryption.
+![CtrlX product vision. On your Host an arrow shows Orbie controlling Workflow. In the Room the developer agent uses Codex and the test agent uses Claude Code. Lin’s review agent, Mia’s design agent and Sam’s QA agent would join the Room from their own Hosts through the Relay. Paired viewers use the same Relay. Three platform cards show iOS, macOS on another Mac and Android as a planned platform.](docs/assets/ctrlx-architecture.svg)
+
+- **Remote control (solid lines).** Paired iOS and macOS **Viewers** connect to your Host through the **Relay** with end-to-end encryption. An Android viewer is planned.
+- **Planned collaboration across Hosts (dashed lines).** Agents in a workflow currently run on the same Host. In the proposed Room, the three teammates’ agents would join through the same Relay and keep running on their owners’ Macs.
 
 ## An export button, from request to review
 

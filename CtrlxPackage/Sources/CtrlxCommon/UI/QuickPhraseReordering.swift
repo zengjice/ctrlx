@@ -78,16 +78,20 @@ private struct QuickPhraseReordering: ViewModifier, DropDelegate {
     }
 
     private func moveBy(_ offset: Int) {
-        guard let index = store.phrases.firstIndex(where: { $0.id == phrase.id }),
-              store.phrases.indices.contains(index + offset) else { return }
+        guard
+            let index = store.phrases.firstIndex(where: { $0.id == phrase.id }),
+            store.phrases.indices.contains(index + offset) else { return }
         _ = move(phrase.id, to: store.phrases[index + offset].id)
     }
 }
 
-extension View {
+package extension View {
     @MainActor
-    package func quickPhraseReordering(_ phrase: QuickPhrase, store: QuickPhraseStore,
-                                      reportError: @escaping (String) -> Void) -> some View {
+    func quickPhraseReordering(
+        _ phrase: QuickPhrase,
+        store: QuickPhraseStore,
+        reportError: @escaping (String) -> Void
+    ) -> some View {
         modifier(QuickPhraseReordering(phrase: phrase, store: store, reportError: reportError))
     }
 }

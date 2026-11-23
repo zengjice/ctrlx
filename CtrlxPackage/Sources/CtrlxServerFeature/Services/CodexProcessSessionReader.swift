@@ -30,12 +30,12 @@ actor CodexProcessSessionReader {
         hasCompletedTurn(processID: processID, runtimeID: runtimeID)
     }
 
-    func turnAborted(processID: String, runtimeID: String, conversationID: String, turnID: UUID) -> Bool {
+    func turnAbortedOrFailed(processID: String, runtimeID: String, conversationID: String, turnID: UUID) -> Bool {
         guard let sessionID = UUID(uuidString: conversationID) else { return false }
-        return hasCompletedTurn(processID: processID, runtimeID: runtimeID, conversationID: sessionID, abortedTurnID: turnID)
+        return hasCompletedTurn(processID: processID, runtimeID: runtimeID, conversationID: sessionID, abortedOrFailedTurnID: turnID)
     }
 
-    private func hasCompletedTurn(processID: String, runtimeID: String, conversationID: UUID? = nil, abortedTurnID: UUID? = nil) -> Bool {
+    private func hasCompletedTurn(processID: String, runtimeID: String, conversationID: UUID? = nil, abortedOrFailedTurnID: UUID? = nil) -> Bool {
         guard
             !Task.isCancelled, let pid = Int32(processID),
             AgentSessionIdentityClient.processRuntimeID(processID) == runtimeID,
@@ -43,7 +43,7 @@ actor CodexProcessSessionReader {
             let header = readHeader(writer),
             let sessionID = Self.sessionID(header: header, path: writer.path),
             conversationID == nil || UUID(uuidString: sessionID) == conversationID,
-            readCompletion(writer, abortedTurnID: abortedTurnID),
+            readCompletion(writer, abortedOrFailedTurnID: abortedOrFailedTurnID),
             !Task.isCancelled,
             AgentSessionIdentityClient.processRuntimeID(processID) == runtimeID,
             activeRollout(pid: pid, conversationID: conversationID) == writer,
@@ -130,14 +130,14 @@ actor CodexProcessSessionReader {
         return Data(bytes[..<newline])
     }
 
-    private func readCompletion(_ rollout: Rollout, abortedTurnID: UUID?) -> Bool {
+    private func readCompletion(_ rollout: Rollout, abortedOrFailedTurnID: UUID?) -> Bool {
         guard let fd = openRollout(rollout) else { return false }
         defer { close(fd) }
         var before = stat()
         guard fstat(fd, &before) == 0, before.st_size > 0 else { return false }
         let matches: Bool
-        if let abortedTurnID {
-            matches = readAbortedTurn(fd, end: before.st_size, turnID: abortedTurnID)
+        if let abortedOrFailedTurnID {
+            matches = readAbortedOrFailedTurn(fd, end: before.st_size, turnID: abortedOrFailedTurnID)
         } else {
             let offset = max(0, before.st_size - off_t(Self.completionLimit))
             guard let bytes = readChunk(fd, from: offset, to: before.st_size) else { return false }
@@ -149,8 +149,8 @@ actor CodexProcessSessionReader {
             && after.st_mtimespec.tv_nsec == before.st_mtimespec.tv_nsec
     }
 
-    private func readAbortedTurn(_ fd: Int32, end: off_t, turnID: UUID) -> Bool {
-        var scan = TurnCompletion(abortedTurnID: turnID)
+    private func readAbortedOrFailedTurn(_ fd: Int32, end: off_t, turnID: UUID) -> Bool {
+        var scan = TurnCompletion(abortedOrFailedTurnID: turnID)
         var chunkEnd = end
         var recordEnd: off_t?
         while chunkEnd > 0 {
@@ -200,7 +200,7 @@ actor CodexProcessSessionReader {
         return count == bytes.count ? bytes : nil
     }
 
-    static func lastTurnCompleted(_ data: Data, startsAtBeginning: Bool = true, abortedTurnID: UUID? = nil) -> Bool {
+    static func lastTurnCompleted(_ data: Data, startsAtBeginning: Bool = true, abortedOrFailedTurnID: UUID? = nil) -> Bool {
         // A partial append may be a newer task start. Never fall back to an
         // older completion when the latest record is incomplete or malformed.
         guard data.count <= completionLimit, data.last == 10 else { return false }
@@ -208,7 +208,7 @@ actor CodexProcessSessionReader {
         if !startsAtBeginning, !lines.isEmpty {
             lines.removeFirst()
         }
-        var scan = TurnCompletion(abortedTurnID: abortedTurnID)
+        var scan = TurnCompletion(abortedOrFailedTurnID: abortedOrFailedTurnID)
         for line in lines.reversed() {
             if let result = scan.consume(line) {
                 return result
@@ -228,7 +228,19 @@ actor CodexProcessSessionReader {
             let payload: Payload
         }
 
-        let abortedTurnID: UUID?
+        private struct FailedCompletion: Decodable {
+            struct Payload: Decodable {
+                struct ErrorDetails: Decodable {
+                    let message: String
+                }
+
+                let error: ErrorDetails
+            }
+
+            let payload: Payload
+        }
+
+        let abortedOrFailedTurnID: UUID?
         var completedTurn: UUID?
 
         /// Continue only until the latest turn boundary or contradictory evidence.
@@ -246,15 +258,19 @@ actor CodexProcessSessionReader {
                  "turn_complete",
                  "turn_aborted":
                 guard let id = record.payload.turn_id.flatMap(UUID.init(uuidString:)), completedTurn == nil || completedTurn == id else { return false }
-                if let abortedTurnID, completedTurn == nil {
-                    guard id == abortedTurnID, record.payload.type == "turn_aborted" else { return false }
+                if let abortedOrFailedTurnID, completedTurn == nil {
+                    guard
+                        id == abortedOrFailedTurnID,
+                        record.payload.type == "turn_aborted" || (try? JSONDecoder().decode(FailedCompletion.self, from: line)) != nil
+                    else { return false }
                 }
                 completedTurn = id
             case "task_started",
                  "turn_started":
                 return completedTurn != nil && record.payload.turn_id.flatMap(UUID.init(uuidString:)) == completedTurn
             default:
-                guard completedTurn != nil || record.payload.type == "token_count" else { return false }
+                let isThreadSettings = abortedOrFailedTurnID != nil && record.payload.type == "thread_settings_applied"
+                guard completedTurn != nil || record.payload.type == "token_count" || isThreadSettings else { return false }
                 if let raw = record.payload.turn_id {
                     guard let id = UUID(uuidString: raw), id == completedTurn else { return false }
                 }

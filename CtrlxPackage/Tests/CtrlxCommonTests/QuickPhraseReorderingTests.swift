@@ -1,8 +1,8 @@
-@testable import CtrlxCommon
 import CtrlxNetworking
 import Dependencies
 import Foundation
 import Testing
+@testable import CtrlxCommon
 
 @MainActor
 @Suite("Quick phrase drag ordering")
@@ -13,7 +13,9 @@ struct QuickPhraseReorderingTests {
 
     private func populated(_ preferences: PreferencesService = .inMemory()) throws -> QuickPhraseStore {
         let library = store(preferences)
-        for text in ["one", "two", "three"] { try library.add(text) }
+        for text in ["one", "two", "three"] {
+            try library.add(text)
+        }
         return library
     }
 
@@ -49,11 +51,16 @@ struct QuickPhraseReorderingTests {
         #expect(changes == 1)
     }
 
-    @Test("The numbered target position matches the final slot in either direction",
-          arguments: 0..<6, 0..<6)
+    @Test(
+        "The numbered target position matches the final slot in either direction",
+        arguments: 0..<6,
+        0..<6
+    )
     func targetPosition(source: Int, destination: Int) throws {
         let library = store()
-        for index in 0..<6 { try library.add("phrase \(index)") }
+        for index in 0..<6 {
+            try library.add("phrase \(index)")
+        }
         let original = library.phrases
         let targetIndex = try #require(library.phrases.firstIndex { $0.id == original[destination].id })
         #expect(library.ordering == nil)
@@ -85,8 +92,10 @@ struct QuickPhraseReorderingTests {
     @Test("Existing v2 storage loads; drag order upgrades storage without mutating records")
     func legacyStorage() throws {
         let preferences = PreferencesService.inMemory()
-        let records = [QuickPhraseRecord(id: UUID(), order: 0, text: "one"),
-                       QuickPhraseRecord(id: UUID(), order: 1, text: "two")]
+        let records = [
+            QuickPhraseRecord(id: UUID(), order: 0, text: "one"),
+            QuickPhraseRecord(id: UUID(), order: 1, text: "two"),
+        ]
         let data = try JSONEncoder().encode(OldLibrary(version: 2, records: records))
         preferences.setData(data, QuickPhraseStore.syncStorageKey)
         let library = store(preferences)
@@ -198,10 +207,12 @@ struct QuickPhraseReorderingTests {
     func capacity() throws {
         let library = store()
         let id = UUID(), secondID = UUID()
-        let base = [QuickPhraseRecord(id: id, order: 0, text: ""),
-                    QuickPhraseRecord(id: secondID, order: 1, text: "two")]
+        let base = [
+            QuickPhraseRecord(id: id, order: 0, text: ""),
+            QuickPhraseRecord(id: secondID, order: 1, text: "two"),
+        ]
         let overhead = try JSONEncoder().encode(OldLibrary(version: 2, records: base)).count
-        let records = [QuickPhraseRecord(id: id, order: 0, text: String(repeating: "a", count: 512 * 1024 - overhead - 10)), base[1]]
+        let records = [QuickPhraseRecord(id: id, order: 0, text: String(repeating: "a", count: 512 * 1_024 - overhead - 10)), base[1]]
         try library.merge(records)
         #expect(throws: QuickPhraseStore.SyncError.self) { try library.move(id, to: secondID) }
         #expect(library.ordering == nil)
@@ -219,8 +230,13 @@ struct QuickPhraseReorderingTests {
     func wireCompatibility() throws {
         let library = try populated()
         try library.move(library.phrases[0].id, to: library.phrases[2].id)
-        let message = QuickPhraseSyncMessage(senderEpoch: UUID(), recipientEpoch: UUID(), enabled: true,
-                                             records: library.records, ordering: library.ordering)
+        let message = QuickPhraseSyncMessage(
+            senderEpoch: UUID(),
+            recipientEpoch: UUID(),
+            enabled: true,
+            records: library.records,
+            ordering: library.ordering
+        )
         let data = try JSONEncoder().encode(message)
         #expect(try JSONDecoder().decode(QuickPhraseSyncMessage.self, from: data) == message)
         let old = try JSONDecoder().decode(OldMessage.self, from: data)

@@ -48,7 +48,7 @@ struct WindowTabDragSource: NSViewRepresentable {
         cancelled: Bool,
         mouseReleased: Bool,
         point: CGPoint,
-        tabStripFrame: CGRect,
+        tabStripFrame: CGRect
     ) -> Bool {
         operation.isEmpty && !cancelled && mouseReleased && !tabStripFrame.insetBy(dx: -24, dy: -24).contains(point)
     }
@@ -98,7 +98,9 @@ struct WindowTabDragSource: NSViewRepresentable {
         }
 
         func stopMonitoring() {
-            if let monitor { NSEvent.removeMonitor(monitor) }
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+            }
             monitor = nil
             mouseDown = nil
         }
@@ -113,7 +115,9 @@ struct WindowTabDragSource: NSViewRepresentable {
             }
             if dragSession != nil {
                 // AppKit can finish the drag after a later mouse-move event has arrived.
-                if event.type == .leftMouseUp { mouseReleasePoint = WindowTabDragSource.screenPoint(for: event) }
+                if event.type == .leftMouseUp {
+                    mouseReleasePoint = WindowTabDragSource.screenPoint(for: event)
+                }
                 return event
             }
             switch event.type {
@@ -121,7 +125,7 @@ struct WindowTabDragSource: NSViewRepresentable {
                 guard
                     event.window === window, !isHiddenOrHasHiddenAncestor,
                     WindowTabDragSource.containsDragOrigin(
-                        convert(event.locationInWindow, from: nil), bounds: bounds, visibleRect: visibleRect,
+                        convert(event.locationInWindow, from: nil), bounds: bounds, visibleRect: visibleRect
                     ),
                     !event.modifierFlags.contains(.control) else { return event }
                 mouseDown = event
@@ -133,7 +137,7 @@ struct WindowTabDragSource: NSViewRepresentable {
                 guard
                     hypot(
                         event.locationInWindow.x - start.locationInWindow.x,
-                        event.locationInWindow.y - start.locationInWindow.y,
+                        event.locationInWindow.y - start.locationInWindow.y
                     ) >= 5 else { return event }
                 mouseDown = nil
                 beginDrag(event)
@@ -175,7 +179,7 @@ struct WindowTabDragSource: NSViewRepresentable {
             let draggingItem = NSDraggingItem(pasteboardWriter: item)
             draggingItem.setDraggingFrame(bounds, contents: preview)
             tabStripFrame = WindowTabDragSource.tabStripFrame(
-                tabFrame: window.convertToScreen(convert(bounds, to: nil)), windowFrame: window.frame, isSession: sessionName != nil,
+                tabFrame: window.convertToScreen(convert(bounds, to: nil)), windowFrame: window.frame, isSession: sessionName != nil
             )
             dragSession = beginDraggingSession(with: [draggingItem], event: event, source: self)
             dragSession?.animatesToStartingPositionsOnCancelOrFail = false
@@ -197,7 +201,7 @@ struct WindowTabDragSource: NSViewRepresentable {
                     cancelled: cancelled,
                     mouseReleased: mouseReleasePoint != nil || NSApp.currentEvent?.type == .leftMouseUp,
                     point: mouseReleasePoint ?? screenPoint,
-                    tabStripFrame: tabStripFrame,
+                    tabStripFrame: tabStripFrame
                 ) {
                 detach?(mouseReleasePoint ?? screenPoint)
             }

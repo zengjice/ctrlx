@@ -105,7 +105,11 @@ final public class ViewerRelayClient {
     public private(set) var hostSupportsFileDownloads = false
     public private(set) var hostSupportsFileUploads = false
     public private(set) var hostSupportsMarkdownEditing = false
-    public private(set) var fileTransferEpoch = UUID()
+    public private(set) var hostConnectionEpoch = UUID()
+    public var fileTransferEpoch: UUID {
+        hostConnectionEpoch
+    }
+
     public private(set) var hostSupportsTerminalFit = false
     public private(set) var hostSupportsWorkspaceClipboard = false
     public private(set) var hostSupportsBrowserAudio = false
@@ -555,9 +559,10 @@ final public class ViewerRelayClient {
         _ command: C,
         paneId: String,
         timeout: TimeInterval = 15,
-        inputBinding: ViewerWorkspaceInputBinding? = nil
+        inputBinding: ViewerWorkspaceInputBinding? = nil,
+        expectedHostConnectionEpoch: UUID? = nil
     ) async -> Result<C.Response, Error> {
-        guard state.isConnected else {
+        guard state.isConnected, matchesHostConnection(expectedHostConnectionEpoch) else {
             return .failure(ViewerRelayClientError.notConnected)
         }
 
@@ -727,7 +732,7 @@ final public class ViewerRelayClient {
         // Fire-and-forget: just write to the WebSocket and return a synthetic success.
         // The command type declares it doesn't need a response, so no handler or timeout.
         guard command.commandType.requiresResponse else {
-            guard await sendEncrypted(.command(commandMessage)) else {
+            guard await sendEncrypted(.command(commandMessage), expectedHostConnectionEpoch: expectedHostConnectionEpoch) else {
                 return .failure(
                     ViewerRelayClientError.commandFailed("Unable to send relay message")
                 )
@@ -742,6 +747,12 @@ final public class ViewerRelayClient {
         let generation = connectionGeneration.current
         guard let task = webSocketTask else {
             return .failure(ViewerRelayClientError.notConnected)
+        }
+        let legacyRenameBinding: ViewerWorkspaceInputBinding? = if
+            case .setWindowName = commandMessage.command, case .legacyWindow = targetBinding {
+            targetBinding
+        } else {
+            nil
         }
 
         return await withTaskCancellationHandler {
@@ -769,7 +780,9 @@ final public class ViewerRelayClient {
                         await self.sendEncrypted(
                             .command(commandMessage),
                             using: task,
-                            generation: generation
+                            generation: generation,
+                            expectedHostConnectionEpoch: expectedHostConnectionEpoch,
+                            legacyRenameBinding: legacyRenameBinding
                         ) else {
                         self.timeoutTasks.removeValue(forKey: commandMessage.id)?.cancel()
                         if let handler = self.pendingCommands.removeValue(forKey: commandMessage.id) {
@@ -1618,24 +1631,27 @@ final public class ViewerRelayClient {
     /// Fails closed if E2EE session is not established - will not send unencrypted.
     /// Returns whether the encrypted frame was handed to the transport.
     @discardableResult
-    private func sendEncrypted(_ message: WebSocketMessage) async -> Bool {
+    private func sendEncrypted(_ message: WebSocketMessage, expectedHostConnectionEpoch: UUID? = nil) async -> Bool {
         let generation = connectionGeneration.current
         guard let task = webSocketTask else {
             logger.debug("No WebSocket task, cannot send encrypted message")
             return false
         }
-        return await sendEncrypted(message, using: task, generation: generation)
+        return await sendEncrypted(message, using: task, generation: generation, expectedHostConnectionEpoch: expectedHostConnectionEpoch)
     }
 
     @discardableResult
     private func sendEncrypted(
         _ message: WebSocketMessage,
         using task: URLSessionWebSocketTask,
-        generation: UInt64
+        generation: UInt64,
+        expectedHostConnectionEpoch: UUID? = nil,
+        legacyRenameBinding: ViewerWorkspaceInputBinding? = nil
     ) async -> Bool {
         guard
             connectionGeneration.isCurrent(generation),
             webSocketTask === task,
+            matchesHostConnection(expectedHostConnectionEpoch),
             let e2eeService,
             await e2eeService.isSessionEstablished
         else {
@@ -1649,7 +1665,14 @@ final public class ViewerRelayClient {
                 TerminalTransportMetrics.shared.recordDuration(.encryption, since: encryptionStart)
             }
             let encryptedMessage = try await message.encrypt(using: e2eeService)
-            guard connectionGeneration.isCurrent(generation), webSocketTask === task else {
+            guard
+                connectionGeneration.isCurrent(generation), webSocketTask === task,
+                matchesHostConnection(expectedHostConnectionEpoch) else {
+                return false
+            }
+            if
+                let legacyRenameBinding, case let .command(command) = message, case let .setWindowName(rename) = command.command,
+                workspaceInputState.windowBinding(target: rename.windowId) != legacyRenameBinding {
                 return false
             }
             return await send(encryptedMessage, using: task, generation: generation)
@@ -1657,6 +1680,10 @@ final public class ViewerRelayClient {
             logger.error("Failed to encrypt message: \(error)")
             return false
         }
+    }
+
+    private func matchesHostConnection(_ expectedEpoch: UUID?) -> Bool {
+        expectedEpoch.map { isHostConnected && hostConnectionEpoch == $0 } ?? true
     }
 
     private func recordSendQueue() {
@@ -1819,7 +1846,7 @@ final public class ViewerRelayClient {
         hostSupportsFileUploads = false
         hostSupportsMarkdownEditing = false
         hostSupportsPaneFiles = false
-        fileTransferEpoch = UUID()
+        hostConnectionEpoch = UUID()
     }
 
     private func resetBrowserState() {

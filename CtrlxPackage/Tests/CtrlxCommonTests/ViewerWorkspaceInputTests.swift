@@ -105,6 +105,28 @@ struct ViewerWorkspaceInputTests {
         #expect(input.windowBinding(target: "old:1") == .legacy(pairID: "old"))
     }
 
+    @Test("Legacy window identity follows surviving panes and expires on a full snapshot without the window")
+    func legacyWindowContinuity() throws {
+        let first = PaneState(paneId: "%0", sessionName: "work", windowIndex: 1, tmuxWindowId: "@0")
+        let sibling = PaneState(paneId: "%1", sessionName: "work", windowIndex: 1, tmuxWindowId: "@0")
+        let other = PaneState(paneId: "%2", sessionName: "work", windowIndex: 2, tmuxWindowId: "@1")
+        var input = ViewerWorkspaceInputState()
+        input.update(.init(pairId: "old", paneStates: ["%0": first, "%1": sibling, "%2": other]))
+        let original = input.windowBinding(target: "@0")
+        let otherWindow = input.windowBinding(target: "@1")
+        #expect(original == input.windowBinding(target: "work:1"))
+        #expect(original == input.windowBinding(target: "%1"))
+        #expect(original != otherWindow)
+        input.update(.init(pairId: "old", paneStates: ["%1": sibling, "%2": other]))
+        #expect(try original.expectedPane(current: input.windowBinding(target: "@0")) == nil)
+
+        input.update(.init(pairId: "old", paneStates: ["%2": other]))
+        #expect(throws: (any Error).self) { try original.expectedPane(current: input.windowBinding(target: "@0")) }
+        input.update(.init(pairId: "old", paneStates: ["%0": first, "%2": other]))
+        #expect(throws: (any Error).self) { try original.expectedPane(current: input.windowBinding(target: "@0")) }
+        #expect(try otherWindow.expectedPane(current: input.windowBinding(target: "@1")) == nil)
+    }
+
     @Test("Queued input retains its original pane through disconnects, replacement and ID reuse")
     func inputBinding() throws {
         var input = ViewerWorkspaceInputState()

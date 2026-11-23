@@ -924,7 +924,6 @@
                         Text(hookTrustMessage)
                     }
                 }
-                // Intentionally inline rather than using `WindowRenamingModifier`:
                 // The tab list closes before this enclosing view presents rename.
                 .alert("Rename Tab", isPresented: .init(
                     get: { renamingWindow != nil },
