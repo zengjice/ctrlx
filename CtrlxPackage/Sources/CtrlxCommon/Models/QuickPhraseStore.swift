@@ -18,16 +18,20 @@ package struct QuickPhrase: Codable, Identifiable, Equatable, Sendable {
         guard !trimmed.isEmpty else { throw ValidationError.empty }
         // C0/C1 can act as terminal keys. Unicode format characters (such as
         // the joiner in 👩‍💻) are legitimate phrase text and must remain intact.
-        guard trimmed.unicodeScalars.allSatisfy({
-            $0.value >= 0x20 && !(0x7F...0x9F).contains($0.value)
-                && !CharacterSet.newlines.contains($0)
-        })
+        guard
+            trimmed.unicodeScalars.allSatisfy({
+                $0.value >= 0x20 && !(0x7F...0x9F).contains($0.value)
+                    && !CharacterSet.newlines.contains($0)
+            })
         else { throw ValidationError.multiline }
         return trimmed
     }
 
     package enum ValidationError: LocalizedError {
-        case empty, multiline, duplicate, unavailable
+        case empty
+        case multiline
+        case duplicate
+        case unavailable
 
         package var errorDescription: String? {
             switch self {
@@ -39,13 +43,15 @@ package struct QuickPhrase: Codable, Identifiable, Equatable, Sendable {
         }
     }
 
-    package var keys: [TmuxKey] { [.text(text), .delay(200), .enter] }
+    package var keys: [TmuxKey] {
+        [.text(text), .delay(200), .enter]
+    }
 }
 
 /// One store owned by platform settings, shared across all hosts/windows on this device.
 @MainActor
 @Observable
-package final class QuickPhraseStore {
+final package class QuickPhraseStore {
     package static let storageKey = "terminalQuickPhrases.v1"
     package static let syncStorageKey = "terminalQuickPhrases.v2"
     package private(set) var phrases: [QuickPhrase] = []
@@ -66,7 +72,8 @@ package final class QuickPhraseStore {
     }
 
     package enum SyncError: LocalizedError {
-        case invalidLibrary, capacity
+        case invalidLibrary
+        case capacity
         package var errorDescription: String? {
             switch self {
             case .invalidLibrary: "The quick phrase library is invalid or incompatible."
@@ -101,7 +108,7 @@ package final class QuickPhraseStore {
             try save(saved.enumerated().map { QuickPhraseRecord(id: $0.element.id, order: $0.offset, text: $0.element.text) })
         } catch {
             // Do not overwrite an unreadable library with an empty list.
-            loadError = "Saved phrases could not be read: \(error.localizedDescription)"
+            self.loadError = "Saved phrases could not be read: \(error.localizedDescription)"
         }
     }
 
@@ -154,7 +161,9 @@ package final class QuickPhraseStore {
         moved.insert(moved.remove(at: source), at: insertion)
         var aliases: [String: [UUID]] = [:]
         for record in records {
-            if let text = record.text { aliases[text, default: []].append(record.id) }
+            if let text = record.text {
+                aliases[text, default: []].append(record.id)
+            }
         }
         let next = QuickPhraseOrdering(
             revision: (ordering?.revision ?? 0) + 1,
@@ -171,7 +180,9 @@ package final class QuickPhraseStore {
             if let old = merged[record.id] {
                 guard old.order == record.order else { throw SyncError.invalidLibrary }
                 // Deletion always wins, including against an unseen offline edit.
-                if old.text == nil, record.text != nil { continue }
+                if old.text == nil, record.text != nil {
+                    continue
+                }
                 if record.text == nil, old.text != nil {
                     merged[record.id] = record
                     continue
@@ -183,7 +194,9 @@ package final class QuickPhraseStore {
                 case (nil, _): merged[record.id] = record
                 case let (previous?, incoming?):
                     guard previous != incoming || old.text == record.text else { throw SyncError.invalidLibrary }
-                    if incoming.isNewer(than: previous) { merged[record.id] = record }
+                    if incoming.isNewer(than: previous) {
+                        merged[record.id] = record
+                    }
                 }
             } else {
                 merged[record.id] = record
@@ -194,7 +207,9 @@ package final class QuickPhraseStore {
             if let old = ordering {
                 guard old.revision != incomingOrder.revision || old.id != incomingOrder.id || old == incomingOrder
                 else { throw SyncError.invalidLibrary }
-                if incomingOrder.isNewer(than: old) { nextOrder = incomingOrder }
+                if incomingOrder.isNewer(than: old) {
+                    nextOrder = incomingOrder
+                }
             } else {
                 nextOrder = incomingOrder
             }
@@ -206,7 +221,9 @@ package final class QuickPhraseStore {
         _ = consentRevision
         if let syncDeviceByPair {
             guard let deviceID = syncDeviceByPair[pairID] else { return false }
-            if let enabled = preferences.optionalBool(deviceConsentKey(deviceID)) { return enabled }
+            if let enabled = preferences.optionalBool(deviceConsentKey(deviceID)) {
+                return enabled
+            }
         }
         return preferences.optionalBool("terminalQuickPhrases.sync.\(pairID)") == true
     }
@@ -257,7 +274,9 @@ package final class QuickPhraseStore {
         notify()
     }
 
-    package func syncDeviceID(for pairID: String) -> String? { syncDeviceByPair?[pairID] }
+    package func syncDeviceID(for pairID: String) -> String? {
+        syncDeviceByPair?[pairID]
+    }
 
     package func syncConsent(for deviceID: String) -> QuickPhraseSyncConsent {
         _ = consentRevision
@@ -289,14 +308,22 @@ package final class QuickPhraseStore {
         let states = syncDevices.first(where: { $0.id == deviceID })?.pairIDs.compactMap { syncConnections[$0]?.status } ?? []
         // One usable route suffices, even when the reverse pairing is offline
         // or a peer still has mixed settings on an older app version.
-        if states.contains(.ready) { return .ready }
-        if states.contains(.waitingForPeer) { return .waitingForPeer }
-        if states.contains(.unsupported) { return .unsupported }
+        if states.contains(.ready) {
+            return .ready
+        }
+        if states.contains(.waitingForPeer) {
+            return .waitingForPeer
+        }
+        if states.contains(.unsupported) {
+            return .unsupported
+        }
         return .offline
     }
 
     package func updateSyncConnection(pairID: String, epoch: UUID, status: QuickPhraseSyncStatus) {
-        if let syncDeviceByPair, syncDeviceByPair[pairID] == nil { return }
+        if let syncDeviceByPair, syncDeviceByPair[pairID] == nil {
+            return
+        }
         guard syncConnections[pairID]?.epoch != epoch || syncConnections[pairID]?.status != status else { return }
         syncConnections[pairID] = (epoch, status)
     }
@@ -307,7 +334,9 @@ package final class QuickPhraseStore {
         syncErrors[pairID] = nil
     }
 
-    private func deviceConsentKey(_ deviceID: String) -> String { "terminalQuickPhrases.deviceSync.\(deviceID)" }
+    private func deviceConsentKey(_ deviceID: String) -> String {
+        "terminalQuickPhrases.deviceSync.\(deviceID)"
+    }
 
     package func observe(_ action: @escaping @MainActor () -> Void) -> UUID {
         let id = UUID()
@@ -315,17 +344,22 @@ package final class QuickPhraseStore {
         return id
     }
 
-    package func removeObserver(_ id: UUID) { observers[id] = nil }
+    package func removeObserver(_ id: UUID) {
+        observers[id] = nil
+    }
 
     private func notify() {
-        for action in Array(observers.values) { action() }
+        for action in Array(observers.values) {
+            action()
+        }
     }
 
     private func validate(_ values: [QuickPhraseRecord], ordering: QuickPhraseOrdering?) throws {
         // Bound the actual JSON (including escapes), leaving room for the E2EE
         // envelope/base64 inside the relay's 1 MB frame limit.
-        guard values.count <= 4096,
-              try JSONEncoder().encode(Library(version: 3, records: values, ordering: ordering)).count <= 512 * 1024
+        guard
+            values.count <= 4_096,
+            try JSONEncoder().encode(Library(version: 3, records: values, ordering: ordering)).count <= 512 * 1_024
         else { throw SyncError.capacity }
         guard Set(values.map(\.id)).count == values.count else { throw SyncError.invalidLibrary }
         for record in values {
@@ -339,9 +373,10 @@ package final class QuickPhraseStore {
         }
         if let ordering {
             let ids = Set(ordering.phraseIDs)
-            guard (1..<Int.max - 1).contains(ordering.revision),
-                  ids.count == ordering.phraseIDs.count,
-                  ids.isSubset(of: Set(values.map(\.id))) else { throw SyncError.invalidLibrary }
+            guard
+                (1..<Int.max - 1).contains(ordering.revision),
+                ids.count == ordering.phraseIDs.count,
+                ids.isSubset(of: Set(values.map(\.id))) else { throw SyncError.invalidLibrary }
         }
     }
 
@@ -351,7 +386,9 @@ package final class QuickPhraseStore {
         let positions = Dictionary(uniqueKeysWithValues: (ordering?.phraseIDs ?? []).enumerated().map { ($0.element, $0.offset) })
         let displayed = positions.isEmpty ? records : records.sorted {
             let left = positions[$0.id] ?? Int.max, right = positions[$1.id] ?? Int.max
-            if left != right { return left < right }
+            if left != right {
+                return left < right
+            }
             return $0.order == $1.order ? $0.id.uuidString < $1.id.uuidString : $0.order < $1.order
         }
         var texts = Set<String>()
