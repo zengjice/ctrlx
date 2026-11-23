@@ -78,7 +78,7 @@
         let playback = FileBrowserVideoPlayback()
         private(set) var generation = UUID()
         private(set) var isReady = false
-        @ObservationIgnored private(set) var key: Key?
+        private(set) var key: Key?
         @ObservationIgnored private(set) var revision: String?
         @ObservationIgnored private(set) var position = FileBrowserPreviewPosition()
         @ObservationIgnored private(set) var owner: UUID?
@@ -189,6 +189,8 @@
 
         func evict() {
             savePosition()
+            generation = UUID()
+            isReady = false
             position.acceptsUpdates = false
             owner = nil
             cache.remove(self)
@@ -213,8 +215,6 @@
             renderEnvironment = nil
             position.capturePDF = nil
             actions.link = nil
-            isReady = false
-            generation = UUID()
             onEvict?()
         }
 
@@ -242,7 +242,8 @@
         }
 
         #if os(macOS)
-            func mount(in parent: NSView, owner: UUID, environment: EnvironmentValues, content: () -> AnyView) {
+            func mount(in parent: NSView, generation: UUID, owner: UUID, environment: EnvironmentValues, content: () -> AnyView) {
+                guard self.generation == generation else { return }
                 if host == nil {
                     updateEnvironment(environment, active: true)
                     let content = content()
@@ -259,7 +260,8 @@
                 parent.addSubview(host)
             }
         #else
-            func mount(in parent: UIViewController, owner: UUID, environment: EnvironmentValues, content: () -> AnyView) {
+            func mount(in parent: UIViewController, generation: UUID, owner: UUID, environment: EnvironmentValues, content: () -> AnyView) {
+                guard self.generation == generation else { return }
                 if host == nil {
                     updateEnvironment(environment, active: true)
                     let content = content()

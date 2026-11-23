@@ -5,11 +5,37 @@
     import PDFKit
     import SwiftUI
     import Testing
+    import Vision
     @testable import CtrlxCommon
 
     @MainActor
     @Suite(.serialized)
     struct FileBrowserPreviewRetentionTests {
+        @Test("Selecting three Markdown files replaces the visible preview each time", arguments: [false, true])
+        func switchingMarkdownFiles(remote: Bool) async throws {
+            let documents = [("second.md", "Orchid"), ("third.md", "Copper")].map { name, title in
+                (path: "/fixture/\(name)", title: title, data: Data(("# \(title)\n\n" + String(repeating: "Preview paragraph.\n\n", count: 150)).utf8))
+            }
+            let fixture = Fixture(remote: remote, additionalFiles: Dictionary(uniqueKeysWithValues: documents.map { ($0.path, $0.data) }))
+            defer { fixture.close() }
+            // Captures composite the preview over a dark background.
+            fixture.window.appearance = NSAppearance(named: .darkAqua)
+            let capture = fixture.tab.previewSession.capture
+            try await wait { fixture.tab.previewData == fixture.data && fixture.previewScroll != nil }
+            try await expectHeading("Document", in: capture)
+
+            for document in documents {
+                let previous = try #require(retainedContainer(in: fixture.host))
+                fixture.tab.selectedFile = document.path
+                try await wait {
+                    guard let current = retainedContainer(in: fixture.host) else { return false }
+                    return fixture.tab.previewData == document.data && fixture.previewScroll != nil && current !== previous
+                }
+                try await expectHeading(document.title, in: capture)
+                #expect(fixture.tab.previewError == nil)
+            }
+        }
+
         @Test("Repeated tab switches retain the preview container and reading position without rereading contents", arguments: [false, true])
         func warmSwitchAndEviction(remote: Bool) async throws {
             let fixture = Fixture(remote: remote)
@@ -177,13 +203,13 @@
             let window: NSWindow
             let host: NSHostingView<Surface>
 
-            init(remote: Bool, pdfData: Data? = nil) {
+            init(remote: Bool, pdfData: Data? = nil, additionalFiles: [String: Data] = [:]) {
                 _ = NSApplication.shared
                 self.data = pdfData ?? Data(("# Document\n\n" + (0..<250).map { "Paragraph \($0): keep this reading position.\n\n" }.joined()).utf8)
                 let data = data
                 let reads = reads
                 let info = FileBrowserEntry(path: pdfData == nil ? "/fixture/readme.md" : "/fixture/document.pdf", name: "document", kind: pdfData == nil ? .markdown : .pdf, size: data.count, revision: "v1")
-                let files = [info.path: data, "/fixture/target.md": Data("# Target".utf8)]
+                let files = additionalFiles.merging([info.path: data, "/fixture/target.md": Data("# Target".utf8)]) { _, existing in existing }
                 let local: @MainActor @Sendable (FileBrowserEntry) async throws -> Data = { info in reads.value += 1
                     return try #require(files[info.path])
                 }
@@ -239,6 +265,15 @@
                 return view
             }
             return view.subviews.lazy.compactMap { retainedContainer(in: $0) }.first
+        }
+
+        private func expectHeading(_ heading: String, in capture: FilePreviewCapture) async throws {
+            let image = try await BrowserAnnotationRenderer.decode(capture.capture(filename: "preview.md"))
+            var request = RecognizeTextRequest()
+            request.recognitionLevel = .fast
+            let observations = try await request.perform(on: image)
+            let text = observations.compactMap { $0.topCandidates(1).first?.string }
+            #expect(text.contains(heading))
         }
     }
 #endif

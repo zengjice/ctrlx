@@ -176,21 +176,15 @@
                 }
         }
 
-        private struct PreviewKey: Hashable {
-            let path: String?
-            let refresh: Int
-            let sourceID: String
-            let connectionID: UUID?
+        private struct PreviewKey: Equatable {
+            let file: FileBrowserPreviewSession.Key
             let unavailable: String?
             let downloadUnavailable: String?
         }
 
         private var previewKey: PreviewKey {
             .init(
-                path: tab.selectedFile,
-                refresh: tab.refresh,
-                sourceID: source.id,
-                connectionID: source.connectionID,
+                file: tab.previewKey(for: source),
                 unavailable: source.unavailableReason,
                 downloadUnavailable: source.downloadUnavailableReason
             )
@@ -641,16 +635,18 @@
         @ViewBuilder
         private func fileContent(_ path: String) -> some View {
             let session = tab.previewSession
-            if tab.isPreviewLoading {
+            let isCurrent = session.key == tab.previewKey(for: source)
+            if !isCurrent || tab.isPreviewLoading {
                 ProgressView().padding()
             }
-            if let error = tab.previewError {
+            if isCurrent, let error = tab.previewError {
                 Text(error).padding().textSelection(.enabled)
             }
             if
-                session.isReady, session.hasContent || tab.previewData != nil || tab.previewURL != nil
+                isCurrent, session.isReady, session.hasContent || tab.previewData != nil || tab.previewURL != nil
                 || FileBrowserOfficeDocument.supports(path: path) || (source.localFileURL == nil && FileBrowserVideo.supports(path: path)) {
-                RetainedFileBrowserPreview(session: session) {
+                let generation = session.generation
+                RetainedFileBrowserPreview(session: session, generation: generation) {
                     if FileBrowserOfficeDocument.supports(path: path) {
                         FileBrowserOfficePreview(path: path, source: source, capture: capture)
                     } else if source.localFileURL == nil, FileBrowserVideo.supports(path: path) {
@@ -667,7 +663,7 @@
                         #endif
                     }
                 }
-                .id(session.generation)
+                .id(generation)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }

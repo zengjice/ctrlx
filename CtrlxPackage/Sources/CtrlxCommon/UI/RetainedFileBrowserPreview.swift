@@ -5,16 +5,17 @@
         @MainActor
         struct RetainedFileBrowserPreview<Content: View>: NSViewRepresentable {
             let session: FileBrowserPreviewSession
+            let generation: UUID
             @ViewBuilder let content: Content
 
             func makeNSView(context: Context) -> NSView {
                 let view = NSView()
-                session.mount(in: view, owner: context.coordinator.owner, environment: context.environment) { AnyView(content) }
+                session.mount(in: view, generation: generation, owner: context.coordinator.owner, environment: context.environment) { AnyView(content) }
                 return view
             }
 
             func updateNSView(_ view: NSView, context: Context) {
-                session.mount(in: view, owner: context.coordinator.owner, environment: context.environment) { AnyView(content) }
+                session.mount(in: view, generation: generation, owner: context.coordinator.owner, environment: context.environment) { AnyView(content) }
             }
 
             func makeCoordinator() -> Coordinator {
@@ -40,16 +41,17 @@
         @MainActor
         struct RetainedFileBrowserPreview<Content: View>: UIViewControllerRepresentable {
             let session: FileBrowserPreviewSession
+            let generation: UUID
             @ViewBuilder let content: Content
 
             func makeUIViewController(context: Context) -> UIViewController {
                 let view = UIViewController()
-                session.mount(in: view, owner: context.coordinator.owner, environment: context.environment) { AnyView(content) }
+                session.mount(in: view, generation: generation, owner: context.coordinator.owner, environment: context.environment) { AnyView(content) }
                 return view
             }
 
             func updateUIViewController(_ view: UIViewController, context: Context) {
-                session.mount(in: view, owner: context.coordinator.owner, environment: context.environment) { AnyView(content) }
+                session.mount(in: view, generation: generation, owner: context.coordinator.owner, environment: context.environment) { AnyView(content) }
             }
 
             func makeCoordinator() -> Coordinator {
