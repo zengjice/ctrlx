@@ -58,6 +58,94 @@
             }
         }
 
+        @Test
+        func markdownDraftSurvivesRefreshAndReconnect() async throws {
+            NSApplication.shared.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
+            let tab = FileBrowserTab(path: "/fixture")
+            let bom = Data([0xEF, 0xBB, 0xBF])
+            let initial = "# Original"
+            let bytes = bom + Data(initial.utf8)
+            let file = FileBrowserEntry(path: "/fixture/document.md", name: "document.md", kind: .markdown, size: bytes.count, revision: "1")
+            var saved: Data?
+            var currentConnection = UUID()
+            func source(connectionID: UUID) -> FileBrowserSource {
+                FileBrowserSource(id: "fixture", paneID: nil, connectionID: connectionID) { operation in
+                    switch operation {
+                    case .list:
+                        return .listing(.init(directory: "/fixture", homeDirectory: "/fixture", entries: [file], nextOffset: nil, revision: "1"))
+                    case .info:
+                        return .info(file)
+                    case let .read(path, offset, revision):
+                        return .chunk(.init(path: path, revision: revision, offset: offset, data: Data(bytes.dropFirst(offset))))
+                    case let .saveMarkdown(path, revision, data):
+                        guard connectionID == currentConnection else {
+                            throw FileBrowserError.message("The Host connection changed.")
+                        }
+                        #expect(path == file.path && revision == file.revision)
+                        saved = data
+                        return .info(.init(path: path, name: file.name, kind: .markdown, size: data.count, revision: "2"))
+                    default: throw FileBrowserError.message("Unexpected fixture request")
+                    }
+                }
+            }
+            let host = NSHostingView(rootView: WorkspaceFileBrowserView(tab: tab, source: source(connectionID: currentConnection)))
+            let window = NSWindow(contentRect: .init(x: -10_000, y: -10_000, width: 1_200, height: 700), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            window.orderFront(nil)
+            defer { window.close() }
+
+            try await settle(host)
+            tab.selectedFile = file.path
+            try await wait { tab.previewData == bytes }
+            try await settle(host)
+            try perform("accessibilityPerformPress", on: "file-edit-markdown", in: host)
+            try await wait {
+                guard let content = window.attachedSheet?.contentView else { return false }
+                return editor(in: content) != nil
+            }
+            let sheet = try #require(window.attachedSheet)
+            let content = try #require(sheet.contentView)
+            let textView = try #require(editor(in: content))
+            #expect(textView.string == initial)
+            let draft = "# 已编辑"
+            textView.insertText(draft, replacementRange: NSRange(location: 0, length: (initial as NSString).length))
+            try await settle(content)
+
+            tab.refresh += 1
+            try await settle(host)
+            #expect(window.attachedSheet === sheet)
+
+            currentConnection = UUID()
+            try perform("accessibilityPerformPress", on: "file-markdown-save", in: content)
+            try await settle(content)
+            #expect(saved == nil)
+            host.rootView = WorkspaceFileBrowserView(tab: tab, source: source(connectionID: currentConnection))
+            try await settle(host)
+            #expect(window.attachedSheet === sheet)
+            #expect(editor(in: content)?.string == draft)
+            try perform("accessibilityPerformPress", on: "file-markdown-save", in: content)
+            try await wait { saved != nil }
+            #expect(saved == bom + Data(draft.utf8))
+        }
+
+        private func editor(in view: NSView) -> NSTextView? {
+            if let editor = view as? NSTextView, editor.isEditable {
+                return editor
+            }
+            return view.subviews.lazy.compactMap { editor(in: $0) }.first
+        }
+
+        private func wait(_ predicate: () -> Bool) async throws {
+            for _ in 0..<100 {
+                if predicate() {
+                    return
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            try #require(predicate())
+        }
+
         private func settle(_ host: NSView) async throws {
             try await Task.sleep(for: .milliseconds(150))
             host.layoutSubtreeIfNeeded()
@@ -90,18 +178,18 @@
             return node.perform(selector)?.takeUnretainedValue()
         }
 
-        private func divider(in node: NSObject) -> NSObject? {
-            if attribute("accessibilityIdentifier", from: node) as? String == "file-browser-divider" {
+        private func element(_ id: String, in node: NSObject) -> NSObject? {
+            if attribute("accessibilityIdentifier", from: node) as? String == id {
                 return node
             }
             for child in attribute("accessibilityChildren", from: node) as? [NSObject] ?? [] {
-                if let match = divider(in: child) {
+                if let match = element(id, in: child) {
                     return match
                 }
             }
             if let view = node as? NSView {
                 for child in view.subviews {
-                    if let match = divider(in: child) {
+                    if let match = element(id, in: child) {
                         return match
                     }
                 }
@@ -110,7 +198,11 @@
         }
 
         private func adjust(_ action: String, in view: NSView) throws {
-            let node = try #require(divider(in: view))
+            try perform(action, on: "file-browser-divider", in: view)
+        }
+
+        private func perform(_ action: String, on id: String, in view: NSView) throws {
+            let node = try #require(element(id, in: view))
             let selector = NSSelectorFromString(action)
             try #require(node.responds(to: selector))
             let implementation = try #require(node.method(for: selector))

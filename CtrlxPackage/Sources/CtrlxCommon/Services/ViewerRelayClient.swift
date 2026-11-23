@@ -104,6 +104,7 @@ final public class ViewerRelayClient {
     public private(set) var hostSupportsRepositoryFileLinks = false
     public private(set) var hostSupportsFileDownloads = false
     public private(set) var hostSupportsFileUploads = false
+    public private(set) var hostSupportsMarkdownEditing = false
     public private(set) var fileTransferEpoch = UUID()
     public private(set) var hostSupportsTerminalFit = false
     public private(set) var hostSupportsWorkspaceClipboard = false
@@ -628,6 +629,9 @@ final public class ViewerRelayClient {
             }
             if case .upload = spec.operation, !hostSupportsFileUploads {
                 return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to upload files"))
+            }
+            if case .saveMarkdown = spec.operation, !hostSupportsMarkdownEditing {
+                return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to edit Markdown files"))
             }
         case .createSessionDirectory where !hostSupportsDirectoryCreation:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to create folders"))
@@ -1286,6 +1290,7 @@ final public class ViewerRelayClient {
             hostSupportsRepositoryFileLinks = sessionState.supportsRepositoryFileLinks == true
             hostSupportsFileDownloads = sessionState.supportsFileDownloads == true
             hostSupportsFileUploads = sessionState.supportsFileUploads == true
+            hostSupportsMarkdownEditing = sessionState.supportsMarkdownEditing == true
             hostSupportsWorkspaceClipboard = sessionState.supportsWorkspaceClipboard == true
             hostSupportsBrowserAudio = sessionState.supportsBrowserAudio == true
             hostSupportsBrowserSharing = sessionState.supportsBrowserSharing == true
@@ -1550,6 +1555,7 @@ final public class ViewerRelayClient {
 
         do {
             let encoder = JSONEncoder()
+            encoder.outputFormatting = .withoutEscapingSlashes
             encoder.dateEncodingStrategy = .iso8601
             let data = try encoder.encode(message)
             guard data.count <= RelayPayloadLimits.maxWebSocketFrameBytes else {
@@ -1811,6 +1817,7 @@ final public class ViewerRelayClient {
 
     private func resetFileUploads() {
         hostSupportsFileUploads = false
+        hostSupportsMarkdownEditing = false
         hostSupportsPaneFiles = false
         fileTransferEpoch = UUID()
     }

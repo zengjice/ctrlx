@@ -8,7 +8,7 @@
 
     @MainActor @Observable
     final class ArtifactWebRenderer: NSObject, WKNavigationDelegate {
-        enum ContentKind: String { case image, mermaid, markdown }
+        enum ContentKind: String { case image, svg, mermaid, markdown }
         private(set) var isReady = false
         private(set) var error: String?
         private(set) var png: Data?
@@ -136,11 +136,8 @@
                             do {
                                 guard let loader = self.imageLoader else { throw FileBrowserError.message("Image loading is unavailable.") }
                                 let bytes = try await loader(reference)
-                                if ((URLComponents(string: reference)?.path ?? "") as NSString).pathExtension.lowercased() == "svg" {
-                                    guard bytes.count <= 512 * 1_024, let text = String(data: bytes, encoding: .utf8), !text.contains("\0") else {
-                                        throw FileBrowserError.message("SVG images must be UTF-8 and no larger than 512 KiB.")
-                                    }
-                                    svg = text
+                                if TerminalArtifactPreview.isSVG(path: URLComponents(string: reference)?.path ?? "") {
+                                    svg = try TerminalArtifactPreview.svgSource(bytes)
                                 } else {
                                     image = try await Task.detached(priority: .userInitiated) {
                                         try ArtifactPreviewImage.png(from: bytes, maximumPixelSize: 1_600)

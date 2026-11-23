@@ -102,23 +102,7 @@ window.setMarkdownImage = async function (reference, base64, svg, error) {
       continue;
     }
     try {
-      if (svg) {
-        const fragment = DOMPurify.sanitize(svg, {
-          RETURN_DOM_FRAGMENT: true,
-          USE_PROFILES: { svg: true, svgFilters: true },
-          FORBID_TAGS: ["script", "foreignObject", "image", "a", "animate", "set"]
-        });
-        const root = fragment.querySelector("svg");
-        if (!root) throw new Error("Invalid SVG");
-        for (const element of root.querySelectorAll("*")) {
-          for (const attribute of Array.from(element.attributes)) {
-            if (attribute.localName === "href" && !attribute.value.startsWith("#")) element.removeAttributeNode(attribute);
-          }
-        }
-        // An SVG image is an isolated image document, never inline page markup.
-        const xml = new XMLSerializer().serializeToString(root);
-        image.src = "data:image/svg+xml;base64," + btoa(Array.from(new TextEncoder().encode(xml), b => String.fromCharCode(b)).join(""));
-      } else image.src = "data:image/png;base64," + base64;
+      image.src = svg ? svgImageURL(sanitizeSVG(svg)) : "data:image/png;base64," + base64;
       await image.decode();
       status.remove();
     } catch {

@@ -5,12 +5,12 @@ import Testing
 
 @MainActor
 struct TerminalArtifactPreviewTests {
-    @Test(arguments: ["diagram.mmd", "图.MERMAID", "picture.PNG", "photo.jpeg", "a.webp", "a.heic", "README.md", "设计.MARKDOWN"])
+    @Test(arguments: ["diagram.mmd", "图.MERMAID", "picture.PNG", "photo.jpeg", "a.webp", "a.heic", "architecture.SVG", "README.md", "设计.MARKDOWN"])
     func supported(path: String) {
         #expect(TerminalArtifactPreview.supports(path: path))
     }
 
-    @Test(arguments: ["a.pdf", "a.svg", "folder", "a.mmd.txt"])
+    @Test(arguments: ["a.pdf", "folder", "a.mmd.txt"])
     func normalFile(path: String) {
         #expect(!TerminalArtifactPreview.supports(path: path))
     }

@@ -484,6 +484,8 @@ public extension WebSocketMessage {
 
             // Encode the inner payload to JSON
             let encoder = JSONEncoder()
+            // Escaped slashes can inflate Base64 file data past the Relay frame limit.
+            encoder.outputFormatting = .withoutEscapingSlashes
             encoder.dateEncodingStrategy = .iso8601
             let innerData = try encoder.encode(self)
 

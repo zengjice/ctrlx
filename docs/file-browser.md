@@ -391,9 +391,9 @@ transport. Actual multi-device tab switching still requires paired-client accept
 
 ### Explicit terminal file links
 
-Image (`png`, `jpg`, `jpeg`, `gif`, `heic`, `webp`, `tiff`, `bmp`), Mermaid
-(`mmd`, `mermaid`) and Markdown (`md`, `markdown`) references open a client-local preview on Mac Host,
-Mac Viewer and iOS. No Files catalog entry is created and terminal selection,
+Image (`png`, `jpg`, `jpeg`, `gif`, `heic`, `webp`, `tiff`, `bmp`, `svg`),
+Mermaid (`mmd`, `mermaid`) and Markdown (`md`, `markdown`) references open a
+client-local preview on Mac Host, Mac Viewer and iOS. No Files catalog entry is created and terminal selection,
 layout and viewport are preserved. macOS uses an independent, movable,
 resizable window that can be placed on another Space while the workbench remains
 interactive; it also supports pinch zoom and Escape. iOS uses a sheet with
@@ -401,7 +401,11 @@ pinch/double-tap zoom, full-screen viewing and swipe-to-dismiss.
 The More menu provides Fit, Copy Image, Share Image and Open in Files. Mermaid
 also offers Diagram/Source and Copy Source. Images show a bounded static preview
 (first frame for animated formats, at most 4096 pixels on the longest side).
-Copy/Share Image uses that preview; the original remains available through Files.
+SVG previews require UTF-8 source up to 512 KiB. The viewer renders the sanitized
+SVG in an isolated image and uses the same static PNG for preview, copy, and
+share. The PNG preserves transparency. For SVGs with a view box and no fixed
+size, the longest edge is 4096 pixels. The SVG source remains available through
+Files.
 
 Mermaid 12.2.0 is bundled and rendered in a nonpersistent system WKWebView on
 the viewing device, following that device's appearance. It does not require the
@@ -654,6 +658,13 @@ On Mac Host and Viewer, vertical scrolling over a Markdown code block scrolls th
 document; horizontal scrolling remains within the code block. This routing applies
 only inside the visible file preview and leaves text selection unchanged.
 
+On Mac Host, Mac Viewer and iOS, select a Markdown file and click or tap the
+pencil beside its name to edit the source. **Save** writes the existing file on
+the Host and refreshes the rendered preview. Saving supports writable regular
+UTF-8 `.md` and `.markdown` files up to 512 KiB and preserves their byte-order
+mark. The draft survives preview refreshes. If the file changes while the
+editor is open, the Host rejects the save and the editor keeps the draft.
+
 Word (`doc`, `docx`), Excel (`xls`, `xlsx`) and PowerPoint (`ppt`, `pptx`)
 use read-only system Quick Look inside the Files preview area: `QLPreviewView`
 on Mac and `QLPreviewController` on iOS, not an external app or modal sheet.
@@ -811,9 +822,6 @@ crash leftovers, active downloads/preview leases, concurrent quota reservations,
 low space and cleanup boundaries. OS media buffers and physical-device playback
 remain runtime acceptance checks, not assertions about the download cache size.
 
-Editing and remote Chromium control are not part of this change. Existing local
-editor tabs and web-browser ownership remain separate.
-
 ## Transport and bounds
 
 `BrowseFiles` uses the existing encrypted command/response connection. The Host
@@ -822,7 +830,9 @@ sending a command, with an upgrade message. The opaque Relay needs no deployment
 The Host and the Viewer app must both contain this feature. Explicit downloads
 have their own optional `supportsFileDownloads` capability; an older Host can
 still browse/preview while a new Viewer immediately prompts an upgrade for
-downloads, without sending the unknown command variant.
+downloads, without sending the unknown command variant. Markdown saves use
+the same queue and require `supportsMarkdownEditing`. Older Hosts still support
+Markdown preview.
 Office inline previews need the same download capability. They detect the file
 extension on the client, so a download-capable older Host that labels Office as
 text does not need a protocol update. No Office-specific wire enum is added.

@@ -189,6 +189,77 @@
             try data.write(to: URL(fileURLWithPath: directory).appendingPathComponent(name))
         }
 
+        @Test(arguments: [false, true])
+        func svgExportsLocalReferencesAtViewBoxResolutionWithTransparency(dark: Bool) async throws {
+            let renderer = ArtifactWebRenderer()
+            let window = mount(renderer)
+            defer {
+                renderer.stop()
+                window.close()
+            }
+            let source = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 2400 600" onload="window.injected = true">
+              <script>window.injected = true</script>
+              <foreignObject><div>Unsafe</div></foreignObject>
+              <use href="https://example.com/foreign.svg#item"/>
+              <defs><rect id="mark" width="1200" height="600" fill="red"/></defs>
+              <use href="#mark"/>
+            </svg>
+            """
+            renderer.load(content: source, kind: .svg, dark: dark)
+            try await wait(renderer)
+
+            #expect(renderer.error == nil)
+            let png = try #require(renderer.png)
+            let image = try #require(NSBitmapImageRep(data: png))
+            #expect(image.pixelsWide == 4_096 && image.pixelsHigh == 1_024)
+            let red = try #require(image.colorAt(x: 100, y: 100))
+            #expect(red.redComponent > 0.9 && red.greenComponent < 0.1 && red.blueComponent < 0.1 && red.alphaComponent == 1)
+            let transparent = try #require(image.colorAt(x: 3_600, y: 100))
+            #expect(transparent.alphaComponent == 0)
+            let sanitized = try await renderer.webView.callAsyncJavaScript(
+                "return new XMLSerializer().serializeToString(sanitizeSVG(content));",
+                arguments: ["content": source], in: nil, contentWorld: .page
+            ) as? String
+            let document = try #require(sanitized)
+            for fragment in ["<script", "onload=", "<foreignObject", "example.com"] {
+                #expect(!document.contains(fragment), "\(document)")
+            }
+            let executed = try await renderer.webView.evaluateJavaScript("window.injected === true || document.querySelector('#content svg') !== null") as? Bool
+            #expect(executed == false)
+
+            renderer.load(content: "Not an SVG", kind: .svg, dark: dark)
+            try await wait(renderer)
+            #expect(renderer.error != nil && renderer.png == nil)
+        }
+
+        @Test
+        func tinyAnimatedSVGShowsTheSamePNGItExports() async throws {
+            let renderer = ArtifactWebRenderer()
+            let window = mount(renderer)
+            defer {
+                renderer.stop()
+                window.close()
+            }
+            let source = """
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1">
+              <style>
+                @keyframes swap { from { fill: red; } to { fill: blue; } }
+                rect { animation: swap 1s infinite; }
+              </style>
+              <rect width="1" height="1" fill="red"/>
+            </svg>
+            """
+            renderer.load(content: source, kind: .svg, dark: false)
+            try await wait(renderer)
+
+            let png = try #require(renderer.png)
+            let image = try #require(NSBitmapImageRep(data: png))
+            #expect(image.pixelsWide == 4_096 && image.pixelsHigh == 4_096)
+            let preview = try await renderer.webView.evaluateJavaScript("document.querySelector('#content > img')?.src ?? ''") as? String
+            #expect(preview == "data:image/png;base64," + png.base64EncodedString())
+        }
+
         @Test
         func rejectsInvalidMermaidAndCanRenderAgain() async throws {
             let renderer = ArtifactWebRenderer()

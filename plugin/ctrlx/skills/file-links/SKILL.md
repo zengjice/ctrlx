@@ -55,8 +55,8 @@ new raster images. Save Mermaid as UTF-8
 Use the project's existing output location; do not create an extra Markdown
 document solely to wrap an image or diagram.
 
-Mac and iOS clients with artifact previews open image and Mermaid references
-directly in a zoomable preview. The user chooses when to open it; do not open
+Mac and iOS clients with artifact previews open images, including UTF-8 SVG up to
+512 KiB, and Mermaid references directly in a zoomable preview. The user chooses when to open it; do not open
 browser tabs or switch their workspace just to display the artifact. Older
 clients continue opening the file in Files. Plain Mermaid code printed only in
 the terminal is not automatically rendered. Keep diagrams within 64 KiB and

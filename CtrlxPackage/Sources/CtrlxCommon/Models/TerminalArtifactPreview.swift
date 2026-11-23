@@ -27,12 +27,16 @@ public struct TerminalArtifactPreview: Identifiable {
 
     public static func supports(path: String?) -> Bool {
         guard let path else { return false }
-        return isMermaid(path: path) || isMarkdown(path: path) || isImage(path: path)
+        return isMermaid(path: path) || isMarkdown(path: path) || isImage(path: path) || isSVG(path: path)
     }
 
     public static func isImage(path: String) -> Bool {
         ["png", "jpg", "jpeg", "gif", "heic", "webp", "tiff", "bmp"]
             .contains((path as NSString).pathExtension.lowercased())
+    }
+
+    static func isSVG(path: String) -> Bool {
+        (path as NSString).pathExtension.lowercased() == "svg"
     }
 
     public static func isMarkdown(path: String) -> Bool {
@@ -72,7 +76,19 @@ public struct TerminalArtifactPreview: Identifiable {
                 throw FileBrowserError.message("Markdown previews require a UTF-8 file no larger than 512 KiB.")
             }
         }
+        if Self.isSVG(path: path) {
+            _ = try Self.svgSource(data)
+        }
         return data
+    }
+
+    static func svgSource(_ data: Data) throws -> String {
+        guard
+            data.count <= FileBrowserLimits.maximumTextBytes,
+            let text = String(data: data, encoding: .utf8), !text.contains("\0") else {
+            throw FileBrowserError.message("SVG images must be UTF-8 and no larger than 512 KiB.")
+        }
+        return text
     }
 
     /// Resolve document-relative URLs lexically; the Host then checks the real workspace boundary.
@@ -103,7 +119,7 @@ public struct TerminalArtifactPreview: Identifiable {
 
     public func loadDocumentImage(_ reference: String) async throws -> Data {
         let imageLink = try documentLink(reference)
-        guard Self.isImage(path: imageLink.path) || (imageLink.path as NSString).pathExtension.lowercased() == "svg" else {
+        guard Self.isImage(path: imageLink.path) || Self.isSVG(path: imageLink.path) else {
             throw FileBrowserError.message("This image format is not supported.")
         }
         let destination = try await TerminalFileDestination.resolve(path: imageLink.path, context: context, source: source)

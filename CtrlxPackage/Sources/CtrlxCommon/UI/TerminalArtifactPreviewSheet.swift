@@ -223,10 +223,16 @@
                     data = try await preview.load()
                 }
                 guard let data else { return }
+                let kind: ArtifactWebRenderer.ContentKind
                 let content: String
                 if isMermaid || isMarkdown {
+                    kind = isMarkdown ? .markdown : .mermaid
                     content = String(decoding: data, as: UTF8.self)
+                } else if TerminalArtifactPreview.isSVG(path: preview.path) {
+                    kind = .svg
+                    content = try TerminalArtifactPreview.svgSource(data)
                 } else {
+                    kind = .image
                     content = try await Task.detached(priority: .userInitiated) {
                         try ArtifactPreviewImage.png(from: data).base64EncodedString()
                     }.value
@@ -234,7 +240,7 @@
                 try Task.checkCancellation()
                 renderer.load(
                     content: content,
-                    kind: isMarkdown ? .markdown : isMermaid ? .mermaid : .image,
+                    kind: kind,
                     dark: colorScheme == .dark,
                     imageLoader: preview.loadDocumentImage,
                     openLink: { pendingDocumentLink = $0 }

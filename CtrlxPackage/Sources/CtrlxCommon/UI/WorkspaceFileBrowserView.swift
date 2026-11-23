@@ -23,6 +23,14 @@
         @State private var folderRequest: FolderRequest?
         @State private var actionMessage: String?
         @State private var isAnnotating = false
+        @State private var markdownEdit: MarkdownEdit?
+
+        private struct MarkdownEdit: Identifiable {
+            let id = UUID()
+            let file: FileBrowserEntry
+            let data: Data
+            let sourceID: String
+        }
 
         private struct Destination {
             let path: String
@@ -87,6 +95,15 @@
                 #endif
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Refreshes replace the preview child while the editor keeps its draft.
+            .sheet(item: $markdownEdit) { edit in
+                FileBrowserMarkdownEditor(file: edit.file, data: edit.data, sourceID: edit.sourceID, source: source) {
+                    markdownEdit = nil
+                    if tab.selectedFile == edit.file.path {
+                        tab.refresh += 1
+                    }
+                }
+            }
             .task(id: tab.loadKey(source: source)) { await tab.load(source: source) }
             .task(id: previewKey) {
                 await tab.loadPreview(source: source)
@@ -400,8 +417,10 @@
         }
 
         private var preview: some View {
-            FileBrowserFilePreview(tab: tab, source: source, onEditingChanged: { isAnnotating = $0 })
-                .id(FilePreviewIdentity(path: tab.selectedFile, refresh: tab.refresh, sourceID: source.id))
+            FileBrowserFilePreview(tab: tab, source: source, onEditingChanged: { isAnnotating = $0 }) { file, data in
+                markdownEdit = .init(file: file, data: data, sourceID: source.id)
+            }
+            .id(FilePreviewIdentity(path: tab.selectedFile, refresh: tab.refresh, sourceID: source.id))
         }
 
         private struct FilePreviewIdentity: Hashable {
@@ -416,6 +435,7 @@
         let tab: FileBrowserTab
         let source: FileBrowserSource
         let onEditingChanged: (Bool) -> Void
+        let onEditMarkdown: (FileBrowserEntry, Data) -> Void
         @Environment(\.browserAnnotationContext) private var annotationContext
         @Environment(\.openURL) private var openURL
         @Dependency(ClipboardClient.self) private var clipboard
@@ -427,6 +447,7 @@
         @State private var isAnnotating = false
         @State private var clipboardMessage: String?
         @State private var documentLinkError: String?
+
         private var documentLink: FileBrowserPreviewActions.Link? {
             tab.previewSession.actions.link
         }
@@ -455,6 +476,17 @@
                         #endif
                         Text((path as NSString).lastPathComponent).lineLimit(1).truncationMode(.middle)
                         Spacer()
+                        if let info = tab.preview, info.path == path, info.kind == .markdown, !info.isSymbolicLink {
+                            Button {
+                                guard let data = tab.previewData else { return }
+                                onEditMarkdown(info, data)
+                            } label: {
+                                Label("Edit Markdown", symbol: .pencil).labelStyle(.iconOnly)
+                            }
+                            .disabled(tab.previewData == nil || source.markdownEditingUnavailableReason != nil)
+                            .help(source.markdownEditingUnavailableReason ?? "Edit Markdown")
+                            .accessibilityIdentifier("file-edit-markdown")
+                        }
                         if annotationContext != nil {
                             Button { captureRequest = UUID() } label: {
                                 Label("Annotate Screenshot", symbol: .pencilLine).labelStyle(.iconOnly)
@@ -477,6 +509,9 @@
                                         clipboardMessage = "Image copied."
                                     } catch { clipboardMessage = error.localizedDescription }
                                 }
+                            }
+                            if tab.preview?.kind == .markdown, let reason = source.markdownEditingUnavailableReason {
+                                Text(reason)
                             }
                             Button("Refresh Preview") { tab.refresh += 1 }
                         } label: { Label("File Actions", symbol: .ellipsisCircle).labelStyle(.iconOnly) }

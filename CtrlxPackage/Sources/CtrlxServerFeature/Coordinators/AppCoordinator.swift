@@ -4156,6 +4156,7 @@
                     supportsFileBrowsing: true,
                     supportsFileDownloads: true,
                     supportsFileUploads: true,
+                    supportsMarkdownEditing: true,
                     supportsRepositoryFileLinks: true,
                     supportsWorkspaceClipboard: true,
                     supportsBrowserAudio: await self?.agentBrowser.supportsBrowserAudio,

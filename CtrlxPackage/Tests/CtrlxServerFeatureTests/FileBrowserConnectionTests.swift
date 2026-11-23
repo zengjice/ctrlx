@@ -455,6 +455,30 @@ struct FileBrowserConnectionTests {
         try await app.asyncShutdown()
     }
 
+    @Test
+    func encryptedMarkdownSaveFitsTheFrameLimit() async throws {
+        let viewer = try await encryption()
+        let host = try await encryption()
+        try await viewer.establishSession(partnerPublicKey: host.publicKey, partnerKeyId: host.keyId, pairId: "pair")
+        try await host.establishSession(partnerPublicKey: viewer.publicKey, partnerKeyId: viewer.keyId, pairId: "pair")
+        // Each UTF-8 triple produces "77+/" in Base64.
+        let data = Data((String(repeating: "\u{FFFF}", count: FileBrowserLimits.maximumTextBytes / 3) + "ab").utf8)
+        #expect(data.count == FileBrowserLimits.maximumTextBytes)
+        let operation = FileBrowserOperation.saveMarkdown(path: "/Host/notes.md", revision: "1", data: data)
+        let command = CommandMessage(paneId: "", command: BrowseFiles(operation).commandType)
+        let sealed = try await WebSocketMessage.command(command).encrypt(using: viewer)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .withoutEscapingSlashes
+        let frame = try encoder.encode(sealed)
+        #expect(frame.count <= RelayPayloadLimits.maxWebSocketFrameBytes)
+        let decoded = try await JSONDecoder().decode(WebSocketMessage.self, from: frame).decrypt(using: host)
+        guard case let .command(message) = decoded else {
+            Issue.record("Expected Markdown save command")
+            return
+        }
+        #expect(message.command == command.command)
+    }
+
     @Test("Downloads and app updates leave keyboard input responsive", arguments: [false, true])
     func backgroundRequestsLeaveKeyboardCommandsResponsive(duringAppUpdate: Bool) async throws {
         let originalVersion = VersionCompatibility.appVersionOverride
