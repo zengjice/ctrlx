@@ -398,6 +398,8 @@ layout and viewport are preserved. macOS uses an independent, movable,
 resizable window that can be placed on another Space while the workbench remains
 interactive; it also supports pinch zoom and Escape. iOS uses a sheet with
 pinch/double-tap zoom, full-screen viewing and swipe-to-dismiss.
+The toolbar’s Refresh button reloads the file from the Host. After reconnecting
+to a Host without stable pane identities, open the terminal link again.
 The More menu provides Fit, Copy Image, Share Image and Open in Files. Mermaid
 also offers Diagram/Source and Copy Source. Images show a bounded static preview
 (first frame for animated formats, at most 4096 pixels on the longest side).

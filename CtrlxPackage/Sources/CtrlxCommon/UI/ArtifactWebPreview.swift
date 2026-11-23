@@ -46,10 +46,7 @@
             imageLoader: (@MainActor (String) async throws -> Data)? = nil,
             openLink: (@MainActor (String) -> Void)? = nil
         ) {
-            stop()
-            isReady = false
-            error = nil
-            png = nil
+            reset()
             payload = (content, kind, dark)
             self.imageLoader = imageLoader
             self.openLink = openLink
@@ -71,6 +68,13 @@
                 self.stop()
                 self.error = "The preview took too long to render. Try a smaller file."
             }
+        }
+
+        func reset() {
+            stop()
+            isReady = false
+            error = nil
+            png = nil
         }
 
         func stop() {
@@ -189,7 +193,7 @@
 
         func webViewWebContentProcessDidTerminate(_: WKWebView) {
             stop()
-            error = "The preview renderer stopped. Close the preview and try again."
+            error = "The preview renderer stopped. Refresh to try again."
         }
     }
 
