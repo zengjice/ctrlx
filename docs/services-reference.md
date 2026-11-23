@@ -1031,7 +1031,7 @@ versions, not an automatic-resume compatibility claim for other CLI versions.
 
 On Mac, press **⌘F** in an eligible terminal tab to open **Fork in Current Directory**.
 
-Right-click a local or Viewer terminal-window tab → **Fork → In Current
+Right-click a local or Viewer terminal tab or its content → **Fork → In Current
 Directory / In Other Directory… / In New Worktree…**. Codex and Claude Code
 implement the optional `AgentSessionForking` capability; sidecars retain their
 existing wire contract. All modes open the shared naming panel before creation.
@@ -1080,7 +1080,7 @@ there are multiple recognized Agents. Mac and iOS share `AgentForkPanel`,
 including separate current/other-directory destinations, worktree review,
 dirty-file acknowledgement, target-directory browsing and retrying the same
 request UUID. Enter a window or worktree name for each Fork. The other-directory
-browser initially lists the Host's home. Choose a folder or type a path to set
+browser initially lists the selected Agent's current directory. Choose a folder or type a path to set
 the required destination. The iPhone sends the captured source to its specific
 Host, which resolves `~`, constructs the Agent command and performs any Git
 operations. Creation is serialized with New Terminal and New Agent. The returned

@@ -230,13 +230,13 @@ struct AgentForkConfigurationTests {
     }
 
     #if os(macOS)
-        @Test("A blank Fork directory field still browses the Host home")
-        func browseHostHomeFromEmptyForkDirectory() async throws {
+        @Test("A blank Fork directory field browses the source Agent's current directory")
+        func browseSourceFromEmptyForkDirectory() async throws {
             let source = try #require(AgentForkSource(pane: pane("%1", index: 1)))
             var paths: [String] = []
             let configuration = AgentForkConfiguration(sources: [source], destination: .otherDirectory, directorySource: .init(id: "host") { request in
                 paths.append(request.path)
-                return .init(directory: "/Host/home", parentDirectory: "/Host", isExactDirectory: true, entries: [])
+                return .init(directory: request.path, parentDirectory: "/Host", isExactDirectory: true, entries: [])
             }, prepare: { .init(source: $0, worktree: nil) }, fork: { _ in
                 Issue.record("Browsing should not create a Fork")
             })
@@ -253,7 +253,7 @@ struct AgentForkConfigurationTests {
                 }
                 try await Task.sleep(for: .milliseconds(20))
             }
-            #expect(paths.first == "~/")
+            #expect(paths.first == source.workingDirectory)
         }
 
         @Test("Native window context menu preserves every Fork destination and action")

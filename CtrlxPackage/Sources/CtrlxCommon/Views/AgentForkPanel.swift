@@ -300,7 +300,7 @@ public struct AgentForkPanel: View {
                             DisclosureGroup("Choose Directory…", isExpanded: $showsDirectoryBrowser) {
                                 if showsDirectoryBrowser {
                                     SessionDirectoryBrowser(
-                                        path: Binding(get: { directory.isEmpty ? "~/" : directory }, set: { directory = $0 }),
+                                        path: Binding(get: { directory.isEmpty ? source.workingDirectory : directory }, set: { directory = $0 }),
                                         source: directorySource, isCreatingDirectory: $isCreatingDirectory
                                     )
                                     .padding(.top, 8)

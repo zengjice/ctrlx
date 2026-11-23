@@ -37,6 +37,19 @@ struct TerminalContentMenuTests {
         #expect(!target.matches(hostID: nil, pane: pane))
     }
 
+    @Test("A window menu can rename with a surviving pane and rejects a reused window route")
+    func windowRenameTarget() throws {
+        var identity = WorkspacePaneIdentity(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+        let original = PaneState(paneId: "%1", sessionName: "work", tmuxWindowId: "@1", workspaceIdentity: identity)
+        let target = try #require(TerminalContentMenuTarget(hostID: nil, pane: original))
+        identity.paneID = UUID()
+        var sibling = PaneState(paneId: "%2", sessionName: "work", tmuxWindowId: "@1", workspaceIdentity: identity)
+        #expect(target.matchesWindow(pane: sibling))
+        #expect(!target.matches(hostID: nil, pane: sibling))
+        sibling.workspaceIdentity?.windowID = UUID()
+        #expect(!target.matchesWindow(pane: sibling))
+    }
+
     @Test("Discovery without a session cannot produce menu actions")
     func undiscoveredPane() {
         #expect(TerminalContentMenuTarget(hostID: nil, pane: .init(paneId: "%1")) == nil)

@@ -24,6 +24,11 @@ struct TerminalContentMenuTarget: Equatable, Sendable {
         self.hostID == hostID && pane?.paneId == paneID && pane?.sessionName == sessionName
             && pane?.stableWindowId == windowID && pane?.workspaceIdentity == workspacePane
     }
+
+    func matchesWindow(pane: PaneState) -> Bool {
+        pane.sessionName == sessionName && pane.stableWindowId == windowID
+            && workspacePane?.isSameWindow(as: pane.workspaceIdentity) == true
+    }
 }
 
 private struct TerminalContentMenuKey: EnvironmentKey {

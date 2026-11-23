@@ -52,7 +52,9 @@ Restart request IDs are created when an action is chosen.
 
 ## Mac terminal content menu
 
-Right-click the content of an Agent or Terminal tab to open **New Agent…**,
+Right-click the content of an Agent or Terminal tab for the same tab actions
+as right-clicking its title, including **Fork**, **Rename Tab**, and **Open Files**.
+The content menu also offers **New Agent…**,
 **New Terminal**, **New Files**, **New Browser**, **New iOS Simulator**, and
 **Open Git**, followed by **Add Photos…** and **Fit Terminal**. Creation uses the same actions and
 Host capabilities as the tab strip's **＋** picker; Open Git remains local-only.

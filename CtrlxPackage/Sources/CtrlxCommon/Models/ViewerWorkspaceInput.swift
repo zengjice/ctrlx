@@ -6,6 +6,7 @@ import Foundation
 public enum ViewerWorkspaceInputBinding: Equatable, Sendable {
     case unavailable
     case legacy(pairID: String)
+    case legacyWindow(pairID: String, incarnation: UUID)
     case pane(pairID: String, hostID: UUID, identity: WorkspacePaneIdentity)
     case window(pairID: String, hostID: UUID, identity: WorkspacePaneIdentity)
     case session(pairID: String, hostID: UUID, identity: WorkspacePaneIdentity)
@@ -13,6 +14,8 @@ public enum ViewerWorkspaceInputBinding: Equatable, Sendable {
     public func expectedPane(current: Self) throws -> WorkspacePaneIdentity? {
         switch (self, current) {
         case let (.legacy(pair), .legacy(currentPair)) where pair == currentPair:
+            return nil
+        case let (.legacyWindow(pair, id), .legacyWindow(currentPair, currentID)) where pair == currentPair && id == currentID:
             return nil
         case let (.pane(pair, host, identity), .pane(currentPair, currentHost, currentIdentity))
             where pair == currentPair && host == currentHost && identity.isSamePane(as: currentIdentity):
@@ -30,9 +33,15 @@ public enum ViewerWorkspaceInputBinding: Equatable, Sendable {
 }
 
 public struct ViewerWorkspaceInputState: Equatable, Sendable {
+    private struct LegacyWindow: Equatable, Sendable {
+        let stableID: String
+        let incarnation: UUID
+    }
+
     public private(set) var catalog: ViewerWorkspaceCatalog?
     private var pairID: String?
     private var windowPaneIDs: [String: String] = [:]
+    private var legacyWindowsByPane: [String: LegacyWindow] = [:]
     public private(set) var supportsIdentity = false
     public private(set) var supportsStreamIdentity = false
     public private(set) var supportsGuardedTerminalTabClose = false
@@ -40,6 +49,7 @@ public struct ViewerWorkspaceInputState: Equatable, Sendable {
     public init() { }
 
     public mutating func update(_ state: SessionStateMessage) {
+        let previousLegacyWindows = pairID == state.pairId ? legacyWindowsByPane : [:]
         pairID = state.pairId
         supportsIdentity = state.supportsWorkspaceInputIdentity == true
         supportsStreamIdentity = state.supportsTerminalStreamIdentity == true
@@ -49,6 +59,17 @@ public struct ViewerWorkspaceInputState: Equatable, Sendable {
         for pane in state.paneStates.values.sorted(by: { $0.paneId < $1.paneId }) {
             for target in [pane.paneId, pane.windowId, pane.stableWindowId] where windowPaneIDs[target] == nil {
                 windowPaneIDs[target] = pane.paneId
+            }
+        }
+        legacyWindowsByPane.removeAll(keepingCapacity: true)
+        guard !supportsIdentity else { return }
+        // An overlapping pane links consecutive full snapshots of a legacy window.
+        // Once a window disappears, a later reuse of its numeric route gets a new identity.
+        for (stableID, panes) in Dictionary(grouping: state.paneStates.values, by: \.stableWindowId) {
+            let window = panes.lazy.compactMap { previousLegacyWindows[$0.paneId] }.first { $0.stableID == stableID }
+                ?? LegacyWindow(stableID: stableID, incarnation: UUID())
+            for pane in panes {
+                legacyWindowsByPane[pane.paneId] = window
             }
         }
     }
@@ -68,7 +89,12 @@ public struct ViewerWorkspaceInputState: Equatable, Sendable {
 
     public func windowBinding(target: String) -> ViewerWorkspaceInputBinding {
         guard let pairID else { return .unavailable }
-        guard supportsIdentity else { return .legacy(pairID: pairID) }
+        guard supportsIdentity else {
+            if let paneID = windowPaneIDs[target], let window = legacyWindowsByPane[paneID] {
+                return .legacyWindow(pairID: pairID, incarnation: window.incarnation)
+            }
+            return .legacy(pairID: pairID)
+        }
         guard
             let paneID = windowPaneIDs[target],
             case let .pane(pair, host, identity) = binding(paneID: paneID) else { return .unavailable }

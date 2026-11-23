@@ -39,11 +39,8 @@ struct RemoteWindowTabBar: View {
     let onNewWindow: () -> Void
     @Binding var isNewTabMenuPresented: Bool
     let agentConfiguration: NewAgentTabConfiguration
-    let forkUnavailableReason: String?
-    let supportsOtherDirectoryFork: Bool
-    let onForkWindow: (TmuxWindow, AgentForkDestination) -> Void
-    let onOpenBrowser: (TmuxWindow) -> Void
-    let onRenameWindow: (TmuxWindow, String) -> Void
+    let windowMenuItems: (TmuxWindow) -> [ContextMenuItem]
+    let onRenameWindow: (TmuxWindow) -> Void
     let onSelectBrowserTab: (UUID) -> Void
     let onCloseBrowserTab: (UUID) -> Void
     /// Toggles which side of the split a tab strip entry lives on.
@@ -56,16 +53,9 @@ struct RemoteWindowTabBar: View {
     let onReorderBrowserTabs: ([UUID]) -> Void
     var onSelectFileTab: ((UUID) -> Void)?
     var onCloseFileTab: ((UUID) -> Void)?
-    let onOpenFiles: (TmuxWindow, Bool) -> Void
     let linkedTabActions: LinkedTabSourceActions
     var onNewResource: ((ResourceTabKind) -> Void)?
-    var onViewWorkflow: ((PaneState) -> Void)?
-    var onTrustAgentHooks: ((PaneState) -> Void)?
     var onDetachWindow: ((TmuxWindow, CGPoint?) -> Void)?
-    var onRestartAgent: ((RestartAgentSession) -> Void)?
-    var restartUnavailableReason: String?
-    var logoutUnavailableReason: String?
-    var restartingAgentPaneIDs: Set<String> = []
 
     /// Cached width of the split-mode tab strip. Measured via the background
     /// `onGeometryChange` so the HStack can drive intrinsic height instead of
@@ -340,14 +330,8 @@ struct RemoteWindowTabBar: View {
             .background(WindowTabDragSource(windowID: window.stableId, label: windowName) { point in
                 onDetachWindow?(window, point)
             })
-            .modifier(WindowRenamingModifier(
-                currentName: window.windowName,
-                isDisabled: !isHostConnected,
-                onRename: { newName in
-                    onRenameWindow(window, newName)
-                },
-                additionalMenu: { windowContextMenuItems(for: window) }
-            ))
+            .stableContextMenu { windowMenuItems(window) }
+            .simultaneousGesture(TapGesture(count: 2).onEnded { onRenameWindow(window) })
 
             TabReturnToMainButton(tab: payload, name: windowName)
 
@@ -372,48 +356,6 @@ struct RemoteWindowTabBar: View {
         .onHover { hovering in
             hoveredWindowId = hovering ? window.id : nil
         }
-    }
-
-    private func windowContextMenuItems(for window: TmuxWindow) -> [ContextMenuItem] {
-        [
-            .button(
-                title: "Open in Separate Window",
-                isEnabled: onDetachWindow != nil && DetachedTerminalTarget(hostID: nil, windowID: window.stableId) != nil
-            ) {
-                onDetachWindow?(window, nil)
-            },
-            .button(
-                title: "Open Files", symbol: .folderBadgePlus,
-                isEnabled: isHostConnected && !window.panes.isEmpty
-            ) {
-                onOpenFiles(window, false)
-            },
-            .button(
-                title: "Open Another Files Tab", symbol: .folderBadgePlus,
-                isEnabled: isHostConnected && !window.panes.isEmpty
-            ) {
-                onOpenFiles(window, true)
-            },
-            .button(
-                title: "Open Browser on Host", symbol: .globe,
-                isEnabled: isHostConnected && !window.panes.isEmpty
-            ) {
-                onOpenBrowser(window)
-            },
-            AgentForkMenu(
-                sources: window.panes.compactMap(AgentForkSource.init(pane:)),
-                unavailableReason: forkUnavailableReason,
-                sourceUnavailableReason: AgentForkSource.unavailableReason(panes: window.panes),
-                allowsOtherDirectory: supportsOtherDirectoryFork,
-                choose: { onForkWindow(window, $0) }
-            ).contextMenuItem,
-        ] + restartMenuItems(for: window) + AgentHookTrustMenu.items(panes: window.panes, isEnabled: isHostConnected && hasCurrentHostState, approve: onTrustAgentHooks) + AgentWorkflowMenu.items(panes: window.panes, isEnabled: isHostConnected && hasCurrentHostState, open: onViewWorkflow)
-    }
-
-    private func restartMenuItems(for window: TmuxWindow) -> [ContextMenuItem] {
-        guard let onRestartAgent else { return [] }
-        return AgentRestartMenu(panes: window.panes, unavailableReason: restartUnavailableReason, busyPaneIDs: restartingAgentPaneIDs, choose: onRestartAgent).contextMenuItems
-            + AgentRestartMenu(panes: window.panes, unavailableReason: logoutUnavailableReason, busyPaneIDs: restartingAgentPaneIDs, logoutBeforeResume: true, choose: onRestartAgent).contextMenuItems
     }
 
     private func openBrowserTabView(_ tab: BrowserTab) -> some View {

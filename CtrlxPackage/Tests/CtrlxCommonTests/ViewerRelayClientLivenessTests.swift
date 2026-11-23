@@ -106,6 +106,71 @@ struct ViewerRelayClientLivenessTests {
         #expect(upgrades.value == 1, "Presence refresh replaced a healthy Relay socket")
     }
 
+    @Test("A legacy rename cannot cross an observed window disappearance or Host reconnection", arguments: [false, true])
+    func legacyRenameRejectsReplacement(reconnect: Bool) async throws {
+        let upgrades = UpgradeCounter()
+        let server = try await MuteRelay.start(countingUpgradesInto: upgrades)
+        defer { server.stop() }
+        let e2ee = try await E2EEService()
+        let client = ViewerRelayClient(pingIntervalSeconds: 60, pongTimeoutSeconds: 10)
+        let pairID = "legacy-pair"
+        try await client.connect(
+            serverURL: #require(URL(string: "ws://127.0.0.1:\(server.port)")),
+            pairId: pairID, deviceId: "viewer", deviceName: "Viewer",
+            publicKey: e2ee.publicKey.base64EncodedString(), publicKeyId: e2ee.keyId,
+            e2eeService: e2ee, partnerPublicKey: nil, partnerPublicKeyId: nil
+        )
+        defer { Task { await client.disconnect() } }
+        try #require(await waitUntil { upgrades.value == 1 && client.state.isConnected })
+
+        let pane = PaneState(paneId: "%1", sessionName: "work", windowIndex: 1)
+        let hello = WebSocketMessage.peerHello(.init(appVersion: "3.0.127", minRequiredPartnerVersion: ""))
+        let state = WebSocketMessage.sessionState(.init(pairId: pairID, paneStates: [pane.paneId: pane]))
+        try await upgrades.send(hello)
+        try await upgrades.send(state)
+        try #require(await waitUntil {
+            guard case .legacyWindow = client.workspaceInputState.windowBinding(target: pane.windowId) else { return false }
+            return client.isHostConnected
+        })
+        let expectedBinding = client.workspaceInputState.windowBinding(target: pane.windowId)
+        let originalEpoch = client.hostConnectionEpoch
+
+        if reconnect {
+            try await upgrades.send(.hostDisconnected)
+            try #require(await waitUntil { !client.isHostConnected })
+            try await upgrades.send(hello)
+        } else {
+            try await upgrades.send(.sessionState(.init(pairId: pairID, paneStates: [:])))
+            try #require(await waitUntil {
+                client.workspaceInputState.windowBinding(target: pane.windowId) == .legacy(pairID: pairID)
+            })
+        }
+        try await upgrades.send(state)
+        try #require(await waitUntil {
+            guard case .legacyWindow = client.workspaceInputState.windowBinding(target: pane.windowId) else { return false }
+            return client.isHostConnected
+        })
+        #expect(upgrades.value == 1)
+        #expect((client.hostConnectionEpoch != originalEpoch) == reconnect)
+        #expect(client.workspaceInputState.windowBinding(target: pane.windowId) != expectedBinding)
+        let result = await client.sendCommand(
+            SetWindowName(windowId: pane.windowId, name: "Stale name"), paneId: "",
+            inputBinding: expectedBinding, expectedHostConnectionEpoch: originalEpoch
+        )
+        guard case let .failure(error as ViewerRelayClientError) = result else {
+            Issue.record("The expired window binding should be rejected before sending the rename")
+            return
+        }
+        switch (reconnect, error) {
+        case (true, .notConnected):
+            break
+        case let (false, .commandFailed(message)):
+            #expect(message.contains("terminal changed"))
+        default:
+            Issue.record("Unexpected rename result: \(error)")
+        }
+    }
+
     // MARK: - Polling
 
     @Test("Quota recovery interrupts the old stream and restores Host presence on the same open client")
