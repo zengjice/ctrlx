@@ -18,6 +18,16 @@ struct CodexProcessSessionReaderTests {
         return Data("{\"type\":\"\(recordType)\",\"payload\":{\"type\":\"\(type)\",\"turn_id\":\(id)}}\n".utf8)
     }
 
+    private func failedCompletion(
+        _ type: String = "task_complete",
+        error: String = #"{"message":"The model is not supported when using Codex with a ChatGPT account.","codex_error_info":"other"}"#
+    ) -> Data {
+        Data("""
+        {"type":"event_msg","payload":{"type":"\(type)","turn_id":"\(childID)","last_agent_message":null,"error":\(error)}}
+
+        """.utf8)
+    }
+
     @Test("Only the latest complete native turn can override cached Working", arguments: ["complete", "turn-complete", "aborted", "active", "new-task", "late-old-completion", "new-context", "unknown-event", "partial", "malformed", "no-turn", "no-start", "truncated-prefix", "token-count"])
     func nativeCompletion(_ scenario: String) throws {
         var data = event("task_started") + event("task_complete")
@@ -39,7 +49,28 @@ struct CodexProcessSessionReaderTests {
         }
         #expect(CodexProcessSessionReader.lastTurnCompleted(data, startsAtBeginning: scenario != "truncated-prefix") == ["complete", "turn-complete", "aborted", "truncated-prefix", "token-count"].contains(scenario))
         let turn = try #require(UUID(uuidString: childID))
-        #expect(CodexProcessSessionReader.lastTurnCompleted(data, startsAtBeginning: scenario != "truncated-prefix", abortedTurnID: turn) == (scenario == "aborted"))
+        #expect(CodexProcessSessionReader.lastTurnCompleted(data, startsAtBeginning: scenario != "truncated-prefix", abortedOrFailedTurnID: turn) == (scenario == "aborted"))
+    }
+
+    @Test(
+        "A matched turn must record a terminal error before it can clear Working",
+        arguments: ["task-complete", "turn-complete", "settings", "new-task", "unknown-event", "transient-error", "null-error", "missing-message"]
+    )
+    func nativeFailure(_ scenario: String) throws {
+        let start = event("task_started")
+        var data = start + failedCompletion()
+        switch scenario {
+        case "turn-complete": data = start + failedCompletion("turn_complete")
+        case "settings": data += event("thread_settings_applied", turn: nil)
+        case "new-task": data += event("thread_settings_applied", turn: nil) + event("task_started", turn: parentID)
+        case "unknown-event": data += event("future-turn-event", turn: nil)
+        case "transient-error": data = start + event("error")
+        case "null-error": data = start + failedCompletion(error: "null")
+        case "missing-message": data = start + failedCompletion(error: "{}")
+        default: break
+        }
+        let turn = try #require(UUID(uuidString: childID))
+        #expect(CodexProcessSessionReader.lastTurnCompleted(data, abortedOrFailedTurnID: turn) == ["task-complete", "turn-complete", "settings"].contains(scenario))
     }
 
     @Test("Completion must come from this process's current unique writable conversation")
@@ -63,9 +94,9 @@ struct CodexProcessSessionReaderTests {
         #expect(await !reader.turnCompleted(processID: pid, runtimeID: runtime))
         try writer.write(contentsOf: event("turn_aborted", turn: parentID))
         #expect(await reader.turnCompleted(processID: pid, runtimeID: runtime))
-        #expect(await reader.turnAborted(processID: pid, runtimeID: runtime, conversationID: childID, turnID: interruptedTurn))
-        #expect(await !reader.turnAborted(processID: pid, runtimeID: runtime, conversationID: parentID, turnID: interruptedTurn))
-        #expect(await !reader.turnAborted(processID: pid, runtimeID: runtime, conversationID: childID, turnID: UUID()))
+        #expect(await reader.turnAbortedOrFailed(processID: pid, runtimeID: runtime, conversationID: childID, turnID: interruptedTurn))
+        #expect(await !reader.turnAbortedOrFailed(processID: pid, runtimeID: runtime, conversationID: parentID, turnID: interruptedTurn))
+        #expect(await !reader.turnAbortedOrFailed(processID: pid, runtimeID: runtime, conversationID: childID, turnID: UUID()))
         try writer.write(contentsOf: Data("{partial".utf8))
         #expect(await !reader.turnCompleted(processID: pid, runtimeID: runtime))
         try writer.write(contentsOf: Data("}\n".utf8))
@@ -81,15 +112,16 @@ struct CodexProcessSessionReaderTests {
         #expect(await !reader.turnCompleted(processID: pid, runtimeID: runtime))
     }
 
-    @Test("Abort verification selects the named writer while a previous conversation is still open")
-    func abortWithPreviousWriterOpen() async throws {
+    @Test("Abort or failure verification selects the named writer while a previous conversation is still open", arguments: [false, true])
+    func completionWithPreviousWriterOpen(failed: Bool) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-abort-writers-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let previous = root.appendingPathComponent("rollout-\(parentID).jsonl")
         let current = root.appendingPathComponent("rollout-\(childID).jsonl")
         try (header(parentID) + Data("\n".utf8) + event("task_started") + event("task_complete")).write(to: previous)
-        try (header(childID) + Data("\n".utf8) + event("task_started") + event("turn_aborted")).write(to: current)
+        let completion = failed ? failedCompletion() + event("thread_settings_applied", turn: nil) : event("turn_aborted")
+        try (header(childID) + Data("\n".utf8) + event("task_started") + completion).write(to: current)
         let previousWriter = try FileHandle(forWritingTo: previous)
         defer { try? previousWriter.close() }
         let currentWriter = try FileHandle(forWritingTo: current)
@@ -98,12 +130,12 @@ struct CodexProcessSessionReaderTests {
         let pid = String(getpid())
         let runtime = try #require(AgentSessionIdentityClient.processRuntimeID(pid))
         let interruptedTurn = try #require(UUID(uuidString: childID))
-        #expect(await reader.turnAborted(processID: pid, runtimeID: runtime, conversationID: childID, turnID: interruptedTurn))
-        #expect(await !reader.turnAborted(processID: pid, runtimeID: runtime, conversationID: parentID, turnID: interruptedTurn))
-        #expect(await !reader.turnAborted(processID: pid, runtimeID: "reused-pid", conversationID: childID, turnID: interruptedTurn))
+        #expect(await reader.turnAbortedOrFailed(processID: pid, runtimeID: runtime, conversationID: childID, turnID: interruptedTurn))
+        #expect(await !reader.turnAbortedOrFailed(processID: pid, runtimeID: runtime, conversationID: parentID, turnID: interruptedTurn))
+        #expect(await !reader.turnAbortedOrFailed(processID: pid, runtimeID: "reused-pid", conversationID: childID, turnID: interruptedTurn))
         #expect(await !reader.turnCompleted(processID: pid, runtimeID: runtime))
         try currentWriter.close()
-        #expect(await !reader.turnAborted(processID: pid, runtimeID: runtime, conversationID: childID, turnID: interruptedTurn))
+        #expect(await !reader.turnAbortedOrFailed(processID: pid, runtimeID: runtime, conversationID: childID, turnID: interruptedTurn))
     }
 
     @Test("Abort verification reads across large image or text records", arguments: [false, true])
@@ -132,28 +164,28 @@ struct CodexProcessSessionReaderTests {
         let turn = try #require(UUID(uuidString: childID))
         let reader = CodexProcessSessionReader()
 
-        #expect(await reader.turnAborted(processID: pid, runtimeID: runtime, conversationID: childID, turnID: turn))
+        #expect(await reader.turnAbortedOrFailed(processID: pid, runtimeID: runtime, conversationID: childID, turnID: turn))
         try writer.seekToEnd()
         try writer.write(contentsOf: Data("{partial".utf8))
-        #expect(await !reader.turnAborted(processID: pid, runtimeID: runtime, conversationID: childID, turnID: turn))
+        #expect(await !reader.turnAbortedOrFailed(processID: pid, runtimeID: runtime, conversationID: childID, turnID: turn))
         try writer.truncate(atOffset: UInt64(start.count + body.count))
         try writer.seekToEnd()
         try writer.write(contentsOf: Data(#"\q"#.utf8) + end + abort)
-        #expect(await !reader.turnAborted(processID: pid, runtimeID: runtime, conversationID: childID, turnID: turn))
+        #expect(await !reader.turnAbortedOrFailed(processID: pid, runtimeID: runtime, conversationID: childID, turnID: turn))
         if isText {
             try writer.truncate(atOffset: UInt64(start.count + body.count))
             try writer.seekToEnd()
             try writer.write(contentsOf: Data([0xE0, 0x80, 0x80]) + end + abort)
-            #expect(await !reader.turnAborted(processID: pid, runtimeID: runtime, conversationID: childID, turnID: turn))
+            #expect(await !reader.turnAbortedOrFailed(processID: pid, runtimeID: runtime, conversationID: childID, turnID: turn))
             try writer.truncate(atOffset: UInt64(start.count + body.count))
             try writer.seekToEnd()
             try writer.write(contentsOf: Data("\",\"turn_id\":\"\(parentID)\"}}\n".utf8) + abort)
-            #expect(await !reader.turnAborted(processID: pid, runtimeID: runtime, conversationID: childID, turnID: turn))
+            #expect(await !reader.turnAbortedOrFailed(processID: pid, runtimeID: runtime, conversationID: childID, turnID: turn))
         }
         try writer.truncate(atOffset: UInt64(start.count))
         try writer.seekToEnd()
         try writer.write(contentsOf: event("task_started", turn: parentID) + body + end + abort)
-        #expect(await !reader.turnAborted(processID: pid, runtimeID: runtime, conversationID: childID, turnID: turn))
+        #expect(await !reader.turnAbortedOrFailed(processID: pid, runtimeID: runtime, conversationID: childID, turnID: turn))
     }
 
     @Test(

@@ -78,17 +78,17 @@
         }
 
         @Test(
-            "A verified interruption clears Working only if the same turn is still current",
+            "A verified abort or failure clears Working only if the same turn is still current",
             arguments: ["codex", "traex"], [false, true]
         )
-        func reconcilesInterruptedTurn(pluginID: String, newSubmission: Bool) async throws {
+        func reconcilesAbortedOrFailedTurn(pluginID: String, newSubmission: Bool) async throws {
             let turn = UUID(), nextTurn = UUID(), conversation = UUID().uuidString
             let process = PluginIngressPeer.Process(processID: 101, parentProcessID: 1, userID: 501, startSeconds: 100, startMicroseconds: 0)
             let peer = try #require(PluginIngressPeer.capture(peerPID: 101, userID: 501, inspect: { _ in process }))
             let duringRead = LockIsolated<(@MainActor @Sendable () -> Void)?>(nil)
             try await withDependencies {
                 $0[AgentSessionIdentityClient.self].runtimeID = { _ in process.runtimeID }
-                $0[CodexTurnStateClient.self].wasAborted = { pid, runtime, session, submittedTurn in
+                $0[CodexTurnStateClient.self].wasAbortedOrFailed = { pid, runtime, session, submittedTurn in
                     #expect(pid == "101" && runtime == process.runtimeID && session == conversation)
                     #expect(submittedTurn == turn)
                     await duringRead.value?()
@@ -112,7 +112,7 @@
                 if newSubmission {
                     duringRead.setValue { submit(nextTurn) }
                 }
-                #expect(await manager.reconcileInterruptedTurns() == !newSubmission)
+                #expect(await manager.reconcileAbortedOrFailedTurns() == !newSubmission)
                 #expect(manager.paneStates["%5"]?.agentSession?.state == (newSubmission ? .working : .idle))
                 #expect(manager.paneStates["%5"]?.claudeSessionID == conversation)
                 #expect(manager.currentAgentBinding(forPane: "%5")?.runtimeID == process.runtimeID)
