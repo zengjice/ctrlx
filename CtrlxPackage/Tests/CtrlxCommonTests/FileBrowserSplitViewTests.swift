@@ -59,15 +59,18 @@
         }
 
         @Test
-        func markdownDraftSurvivesRefreshAndReconnect() async throws {
+        func markdownEditorWindowSurvivesRefreshAndReconnect() async throws {
             NSApplication.shared.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
             let tab = FileBrowserTab(path: "/fixture")
+            let secondTab = FileBrowserTab(path: "/fixture")
             let bom = Data([0xEF, 0xBB, 0xBF])
             let initial = "# Original"
             let bytes = bom + Data(initial.utf8)
             let file = FileBrowserEntry(path: "/fixture/document.md", name: "document.md", kind: .markdown, size: bytes.count, revision: "1")
             var saved: Data?
+            var saveAttempts = 0
             var currentConnection = UUID()
+            var editorConnection = currentConnection
             func source(connectionID: UUID) -> FileBrowserSource {
                 FileBrowserSource(id: "fixture", paneID: nil, connectionID: connectionID) { operation in
                     switch operation {
@@ -78,6 +81,7 @@
                     case let .read(path, offset, revision):
                         return .chunk(.init(path: path, revision: revision, offset: offset, data: Data(bytes.dropFirst(offset))))
                     case let .saveMarkdown(path, revision, data):
+                        saveAttempts += 1
                         guard connectionID == currentConnection else {
                             throw FileBrowserError.message("The Host connection changed.")
                         }
@@ -88,7 +92,9 @@
                     }
                 }
             }
-            let host = NSHostingView(rootView: WorkspaceFileBrowserView(tab: tab, source: source(connectionID: currentConnection)))
+            let host = NSHostingView(rootView: WorkspaceFileBrowserView(tab: tab, source: source(connectionID: currentConnection)) {
+                source(connectionID: editorConnection)
+            }.environment(\.colorScheme, .dark))
             let window = NSWindow(contentRect: .init(x: -10_000, y: -10_000, width: 1_200, height: 700), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             window.contentView = host
@@ -100,33 +106,124 @@
             try await wait { tab.previewData == bytes }
             try await settle(host)
             try perform("accessibilityPerformPress", on: "file-edit-markdown", in: host)
-            try await wait {
-                guard let content = window.attachedSheet?.contentView else { return false }
-                return editor(in: content) != nil
-            }
-            let sheet = try #require(window.attachedSheet)
-            let content = try #require(sheet.contentView)
+            try await wait { markdownWindow(title: file.name) != nil }
+            let editorWindow = try #require(markdownWindow(title: file.name))
+            defer { editorWindow.close() }
+            #expect(window.attachedSheet == nil)
+            #expect(editorWindow.parent == nil)
+            #expect(editorWindow.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua)
+            #expect(editorWindow.styleMask.contains(.resizable))
+            #expect(editorWindow.isMovable)
+            #expect(editorWindow.collectionBehavior.contains(.managed))
+            let initialWidth = editorWindow.frame.width
+            editorWindow.setContentSize(.init(width: initialWidth + 80, height: 630))
+            #expect(editorWindow.frame.width > initialWidth)
+            let content = try #require(editorWindow.contentView)
+            try await wait { editor(in: content) != nil }
             let textView = try #require(editor(in: content))
             #expect(textView.string == initial)
             let draft = "# 已编辑"
             textView.insertText(draft, replacementRange: NSRange(location: 0, length: (initial as NSString).length))
             try await settle(content)
 
+            editorWindow.performClose(nil)
+            try await chooseCloseAction("Keep Editing", in: editorWindow)
+            #expect(editorWindow.isVisible)
+            #expect(textView.string == draft)
+            #expect(saveAttempts == 0)
+
             tab.refresh += 1
             try await settle(host)
-            #expect(window.attachedSheet === sheet)
+            try perform("accessibilityPerformPress", on: "file-edit-markdown", in: host)
+            #expect(markdownWindow(title: file.name) === editorWindow)
+            #expect(editor(in: content)?.string == draft)
+
+            let secondHost = NSHostingView(rootView: WorkspaceFileBrowserView(tab: secondTab, source: source(connectionID: currentConnection)) {
+                source(connectionID: editorConnection)
+            })
+            window.contentView = secondHost
+            secondTab.selectedFile = file.path
+            try await wait { secondTab.previewData == bytes }
+            try await settle(secondHost)
+            try perform("accessibilityPerformPress", on: "file-edit-markdown", in: secondHost)
+            #expect(markdownWindow(title: file.name) === editorWindow)
+            window.contentView = nil
 
             currentConnection = UUID()
             try perform("accessibilityPerformPress", on: "file-markdown-save", in: content)
-            try await settle(content)
+            try await wait { saveAttempts == 1 && element("file-markdown-save", in: content) != nil }
             #expect(saved == nil)
-            host.rootView = WorkspaceFileBrowserView(tab: tab, source: source(connectionID: currentConnection))
-            try await settle(host)
-            #expect(window.attachedSheet === sheet)
+            editorConnection = currentConnection
+            #expect(markdownWindow(title: file.name) === editorWindow)
             #expect(editor(in: content)?.string == draft)
-            try perform("accessibilityPerformPress", on: "file-markdown-save", in: content)
-            try await wait { saved != nil }
+            editorWindow.performClose(nil)
+            try await chooseCloseAction("Save", in: editorWindow)
+            try await wait { markdownWindow(title: file.name) == nil }
             #expect(saved == bom + Data(draft.utf8))
+            #expect(saveAttempts == 2)
+            #expect(tab.refresh == 2)
+            #expect(secondTab.refresh == 1)
+        }
+
+        @Test
+        func closingMarkdownEditorDiscardsOnlyWhenConfirmed() async throws {
+            NSApplication.shared.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
+            let tab = FileBrowserTab(path: "/fixture")
+            let initial = "Original"
+            let file = FileBrowserEntry(path: "/fixture/discard.md", name: "discard.md", kind: .markdown, size: initial.utf8.count, revision: "1")
+            func open() throws -> NSWindow {
+                FileBrowserMarkdownEditorWindow.present(file: file, data: Data(initial.utf8), tab: tab, sourceID: "fixture", colorScheme: .light) {
+                    FileBrowserSource(id: "fixture", paneID: nil) { _ in
+                        Issue.record("Closing without Save must not write the file")
+                        throw FileBrowserError.message("Unexpected request")
+                    }
+                }
+                return try #require(markdownWindow(title: file.name))
+            }
+
+            let cleanWindow = try open()
+            defer { cleanWindow.close() }
+            cleanWindow.performClose(nil)
+            #expect(cleanWindow.attachedSheet == nil)
+            #expect(!cleanWindow.isVisible)
+
+            let window = try open()
+            defer { window.close() }
+            let content = try #require(window.contentView)
+            try await wait { editor(in: content) != nil }
+            let textView = try #require(editor(in: content))
+            textView.insertText("Edited", replacementRange: NSRange(location: 0, length: initial.utf8.count))
+            try await settle(content)
+            try perform("accessibilityPerformPress", on: "file-markdown-cancel", in: content)
+            try await chooseCloseAction("Discard Changes", in: window)
+            try await wait { markdownWindow(title: file.name) == nil }
+
+            let reopened = try open()
+            defer { reopened.close() }
+            let reopenedContent = try #require(reopened.contentView)
+            try await wait { editor(in: reopenedContent)?.string == initial }
+        }
+
+        private func chooseCloseAction(_ title: String, in window: NSWindow) async throws {
+            try await wait { window.attachedSheet?.contentView != nil }
+            let content = try #require(window.attachedSheet?.contentView)
+            let button = try #require(button(named: title, in: content))
+            #expect(button.isEnabled)
+            button.performClick(nil)
+            try await wait { window.attachedSheet == nil }
+        }
+
+        private func button(named title: String, in view: NSView) -> NSButton? {
+            if let button = view as? NSButton, button.title == title {
+                return button
+            }
+            return view.subviews.lazy.compactMap { button(named: title, in: $0) }.first
+        }
+
+        private func markdownWindow(title: String) -> NSWindow? {
+            NSApplication.shared.windows.first {
+                $0.identifier?.rawValue == "file-markdown-editor" && $0.title == title && $0.isVisible
+            }
         }
 
         private func editor(in view: NSView) -> NSTextView? {

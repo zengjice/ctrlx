@@ -100,91 +100,19 @@
                 .labelStyle(.iconOnly)
                 .disabled(isAnnotating)
                 .padding(8)
-                HStack {
-                    Label("Host · Chromium", symbol: .globe).font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                    if let downloads = session.tab.downloads, !downloads.isEmpty {
-                        BrowserDownloadsButton(downloads: downloads, open: onOpenFile)
+                ViewThatFits(in: .horizontal) {
+                    HStack {
+                        browserControls
+                        annotationButton
                     }
-                    if client.hostSupportsResourceAuthorization, let sessionID = session.tab.resourceSessionID {
-                        ResourceAgentMenu(kind: .browser, tabID: session.tab.id, sessionID: sessionID, grant: session.tab.grant) {
-                            try await ResourceTabClient.request($0, client: client)
-                        }
+                    VStack(alignment: .trailing, spacing: 6) {
+                        browserControls
+                        annotationButton
                     }
-                    if client.hostSupportsBrowserAudio, session.tab.isExtensionWindow != true {
-                        Button {
-                            audioEnabled = !session.audioEnabled
-                            session.setAudioEnabled(audioEnabled)
-                        } label: {
-                            Label(
-                                session.audioEnabled ? "Mute Page Sound" : "Enable Page Sound",
-                                symbol: session.audioEnabled ? .speakerWave2Fill : .speakerSlashFill
-                            ).labelStyle(.iconOnly)
-                        }
-                        .disabled(session.controlID == nil)
-                        .help(session.controlID == nil ? "Take Control to receive page sound" : "Play this page's sound on this device")
-                        .accessibilityIdentifier("remote-browser-audio")
-                    }
-                    if client.hostSupportsBrowserExtensions {
-                        if session.tab.isExtensionWindow != true {
-                            #if os(macOS)
-                                Button {
-                                    session.releaseControl()
-                                    extensionRequest = ExtensionRequest(storeID: nil, initialView: .window)
-                                } label: { Label("Open Page as Chrome Window", symbol: .arrowUpRightSquare).labelStyle(.iconOnly) }
-                                    .accessibilityIdentifier("remote-browser-extension-window")
-                            #endif
-                        }
-                        Button {
-                            session.releaseControl()
-                            extensionRequest = ExtensionRequest(storeID: nil)
-                        } label: { Label("Browser Extensions", symbol: .puzzlepiece).labelStyle(.iconOnly) }
-                            .accessibilityIdentifier("remote-browser-extensions")
-                    }
-                    if session.controlID != nil {
-                        if session.supportsClipboard {
-                            Button(action: session.copy) { Label("Copy", symbol: .docOnDoc).labelStyle(.iconOnly) }
-                        }
-                        Button(action: session.paste) { Label("Paste", symbol: .docOnClipboard).labelStyle(.iconOnly) }
-                    }
-                    #if os(iOS)
-                        if session.tab.isExtensionWindow != true {
-                            Button(action: requestKeyboard) {
-                                Label("Keyboard", symbol: .keyboard).labelStyle(.iconOnly)
-                            }
-                            .disabled(!client.isHostConnected || session.frame == nil || session.isTakingControl)
-                            .accessibilityHint(session.controlID == nil
-                                ? "Take control and show the keyboard."
-                                : "Show or hide the keyboard.")
-                            .accessibilityIdentifier("remote-browser-keyboard")
-                        }
-                    #endif
-                    if session.controlID != nil {
-                        RemoteControlButton(
-                            title: session.tab.isAgentOwned ? "Return to Agent" : "Release Control",
-                            isControlled: true
-                        ) {
-                            keyboardRequested = false
-                            session.releaseControl()
-                        }
-                    } else if session.tab.isExtensionWindow != true {
-                        RemoteControlButton(
-                            title: "Take Control",
-                            isControlled: false,
-                            isDisabled: session.isTakingControl || !client.isHostConnected || session.frame == nil
-                        ) {
-                            takeControl()
-                        }
-                    }
-                    if session.tab.isExtensionWindow != true {
-                        Button { captureRequest = UUID() } label: {
-                            Label("Annotate Screenshot", symbol: .pencilLine).labelStyle(.iconOnly)
-                        }
-                        .disabled(annotationContext?.isAvailable != true)
-                        .help("Mark this page and add it to an Agent input")
-                        .accessibilityIdentifier("remote-browser-annotate")
-                    }
-                }.disabled(isAnnotating).padding(.horizontal, 8).padding(.bottom, 8)
+                }
+                .disabled(isAnnotating)
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
                 if client.hostSupportsBrowserExtensions, let id = BrowserExtensionStoreURL.extensionID(from: session.tab.url) {
                     HStack {
                         Text("Chrome Web Store").font(.caption).foregroundStyle(.secondary)
@@ -351,6 +279,96 @@
                     && !isAnnotating && session.selectMenu == nil && extensionRequest == nil
             }
         #endif
+
+        private var browserControls: some View {
+            HStack {
+                Label("Host · Chromium", symbol: .globe).font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                if let downloads = session.tab.downloads, !downloads.isEmpty {
+                    BrowserDownloadsButton(downloads: downloads, open: onOpenFile)
+                }
+                if client.hostSupportsResourceAuthorization, let sessionID = session.tab.resourceSessionID {
+                    ResourceAgentMenu(kind: .browser, tabID: session.tab.id, sessionID: sessionID, grant: session.tab.grant) {
+                        try await ResourceTabClient.request($0, client: client)
+                    }
+                }
+                if client.hostSupportsBrowserAudio, session.tab.isExtensionWindow != true {
+                    Button {
+                        audioEnabled = !session.audioEnabled
+                        session.setAudioEnabled(audioEnabled)
+                    } label: {
+                        Label(
+                            session.audioEnabled ? "Mute Page Sound" : "Enable Page Sound",
+                            symbol: session.audioEnabled ? .speakerWave2Fill : .speakerSlashFill
+                        ).labelStyle(.iconOnly)
+                    }
+                    .disabled(session.controlID == nil)
+                    .help(session.controlID == nil ? "Take Control to receive page sound" : "Play this page's sound on this device")
+                    .accessibilityIdentifier("remote-browser-audio")
+                }
+                if client.hostSupportsBrowserExtensions {
+                    if session.tab.isExtensionWindow != true {
+                        #if os(macOS)
+                            Button {
+                                session.releaseControl()
+                                extensionRequest = ExtensionRequest(storeID: nil, initialView: .window)
+                            } label: { Label("Open Page as Chrome Window", symbol: .arrowUpRightSquare).labelStyle(.iconOnly) }
+                                .accessibilityIdentifier("remote-browser-extension-window")
+                        #endif
+                    }
+                    Button {
+                        session.releaseControl()
+                        extensionRequest = ExtensionRequest(storeID: nil)
+                    } label: { Label("Browser Extensions", symbol: .puzzlepiece).labelStyle(.iconOnly) }
+                        .accessibilityIdentifier("remote-browser-extensions")
+                }
+                if session.controlID != nil {
+                    if session.supportsClipboard {
+                        Button(action: session.copy) { Label("Copy", symbol: .docOnDoc).labelStyle(.iconOnly) }
+                    }
+                    Button(action: session.paste) { Label("Paste", symbol: .docOnClipboard).labelStyle(.iconOnly) }
+                }
+                #if os(iOS)
+                    if session.tab.isExtensionWindow != true {
+                        Button(action: requestKeyboard) {
+                            Label("Keyboard", symbol: .keyboard).labelStyle(.iconOnly)
+                        }
+                        .disabled(!client.isHostConnected || session.frame == nil || session.isTakingControl)
+                        .accessibilityHint(session.controlID == nil
+                            ? "Take control and show the keyboard."
+                            : "Show or hide the keyboard.")
+                        .accessibilityIdentifier("remote-browser-keyboard")
+                    }
+                #endif
+                if session.controlID != nil {
+                    RemoteControlButton(
+                        title: session.tab.isAgentOwned ? "Return to Agent" : "Release Control",
+                        isControlled: true
+                    ) {
+                        keyboardRequested = false
+                        session.releaseControl()
+                    }
+                } else if session.tab.isExtensionWindow != true {
+                    RemoteControlButton(
+                        title: "Take Control",
+                        isControlled: false,
+                        isDisabled: session.isTakingControl || !client.isHostConnected || session.frame == nil
+                    ) {
+                        takeControl()
+                    }
+                }
+            }
+        }
+
+        @ViewBuilder
+        private var annotationButton: some View {
+            if session.tab.isExtensionWindow != true {
+                ScreenshotAnnotationButton { captureRequest = UUID() }
+                    .disabled(annotationContext?.isAvailable != true)
+                    .help("Mark this page and add it to an Agent input")
+                    .accessibilityIdentifier("remote-browser-annotate")
+            }
+        }
 
         private func bookmarkRequest(_ operation: BrowserBookmarkOperation) async throws -> [BrowserBookmark] {
             let request = BrowseBrowser(

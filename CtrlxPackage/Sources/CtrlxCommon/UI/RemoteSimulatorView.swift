@@ -69,12 +69,10 @@ public struct RemoteSimulatorView: View {
                 } else {
                     Text("Host · Read only").font(.caption).foregroundStyle(.secondary)
                 }
-                Button(action: beginAnnotation) {
-                    Label("Annotate Screenshot", symbol: .pencilLine).labelStyle(.iconOnly)
-                }
-                .disabled(displayed == nil || !client.isHostConnected || annotationContext?.isAvailable != true)
-                .help("Mark a screenshot and add it to an Agent input")
-                .accessibilityIdentifier("simulator-annotate")
+                ScreenshotAnnotationButton(action: beginAnnotation)
+                    .disabled(displayed == nil || !client.isHostConnected || annotationContext?.isAvailable != true)
+                    .help("Mark a screenshot and add it to an Agent input")
+                    .accessibilityIdentifier("simulator-annotate")
             }
             .disabled(annotation != nil)
             .padding(8)

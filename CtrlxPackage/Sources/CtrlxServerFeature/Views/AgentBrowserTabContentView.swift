@@ -118,12 +118,10 @@ struct AgentBrowserTabContentView: View {
                     .accessibilityIdentifier("agent-browser-developer-tools")
                     .disabled(state.isClosed || state.isRemotelyControlled)
                 if !state.isExtensionWindow {
-                    Button { captureRequest = UUID() } label: {
-                        Label("Annotate Screenshot", symbol: .pencilLine)
-                    }
-                    .help("Mark a screenshot and add it to an Agent input")
-                    .accessibilityIdentifier("agent-browser-annotate")
-                    .disabled(state.isClosed || annotationContext?.isAvailable != true)
+                    ScreenshotAnnotationButton { captureRequest = UUID() }
+                        .help("Mark a screenshot and add it to an Agent input")
+                        .accessibilityIdentifier("agent-browser-annotate")
+                        .disabled(state.isClosed || annotationContext?.isAvailable != true)
                 }
             }
             .labelStyle(.iconOnly)

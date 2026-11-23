@@ -134,7 +134,7 @@ Codex 的专用启动方式，不引导 Claude 启动嵌套 Codex。
 | 键盘与文本 | `key`、`button`、`paste` | HID 按键及修饰键组合，Home / 锁屏 / 音量键，Unicode 剪贴板粘贴和指定目标的 iOS 菜单粘贴；人工输入采用 iOS 硬件键盘输入源 |
 | 原生显示 | `show`、`show --split`、`rotate`、`display-mode` | 内嵌 Metal 画面、左右分栏、方向切换、默认同步 / 可选低延迟显示。低延迟模式可能撕裂；选择标签不保证 Mac App 自动取得前台 |
 | Viewer 查看与接管 | Mac / iOS Viewer 的 Host 模拟器标签 | 共享 Host 画面，支持显式接管后的触摸及文本 / 图片剪贴板；选择独立，隐藏 / 后台 / 断线停止取帧并释放控制；iOS More / Tabs 支持显式 Close Tab，需 Host 宣告关闭能力 |
-| 截图标注 | Mac Host / Mac Viewer / iOS Viewer 标签内的 Annotate Screenshot | 原地冻结截图，框选 / 箭头 / 画笔后添加至同会话 Agent 输入；不发送回车、不抢模拟器控制权 |
+| 截图标注 | Mac Host / Mac Viewer / iOS Viewer 标签内的 Annotate | 原地冻结截图，框选 / 箭头 / 画笔后添加至同会话 Agent 输入；不发送回车、不抢模拟器控制权 |
 | 环境 | `location`、`appearance`、`privacy`、`push` | 固定定位及清除定位模拟、深浅色、列举权限的 grant / revoke / reset、向指定 App 注入模拟推送；关闭时不自动恢复这些配置 |
 | 资源与服务配置 | `config`、`resources`、`metrics`，`open --profile` / `--requires` | 默认双开，数量可配置为 1...32；检查内存压力和内存 / 磁盘保留量。报告进程 footprint / CPU，支持 standard / balanced 和功能依赖保留；配置上限不等于实测容量 |
 | 诊断 | `logs`、`crashes` | 按设备与 App 身份查询有时间、条数及字节上限的日志和崩溃记录；截断和空结果均不能证明从未出错 |
@@ -225,7 +225,7 @@ Relay 业务接口。此刷新策略不承诺远程达到本地 ≥50 FPS / ≤1
 
 ### 三端截图标注
 
-模拟器标签顶部提供 **Annotate Screenshot**，在首帧就绪、图片投递能力可用时启用。
+模拟器标签顶部提供 **Annotate**，在首帧就绪、图片投递能力可用时启用。
 复用 `BrowserAnnotationSurface`，在原位置覆盖一张只读截图，不另开编辑页，也不卸载
 Host 的原生渲染视图。支持红色框选、箭头、画笔、撤销、清空、取消和 **Add to Input**；
 笔迹使用图片归一化坐标，窗口缩放 / 分栏不改变落点。冻结的是本次截图，设备与其他

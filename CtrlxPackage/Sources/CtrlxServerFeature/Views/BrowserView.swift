@@ -488,13 +488,10 @@ struct BrowserTabContentView: View {
             .frame(minWidth: 0, maxWidth: .infinity)
 
             if annotationContext != nil {
-                Button { captureRequest = UUID() } label: {
-                    Label("Annotate Screenshot", symbol: .pencilLine).labelStyle(.iconOnly)
-                }
-                .buttonStyle(.borderless)
-                .disabled(annotationContext?.isAvailable != true)
-                .help("Mark this page and add it to an Agent input")
-                .accessibilityIdentifier("browser-annotate")
+                ScreenshotAnnotationButton { captureRequest = UUID() }
+                    .disabled(annotationContext?.isAvailable != true)
+                    .help("Mark this page and add it to an Agent input")
+                    .accessibilityIdentifier("browser-annotate")
             }
         }
         .padding(.trailing, 8)
