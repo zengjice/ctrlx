@@ -24,6 +24,8 @@ public enum FileBrowserOperation: Codable, Sendable, Equatable {
     case read(path: String, offset: Int, revision: String)
     /// Explicit export, separate from bounded inline previews. Capability-gated on viewers.
     case download(path: String, offset: Int, revision: String)
+    /// Replace an existing UTF-8 Markdown file if its preview revision still matches.
+    case saveMarkdown(path: String, revision: String, data: Data)
     case upload(FileBrowserUploadOperation)
     case search(path: String, query: String, mode: FileBrowserSearchMode, includeHidden: Bool)
 

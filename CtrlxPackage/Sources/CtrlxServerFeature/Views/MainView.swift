@@ -5192,7 +5192,17 @@ public struct MainView: View {
             }
             guard initialSelection == browserOpenSelection(for: target) else { return }
             if shouldPreview, let path = destination.file, let fileContext {
-                presentArtifactPreview(.init(link: request, context: fileContext, source: source, path: path))
+                if let hostID = request.hostID, let inputBinding {
+                    let manager = coordinator.viewerConnectionManager
+                    presentArtifactPreview(.init(
+                        link: request, context: fileContext, path: path,
+                        inputBinding: inputBinding, initialConnectionID: source.connectionID
+                    ) {
+                        manager?.connection(for: hostID)
+                    })
+                } else {
+                    presentArtifactPreview(.init(link: request, context: fileContext, source: source, path: path))
+                }
             } else if let descriptor {
                 let tab = try presentHostFileTab(descriptor, hostID: request.hostID, windowID: windowID)
                 tab.openTerminalFile(destination, paneID: request.paneID)

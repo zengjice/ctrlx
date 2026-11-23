@@ -138,43 +138,88 @@
         }
 
         @Test
-        func sheetLoadsHostBytesIntoTheMountedPreview() async throws {
-            _ = NSApplication.shared
-            let data = Data("flowchart LR\n A[Agent 回复] --> B[点击引用]\n B --> C[查看图表]".utf8)
+        func mountedPreviewReloadsHostBytesWhenRefreshIsPressed() async throws {
+            NSApplication.shared.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
+            let path = "/Host/worktree/diagram.mmd"
+            var data = Data("flowchart LR\n A[Original] --> B[Open]".utf8)
+            var revision = "1"
+            var deleted = false
             let context = RepositoryFileContext(pluginID: "codex", sessionID: "preview-test", projectDirectory: "/Host/worktree")
-            let info = FileBrowserEntry(path: "/Host/worktree/diagram.mmd", name: "diagram.mmd", kind: .text, size: data.count, revision: "1")
             let source = FileBrowserSource(id: "isolated-host", paneID: "%1") { operation in
                 switch operation {
                 case .repositoryInfo,
-                     .info: return .info(info)
-                case let .read(path, offset, revision): return .chunk(.init(path: path, revision: revision, offset: offset, data: data))
-                default: throw FileBrowserError.message("Preview must not open a Files tab")
+                     .info:
+                    if deleted {
+                        throw FileBrowserError.message("The file has been deleted.")
+                    }
+                    return .info(.init(path: path, name: "diagram.mmd", kind: .text, size: data.count, revision: revision))
+                case let .read(path, offset, requestedRevision):
+                    #expect(requestedRevision == revision)
+                    return .chunk(.init(path: path, revision: revision, offset: offset, data: data))
+                default:
+                    throw FileBrowserError.message("Preview must not open a Files tab")
                 }
             }
-            let preview = TerminalArtifactPreview(link: .init(path: "diagram.mmd", paneID: "%1", hostID: "isolated-host"), context: context, source: source, path: info.path)
-            let hosting = NSHostingView(rootView: TerminalArtifactPreviewSheet(preview: preview) { _ in Issue.record("Unexpected Open in Files") }.preferredColorScheme(.light))
-            let window = NSWindow(contentRect: CGRect(x: -10_000, y: -10_000, width: 800, height: 600), styleMask: .borderless, backing: .buffered, defer: false)
-            window.isReleasedWhenClosed = false
-            window.contentView = hosting
+            let preview = TerminalArtifactPreview(link: .init(path: "diagram.mmd", paneID: "%1", hostID: "isolated-host"), context: context, source: source, path: path)
+            let controller = TerminalArtifactPreviewWindowController(preview: preview, colorScheme: .light) { _ in
+                Issue.record("Unexpected Open in Files")
+            }
+            let window = try #require(controller.window)
+            window.setFrameOrigin(.init(x: -10_000, y: -10_000))
             window.orderBack(nil)
             defer { window.close() }
-            let deadline = ContinuousClock.now + .seconds(25)
-            var web: WKWebView?
-            while ContinuousClock.now < deadline {
-                web = webView(in: hosting)
-                if let web, (try? await web.evaluateJavaScript("document.querySelector('#content > svg') !== null")) as? Bool == true {
-                    break
-                }
-                try await Task.sleep(for: .milliseconds(25))
-            }
-            let view = try #require(web)
-            let rendered = try await view.evaluateJavaScript("document.querySelector('#content > svg') !== null") as? Bool
-            #expect(rendered == true)
+            let hosting = try #require(window.contentView)
+            let view = try await waitForRenderedLabel("Original", in: hosting)
             #expect(view.bounds.width > 400 && view.bounds.height > 200)
-            let image = try await view.takeSnapshot(configuration: nil)
+
+            data = Data("flowchart LR\n A[Refreshed] --> B[Open]".utf8)
+            revision = "2"
+            try pressRefresh(in: window)
+
+            let refreshed = try await waitForRenderedLabel("Refreshed", in: hosting)
+            #expect(refreshed === view)
+            let image = try await refreshed.takeSnapshot(configuration: nil)
             let tiff = try #require(image.tiffRepresentation)
             let png = try #require(NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]))
             try saveEvidence(png, name: "mounted-sheet-content.png")
+
+            deleted = true
+            try pressRefresh(in: window)
+            for _ in 0..<100 {
+                if accessibilityElement("artifact-preview-error", in: window) != nil {
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            try #require(accessibilityElement("artifact-preview-error", in: window) != nil)
+        }
+
+        private func pressRefresh(in window: NSWindow) throws {
+            let button = try #require(accessibilityElement("artifact-preview-refresh", in: window))
+            let press = NSSelectorFromString("accessibilityPerformPress")
+            let method = try #require(button.method(for: press))
+            _ = unsafeBitCast(method, to: (@convention(c) (AnyObject, Selector) -> Bool).self)(button, press)
+        }
+
+        private func waitForRenderedLabel(_ label: String, in hosting: NSView) async throws -> WKWebView {
+            let deadline = ContinuousClock.now + .seconds(25)
+            while ContinuousClock.now < deadline {
+                if let view = webView(in: hosting), (try? await view.evaluateJavaScript("document.querySelector('#content > svg')?.textContent.includes('\(label)')")) as? Bool == true {
+                    return view
+                }
+                try await Task.sleep(for: .milliseconds(25))
+            }
+            throw FileBrowserError.message("The preview did not render \(label).")
+        }
+
+        private func accessibilityElement(_ id: String, in node: NSObject) -> NSObject? {
+            let identifier = NSSelectorFromString("accessibilityIdentifier")
+            if node.responds(to: identifier), node.perform(identifier)?.takeUnretainedValue() as? String == id {
+                return node
+            }
+            let children = NSSelectorFromString("accessibilityChildren")
+            let elements = node.responds(to: children) ? node.perform(children)?.takeUnretainedValue() as? [NSObject] ?? [] : []
+            return (elements + ((node as? NSView)?.subviews ?? [])).lazy.compactMap { accessibilityElement(id, in: $0) }.first
         }
 
         private func webView(in view: NSView) -> WKWebView? {
@@ -187,6 +232,77 @@
         private func saveEvidence(_ data: Data, name: String) throws {
             guard let directory = ProcessInfo.processInfo.environment["CTRLX_PREVIEW_EVIDENCE"] else { return }
             try data.write(to: URL(fileURLWithPath: directory).appendingPathComponent(name))
+        }
+
+        @Test(arguments: [false, true])
+        func svgExportsLocalReferencesAtViewBoxResolutionWithTransparency(dark: Bool) async throws {
+            let renderer = ArtifactWebRenderer()
+            let window = mount(renderer)
+            defer {
+                renderer.stop()
+                window.close()
+            }
+            let source = """
+            <svg xmlns="http://www.w3.org/2000/svg" width="100%" viewBox="0 0 2400 600" onload="window.injected = true">
+              <script>window.injected = true</script>
+              <foreignObject><div>Unsafe</div></foreignObject>
+              <use href="https://example.com/foreign.svg#item"/>
+              <defs><rect id="mark" width="1200" height="600" fill="red"/></defs>
+              <use href="#mark"/>
+            </svg>
+            """
+            renderer.load(content: source, kind: .svg, dark: dark)
+            try await wait(renderer)
+
+            #expect(renderer.error == nil)
+            let png = try #require(renderer.png)
+            let image = try #require(NSBitmapImageRep(data: png))
+            #expect(image.pixelsWide == 4_096 && image.pixelsHigh == 1_024)
+            let red = try #require(image.colorAt(x: 100, y: 100))
+            #expect(red.redComponent > 0.9 && red.greenComponent < 0.1 && red.blueComponent < 0.1 && red.alphaComponent == 1)
+            let transparent = try #require(image.colorAt(x: 3_600, y: 100))
+            #expect(transparent.alphaComponent == 0)
+            let sanitized = try await renderer.webView.callAsyncJavaScript(
+                "return new XMLSerializer().serializeToString(sanitizeSVG(content));",
+                arguments: ["content": source], in: nil, contentWorld: .page
+            ) as? String
+            let document = try #require(sanitized)
+            for fragment in ["<script", "onload=", "<foreignObject", "example.com"] {
+                #expect(!document.contains(fragment), "\(document)")
+            }
+            let executed = try await renderer.webView.evaluateJavaScript("window.injected === true || document.querySelector('#content svg') !== null") as? Bool
+            #expect(executed == false)
+
+            renderer.load(content: "Not an SVG", kind: .svg, dark: dark)
+            try await wait(renderer)
+            #expect(renderer.error != nil && renderer.png == nil)
+        }
+
+        @Test
+        func tinyAnimatedSVGShowsTheSamePNGItExports() async throws {
+            let renderer = ArtifactWebRenderer()
+            let window = mount(renderer)
+            defer {
+                renderer.stop()
+                window.close()
+            }
+            let source = """
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1">
+              <style>
+                @keyframes swap { from { fill: red; } to { fill: blue; } }
+                rect { animation: swap 1s infinite; }
+              </style>
+              <rect width="1" height="1" fill="red"/>
+            </svg>
+            """
+            renderer.load(content: source, kind: .svg, dark: false)
+            try await wait(renderer)
+
+            let png = try #require(renderer.png)
+            let image = try #require(NSBitmapImageRep(data: png))
+            #expect(image.pixelsWide == 4_096 && image.pixelsHigh == 4_096)
+            let preview = try await renderer.webView.evaluateJavaScript("document.querySelector('#content > img')?.src ?? ''") as? String
+            #expect(preview == "data:image/png;base64," + png.base64EncodedString())
         }
 
         @Test

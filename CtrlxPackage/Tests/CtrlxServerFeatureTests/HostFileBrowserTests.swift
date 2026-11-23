@@ -9,6 +9,71 @@ import Testing
 @testable import CtrlxServerFeature
 
 struct HostFileBrowserTests {
+    @Test
+    func markdownSaveUpdatesThePreviewAndRejectsAStaleRevision() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("设计.MARKDOWN")
+        try Data("# Original".utf8).write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o640], ofItemAtPath: file.path)
+        let host = HostFileBrowser()
+        guard case let .info(original) = try await host.request(.info(path: file.path)) else {
+            Issue.record("Missing original Markdown")
+            return
+        }
+        let originalBytes = Data("# Original".utf8)
+        #expect(try await host.localPreview(original) == originalBytes)
+        #expect(try await host.request(.saveMarkdown(path: file.path, revision: original.revision, data: originalBytes)) == .info(original))
+        let revised = Data("# 修改\n\n**已保存**\n".utf8)
+        guard case let .info(saved) = try await host.request(.saveMarkdown(path: file.path, revision: original.revision, data: revised)) else {
+            Issue.record("Missing saved Markdown")
+            return
+        }
+        #expect(saved.revision != original.revision)
+        #expect(try await host.localPreview(saved) == revised)
+        #expect(try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? Int == 0o640)
+        await #expect(throws: FileBrowserError.self) {
+            try await host.request(.saveMarkdown(path: file.path, revision: original.revision, data: Data()))
+        }
+        #expect(try Data(contentsOf: file) == revised)
+    }
+
+    @Test
+    func markdownSaveRejectsLinksAndInvalidContent() async throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("notes.md")
+        let link = root.appendingPathComponent("alias.md")
+        let text = root.appendingPathComponent("notes.txt")
+        let utf16 = root.appendingPathComponent("utf16.md")
+        let utf16Bytes = try #require("# UTF-16".data(using: .utf16))
+        try utf16Bytes.write(to: utf16)
+        let original = Data("# Keep".utf8)
+        try original.write(to: file)
+        try original.write(to: text)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: file)
+        let host = HostFileBrowser()
+        guard
+            case let .info(info) = try await host.request(.info(path: file.path)),
+            case let .info(textInfo) = try await host.request(.info(path: text.path)),
+            case let .info(utf16Info) = try await host.request(.info(path: utf16.path)) else {
+            Issue.record("Missing Markdown fixture")
+            return
+        }
+        for request in [
+            FileBrowserOperation.saveMarkdown(path: link.path, revision: info.revision, data: Data()),
+            .saveMarkdown(path: text.path, revision: textInfo.revision, data: Data()),
+            .saveMarkdown(path: utf16.path, revision: utf16Info.revision, data: original),
+            .saveMarkdown(path: file.path, revision: info.revision, data: Data([0xFF])),
+            .saveMarkdown(path: file.path, revision: info.revision, data: Data(repeating: 65, count: FileBrowserLimits.maximumTextBytes + 1)),
+        ] {
+            await #expect(throws: FileBrowserError.self) { try await host.request(request) }
+        }
+        #expect(try Data(contentsOf: file) == original)
+        #expect(try Data(contentsOf: text) == original)
+        #expect(try Data(contentsOf: utf16) == utf16Bytes)
+    }
+
     @Test("Local previews validate cached files after edits, replacement and deletion")
     func localPreviewCacheFreshness() async throws {
         let root = try fixture()

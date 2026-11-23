@@ -8,7 +8,7 @@
 
     @MainActor @Observable
     final class ArtifactWebRenderer: NSObject, WKNavigationDelegate {
-        enum ContentKind: String { case image, mermaid, markdown }
+        enum ContentKind: String { case image, svg, mermaid, markdown }
         private(set) var isReady = false
         private(set) var error: String?
         private(set) var png: Data?
@@ -46,10 +46,7 @@
             imageLoader: (@MainActor (String) async throws -> Data)? = nil,
             openLink: (@MainActor (String) -> Void)? = nil
         ) {
-            stop()
-            isReady = false
-            error = nil
-            png = nil
+            reset()
             payload = (content, kind, dark)
             self.imageLoader = imageLoader
             self.openLink = openLink
@@ -71,6 +68,13 @@
                 self.stop()
                 self.error = "The preview took too long to render. Try a smaller file."
             }
+        }
+
+        func reset() {
+            stop()
+            isReady = false
+            error = nil
+            png = nil
         }
 
         func stop() {
@@ -136,11 +140,8 @@
                             do {
                                 guard let loader = self.imageLoader else { throw FileBrowserError.message("Image loading is unavailable.") }
                                 let bytes = try await loader(reference)
-                                if ((URLComponents(string: reference)?.path ?? "") as NSString).pathExtension.lowercased() == "svg" {
-                                    guard bytes.count <= 512 * 1_024, let text = String(data: bytes, encoding: .utf8), !text.contains("\0") else {
-                                        throw FileBrowserError.message("SVG images must be UTF-8 and no larger than 512 KiB.")
-                                    }
-                                    svg = text
+                                if TerminalArtifactPreview.isSVG(path: URLComponents(string: reference)?.path ?? "") {
+                                    svg = try TerminalArtifactPreview.svgSource(bytes)
                                 } else {
                                     image = try await Task.detached(priority: .userInitiated) {
                                         try ArtifactPreviewImage.png(from: bytes, maximumPixelSize: 1_600)
@@ -192,7 +193,7 @@
 
         func webViewWebContentProcessDidTerminate(_: WKWebView) {
             stop()
-            error = "The preview renderer stopped. Close the preview and try again."
+            error = "The preview renderer stopped. Refresh to try again."
         }
     }
 

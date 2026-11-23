@@ -71,6 +71,7 @@ public struct SessionStateMessage: Codable, Sendable {
     private let legacyFileTabs: [HostFileTab]?
     public let supportsFileDownloads: Bool?
     public let supportsFileUploads: Bool?
+    public let supportsMarkdownEditing: Bool?
     public let supportsRepositoryFileLinks: Bool?
     /// Older hosts only create shells; viewers must not send an agent request
     /// until this capability is explicitly advertised.
@@ -156,6 +157,7 @@ public struct SessionStateMessage: Codable, Sendable {
         case legacyFileTabs = "fileTabs"
         case supportsFileDownloads
         case supportsFileUploads
+        case supportsMarkdownEditing
         case supportsRepositoryFileLinks
         case supportsAgentWindowLaunch
         case supportsAgentFork
@@ -213,6 +215,7 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsFileBrowsing: Bool? = nil,
         supportsFileDownloads: Bool? = nil,
         supportsFileUploads: Bool? = nil,
+        supportsMarkdownEditing: Bool? = nil,
         supportsRepositoryFileLinks: Bool? = nil,
         supportsWorkspaceClipboard: Bool? = nil,
         supportsBrowserAudio: Bool? = nil,
@@ -269,6 +272,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.legacyFileTabs = fileTabs
         self.supportsFileDownloads = supportsFileDownloads
         self.supportsFileUploads = supportsFileUploads
+        self.supportsMarkdownEditing = supportsMarkdownEditing
         self.supportsRepositoryFileLinks = supportsRepositoryFileLinks
         self.supportsAgentWindowLaunch = supportsAgentWindowLaunch
         self.supportsAgentFork = supportsAgentFork
@@ -331,6 +335,7 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsFileBrowsing: supportsFileBrowsing,
             supportsFileDownloads: supportsFileDownloads,
             supportsFileUploads: supportsFileUploads,
+            supportsMarkdownEditing: supportsMarkdownEditing,
             supportsRepositoryFileLinks: supportsRepositoryFileLinks,
             supportsWorkspaceClipboard: supportsWorkspaceClipboard,
             supportsBrowserAudio: supportsBrowserAudio,

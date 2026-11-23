@@ -46,6 +46,7 @@ struct FileBrowserConnectionTests {
             let hostID = UUID()
             let original = WorkspacePaneIdentity(serverID: "100:1", sessionID: UUID(), windowID: UUID(), paneID: UUID())
             let current = LockIsolated(original)
+            let supportsIdentity = LockIsolated(true)
             let staleTab = HostFileTab(sessionName: "test", windowID: "@1", sourcePaneID: "%7", initialDirectory: "/Host/old")
             let (gate, release) = AsyncStream<Void>.makeStream()
             defer { release.finish() }
@@ -54,14 +55,14 @@ struct FileBrowserConnectionTests {
                 .init(
                     pairId: "",
                     paneStates: ["%7": .init(
-                        paneId: "%7", sessionName: "test", tmuxWindowId: "@1", workspaceIdentity: current.value
+                        paneId: "%7", sessionName: "test", tmuxWindowId: "@1", workspaceIdentity: supportsIdentity.value ? current.value : nil
                     )],
                     supportsFileBrowsing: true,
                     supportsRepositoryFileLinks: true,
                     supportsPaneFiles: true,
                     fileTabs: [],
-                    workspaceIdentity: .init(hostID: hostID, serverID: current.value.serverID),
-                    supportsWorkspaceInputIdentity: true
+                    workspaceIdentity: supportsIdentity.value ? .init(hostID: hostID, serverID: current.value.serverID) : nil,
+                    supportsWorkspaceInputIdentity: supportsIdentity.value ? true : nil
                 )
             }
             host.onCommand = { command in
@@ -69,7 +70,7 @@ struct FileBrowserConnectionTests {
                     Issue.record("Unexpected command")
                     return .failure(for: command.id, error: "Unexpected command")
                 }
-                #expect(command.expectedWorkspacePane == (spec.operation.usesSourcePane ? original : nil))
+                #expect(command.expectedWorkspacePane == (spec.operation.usesSourcePane && supportsIdentity.value ? original : nil))
                 commands += 1
                 for await _ in gate {
                     break
@@ -86,6 +87,18 @@ struct FileBrowserConnectionTests {
                 await connect(viewer, url: url, encryption: viewerEncryption, hostEncryption: hostEncryption)
                 try await waitUntil { host.isViewerConnected && viewer.hostSupportsPaneFiles }
                 let source = FileBrowserSource.remote(hostID: "pair", paneID: "%7", connection: connection)
+                let preview: TerminalArtifactPreview?
+                if case let .repositoryInfo(path, context) = operation {
+                    let link = TerminalFileLinkRequest(path: path, paneID: "%7", hostID: "pair")
+                    preview = .init(
+                        link: link, context: context, path: "/Host/old/README.md",
+                        inputBinding: viewer.workspaceInputState.binding(paneID: "%7"), initialConnectionID: source.connectionID
+                    ) {
+                        connection
+                    }
+                } else {
+                    preview = nil
+                }
                 let pending = Task {
                     if case .tabs = operation {
                         return try await FileBrowserResponse.tab(HostFileTabClient.open(connection: connection, sessionName: "test", paneID: "%7"))
@@ -114,6 +127,44 @@ struct FileBrowserConnectionTests {
                 // Browsing an explicit path remains useful after its terminal exits.
                 _ = try await source.request(.info(path: "/Host/old/README.md"))
                 #expect(commands == 2)
+                if let preview {
+                    await #expect(throws: (any Error).self) { try await preview.load() }
+                    #expect(commands == 2, "A preview must reject a replacement pane before sending a request")
+
+                    let previousEpoch = viewer.fileTransferEpoch
+                    current.setValue(original)
+                    await viewer.disconnect()
+                    await connect(viewer, url: url, encryption: viewerEncryption, hostEncryption: hostEncryption)
+                    try await waitUntil { host.isViewerConnected && viewer.hostSupportsPaneFiles && viewer.workspaceInputState.catalog?.scope.serverID == original.serverID }
+                    #expect(viewer.fileTransferEpoch != previousEpoch)
+                    #expect(try await preview.load() == Data())
+                    #expect(commands > 2)
+
+                    supportsIdentity.setValue(false)
+                    await host.pushSessionState()
+                    let legacyBinding = ViewerWorkspaceInputBinding.legacy(pairID: "pair")
+                    try await waitUntil { viewer.workspaceInputState.binding(paneID: "%7") == legacyBinding }
+                    let legacyEpoch = viewer.fileTransferEpoch
+                    let legacyContext = RepositoryFileContext(
+                        pluginID: preview.context.pluginID, sessionID: nil, projectDirectory: preview.context.projectDirectory
+                    )
+                    let legacyPreview = TerminalArtifactPreview(
+                        link: preview.link, context: legacyContext, path: preview.path,
+                        inputBinding: legacyBinding, initialConnectionID: legacyEpoch
+                    ) {
+                        connection
+                    }
+                    #expect(try await legacyPreview.load() == Data())
+
+                    let beforeReconnect = commands
+                    current.setValue(rebuilt)
+                    await viewer.disconnect()
+                    await connect(viewer, url: url, encryption: viewerEncryption, hostEncryption: hostEncryption)
+                    try await waitUntil { host.isViewerConnected && viewer.workspaceInputState.binding(paneID: "%7") == legacyBinding }
+                    #expect(viewer.fileTransferEpoch != legacyEpoch)
+                    await #expect(throws: FileBrowserError.self) { try await legacyPreview.load() }
+                    #expect(commands == beforeReconnect, "An open legacy preview must not resolve a recycled pane ID")
+                }
                 #expect(await relay.errors.isEmpty)
             } catch {
                 await viewer.disconnect()
@@ -453,6 +504,30 @@ struct FileBrowserConnectionTests {
         }
         await app.server.shutdown()
         try await app.asyncShutdown()
+    }
+
+    @Test
+    func encryptedMarkdownSaveFitsTheFrameLimit() async throws {
+        let viewer = try await encryption()
+        let host = try await encryption()
+        try await viewer.establishSession(partnerPublicKey: host.publicKey, partnerKeyId: host.keyId, pairId: "pair")
+        try await host.establishSession(partnerPublicKey: viewer.publicKey, partnerKeyId: viewer.keyId, pairId: "pair")
+        // Each UTF-8 triple produces "77+/" in Base64.
+        let data = Data((String(repeating: "\u{FFFF}", count: FileBrowserLimits.maximumTextBytes / 3) + "ab").utf8)
+        #expect(data.count == FileBrowserLimits.maximumTextBytes)
+        let operation = FileBrowserOperation.saveMarkdown(path: "/Host/notes.md", revision: "1", data: data)
+        let command = CommandMessage(paneId: "", command: BrowseFiles(operation).commandType)
+        let sealed = try await WebSocketMessage.command(command).encrypt(using: viewer)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .withoutEscapingSlashes
+        let frame = try encoder.encode(sealed)
+        #expect(frame.count <= RelayPayloadLimits.maxWebSocketFrameBytes)
+        let decoded = try await JSONDecoder().decode(WebSocketMessage.self, from: frame).decrypt(using: host)
+        guard case let .command(message) = decoded else {
+            Issue.record("Expected Markdown save command")
+            return
+        }
+        #expect(message.command == command.command)
     }
 
     @Test("Downloads and app updates leave keyboard input responsive", arguments: [false, true])

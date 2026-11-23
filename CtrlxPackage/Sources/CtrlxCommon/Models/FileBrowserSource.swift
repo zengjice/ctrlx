@@ -16,6 +16,7 @@ public struct FileBrowserSource {
     public let unavailableReason: String?
     public let downloadUnavailableReason: String?
     public let uploadUnavailableReason: String?
+    public let markdownEditingUnavailableReason: String?
     public let creationUnavailableReason: String?
     public let createDirectory: (@MainActor (CreateSessionDirectory) async throws -> String)?
     /// Only local Host sources provide this. Remote paths must never become Viewer file URLs.
@@ -30,6 +31,7 @@ public struct FileBrowserSource {
         unavailableReason: String? = nil,
         downloadUnavailableReason: String? = nil,
         uploadUnavailableReason: String? = nil,
+        markdownEditingUnavailableReason: String? = nil,
         creationUnavailableReason: String? = nil,
         connectionID: UUID? = nil,
         createDirectory: (@MainActor (CreateSessionDirectory) async throws -> String)? = nil,
@@ -43,6 +45,7 @@ public struct FileBrowserSource {
         self.unavailableReason = unavailableReason
         self.downloadUnavailableReason = downloadUnavailableReason
         self.uploadUnavailableReason = uploadUnavailableReason
+        self.markdownEditingUnavailableReason = markdownEditingUnavailableReason
         self.creationUnavailableReason = creationUnavailableReason ?? (createDirectory == nil ? "Folder creation is unavailable on this Host." : nil)
         self.createDirectory = createDirectory
         self.localFileURL = localFileURL
@@ -60,6 +63,7 @@ public struct FileBrowserSource {
         }
         let downloadReason = reason ?? (connection?.relayClient.hostSupportsFileDownloads == true ? nil : "Update the Host Mac to download files.")
         let uploadReason = reason ?? (connection?.relayClient.hostSupportsFileUploads == true ? nil : "Update the Host Mac to upload files.")
+        let markdownEditingReason = reason ?? (connection?.relayClient.hostSupportsMarkdownEditing == true ? nil : "Update the Host Mac to edit Markdown files.")
         let creationReason = reason ?? (connection?.relayClient.hostSupportsDirectoryCreation == true ? nil : "Update the Host Mac to create folders.")
         let epoch = connection?.relayClient.fileTransferEpoch
         let inputBinding: ViewerWorkspaceInputBinding? = if let paneID, !paneID.isEmpty {
@@ -73,6 +77,7 @@ public struct FileBrowserSource {
             unavailableReason: reason,
             downloadUnavailableReason: downloadReason,
             uploadUnavailableReason: uploadReason,
+            markdownEditingUnavailableReason: markdownEditingReason,
             creationUnavailableReason: creationReason,
             connectionID: epoch,
             createDirectory: { request in

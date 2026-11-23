@@ -4,6 +4,7 @@
     #endif
     import CoreTransferable
     import Dependencies
+    import Observation
     import SwiftUI
     import UniformTypeIdentifiers
 
@@ -18,8 +19,8 @@
         @Environment(\.colorScheme) private var colorScheme
         @Environment(\.openURL) private var openURL
         @Dependency(ClipboardClient.self) private var clipboard
-        @State private var data: Data?
-        @State private var error: String?
+        @State private var file: PreviewFile
+        @State private var renderError: String?
         @State private var showsSource = false
         @State private var showsFullscreen = false
         @State private var renderer = ArtifactWebRenderer()
@@ -29,7 +30,7 @@
         public init(preview: TerminalArtifactPreview, onOpenFiles: @escaping (TerminalFileLinkRequest) -> Void) {
             self.init(
                 preview: preview,
-                initialData: nil,
+                file: PreviewFile(),
                 isFullscreen: false,
                 onOpenFiles: onOpenFiles,
                 onClose: nil,
@@ -45,7 +46,7 @@
             ) {
                 self.init(
                     preview: preview,
-                    initialData: nil,
+                    file: PreviewFile(),
                     isFullscreen: false,
                     onOpenFiles: onOpenFiles,
                     onClose: onClose,
@@ -56,7 +57,7 @@
 
         private init(
             preview: TerminalArtifactPreview,
-            initialData: Data?,
+            file: PreviewFile,
             isFullscreen: Bool,
             onOpenFiles: @escaping (TerminalFileLinkRequest) -> Void,
             onClose: (() -> Void)?,
@@ -67,7 +68,35 @@
             self.onClose = onClose
             self.configuresMacSheetWindow = configuresMacSheetWindow
             self.isFullscreen = isFullscreen
-            _data = State(initialValue: initialData)
+            _file = State(initialValue: file)
+        }
+
+        @MainActor @Observable
+        final fileprivate class PreviewFile {
+            enum Contents {
+                case loading
+                case loaded(Data)
+                case failed(String)
+            }
+
+            var contents = Contents.loading
+            var refresh = 0
+        }
+
+        private var data: Data? {
+            guard case let .loaded(data) = file.contents else { return nil }
+            return data
+        }
+
+        private var error: String? {
+            if case let .failed(error) = file.contents {
+                return error
+            }
+            return renderError ?? renderer.error
+        }
+
+        private var showsRendering: Bool {
+            data != nil && renderer.isReady && !showsSource
         }
 
         private var isMermaid: Bool {
@@ -96,9 +125,9 @@
                     }
                     ZStack {
                         ArtifactWebPreview(renderer: renderer)
-                            .opacity(showsSource || !renderer.isReady ? 0 : 1)
-                            .allowsHitTesting(!showsSource && renderer.isReady)
-                            .accessibilityHidden(showsSource || !renderer.isReady)
+                            .opacity(showsRendering ? 1 : 0)
+                            .allowsHitTesting(showsRendering)
+                            .accessibilityHidden(!showsRendering)
                         if showsSource, let data {
                             ScrollView([.horizontal, .vertical]) {
                                 Text(String(decoding: data, as: UTF8.self))
@@ -107,15 +136,16 @@
                                     .padding()
                                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                             }
-                        } else if let error = error ?? renderer.error {
+                        } else if let error {
                             VStack(spacing: 12) {
                                 Label("Preview Unavailable", symbol: .exclamationmarkTriangle).font(.headline)
                                 Text(error).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                                    .accessibilityIdentifier("artifact-preview-error")
                                 if isMermaid || isMarkdown, data != nil {
                                     Button("View Source") { showsSource = true }
                                 }
                             }.padding(24)
-                        } else if !renderer.isReady {
+                        } else if !showsRendering {
                             ProgressView(data == nil ? "Loading preview…" : "Rendering preview…")
                         }
                     }
@@ -130,10 +160,17 @@
                         ToolbarItem(placement: .cancellationAction) {
                             Button("Done") { closePreview() }.keyboardShortcut(.cancelAction)
                         }
-                        ToolbarItem(placement: .primaryAction) {
+                        ToolbarItemGroup(placement: .primaryAction) {
+                            Button(action: refreshPreview) {
+                                Label("Refresh", symbol: .arrowClockwise)
+                            }
+                            .labelStyle(.iconOnly)
+                            .help("Refresh")
+                            .disabled(data == nil && error == nil)
+                            .accessibilityIdentifier("artifact-preview-refresh")
                             Menu {
                                 Button { renderer.fit() } label: { Label("Fit to View", symbol: .arrowDownRightAndArrowUpLeft) }
-                                    .disabled(!renderer.isReady || showsSource)
+                                    .disabled(!showsRendering)
                                 #if os(iOS)
                                     if !isFullscreen {
                                         Button { showsFullscreen = true } label: { Label("Full Screen", symbol: .arrowUpLeftAndArrowDownRight) }
@@ -142,11 +179,11 @@
                                 #endif
                                 if !isMarkdown {
                                     Button {
-                                        if let png = renderer.png {
+                                        if data != nil, let png = renderer.png {
                                             clipboard.setImage(.init(data: png, format: .png))
                                         }
                                     } label: { Label("Copy Image", symbol: .docOnDoc) }
-                                        .disabled(renderer.png == nil)
+                                        .disabled(data == nil || renderer.png == nil)
                                 }
                                 if isMermaid || isMarkdown {
                                     Button("Copy Source") {
@@ -155,7 +192,7 @@
                                         }
                                     }.disabled(data == nil)
                                 }
-                                if let png = renderer.png {
+                                if data != nil, let png = renderer.png {
                                     ShareLink(
                                         item: PreviewExport(data: png, name: (title as NSString).deletingPathExtension + ".png"),
                                         preview: SharePreview(title, image: Symbols.docPlaintextFill.image)
@@ -188,7 +225,7 @@
             .fullScreenCover(isPresented: $showsFullscreen) {
                 TerminalArtifactPreviewSheet(
                     preview: preview,
-                    initialData: data,
+                    file: file,
                     isFullscreen: true,
                     onOpenFiles: onOpenFiles,
                     onClose: nil,
@@ -196,7 +233,11 @@
                 )
             }
             #endif
-            .task(id: colorScheme) { await load() }
+            .task(id: RenderKey(colorScheme: colorScheme, refresh: file.refresh, isCovered: showsFullscreen)) {
+                if !showsFullscreen {
+                    await load()
+                }
+            }
             .task(id: pendingDocumentLink) { await openDocumentLink() }
             .alert("Cannot Open Link", isPresented: Binding(get: { linkError != nil }, set: {
                 if !$0 {
@@ -216,17 +257,40 @@
             }
         }
 
+        private struct RenderKey: Equatable {
+            let colorScheme: ColorScheme
+            let refresh: Int
+            let isCovered: Bool
+        }
+
+        private func refreshPreview() {
+            renderer.reset()
+            file.contents = .loading
+            renderError = nil
+            pendingDocumentLink = nil
+            file.refresh += 1
+        }
+
         private func load() async {
-            error = nil
+            renderer.reset()
+            renderError = nil
             do {
-                if data == nil {
-                    data = try await preview.load()
+                if case .loading = file.contents {
+                    let updated = try await preview.load()
+                    try Task.checkCancellation()
+                    file.contents = .loaded(updated)
                 }
                 guard let data else { return }
+                let kind: ArtifactWebRenderer.ContentKind
                 let content: String
                 if isMermaid || isMarkdown {
+                    kind = isMarkdown ? .markdown : .mermaid
                     content = String(decoding: data, as: UTF8.self)
+                } else if TerminalArtifactPreview.isSVG(path: preview.path) {
+                    kind = .svg
+                    content = try TerminalArtifactPreview.svgSource(data)
                 } else {
+                    kind = .image
                     content = try await Task.detached(priority: .userInitiated) {
                         try ArtifactPreviewImage.png(from: data).base64EncodedString()
                     }.value
@@ -234,7 +298,7 @@
                 try Task.checkCancellation()
                 renderer.load(
                     content: content,
-                    kind: isMarkdown ? .markdown : isMermaid ? .mermaid : .image,
+                    kind: kind,
                     dark: colorScheme == .dark,
                     imageLoader: preview.loadDocumentImage,
                     openLink: { pendingDocumentLink = $0 }
@@ -242,7 +306,11 @@
             } catch is CancellationError { }
             catch {
                 if !Task.isCancelled {
-                    self.error = error.localizedDescription
+                    if case .loading = file.contents {
+                        file.contents = .failed(error.localizedDescription)
+                    } else {
+                        renderError = error.localizedDescription
+                    }
                 }
             }
         }
@@ -260,7 +328,7 @@
             }
             do {
                 let request = try preview.documentLink(reference)
-                _ = try await TerminalFileDestination.resolve(path: request.path, context: preview.context, source: preview.source)
+                _ = try await TerminalFileDestination.resolve(path: request.path, context: preview.context, source: preview.currentSource())
                 try Task.checkCancellation()
                 onOpenFiles(request)
             } catch is CancellationError { }

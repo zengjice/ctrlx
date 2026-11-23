@@ -1034,7 +1034,12 @@
                         previewKeyboardRestore.captureIfNeeded(paneID: activePaneId, keyboardIsActive: isKeyboardActive)
                     }
                     artifactPreviewIsPresented = true
-                    artifactPreview = .init(link: request, context: fileContext, source: source, path: path)
+                    artifactPreview = .init(
+                        link: request, context: fileContext, path: path,
+                        inputBinding: inputBinding, initialConnectionID: source.connectionID
+                    ) { [connectionManager, hostId] in
+                        connectionManager.connection(for: hostId)
+                    }
                 } else if let descriptor {
                     previewKeyboardRestore.discard()
                     let tab = fileWorkspace.adopt(descriptor)

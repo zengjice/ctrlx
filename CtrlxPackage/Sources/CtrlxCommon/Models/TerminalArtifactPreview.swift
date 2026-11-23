@@ -7,14 +7,48 @@ public struct TerminalArtifactPreview: Identifiable {
     public let id = UUID()
     public let link: TerminalFileLinkRequest
     public let context: RepositoryFileContext
-    public let source: FileBrowserSource
     public let path: String
+    let currentSource: @MainActor () throws -> FileBrowserSource
 
     public init(link: TerminalFileLinkRequest, context: RepositoryFileContext, source: FileBrowserSource, path: String) {
+        self.init(link: link, context: context, path: path) { source }
+    }
+
+    public init(
+        link: TerminalFileLinkRequest,
+        context: RepositoryFileContext,
+        path: String,
+        inputBinding: ViewerWorkspaceInputBinding,
+        initialConnectionID: UUID?,
+        connection: @escaping @MainActor () -> ViewerConnection?
+    ) {
+        self.init(link: link, context: context, path: path) {
+            guard let hostID = link.hostID, let connection = connection(), connection.isHostConnected else {
+                throw FileBrowserError.message("Host is offline. Reconnect and refresh the preview.")
+            }
+            guard connection.id == hostID else {
+                throw FileBrowserError.message("The preview belongs to a different Host.")
+            }
+            if case .legacy = inputBinding, connection.relayClient.fileTransferEpoch != initialConnectionID {
+                throw FileBrowserError.message("The Host connection changed. Open the link again.")
+            }
+            // Recheck the original pane before adopting the current connection.
+            // The repository requests then check its original Agent context on the Host.
+            _ = try inputBinding.expectedPane(current: connection.relayClient.workspaceInputState.binding(paneID: link.paneID))
+            return .remote(hostID: hostID, paneID: link.paneID, connection: connection)
+        }
+    }
+
+    private init(
+        link: TerminalFileLinkRequest,
+        context: RepositoryFileContext,
+        path: String,
+        currentSource: @escaping @MainActor () throws -> FileBrowserSource
+    ) {
         self.link = link
         self.context = context
-        self.source = source
         self.path = path
+        self.currentSource = currentSource
     }
 
     public var filesLink: TerminalFileLinkRequest {
@@ -27,12 +61,16 @@ public struct TerminalArtifactPreview: Identifiable {
 
     public static func supports(path: String?) -> Bool {
         guard let path else { return false }
-        return isMermaid(path: path) || isMarkdown(path: path) || isImage(path: path)
+        return isMermaid(path: path) || isMarkdown(path: path) || isImage(path: path) || isSVG(path: path)
     }
 
     public static func isImage(path: String) -> Bool {
         ["png", "jpg", "jpeg", "gif", "heic", "webp", "tiff", "bmp"]
             .contains((path as NSString).pathExtension.lowercased())
+    }
+
+    static func isSVG(path: String) -> Bool {
+        (path as NSString).pathExtension.lowercased() == "svg"
     }
 
     public static func isMarkdown(path: String) -> Bool {
@@ -45,6 +83,7 @@ public struct TerminalArtifactPreview: Identifiable {
 
     /// Reuse bounded, revision-checked reads, then revalidate the source before presentation.
     public func load() async throws -> Data {
+        let source = try currentSource()
         let destination = try await TerminalFileDestination.resolve(path: link.path, context: context, source: source)
         guard destination.file == path else { throw FileBrowserError.message("The linked file changed. Open the link again.") }
         let tab = FileBrowserTab(path: destination.directory, sourcePaneID: link.paneID)
@@ -72,7 +111,19 @@ public struct TerminalArtifactPreview: Identifiable {
                 throw FileBrowserError.message("Markdown previews require a UTF-8 file no larger than 512 KiB.")
             }
         }
+        if Self.isSVG(path: path) {
+            _ = try Self.svgSource(data)
+        }
         return data
+    }
+
+    static func svgSource(_ data: Data) throws -> String {
+        guard
+            data.count <= FileBrowserLimits.maximumTextBytes,
+            let text = String(data: data, encoding: .utf8), !text.contains("\0") else {
+            throw FileBrowserError.message("SVG images must be UTF-8 and no larger than 512 KiB.")
+        }
+        return text
     }
 
     /// Resolve document-relative URLs lexically; the Host then checks the real workspace boundary.
@@ -103,9 +154,10 @@ public struct TerminalArtifactPreview: Identifiable {
 
     public func loadDocumentImage(_ reference: String) async throws -> Data {
         let imageLink = try documentLink(reference)
-        guard Self.isImage(path: imageLink.path) || (imageLink.path as NSString).pathExtension.lowercased() == "svg" else {
+        guard Self.isImage(path: imageLink.path) || Self.isSVG(path: imageLink.path) else {
             throw FileBrowserError.message("This image format is not supported.")
         }
+        let source = try currentSource()
         let destination = try await TerminalFileDestination.resolve(path: imageLink.path, context: context, source: source)
         guard let path = destination.file else { throw FileBrowserError.message("The image link points to a folder.") }
         return try await Self(link: imageLink, context: context, source: source, path: path).load()

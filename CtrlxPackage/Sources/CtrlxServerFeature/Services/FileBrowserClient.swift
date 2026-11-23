@@ -144,6 +144,8 @@ actor HostFileBrowser {
             let path = try resolve(path)
             let data = try read(path: path, offset: offset, revision: revision, download: true)
             return .chunk(.init(path: path, revision: revision, offset: offset, data: data))
+        case let .saveMarkdown(path, revision, data):
+            return try .info(saveMarkdown(path: resolve(path), revision: revision, data: data))
         case let .search(path, query, mode, hidden):
             return try .search(search(path: resolve(path), query: query, mode: mode, hidden: hidden))
         }
@@ -428,6 +430,44 @@ actor HostFileBrowser {
             fstat(fd, &after) == 0, revision(after) == expected,
             try revision(metadata(path)) == expected else { throw FileBrowserError.message("File changed. Refresh its preview.") }
         return data
+    }
+
+    private func saveMarkdown(path: String, revision expected: String, data: Data) throws -> FileBrowserEntry {
+        guard
+            Self.kind(for: path) == .markdown, data.count <= FileBrowserLimits.maximumTextBytes,
+            let text = String(data: data, encoding: .utf8), !text.contains("\0") else {
+            throw FileBrowserError.message("Save requires a UTF-8 Markdown file no larger than 512 KiB.")
+        }
+
+        let target = URL(fileURLWithPath: path)
+        var current = stat()
+        guard lstat(path, &current) == 0, revision(current) == expected else {
+            throw FileBrowserError.message("The file changed on the Host. Copy your edits before refreshing the preview.")
+        }
+        guard
+            current.st_mode & S_IFMT == S_IFREG, current.st_size <= FileBrowserLimits.maximumTextBytes,
+            files.isWritableFile(atPath: path) else {
+            throw FileBrowserError.message("Only writable regular Markdown files can be saved.")
+        }
+
+        let original = try read(path: path, offset: 0, revision: expected, wholeFile: true)
+        guard let originalText = String(data: original, encoding: .utf8), !originalText.contains("\0") else {
+            throw FileBrowserError.message("The original Markdown file must be UTF-8.")
+        }
+        if original == data {
+            return try entry(path: path)
+        }
+
+        let staging = try files.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: target, create: true)
+        defer { try? files.removeItem(at: staging) }
+        let replacement = staging.appendingPathComponent("markdown")
+        try data.write(to: replacement)
+        try Task.checkCancellation()
+        guard lstat(path, &current) == 0, revision(current) == expected else {
+            throw FileBrowserError.message("The file changed on the Host. Copy your edits before refreshing the preview.")
+        }
+        _ = try files.replaceItemAt(target, withItemAt: replacement)
+        return try entry(path: path)
     }
 
     private func search(path: String, query: String, mode: FileBrowserSearchMode, hidden: Bool) throws -> FileBrowserSearchResults {
