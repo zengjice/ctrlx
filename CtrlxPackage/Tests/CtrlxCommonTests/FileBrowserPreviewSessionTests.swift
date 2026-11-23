@@ -22,7 +22,8 @@
             }
             #expect(sessions[0].hasContent && sessions[1].hasContent)
             let reused = UUID()
-            sessions[0].mount(in: parents[0], owner: reused, environment: environment) { AnyView(Text("Must reuse")) }
+            let session = sessions[0]
+            session.mount(in: parents[0], generation: session.generation, owner: reused, environment: environment) { AnyView(Text("Must reuse")) }
             hide(sessions[0], parent: parents[0], owner: reused)
             hide(sessions[2], parent: parents[2], owner: owners[2])
             #expect(sessions[0].hasContent)
@@ -45,7 +46,7 @@
             let native = try #require(old.subviews.first)
             let new = NSView(frame: old.bounds)
             let newOwner = UUID()
-            session.mount(in: new, owner: newOwner, environment: environment) { AnyView(Text("Must reuse")) }
+            session.mount(in: new, generation: session.generation, owner: newOwner, environment: environment) { AnyView(Text("Must reuse")) }
             session.hide(owner: owner)
             cache.releaseHidden()
             #expect(session.owner == newOwner)
@@ -54,6 +55,31 @@
             #expect(old.subviews.isEmpty)
             session.hide(owner: newOwner)
             #expect(!session.hasContent)
+        }
+
+        @Test("An evicted preview cannot remount while a new file is loading")
+        func staleMount() {
+            _ = NSApplication.shared
+            let session = FileBrowserPreviewSession(cache: .init())
+            defer { session.close() }
+            session.configure(.init(sourceID: "host", connectionID: nil, path: "/work/second.md", refresh: 0))
+            session.acceptRevision("v1")
+            let staleGeneration = session.generation
+            let parent = mount(session)
+
+            session.configure(.init(sourceID: "host", connectionID: nil, path: "/work/third.md", refresh: 0))
+            session.acceptRevision("v1")
+            session.mount(in: parent, generation: staleGeneration, owner: UUID(), environment: environment) {
+                Issue.record("An old view tried to install its content in the new preview")
+                return AnyView(Text("Second"))
+            }
+            #expect(parent.subviews.isEmpty)
+            #expect(session.owner == nil)
+            #expect(!session.hasContent)
+
+            let latest = mount(session)
+            #expect(!latest.subviews.isEmpty)
+            #expect(session.hasContent)
         }
 
         @Test("Connection replacement preserves a checkpoint but file, revision and refresh changes reset it")
@@ -126,7 +152,7 @@
 
         private func mount(_ session: FileBrowserPreviewSession) -> NSView {
             let parent = NSView(frame: .init(x: 0, y: 0, width: 300, height: 200))
-            session.mount(in: parent, owner: UUID(), environment: environment) { AnyView(Text("Preview")) }
+            session.mount(in: parent, generation: session.generation, owner: UUID(), environment: environment) { AnyView(Text("Preview")) }
             return parent
         }
 

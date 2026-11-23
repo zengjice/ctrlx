@@ -36,12 +36,10 @@
                         Symbols.house.image
                     }
                     .help("Home — take manual control")
-                    Button { captureRequest = UUID() } label: {
-                        Label("Annotate Screenshot", symbol: .pencilLine).labelStyle(.iconOnly)
-                    }
-                    .disabled(!state.hasPresentedFrame || state.isClosed || annotationContext?.isAvailable != true)
-                    .help("Mark a screenshot and add it to an Agent input")
-                    .accessibilityIdentifier("simulator-annotate")
+                    ScreenshotAnnotationButton { captureRequest = UUID() }
+                        .disabled(!state.hasPresentedFrame || state.isClosed || annotationContext?.isAvailable != true)
+                        .help("Mark a screenshot and add it to an Agent input")
+                        .accessibilityIdentifier("simulator-annotate")
                 }
                 .disabled(isAnnotating)
                 .padding(8)

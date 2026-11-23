@@ -13,6 +13,7 @@
         @Environment(\.resourceTabActions) private var resourceActions
         @Bindable private var tab: FileBrowserTab
         private let source: FileBrowserSource
+        private let currentMarkdownSource: () -> FileBrowserSource
         @FocusState private var searchFocused: Bool
         @Dependency(ClipboardClient.self) private var clipboard
         @Environment(\.scenePhase) private var scenePhase
@@ -23,14 +24,18 @@
         @State private var folderRequest: FolderRequest?
         @State private var actionMessage: String?
         @State private var isAnnotating = false
-        @State private var markdownEdit: MarkdownEdit?
+        #if os(macOS)
+            @Environment(\.colorScheme) private var colorScheme
+        #else
+            @State private var markdownEdit: MarkdownEdit?
 
-        private struct MarkdownEdit: Identifiable {
-            let id = UUID()
-            let file: FileBrowserEntry
-            let data: Data
-            let sourceID: String
-        }
+            private struct MarkdownEdit: Identifiable {
+                let id = UUID()
+                let file: FileBrowserEntry
+                let draft: FileBrowserMarkdownDraft
+                let sourceID: String
+            }
+        #endif
 
         private struct Destination {
             let path: String
@@ -43,9 +48,14 @@
             let name: String
         }
 
-        public init(tab: FileBrowserTab, source: FileBrowserSource) {
+        public init(
+            tab: FileBrowserTab,
+            source: FileBrowserSource,
+            currentMarkdownSource: (() -> FileBrowserSource)? = nil
+        ) {
             self.tab = tab
             self.source = source
+            self.currentMarkdownSource = currentMarkdownSource ?? { source }
         }
 
         public var body: some View {
@@ -95,20 +105,22 @@
                 #endif
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            // Refreshes replace the preview child while the editor keeps its draft.
-            .sheet(item: $markdownEdit) { edit in
-                FileBrowserMarkdownEditor(file: edit.file, data: edit.data, sourceID: edit.sourceID, source: source) {
-                    markdownEdit = nil
-                    if tab.selectedFile == edit.file.path {
-                        tab.refresh += 1
-                    }
+            #if os(iOS)
+                // Refreshes replace the preview child while the editor keeps its draft.
+                .sheet(item: $markdownEdit) { edit in
+                    FileBrowserMarkdownEditor(file: edit.file, draft: edit.draft, sourceID: edit.sourceID, source: currentMarkdownSource, onSaved: {
+                        markdownEdit = nil
+                        if tab.selectedFile == edit.file.path {
+                            tab.refresh += 1
+                        }
+                    })
                 }
-            }
-            .task(id: tab.loadKey(source: source)) { await tab.load(source: source) }
-            .task(id: previewKey) {
-                await tab.loadPreview(source: source)
-            }
-            .task(id: folderRequest?.id) { await createFolder() }
+            #endif
+                .task(id: tab.loadKey(source: source)) { await tab.load(source: source) }
+                .task(id: previewKey) {
+                    await tab.loadPreview(source: source)
+                }
+                .task(id: folderRequest?.id) { await createFolder() }
             #if os(macOS)
                 .onPasteCommand(of: [.png, .jpeg, .tiff]) { _ in pasteImage() }
             #endif
@@ -164,21 +176,15 @@
                 }
         }
 
-        private struct PreviewKey: Hashable {
-            let path: String?
-            let refresh: Int
-            let sourceID: String
-            let connectionID: UUID?
+        private struct PreviewKey: Equatable {
+            let file: FileBrowserPreviewSession.Key
             let unavailable: String?
             let downloadUnavailable: String?
         }
 
         private var previewKey: PreviewKey {
             .init(
-                path: tab.selectedFile,
-                refresh: tab.refresh,
-                sourceID: source.id,
-                connectionID: source.connectionID,
+                file: tab.previewKey(for: source),
                 unavailable: source.unavailableReason,
                 downloadUnavailable: source.downloadUnavailableReason
             )
@@ -417,10 +423,18 @@
         }
 
         private var preview: some View {
-            FileBrowserFilePreview(tab: tab, source: source, onEditingChanged: { isAnnotating = $0 }) { file, data in
-                markdownEdit = .init(file: file, data: data, sourceID: source.id)
-            }
-            .id(FilePreviewIdentity(path: tab.selectedFile, refresh: tab.refresh, sourceID: source.id))
+            FileBrowserFilePreview(tab: tab, source: source, onEditingChanged: { isAnnotating = $0 }, onEditMarkdown: openMarkdownEditor)
+                .id(FilePreviewIdentity(path: tab.selectedFile, refresh: tab.refresh, sourceID: source.id))
+        }
+
+        private func openMarkdownEditor(_ file: FileBrowserEntry, data: Data) {
+            #if os(macOS)
+                FileBrowserMarkdownEditorWindow.present(
+                    file: file, data: data, tab: tab, sourceID: source.id, colorScheme: colorScheme, source: currentMarkdownSource
+                )
+            #else
+                markdownEdit = .init(file: file, draft: FileBrowserMarkdownDraft(data: data), sourceID: source.id)
+            #endif
         }
 
         private struct FilePreviewIdentity: Hashable {
@@ -470,52 +484,9 @@
                         unavailable: source.unavailableReason,
                         downloadUnavailable: source.downloadUnavailableReason
                     )
-                    HStack {
-                        #if os(iOS)
-                            Button { tab.selectedFile = nil } label: { Label("Files", symbol: .chevronLeft) }
-                        #endif
-                        Text((path as NSString).lastPathComponent).lineLimit(1).truncationMode(.middle)
-                        Spacer()
-                        if let info = tab.preview, info.path == path, info.kind == .markdown, !info.isSymbolicLink {
-                            Button {
-                                guard let data = tab.previewData else { return }
-                                onEditMarkdown(info, data)
-                            } label: {
-                                Label("Edit Markdown", symbol: .pencil).labelStyle(.iconOnly)
-                            }
-                            .disabled(tab.previewData == nil || source.markdownEditingUnavailableReason != nil)
-                            .help(source.markdownEditingUnavailableReason ?? "Edit Markdown")
-                            .accessibilityIdentifier("file-edit-markdown")
-                        }
-                        if annotationContext != nil {
-                            Button { captureRequest = UUID() } label: {
-                                Label("Annotate Screenshot", symbol: .pencilLine).labelStyle(.iconOnly)
-                            }
-                            .disabled(annotationContext?.isAvailable != true || tab.isPreviewLoading || !supportsAnnotation(path))
-                            .help("Mark the visible file preview and add it to an Agent input")
-                            .accessibilityIdentifier("file-annotate")
-                        }
-                        Menu {
-                            Button("Copy Path") { clipboard.setString(path) }
-                            if
-                                let data = tab.previewData, tab.preview?.kind == .text || tab.preview?.kind == .markdown,
-                                let text = String(data: data, encoding: .utf8) {
-                                Button("Copy Text") { clipboard.setString(text) }
-                            }
-                            if let data = tab.previewData, tab.preview?.kind == .image {
-                                Button("Copy Image") {
-                                    do {
-                                        try clipboard.setWorkspaceContent(WorkspaceClipboard.image(data))
-                                        clipboardMessage = "Image copied."
-                                    } catch { clipboardMessage = error.localizedDescription }
-                                }
-                            }
-                            if tab.preview?.kind == .markdown, let reason = source.markdownEditingUnavailableReason {
-                                Text(reason)
-                            }
-                            Button("Refresh Preview") { tab.refresh += 1 }
-                        } label: { Label("File Actions", symbol: .ellipsisCircle).labelStyle(.iconOnly) }
-                    }.disabled(isAnnotating).padding(10)
+                    header(path)
+                        .disabled(isAnnotating)
+                        .padding(10)
                     if let clipboardMessage {
                         Text(clipboardMessage).font(.caption).padding(.horizontal, 10)
                     }
@@ -575,6 +546,81 @@
             }
         }
 
+        private func header(_ path: String) -> some View {
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    heading(path)
+                    Spacer()
+                    editActions(path)
+                    fileMenu(path)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        heading(path)
+                        Spacer()
+                        fileMenu(path)
+                    }
+                    ViewThatFits(in: .horizontal) {
+                        HStack { editActions(path) }
+                        VStack(alignment: .leading) { editActions(path) }
+                    }
+                }
+            }
+        }
+
+        @ViewBuilder
+        private func heading(_ path: String) -> some View {
+            #if os(iOS)
+                Button { tab.selectedFile = nil } label: { Label("Files", symbol: .chevronLeft) }
+            #endif
+            Text((path as NSString).lastPathComponent).lineLimit(1).truncationMode(.middle)
+        }
+
+        @ViewBuilder
+        private func editActions(_ path: String) -> some View {
+            if let info = tab.preview, info.path == path, info.kind == .markdown, !info.isSymbolicLink {
+                Button {
+                    guard let data = tab.previewData else { return }
+                    onEditMarkdown(info, data)
+                } label: {
+                    Label("Edit Markdown", symbol: .pencil).labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(.bordered)
+                .disabled(tab.previewData == nil || source.markdownEditingUnavailableReason != nil)
+                .help(source.markdownEditingUnavailableReason ?? "Edit Markdown")
+                .accessibilityIdentifier("file-edit-markdown")
+            }
+            if annotationContext != nil {
+                ScreenshotAnnotationButton { captureRequest = UUID() }
+                    .disabled(annotationContext?.isAvailable != true || tab.isPreviewLoading || !supportsAnnotation(path))
+                    .help("Mark the visible file preview and add it to an Agent input")
+                    .accessibilityIdentifier("file-annotate")
+            }
+        }
+
+        private func fileMenu(_ path: String) -> some View {
+            Menu {
+                Button("Copy Path") { clipboard.setString(path) }
+                if
+                    let data = tab.previewData, tab.preview?.kind == .text || tab.preview?.kind == .markdown,
+                    let text = String(data: data, encoding: .utf8) {
+                    Button("Copy Text") { clipboard.setString(text) }
+                }
+                if let data = tab.previewData, tab.preview?.kind == .image {
+                    Button("Copy Image") {
+                        do {
+                            try clipboard.setWorkspaceContent(WorkspaceClipboard.image(data))
+                            clipboardMessage = "Image copied."
+                        } catch { clipboardMessage = error.localizedDescription }
+                    }
+                }
+                if tab.preview?.kind == .markdown, let reason = source.markdownEditingUnavailableReason {
+                    Text(reason)
+                }
+                Button("Refresh Preview") { tab.refresh += 1 }
+            } label: { Label("File Actions", symbol: .ellipsisCircle).labelStyle(.iconOnly) }
+        }
+
         private func supportsAnnotation(_ path: String) -> Bool {
             if FileBrowserOfficeDocument.supports(path: path) || FileBrowserVideo.supports(path: path) {
                 return true
@@ -589,16 +635,18 @@
         @ViewBuilder
         private func fileContent(_ path: String) -> some View {
             let session = tab.previewSession
-            if tab.isPreviewLoading {
+            let isCurrent = session.key == tab.previewKey(for: source)
+            if !isCurrent || tab.isPreviewLoading {
                 ProgressView().padding()
             }
-            if let error = tab.previewError {
+            if isCurrent, let error = tab.previewError {
                 Text(error).padding().textSelection(.enabled)
             }
             if
-                session.isReady, session.hasContent || tab.previewData != nil || tab.previewURL != nil
+                isCurrent, session.isReady, session.hasContent || tab.previewData != nil || tab.previewURL != nil
                 || FileBrowserOfficeDocument.supports(path: path) || (source.localFileURL == nil && FileBrowserVideo.supports(path: path)) {
-                RetainedFileBrowserPreview(session: session) {
+                let generation = session.generation
+                RetainedFileBrowserPreview(session: session, generation: generation) {
                     if FileBrowserOfficeDocument.supports(path: path) {
                         FileBrowserOfficePreview(path: path, source: source, capture: capture)
                     } else if source.localFileURL == nil, FileBrowserVideo.supports(path: path) {
@@ -615,7 +663,7 @@
                         #endif
                     }
                 }
-                .id(session.generation)
+                .id(generation)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }

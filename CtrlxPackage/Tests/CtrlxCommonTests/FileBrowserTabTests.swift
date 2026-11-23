@@ -269,6 +269,26 @@ struct FileBrowserTabTests {
         #expect(tab.error?.contains("Directory changed") == true)
     }
 
+    @Test("A cancelled preview task cannot clear the newly loaded file")
+    func cancelledTaskKeepsCurrentPreview() async {
+        let tab = FileBrowserTab(path: "/host")
+        let data = Data("# Current".utf8)
+        let file = FileBrowserEntry(path: "/host/current.md", name: "current.md", kind: .markdown, size: data.count, revision: "1")
+        let source = FileBrowserSource(id: "host", paneID: nil, localPreview: { _ in data }) { _ in
+            .info(file)
+        }
+        tab.selectedFile = file.path
+        await tab.loadPreview(source: source)
+        #expect(tab.previewData == data)
+
+        let stale = Task { await tab.loadPreview(source: source) }
+        stale.cancel()
+        await stale.value
+
+        #expect(tab.previewData == data)
+        #expect(!tab.isPreviewLoading)
+    }
+
     @Test(arguments: [false, true])
     func leavingTabDiscardsLatePreview(direct: Bool) async {
         let tab = FileBrowserTab(path: "/host")

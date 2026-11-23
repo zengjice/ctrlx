@@ -126,6 +126,24 @@ enum BrowserAnnotationRenderer {
     }
 }
 
+    @MainActor
+    public struct ScreenshotAnnotationButton: View {
+        private let action: () -> Void
+
+        public init(action: @escaping () -> Void) {
+            self.action = action
+        }
+
+        public var body: some View {
+            Button(action: action) {
+                Label("Annotate", symbol: .highlighter)
+                    .labelStyle(.titleAndIcon)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityLabel("Annotate Screenshot")
+        }
+    }
+
 /// Keeps the native page mounted and the layout unchanged. No sheet, navigation,
 /// DOM injection, browser resize or control takeover is needed for annotation.
 @MainActor

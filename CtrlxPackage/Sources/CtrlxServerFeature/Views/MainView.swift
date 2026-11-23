@@ -2086,7 +2086,11 @@ public struct MainView: View {
                 description: "The saved Files tab will reconnect when its original terminal is available."
             )
         } else {
-            WorkspaceFileBrowserView(tab: tab, source: .remote(hostID: remote.hostId, paneID: tab.sourcePaneID, connection: connection))
+            let hostID = remote.hostId
+            let manager = coordinator.viewerConnectionManager
+            WorkspaceFileBrowserView(tab: tab, source: .remote(hostID: hostID, paneID: tab.sourcePaneID, connection: connection)) {
+                .remote(hostID: hostID, paneID: nil, connection: manager?.connection(for: hostID))
+            }
         }
     }
 

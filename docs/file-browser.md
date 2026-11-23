@@ -660,9 +660,11 @@ On Mac Host and Viewer, vertical scrolling over a Markdown code block scrolls th
 document; horizontal scrolling remains within the code block. This routing applies
 only inside the visible file preview and leaves text selection unchanged.
 
-On Mac Host, Mac Viewer and iOS, select a Markdown file and click or tap the
-pencil beside its name to edit the source. **Save** writes the existing file on
-the Host and refreshes the rendered preview. Saving supports writable regular
+On Mac Host, Mac Viewer and iOS, select a Markdown file and choose **Edit Markdown**.
+On Mac, the editor opens in a movable, resizable window. Closing it with unsaved
+changes offers **Save**, **Discard Changes**, and **Keep Editing**. **Save** writes
+the existing file on the Host and refreshes its preview in the Files tabs that
+opened the editor. Saving supports writable regular
 UTF-8 `.md` and `.markdown` files up to 512 KiB and preserves their byte-order
 mark. The draft survives preview refreshes. If the file changes while the
 editor is open, the Host rejects the save and the editor keeps the draft.
@@ -695,7 +697,7 @@ preview transfers still pause/cancel when leaving their preview.
 
 ### In-place preview annotation
 
-Mac Host, Mac Viewer and iOS expose **Annotate Screenshot** in the selected
+Mac Host, Mac Viewer and iOS expose **Annotate** in the selected
 file's preview header. Images, text/Markdown, PDF, Office and a ready video frame
 reuse the browser's rectangle/arrow/pen, undo, clear and **Add to Input** overlay;
 there is no separate editor. Entering annotation freezes the visible preview and

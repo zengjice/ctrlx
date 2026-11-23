@@ -344,9 +344,15 @@ final public class FileBrowserTab: Identifiable {
         }
     }
 
+    func previewKey(for source: FileBrowserSource) -> FileBrowserPreviewSession.Key {
+        .init(sourceID: source.id, connectionID: source.connectionID, path: selectedFile, refresh: refresh)
+    }
+
     public func loadPreview(source: FileBrowserSource) async {
+        guard !Task.isCancelled else { return }
+        let key = previewKey(for: source)
         openSession.configure(source: source)
-        previewSession.configure(.init(sourceID: source.id, connectionID: source.connectionID, path: selectedFile, refresh: refresh))
+        previewSession.configure(key)
         let token = UUID()
         previewID = token
         if !previewSession.hasContent {
@@ -356,7 +362,7 @@ final public class FileBrowserTab: Identifiable {
         }
         previewError = nil
         isPreviewLoading = false
-        guard let selectedFile else { return }
+        guard let selectedFile = key.path else { return }
         isPreviewLoading = !previewSession.hasContent
         defer {
             if token == previewID {

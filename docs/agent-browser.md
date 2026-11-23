@@ -833,7 +833,7 @@ legacy 180 KiB and adaptive 512 KiB bounds).
 ## In-place screenshot annotation
 
 Mac Host (Chromium/WebKit), Mac Viewer (Host Chromium and device-local WebKit),
-and iOS (Host Chromium) offer **Annotate Screenshot** in the tab's top toolbar.
+and iOS (Host Chromium) offer **Annotate** in the tab's top toolbar.
 The native page stays mounted: a frozen viewport image covers it, with a floating
 rectangle, arrow, pen, undo/clear and recipient toolbar. There is no separate
 editor page, DOM injection, full-page stitching, viewport resize or implicit
