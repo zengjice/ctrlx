@@ -1,111 +1,232 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="464" viewBox="0 0 1000 464" role="img" aria-labelledby="title desc">
-  <title id="title">Your CtrlX workspace on Mac and iPhone</title>
-  <desc id="desc">The Host Mac runs agents and shells in tmux. It also offers conversation forks, workflows, Orbie, and tools to inspect files, diffs, web pages and iOS apps. A local terminal can attach to the same session. An iPhone or another Mac can use the workspace through a relay that forwards end-to-end encrypted traffic. Sessions keep running when a viewer disconnects.</desc>
-
+<svg xmlns="http://www.w3.org/2000/svg" width="940" height="590" viewBox="0 0 940 590" role="img" aria-labelledby="title desc">
+  <title id="title">CtrlX product vision: one Room, four Hosts</title>
+  <desc id="desc">Your Host Mac runs the global agent Orbie and Workflow. Orbie can control Workflow, and both coordinate agents in the Room. The developer agent uses Codex and the test agent uses Claude Code. The developer’s workbench includes Terminal, Files, Git, Browser and iOS Simulator. Lin’s review agent uses Claude Code, Mia’s design agent uses OpenCode and Sam’s QA agent uses Codex. These guests would join the Room through the Relay while running on their owners’ Hosts. Paired viewers use the same Relay. Three platform cards show iOS on iPhone, macOS on another Mac and Android as a planned platform.</desc>
   <defs>
-    <linearGradient id="canvas" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#0B0E13"/>
-      <stop offset="0.55" stop-color="#10151C"/>
-      <stop offset="1" stop-color="#0A0D12"/>
+    <linearGradient id="canvas" x2="1" y2="1">
+      <stop stop-color="#101720"/><stop offset="1" stop-color="#0C1118"/>
     </linearGradient>
-    <linearGradient id="hostPanel" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#181E27"/>
-      <stop offset="1" stop-color="#12171E"/>
-    </linearGradient>
-    <linearGradient id="tmuxPanel" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#151E23"/>
-      <stop offset="1" stop-color="#10161B"/>
-    </linearGradient>
-    <linearGradient id="relayPanel" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#17232C"/>
-      <stop offset="1" stop-color="#101820"/>
-    </linearGradient>
-    <pattern id="grid" width="36" height="36" patternUnits="userSpaceOnUse">
-      <path d="M 36 0 L 0 0 0 36" fill="none" stroke="#FFFFFF" stroke-opacity="0.025" stroke-width="1"/>
-    </pattern>
-    <filter id="softGlow" x="-40%" y="-40%" width="180%" height="180%">
-      <feGaussianBlur stdDeviation="8" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
-    <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
-      <path d="M0 0 8 4 0 8Z" fill="#62D8FF"/>
+    <marker id="local-tip" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="4" markerHeight="4" orient="auto">
+      <path d="M0 0 8 4 0 8Z" fill="#BCADF4"/>
+    </marker>
+    <marker id="workbench-tip" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="4" markerHeight="4" orient="auto">
+      <path d="M0 0 8 4 0 8Z" fill="#84D8B3"/>
+    </marker>
+    <marker id="guest-tip" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="4.5" markerHeight="4.5" orient="auto">
+      <path d="M0 0 8 4 0 8Z" fill="#F4C583"/>
+    </marker>
+    <marker id="viewer-tip" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="4.5" markerHeight="4.5" orient="auto-start-reverse">
+      <path d="M0 0 8 4 0 8Z" fill="#80CFF3"/>
     </marker>
   </defs>
 
-  <rect width="1000" height="464" rx="22" fill="url(#canvas)"/>
-  <rect width="1000" height="464" rx="22" fill="url(#grid)"/>
+  <rect width="940" height="590" rx="20" fill="url(#canvas)"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, 'PingFang SC', sans-serif" fill="#F1F4FA">
+    <switch transform="translate(24 36)" font-size="25" font-weight="650">
+      <text systemLanguage="zh">一个 Room，四台 Host</text><text>One Room, four Hosts</text>
+    </switch>
+    <switch transform="translate(916 35)" text-anchor="end" font-size="16" fill="#ADB9C9">
+      <text systemLanguage="zh">产品目标形态</text><text>Product vision</text>
+    </switch>
 
-  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" fill="#F2F5F8">
-    <text x="32" y="46" font-size="30" font-weight="700">Your workspace on Mac and iPhone</text>
+    <g id="your-host">
+      <rect x="22" y="56" width="481" height="481" rx="18" fill="#18212A" stroke="#586B7E"/>
+      <g transform="translate(43 73)" fill="none" stroke="#CDD9E4" stroke-width="2" stroke-linejoin="round">
+        <rect x="2" y="0" width="22" height="15" rx="2"/><path d="M2 16l-3 3h28l-3-3"/>
+      </g>
+      <switch transform="translate(83 94)" font-size="24" font-weight="650">
+        <text systemLanguage="zh">你的 Host Mac</text><text>Your Host Mac</text>
+      </switch>
 
-    <!-- Each Host owns its sessions and project tools. -->
-    <rect x="24" y="78" width="426" height="361" rx="20" fill="#0E1218" stroke="#34404D"/>
-    <rect x="29" y="73" width="426" height="361" rx="20" fill="#11161D" stroke="#3B4754"/>
-    <rect x="34" y="68" width="426" height="361" rx="20" fill="url(#hostPanel)" stroke="#556271"/>
-    <circle cx="62" cy="100" r="5" fill="#61E294"/>
-    <text x="78" y="110" font-size="28" font-weight="700">Host Mac</text>
-    <text x="440" y="107" text-anchor="end" font-size="17" fill="#A8B4BF">home or office</text>
+      <g id="orchestration">
+        <switch transform="translate(42 127)" font-size="18" font-weight="600" fill="#D7CCF3">
+          <text systemLanguage="zh">全局编排</text><text>Global orchestration</text>
+        </switch>
+        <g fill="#232234" stroke="#675F89">
+          <rect x="40" y="139" width="187" height="65" rx="10"/>
+          <rect x="296" y="139" width="187" height="65" rx="10"/>
+        </g>
+        <g transform="translate(59 159)" fill="#C9B9FF">
+          <path d="M0-9Q2-2 9 0Q2 2 0 9Q-2 2-9 0Q-2-2 0-9Z"/><circle cx="10" cy="-9" r="2"/>
+        </g>
+        <g transform="translate(309 150)" fill="#232234" stroke="#C9B9FF" stroke-width="1.7" stroke-linejoin="round">
+          <path d="M4 6v10h11"/><rect width="8" height="7" rx="1.5"/><rect x="12" y="13" width="8" height="7" rx="1.5"/>
+        </g>
+        <g font-size="22" font-weight="650">
+          <switch transform="translate(80 169)">
+            <text systemLanguage="zh">全局 Agent</text><text>Global agent</text>
+          </switch>
+          <text x="340" y="169">Workflow</text>
+        </g>
+        <g font-size="16" fill="#DBD2EB">
+          <text x="80" y="191">Orbie</text>
+          <switch transform="translate(340 191)">
+            <text systemLanguage="zh">按预设步骤交接</text><text>Run steps in order</text>
+          </switch>
+        </g>
+        <g id="orbie-controls-workflow">
+          <switch transform="translate(261 162)" text-anchor="middle" font-size="14" fill="#D7CCF3">
+            <text systemLanguage="zh">控制</text><text>controls</text>
+          </switch>
+          <path d="M229 173H293" fill="none" stroke="#BCADF4" stroke-width="2.4" marker-end="url(#local-tip)"/>
+        </g>
+        <g fill="none" stroke="#BCADF4" stroke-width="2">
+          <path d="M134 204v9q0 4 4 4h247q4 0 4-4v-9"/>
+          <path d="M261 217v13" marker-end="url(#local-tip)"/>
+        </g>
+      </g>
 
-    <rect x="52" y="128" width="390" height="136" rx="13" fill="url(#tmuxPanel)" stroke="#4C6870"/>
-    <rect x="52" y="139" width="4" height="114" rx="2" fill="#61E294"/>
-    <text x="70" y="159" font-size="23" font-weight="700" fill="#76E8A5">tmux sessions</text>
+      <g id="room">
+        <rect x="38" y="232" width="449" height="288" rx="13" fill="#121F22" stroke="#527F71"/>
+        <text x="54" y="263" font-size="27" font-weight="700" fill="#A0E6C2">Room</text>
+        <g id="developer-agent" transform="translate(54 277)">
+          <rect width="202" height="51" rx="8" fill="#1E302E" stroke="#4B7263"/>
+          <switch transform="translate(14 22)" font-size="19" font-weight="650">
+            <text systemLanguage="zh">开发 Agent</text><text>Developer agent</text>
+          </switch>
+          <text x="14" y="42" font-size="16" fill="#C1D9CC">Codex</text>
+        </g>
+        <g id="test-agent" transform="translate(268 277)">
+          <rect width="203" height="51" rx="8" fill="#1E302E" stroke="#4B7263"/>
+          <switch transform="translate(14 22)" font-size="19" font-weight="650">
+            <text systemLanguage="zh">测试 Agent</text><text>Test agent</text>
+          </switch>
+          <text x="14" y="42" font-size="16" fill="#C1D9CC">Claude Code</text>
+        </g>
 
-    <rect x="70" y="175" width="89" height="34" rx="8" fill="#13252E" stroke="#315F70"/>
-    <text x="114.5" y="198" text-anchor="middle" font-size="18" font-weight="600" fill="#CDF2FF">Codex</text>
-    <rect x="168" y="175" width="143" height="34" rx="8" fill="#211D2F" stroke="#54477C"/>
-    <text x="239.5" y="198" text-anchor="middle" font-size="18" font-weight="600" fill="#E6DDFF">Claude Code</text>
-    <rect x="320" y="175" width="104" height="34" rx="8" fill="#272318" stroke="#6D5B31"/>
-    <text x="372" y="198" text-anchor="middle" font-size="18" font-weight="600" fill="#FCE7AE">Shell</text>
+        <path d="M151 329v14" stroke="#84D8B3" stroke-width="2" marker-end="url(#workbench-tip)"/>
+        <g id="agent-workbench">
+          <rect x="54" y="345" width="417" height="62" rx="8" fill="#17282A" stroke="#42665E"/>
+          <switch transform="translate(69 368)" font-size="19" font-weight="650">
+            <text systemLanguage="zh">Agent 工作台</text><text>Agent workbench</text>
+          </switch>
+          <text x="69" y="392" font-size="17" fill="#D9EAE2">Terminal · Files · Git · Browser · iOS Simulator</text>
+        </g>
 
-    <text x="70" y="231" font-size="17" fill="#DDE8EE">Sessions keep running if you disconnect.</text>
-    <text x="70" y="252" font-size="15" fill="#A8B4BF">Reattach in CtrlX or Terminal.</text>
-
-    <rect x="52" y="276" width="390" height="136" rx="13" fill="#111820" stroke="#344651"/>
-    <text x="70" y="303" font-size="21" font-weight="650">Work with agents</text>
-    <text x="70" y="330" font-size="18" fill="#B8C5D0">Fork · Workflows · Orbie</text>
-    <path d="M70 344H424" stroke="#32424E"/>
-    <text x="70" y="372" font-size="21" font-weight="650">Inspect changes</text>
-    <text x="70" y="398" font-size="18" fill="#B8C5D0">Files · Git · Browser · iOS Simulator</text>
-
-  </g>
-  <g transform="translate(0 24)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" fill="#F2F5F8">
-    <!-- The Relay forwards traffic between the paired endpoints. -->
-    <g fill="none" stroke="#62D8FF" stroke-width="2.5">
-      <path d="M463 221H501" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
-      <path d="M676 221H701" marker-start="url(#arrow)"/>
-      <path d="M701 149V293"/>
-      <path d="M701 149H729" marker-end="url(#arrow)"/>
-      <path d="M701 293H729" marker-end="url(#arrow)"/>
+        <g id="guest-agents">
+          <rect x="54" y="418" width="417" height="88" rx="9" fill="#29261F" stroke="#E7B978" stroke-dasharray="5 4"/>
+          <switch transform="translate(70 443)" font-size="18" font-weight="650" fill="#F5CF99">
+            <text systemLanguage="zh">受邀 Agent · 规划中</text><text>Guest agents · planned</text>
+          </switch>
+          <g transform="translate(70 472)">
+            <switch font-size="17" font-weight="650">
+              <text systemLanguage="zh">评审 Agent</text><text>Review agent</text>
+            </switch>
+            <text y="21" font-size="16" fill="#F0D6B3">Claude Code</text>
+          </g>
+          <g transform="translate(209 472)">
+            <switch font-size="17" font-weight="650">
+              <text systemLanguage="zh">设计 Agent</text><text>Design agent</text>
+            </switch>
+            <text y="21" font-size="16" fill="#F0D6B3">OpenCode</text>
+          </g>
+          <g transform="translate(346 472)">
+            <switch font-size="17" font-weight="650">
+              <text systemLanguage="zh">验收 Agent</text><text>QA agent</text>
+            </switch>
+            <text y="21" font-size="16" fill="#F0D6B3">Codex</text>
+          </g>
+        </g>
+      </g>
     </g>
 
-    <rect x="504" y="131" width="169" height="179" rx="19" fill="url(#relayPanel)" stroke="#3B6A7B"/>
-    <circle cx="588.5" cy="168" r="21" fill="#132B35" stroke="#62D8FF" filter="url(#softGlow)"/>
-    <path d="M581 166V162a7.5 7.5 0 0 1 15 0v4 M578 166h21v14h-21z" fill="none" stroke="#62D8FF" stroke-width="2" stroke-linejoin="round"/>
-    <text x="588.5" y="226" text-anchor="middle" font-size="28" font-weight="700">Relay</text>
-    <text x="588.5" y="255" text-anchor="middle" font-size="17" fill="#B8C5D0">Forwards ciphertext</text>
-    <path d="M526 269H651" stroke="#32424E"/>
-    <text x="588.5" y="293" text-anchor="middle" font-size="16" fill="#88E2FF">End-to-end encrypted</text>
-
-    <!-- The same workspace is interactive from either Viewer. -->
-    <text x="734" y="78" font-size="14" font-weight="650" letter-spacing="1.3" fill="#88E2FF">PAIRED VIEWERS</text>
-    <rect x="732" y="90" width="239" height="118" rx="17" fill="url(#hostPanel)" stroke="#475665"/>
-    <g fill="none" stroke="#C5D2DD" stroke-width="2" stroke-linecap="round">
-      <rect x="751" y="113" width="32" height="22" rx="3"/>
-      <path d="M767 135v6m-7 0h14"/>
+    <!-- The dashed branches meet the Relay. The arrow ends at the Room’s guest roster. -->
+    <g id="collaboration-links" fill="none" stroke="#F4C583" stroke-width="2.2" stroke-dasharray="6 5" stroke-linejoin="round">
+      <path d="M551 326h-27q-8 0-8 8v120q0 8-8 8h-35" marker-end="url(#guest-tip)"/>
+      <path d="M693 298h53"/>
+      <path d="M730 298V186q0-8 8-8h8"/>
+      <path d="M730 298v112q0 8 8 8h8"/>
     </g>
-    <text x="796" y="138" font-size="25" font-weight="700">Another Mac</text>
-    <text x="752" y="179" font-size="18" fill="#B8C5D0">Open the same terminal</text>
-
-    <rect x="732" y="234" width="239" height="118" rx="17" fill="url(#hostPanel)" stroke="#475665"/>
-    <g fill="none" stroke="#C5D2DD" stroke-width="2" stroke-linecap="round">
-      <rect x="758" y="252" width="19" height="32" rx="4"/>
-      <path d="M765 256h5m-5 24h5"/>
+    <g id="viewer-links" fill="none" stroke="#80CFF3" stroke-width="2.2" marker-start="url(#viewer-tip)" marker-end="url(#viewer-tip)">
+      <path d="M506 274h42"/>
+      <path d="M622 354v31"/>
     </g>
-    <text x="796" y="278" font-size="25" font-weight="700">iPhone</text>
-    <text x="752" y="309" font-size="18" fill="#B8C5D0">Answer an agent</text>
-    <text x="752" y="332" font-size="18" fill="#B8C5D0">Try the result</text>
+
+    <!-- The same Relay serves both routes, outside all Hosts. -->
+    <g id="relay">
+      <rect x="551" y="246" width="142" height="105" rx="15" fill="#1C2D39" stroke="#88A7B9" stroke-width="1.6"/>
+      <g transform="translate(621 266)" fill="#1C2D39" stroke="#ACCDE0" stroke-width="1.8">
+        <path d="M-10 0h10l10-5M0 0l10 6"/><circle cx="-10" cy="0" r="2.8"/>
+        <circle cx="11" cy="-5.5" r="2.8"/><circle cx="11" cy="6.5" r="2.8"/>
+      </g>
+      <text x="622" y="305" text-anchor="middle" font-size="27" font-weight="650">Relay</text>
+      <switch transform="translate(622 330)" text-anchor="middle" font-size="15.5" fill="#C7DCE8">
+        <text systemLanguage="zh">转发密文</text><text>Routes ciphertext</text>
+      </switch>
+    </g>
+
+    <g id="teammate-hosts">
+      <switch transform="translate(746 99)" font-size="19" font-weight="650">
+        <text systemLanguage="zh">同事的 Host</text><text>Teammates’ Hosts</text>
+      </switch>
+      <g id="lin-host" transform="translate(746 143)">
+        <switch transform="translate(0 -5)" font-size="16" fill="#C8B79E">
+          <text systemLanguage="zh">Lin 的 Host</text><text>Lin’s Host</text>
+        </switch>
+        <rect y="6" width="170" height="58" rx="9" fill="#222529" stroke="#716757"/>
+        <switch transform="translate(14 31)" font-size="19" font-weight="650">
+          <text systemLanguage="zh">评审 Agent</text><text>Review agent</text>
+        </switch>
+        <text x="14" y="52" font-size="16" fill="#F0D6B3">Claude Code</text>
+      </g>
+      <g id="mia-host" transform="translate(746 263)">
+        <switch transform="translate(0 -5)" font-size="16" fill="#C8B79E">
+          <text systemLanguage="zh">Mia 的 Host</text><text>Mia’s Host</text>
+        </switch>
+        <rect y="6" width="170" height="58" rx="9" fill="#222529" stroke="#716757"/>
+        <switch transform="translate(14 31)" font-size="19" font-weight="650">
+          <text systemLanguage="zh">设计 Agent</text><text>Design agent</text>
+        </switch>
+        <text x="14" y="52" font-size="16" fill="#F0D6B3">OpenCode</text>
+      </g>
+      <g id="sam-host" transform="translate(746 383)">
+        <switch transform="translate(0 -5)" font-size="16" fill="#C8B79E">
+          <text systemLanguage="zh">Sam 的 Host</text><text>Sam’s Host</text>
+        </switch>
+        <rect y="6" width="170" height="58" rx="9" fill="#222529" stroke="#716757"/>
+        <switch transform="translate(14 31)" font-size="19" font-weight="650">
+          <text systemLanguage="zh">验收 Agent</text><text>QA agent</text>
+        </switch>
+        <text x="14" y="52" font-size="16" fill="#F0D6B3">Codex</text>
+      </g>
+    </g>
+    <circle cx="730" cy="298" r="3" fill="#F4C583"/>
+
+    <g id="paired-viewer">
+      <rect x="529" y="388" width="186" height="149" rx="12" fill="#192A38" stroke="#557D96"/>
+      <switch transform="translate(622 413)" text-anchor="middle" font-size="18" font-weight="650">
+        <text systemLanguage="zh">已配对的 Viewer</text><text>Paired viewers</text>
+      </switch>
+      <g id="viewer-ios" transform="translate(539 423)">
+        <rect width="166" height="28" rx="6" fill="#213848" stroke="#4C6C82"/>
+        <text x="10" y="19" font-size="16" font-weight="650">iOS</text>
+        <text x="156" y="19" text-anchor="end" font-size="14" fill="#C0D9E8">iPhone</text>
+      </g>
+      <g id="viewer-macos" transform="translate(539 458)">
+        <rect width="166" height="28" rx="6" fill="#213848" stroke="#4C6C82"/>
+        <text x="10" y="19" font-size="16" font-weight="650">macOS</text>
+        <switch transform="translate(156 19)" text-anchor="end" font-size="14" fill="#C0D9E8">
+          <text systemLanguage="zh">另一台 Mac</text><text>Another Mac</text>
+        </switch>
+      </g>
+      <g id="viewer-android" transform="translate(539 493)">
+        <rect width="166" height="28" rx="6" fill="#29261F" stroke="#E7B978" stroke-dasharray="5 4"/>
+        <text x="10" y="19" font-size="16" font-weight="650">Android</text>
+        <switch transform="translate(156 19)" text-anchor="end" font-size="14" fill="#F5CF99">
+          <text systemLanguage="zh">规划中</text><text>Planned</text>
+        </switch>
+      </g>
+    </g>
+
+    <path d="M24 549H916" stroke="#35404C"/>
+    <g id="connection-key" font-size="16">
+      <path d="M26 569h32" stroke="#80CFF3" stroke-width="2.5"/>
+      <switch transform="translate(67 575)" fill="#C2DEEF">
+        <text systemLanguage="zh">已支持 · iOS 和 macOS 加密远程控制</text><text>Available · encrypted iOS and macOS remote control</text>
+      </switch>
+      <path d="M505 569h32" stroke="#F4C583" stroke-width="2.5" stroke-dasharray="6 5"/>
+      <switch transform="translate(546 575)" fill="#F0D6B3">
+        <text systemLanguage="zh">规划中 · 跨 Host 的 Agent 协作</text><text>Planned · agent collaboration across Hosts</text>
+      </switch>
+    </g>
   </g>
 </svg>

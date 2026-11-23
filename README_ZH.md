@@ -15,7 +15,7 @@ CtrlX 也是一款 AI 编程工作台。你可以带着已有的**上下文**换
 | | • **跨操作区给反馈。** 在文件、网页或模拟器里圈出问题，把标注带回原对话的输入框。 |
 | | • **跨 Agent 分头试方案。** 在 Mac 的 Codex 或 Claude Code 标签按 ⌘F 快速 Fork，让新 Agent 带着已有对话试另一条路。要隔离改动，可从 Fork 菜单选独立的 Git worktree。[Fork 用法](docs/services-reference.md#fork-a-native-agent-conversation-macios) |
 | | • **跨 App 唤起 Orbie。** 在 Mac 其他 App 里也能用全局快捷键接着聊，或从这段讨论 Fork 一个 Orbiter 去做支线。[Orbie 与 Orbiter](docs/global-agent-design.md) |
-| | • **跨用户协作（规划中）。** 希望你的 Agent 能把商定的接口交给同事的 Agent，让它接着做联调。 |
+| | • **跨用户协作（规划中）。** 邀请同事的 Agent 加入同一个 Room，按你们定好的接口一起联调。 |
 | **可恢复性** | • **找回工作现场。** 启用工作区恢复后，Mac 重启可找回标签、分屏和 CtrlX 编辑器中未发送的草稿。 |
 | | • **接回原对话。** 受支持的 Codex 和 Claude Code 版本可自动恢复已核实的对话。需要确认时，也能在 iPhone 上点 **Resume**。[工作区恢复](docs/workspace-recovery-design.md) |
 
@@ -31,9 +31,12 @@ CtrlX 也是一款 AI 编程工作台。你可以带着已有的**上下文**换
 
 ## 产品架构
 
-![CtrlX 产品架构。左侧的 Host Mac 在 tmux 中运行 Agent 和终端，负责工作流，也提供文件、Git、浏览器和 iOS 模拟器。右侧的另一台 Mac 和 iPhone 通过中间的 Relay 加密连接这个工作区。](docs/assets/ctrlx-architecture.svg)
+我们设想的 **Room** 把做同一件事的 Agent 聚在一起。全局 Agent **Orbie** 和 **Workflow** 都运行在你自己的 **Host Mac** 上。你可以从 Orbie 的对话中分出 **Orbiter** 探索支线。Workflow 可以由你直接启动，也可以交给 Orbie 控制。
 
-项目和 tmux 会话留在开发机（**Host**）。iPhone 或另一台 Mac（**Viewer**）通过 **Relay** 接入，工作区内容端到端加密。
+![CtrlX 目标架构。你的 Host 内有一条从 Orbie 指向 Workflow 的控制箭头。Room 内的开发 Agent 使用 Codex，测试 Agent 使用 Claude Code。Lin 的评审 Agent、Mia 的设计 Agent 和 Sam 的验收 Agent 将经 Relay 从各自的 Host 加入 Room。已配对的 Viewer 通过同一个 Relay 接入，分为 iOS、另一台 Mac 上的 macOS 和规划中的 Android 三个小框。](docs/assets/ctrlx-architecture.svg)
+
+- **远程控制（实线）。** iOS 和 macOS **Viewer** 已支持通过 **Relay** 端到端加密接入你的 Host。Android Viewer 在规划中。
+- **规划中的跨 Host 协作（虚线）。** 目前，同一工作流的 Agent 在同一台 Host 上执行任务。按规划，三位同事的 Agent 可以经同一个 Relay 加入你的 Room，仍在各自的 Mac 上工作。
 
 ## 比如，给报表加一个导出按钮
 
