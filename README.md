@@ -67,12 +67,12 @@ Codex, Claude Code and Traex have built-in integrations. Plugins are available f
 ### Connect an iPhone or another Mac
 
 1. **Install the Viewer.** Install CtrlX on another Mac or on an iPhone running **iOS 18 or later**.
-2. **Choose the same Relay.** On both devices, select the hosted Relay at `wss://ctrlx.zengjice.com:7001` or enter the address of your own Relay.
+2. **Choose the same Relay.** On both devices, select the hosted Relay at `wss://ctrlx.zengjice.com:7001` or enter the address of your own Relay. If your Relay requires an access key, save it under **Settings → Relay** on the Host before generating a pairing code. [Relay access keys](docs/self-hosting.md#optional-account-authentication-and-traffic-quotas)
 3. **Enter the pairing code.** Generate a code on the Mac running your agents (the Host) and enter it on the Viewer. Open the original session to pick up where you left off.
 
 If you already have a CtrlX IPA signed for your iPhone, connect the phone to your Mac over USB and choose **File → Install IPA on iPhone…** in CtrlX on the Mac. You can also build and sign the app locally with Xcode. [Local installation](RELEASE.md#local-overwrite-installation)
 
-Keep the Host awake, online and running CtrlX while you work remotely. If your Relay requires an access key, save it under **Settings → Relay** on the Host. To send iPhone push notifications through a self-hosted Relay, configure APNs. [Relay access keys](docs/self-hosting.md#optional-account-authentication-and-traffic-quotas) · [Push notifications](docs/self-hosting.md#apns)
+Keep the Host awake, online and running CtrlX while you work remotely. To send iPhone push notifications through a self-hosted Relay, configure APNs. [Push notifications](docs/self-hosting.md#apns)
 
 ## Privacy and open source
 

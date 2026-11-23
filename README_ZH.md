@@ -67,12 +67,12 @@ CtrlX 内置 Codex、Claude Code 和 Traex 集成，另有 OpenCode、pi 和 omp
 ### 从 iPhone 或另一台 Mac 连接
 
 1. **安装 Viewer。** 在另一台 Mac 或 iPhone（**iOS 18 或更新版本**）上安装 CtrlX。
-2. **选择同一 Relay。** 两端都使用托管中继 `wss://ctrlx.zengjice.com:7001`，或都填入你的自建中继地址。
+2. **选择同一 Relay。** 两端都使用托管中继 `wss://ctrlx.zengjice.com:7001`，或都填入你的自建中继地址。如果 Relay 要求访问密钥，请先在 Host 的 **Settings → Relay** 保存密钥，再生成配对码。[Relay 访问密钥](docs/self-hosting.md#optional-account-authentication-and-traffic-quotas)
 3. **输入配对码。** 在运行 Agent 的 Mac（Host）上生成配对码，在 Viewer 输入，打开原来的会话即可继续工作。
 
 如果已有适用于这台 iPhone 的 CtrlX 签名 IPA，用 USB 把 iPhone 连到 Mac，在 Mac 版 CtrlX 中选择 **File → Install IPA on iPhone…** 即可安装。也可以用 Xcode 本地构建并签名。[本地签名安装](RELEASE.md#local-overwrite-installation)
 
-远程使用期间，Host 需保持唤醒、联网并运行 CtrlX。如果 Relay 要求访问密钥，请在 Host 的 **Settings → Relay** 保存密钥。自建 Relay 如需向 iPhone 推送通知，还需配置 APNs。[Relay 访问密钥](docs/self-hosting.md#optional-account-authentication-and-traffic-quotas) · [推送配置](docs/self-hosting.md#apns)
+远程使用期间，Host 需保持唤醒、联网并运行 CtrlX。自建 Relay 如需向 iPhone 推送通知，还需配置 APNs。[推送配置](docs/self-hosting.md#apns)
 
 ## 隐私与开源
 
