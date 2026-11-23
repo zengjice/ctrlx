@@ -14,6 +14,7 @@ public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
     private var messageID: String?
     private var answer: [String] = []
     private var isEndTurn = false
+    private var activityLog: AgentTurnActivityLog?
 
     public init(conversationID: String, nativeTurnID: String, prompt: String, candidate: String) {
         self.conversationID = conversationID
@@ -33,6 +34,26 @@ public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
     public var recoveredCompletion: AgentWorkflowTranscriptOutcome? {
         guard let completedAnswer, !completedAnswer.isEmpty else { return nil }
         return .succeeded(completedAnswer)
+    }
+
+    public var activity: [AgentTurnActivity] {
+        activityLog?.entries ?? []
+    }
+
+    public var evictedActivityIDs: Set<String> {
+        activityLog?.evictedActivityIDs ?? []
+    }
+
+    public mutating func trackActivityEvictions(for ids: Set<String>) {
+        activityLog?.trackedEvictionIDs = ids
+    }
+
+    public mutating func captureActivity(aligningWith saved: [AgentTurnActivity]) {
+        activityLog = .init(aligningWith: saved)
+    }
+
+    public mutating func beginAppendingActivity() {
+        activityLog?.beginAppending()
     }
 
     public func isTurnStart(_ line: Data) throws -> Bool {
@@ -103,11 +124,24 @@ public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
                 messageID = nextMessageID
                 answer = []
             }
-            isEndTurn = message["stop_reason"] as? String == "end_turn"
+            let stopReason = message["stop_reason"] as? String
+            isEndTurn = stopReason == "end_turn"
                 && record["isApiErrorMessage"] as? Bool != true
-            for block in message["content"] as? [[String: Any]] ?? [] where block["type"] as? String == "text" {
-                if let text = block["text"] as? String {
+            let timestamp = activityLog == nil ? nil : AgentTurnActivity.parseTimestamp(record["timestamp"] as? String)
+            let blocks = message["content"] as? [[String: Any]] ?? []
+            for (index, block) in blocks.enumerated() {
+                switch block["type"] as? String {
+                case "text":
+                    guard let text = block["text"] as? String else { continue }
                     answer.append(text)
+                    if stopReason == "tool_use" {
+                        activityLog?.record(id: "\(id):\(index)", kind: .update, text: text, timestamp: timestamp)
+                    }
+                case "tool_use":
+                    if activityLog != nil, let toolID = block["id"] as? String, let name = block["name"] as? String {
+                        activityLog?.record(id: toolID, kind: .tool, text: "Called \(name)", timestamp: timestamp)
+                    }
+                default: break
                 }
             }
         } else if type == "system", record["subtype"] as? String == "stop_hook_summary" {

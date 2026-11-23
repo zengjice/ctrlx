@@ -12,7 +12,50 @@
             let reachedEnd: Bool
         }
 
+        struct ActivityDrain: Sendable {
+            fileprivate(set) var entries: [AgentTurnActivity]
+            fileprivate(set) var evictedActivityIDs: Set<String> = []
+            let isComplete: Bool
+            let hasPartialRecord: Bool
+            fileprivate var checkedEvictionIDs: Set<String> = []
+            fileprivate let revision: FileRevision
+
+            var fileIdentity: FileIdentity {
+                revision.identity
+            }
+        }
+
+        struct FileIdentity: Codable, Equatable, Sendable {
+            let device: dev_t
+            let inode: ino_t
+        }
+
+        fileprivate struct FileRevision: Equatable, Sendable {
+            let identity: FileIdentity
+            let size: UInt64
+            let modifiedSeconds: Int
+            let modifiedNanoseconds: Int
+            let changedSeconds: Int
+            let changedNanoseconds: Int
+
+            init(_ info: stat) {
+                self.identity = FileIdentity(device: info.st_dev, inode: info.st_ino)
+                self.size = UInt64(info.st_size)
+                self.modifiedSeconds = info.st_mtimespec.tv_sec
+                self.modifiedNanoseconds = info.st_mtimespec.tv_nsec
+                self.changedSeconds = info.st_ctimespec.tv_sec
+                self.changedNanoseconds = info.st_ctimespec.tv_nsec
+            }
+
+            func referencesSameFile(as other: Self) -> Bool {
+                identity == other.identity
+            }
+        }
+
         private let handle: FileHandle
+        private nonisolated let openedFile: FileRevision
+        private var initialParser: any AgentWorkflowTranscriptParser
+        private var replayingActivity = true
         private var parser: any AgentWorkflowTranscriptParser
         private var pending = AgentWorkflowTranscriptRecord()
         private var offset: UInt64 = 0
@@ -36,11 +79,17 @@
                 throw AgentWorkflowError("The native transcript could not be opened.")
             }
             var info = stat()
-            guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_uid == getuid() else {
+            guard fstat(fd, &info) == 0, info.st_size >= 0, info.st_mode & S_IFMT == S_IFREG, info.st_uid == getuid() else {
                 close(fd)
                 throw AgentWorkflowError("The native transcript must be a regular file owned by this user.")
             }
-            self.handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+            self.init(handle: FileHandle(fileDescriptor: fd, closeOnDealloc: true), revision: FileRevision(info), parser: parser)
+        }
+
+        private init(handle: FileHandle, revision: FileRevision, parser: any AgentWorkflowTranscriptParser) {
+            self.handle = handle
+            self.openedFile = revision
+            self.initialParser = parser
             self.parser = parser
             self.markers = parser.startMarkers.filter { !$0.isEmpty }.map { Data($0.utf8) }
             self.locating = !markers.isEmpty
@@ -51,17 +100,84 @@
             pendingOutcome = failure ?? parser.updateCandidate(candidate)
         }
 
+        var activityWindow: (entries: [AgentTurnActivity], evicted: Set<String>) {
+            (parser.activity, parser.evictedActivityIDs)
+        }
+
+        func trackSavedActivityEvictions(_ activity: [AgentTurnActivity]) {
+            parser.trackActivityEvictions(for: Set(activity.suffix(AgentTurnActivityLog.maximumEntries).map(\.id)))
+        }
+
+        nonisolated var fileIdentity: FileIdentity {
+            openedFile.identity
+        }
+
+        nonisolated func referencesSameFile(as other: AgentWorkflowTranscriptFile) -> Bool {
+            openedFile.referencesSameFile(as: other.openedFile)
+        }
+
+        nonisolated func referencesSameFile(as drain: ActivityDrain) -> Bool {
+            openedFile.referencesSameFile(as: drain.revision)
+        }
+
+        func alignActivity(with saved: [AgentTurnActivity]) {
+            initialParser.captureActivity(aligningWith: saved)
+            parser.captureActivity(aligningWith: saved)
+        }
+
         func pollRecovery() throws -> Poll {
             let result = try poll()
             guard result.reachedEnd, pending.retained.isEmpty else { return result }
             return .init(outcome: result.outcome ?? parser.recoveredCompletion, reachedEnd: true)
         }
 
-        func poll() throws -> Poll {
-            var info = stat()
-            guard fstat(handle.fileDescriptor, &info) == 0, info.st_size >= 0, UInt64(info.st_size) >= offset else {
-                throw AgentWorkflowError("The native transcript was truncated while verifying a turn.")
+        func drainActivity(reusing previous: ActivityDrain? = nil, checking candidates: Set<String> = []) async throws -> ActivityDrain {
+            let revision = try FileRevision(fileInfo())
+            if let previous, previous.revision == revision {
+                return try await checkEvictions(in: previous, for: candidates)
             }
+            let result = try await drain(through: revision.size)
+            let hasPartialRecord = result.outcome == nil && !locating && !pending.retained.isEmpty
+            let isComplete = result.outcome != nil || (!locating && !hasPartialRecord)
+            let saved = previous?.entries ?? []
+            let (observed, observedEvictions) = activityWindow
+            let evicted = observedEvictions.union(previous?.evictedActivityIDs ?? []).subtracting(observed.map(\.id))
+            let activityDrain = ActivityDrain(
+                entries: observed, evictedActivityIDs: evicted,
+                isComplete: isComplete, hasPartialRecord: hasPartialRecord, revision: revision
+            )
+            var checked = try await checkEvictions(in: activityDrain, for: candidates.union(saved.map(\.id)))
+            checked.entries = AgentTurnActivity.merging(observed, into: saved.filter { !checked.evictedActivityIDs.contains($0.id) })
+            return checked
+        }
+
+        func checkEvictions(in drain: ActivityDrain, for candidates: Set<String>) async throws -> ActivityDrain {
+            let missing = candidates.subtracting(drain.entries.map(\.id)).subtracting(drain.evictedActivityIDs).subtracting(drain.checkedEvictionIDs)
+            guard drain.entries.count >= AgentTurnActivityLog.maximumEntries, !missing.isEmpty else { return drain }
+            // Reuse the verified descriptor even if the path now names a replacement.
+            var parser = initialParser
+            parser.trackActivityEvictions(for: missing)
+            let replay = AgentWorkflowTranscriptFile(handle: handle, revision: drain.revision, parser: parser)
+            _ = try await replay.drain(through: drain.revision.size)
+            var checked = drain
+            checked.evictedActivityIDs.formUnion(await replay.parser.evictedActivityIDs)
+            checked.checkedEvictionIDs.formUnion(missing)
+            return checked
+        }
+
+        private func drain(through end: UInt64) async throws -> Poll {
+            updateCandidate("")
+            while true {
+                let result = try poll(through: end)
+                if result.outcome != nil || result.reachedEnd {
+                    return result
+                }
+                await Task.yield()
+            }
+        }
+
+        func poll(through end: UInt64? = nil) throws -> Poll {
+            _ = try fileInfo()
             if let outcome = pendingOutcome {
                 pendingOutcome = nil
                 return .init(outcome: outcome, reachedEnd: false)
@@ -70,7 +186,7 @@
             for _ in 0..<16 {
                 try Task.checkCancellation()
                 if buffered.isEmpty {
-                    guard let bytes = try readChunk(), !bytes.isEmpty else {
+                    guard let bytes = try readChunk(through: end), !bytes.isEmpty else {
                         // The prompt or its newline may not exist yet. Keep the
                         // locator's partial-record position until it is complete.
                         return .init(outcome: nil, reachedEnd: true)
@@ -100,7 +216,13 @@
                         // Reuse the complete, image-stripped start record;
                         // do not seek back and parse its payload a second time.
                     }
-                    if !value.isEmpty, let outcome = try parser.consume(value) {
+                    guard !value.isEmpty else { continue }
+                    if replayingActivity, offset - UInt64(buffered.count) > openedFile.size {
+                        replayingActivity = false
+                        parser.beginAppendingActivity()
+                    }
+                    let outcome = try parser.consume(value)
+                    if let outcome {
                         if case .failed = outcome {
                             failure = outcome
                         }
@@ -136,7 +258,6 @@
                         // A late ID requires revisiting the skipped prefix.
                         // The ordinary poll loop accounts for every read and
                         // retains its partial record across budget boundaries.
-                        try handle.seek(toOffset: recordStart)
                         offset = recordStart
                         buffered = Data()
                     }
@@ -151,9 +272,26 @@
             buffered = Data()
         }
 
-        private func readChunk() throws -> Data? {
-            let bytes = try handle.read(upToCount: 64 * 1_024)
-            bytesRead += UInt64(bytes?.count ?? 0)
+        private func fileInfo() throws -> stat {
+            var info = stat()
+            guard fstat(handle.fileDescriptor, &info) == 0, info.st_size >= 0, UInt64(info.st_size) >= offset else {
+                throw AgentWorkflowError("The native transcript was truncated while verifying a turn.")
+            }
+            return info
+        }
+
+        private func readChunk(through end: UInt64?) throws -> Data? {
+            let size: UInt64 = 64 * 1_024
+            let available = end.map { min(size, $0 - offset) } ?? size
+            guard available > 0 else { return nil }
+            // Activity replay and the live reader have independent cursors.
+            var bytes = Data(count: Int(available))
+            let count = bytes.withUnsafeMutableBytes { buffer in
+                pread(handle.fileDescriptor, buffer.baseAddress, buffer.count, off_t(offset))
+            }
+            guard count >= 0 else { throw AgentWorkflowError("The native transcript could not be read.") }
+            bytes.count = count
+            bytesRead += UInt64(count)
             return bytes
         }
     }

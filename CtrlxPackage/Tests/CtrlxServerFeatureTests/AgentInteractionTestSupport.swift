@@ -64,7 +64,10 @@ final class AgentInteractionTestSupport {
         try await restartInteraction(verificationTimeout: verificationTimeout)
     }
 
-    func restartInteraction(verificationTimeout: Duration = .seconds(60)) async throws {
+    func restartInteraction(
+        verificationTimeout: Duration = .seconds(60),
+        onFailure: @escaping @Sendable (String) -> Void = { Issue.record(Comment(rawValue: $0)) }
+    ) async throws {
         await interaction?.shutdown()
         catalog = AgentRuntimeCatalog(hostID: hostID) { [weak self] _ in
             guard let self else { throw CancellationError() }
@@ -106,7 +109,7 @@ final class AgentInteractionTestSupport {
                 try await synchronizeEvents()
             },
             verificationTimeout: verificationTimeout,
-            onFailure: { Issue.record(Comment(rawValue: $0)) }
+            onFailure: onFailure
         )
         try await interaction.start()
     }

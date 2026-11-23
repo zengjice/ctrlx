@@ -53,6 +53,88 @@ struct CodexWorkflowTranscriptTests {
     }
 
     @Test
+    func activityUsesOnlyVisibleItemsFromTheAcceptedTurn() throws {
+        var parser = CodexWorkflowTranscript(conversationID: "session", nativeTurnID: "turn")
+        func item(_ item: [String: Any], turn: String = "turn", thread: String = "session") throws -> Data {
+            try JSONSerialization.data(withJSONObject: [
+                "type": "event_msg", "timestamp": "1970-01-01T00:00:01.125Z",
+                "payload": ["type": "item_completed", "turn_id": turn, "thread_id": thread, "item": item],
+            ])
+        }
+        let update = ["type": "AgentMessage", "id": "update", "phase": "commentary", "content": [["type": "Text", "text": "Checking the source"]]] as [String: Any]
+        _ = try parser.consume(record("session_meta", ["id": "session"]))
+        _ = try parser.consume(item(update))
+        #expect(parser.activity.isEmpty)
+        parser.captureActivity()
+        _ = try parser.consume(item(update, turn: "old"))
+        _ = try parser.consume(item(update, thread: "different"))
+        _ = try parser.consume(item(["type": "Reasoning", "id": "private", "summary_text": ["Private reasoning"]]))
+        _ = try parser.consume(item(update.merging(["phase": "final_answer"]) { _, new in new }))
+        #expect(parser.activity.isEmpty)
+        _ = try parser.consume(item(update))
+        _ = try parser.consume(item(update))
+        _ = try parser.consume(item([
+            "type": "CommandExecution", "id": "command", "status": "completed",
+            "parsed_cmd": [["type": "unknown", "cmd": "git status --secret=hidden"]], "aggregated_output": "Hidden output",
+        ]))
+        _ = try parser.consume(item(["type": "McpToolCall", "id": "tool", "status": "failed", "tool": "lookup", "error": "Hidden error"]))
+        #expect(parser.activity.map(\.text) == ["Checking the source", "Ran git", "lookup failed"])
+        #expect(parser.activity.allSatisfy { $0.timestamp == Date(timeIntervalSince1970: 1.125) })
+        #expect(try parser.consume(record("event_msg", ["type": "task_complete", "turn_id": "turn", "last_agent_message": "Final"])) == .succeeded("Final"))
+        _ = try parser.consume(item(["type": "FileChange", "id": "late", "status": "completed"]))
+        #expect(parser.activity.count == 3)
+    }
+
+    @Test
+    func activityKeepsOnlyTheMostRecentBoundedEntries() {
+        var activity = AgentTurnActivityLog()
+        for index in 0..<30 {
+            activity.record(id: String(index), kind: .update, text: String(repeating: "中", count: 500))
+        }
+        #expect(activity.entries.map(\.id) == (12..<30).map(String.init))
+        #expect(activity.entries.last?.text.unicodeScalars.count == 360)
+    }
+
+    @Test
+    func longActivityOnlyTracksEvictionsRequestedForRecovery() throws {
+        var parser = CodexWorkflowTranscript(conversationID: "session", nativeTurnID: "turn")
+        parser.captureActivity()
+        _ = try parser.consume(record("session_meta", ["id": "session"]))
+        for index in 0..<50_000 {
+            _ = try parser.consume(record("event_msg", [
+                "type": "item_completed", "turn_id": "turn", "item": ["type": "ImageView", "id": String(index)],
+            ]))
+        }
+        #expect(parser.activity.map(\.id) == (49_982..<50_000).map(String.init))
+        #expect(parser.evictedActivityIDs.isEmpty)
+
+        parser.trackActivityEvictions(for: ["49982", "49999"])
+        _ = try parser.consume(record("event_msg", [
+            "type": "item_completed", "turn_id": "turn", "item": ["type": "ImageView", "id": "50000"],
+        ]))
+        #expect(parser.evictedActivityIDs == ["49982"])
+        parser.trackActivityEvictions(for: ["49999"])
+        #expect(parser.evictedActivityIDs.isEmpty)
+    }
+
+    @Test
+    func offlineActivityAfterAnOlderSharedEntryContinuesAfterSavedHistory() {
+        var original = AgentTurnActivityLog()
+        for index in 1...36 {
+            original.record(id: "tool-\(index)", kind: .tool, text: "Tool \(index)")
+        }
+        var replay = AgentTurnActivityLog(aligningWith: original.entries)
+        for index in 1...19 {
+            replay.record(id: "tool-\(index)", kind: .tool, text: "Tool \(index)")
+        }
+        for index in 1...18 {
+            replay.record(id: "offline-\(index)", kind: .tool, text: "Offline tool \(index)")
+        }
+        #expect(replay.entries.map(\.id) == (1...18).map { "offline-\($0)" })
+        #expect(replay.entries.compactMap(\.sequence) == Array(37...54))
+    }
+
+    @Test
     func rejectedSubmissionHasMatchingCompletionWithoutAnAnswer() throws {
         var parser = CodexWorkflowTranscript(conversationID: "session", nativeTurnID: "rejected-turn")
         _ = try parser.consume(record("session_meta", ["id": "session"]))

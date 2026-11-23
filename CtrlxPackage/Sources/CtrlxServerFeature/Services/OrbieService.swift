@@ -119,10 +119,10 @@ final class OrbieService {
                 record = saved
                 draft = saved.draft
             }
-            try await reconcile(inspect: inspect)
             if inspect {
                 try await interaction.resumePendingReplies()
             }
+            try await reconcile(inspect: inspect)
             refreshIssue = nil
         } catch is CancellationError {
             // Closing a panel cancels its inspection, not the next user operation.

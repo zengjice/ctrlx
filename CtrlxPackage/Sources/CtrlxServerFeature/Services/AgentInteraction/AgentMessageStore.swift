@@ -18,9 +18,29 @@ struct AgentMessage: Codable, Equatable, Identifiable, Sendable {
     }
 
     var attachments: [Attachment]?
+    var activity: [AgentTurnActivity]?
+    var needsFailureActivity: Bool?
+    var activitySource: AgentActivitySnapshot.Source?
     var answer: String?
     var completedAt: Date?
     var issue: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case createdAt
+        case instance
+        case text
+        case prompt
+        case status
+        case nativeEvent
+        case attachments
+        case activity
+        case needsFailureActivity
+        case answer
+        case completedAt
+        case issue
+        case activitySource = "failureActivitySource"
+    }
 
     var agentID: AgentID {
         instance.agentID
@@ -30,12 +50,99 @@ struct AgentMessage: Codable, Equatable, Identifiable, Sendable {
         [.pending, .writing, .awaitingAcceptance, .running, .uncertain].contains(status)
     }
 
+    var needsReplyRecovery: Bool {
+        isPending || needsFailureActivity == true
+    }
+
+    mutating func recordNativeFailure(_ event: PluginWorkflowEvent) {
+        nativeEvent = event
+        status = .failed
+        issue = event.text
+        completedAt = Date()
+        needsFailureActivity = true
+    }
+
+    @discardableResult
+    mutating func mergeActivity(_ snapshot: AgentActivitySnapshot, finalizing: Bool = false, preferObservedOrder: Bool = true) -> Bool {
+        let previous = activity
+        let previousSource = activitySource
+        let source = if let previousSource, let observedSource = snapshot.source, previousSource != observedSource {
+            AgentActivitySnapshot.Source.rotated
+        } else {
+            previousSource ?? snapshot.source
+        }
+        let rotated = source == .rotated
+        activity?.removeAll { snapshot.evictedActivityIDs.contains($0.id) }
+        mergeActivity(snapshot.entries, preferTimestamps: rotated, preferObservedOrder: rotated && preferObservedOrder)
+        activitySource = finalizing ? nil : source
+        return activity != previous || activitySource != previousSource
+    }
+
+    @discardableResult
+    mutating func mergeActivity(_ observed: [AgentTurnActivity], preferTimestamps: Bool = false, preferObservedOrder: Bool = false) -> Bool {
+        guard !observed.isEmpty else { return false }
+        let saved = activity ?? []
+        let merged = if preferObservedOrder {
+            AgentTurnActivity.merging(saved, into: observed, preferTimestamps: preferTimestamps)
+        } else {
+            AgentTurnActivity.merging(observed, into: saved, preferTimestamps: preferTimestamps)
+        }
+        // Keep shared IDs available until the result is merged with saved activity.
+        let recent = Array(merged.suffix(AgentTurnActivityLog.maximumEntries))
+        guard recent != activity else { return false }
+        activity = recent
+        return true
+    }
+
     init(id: UUID = UUID(), instance: AgentWorkflowInstance, text: String, instructions: String = "", now: Date = Date()) {
         self.id = id
         self.createdAt = now
         self.instance = instance
         self.text = text
         self.prompt = [text, instructions, "[CtrlX message: \(id.uuidString)]"].filter { !$0.isEmpty }.joined(separator: "\n\n")
+    }
+}
+
+extension AgentTurnActivity {
+    static func merging(_ observed: [Self], into saved: [Self], preferTimestamps: Bool = false) -> [Self] {
+        guard !saved.isEmpty else { return observed }
+        var merged = saved
+        let savedIDs = Set(saved.map(\.id))
+        var insertionIndex = merged.endIndex
+        for (position, entry) in observed.enumerated().reversed() {
+            if let index = merged.firstIndex(where: { $0.id == entry.id }) {
+                if merged[index].timestamp == nil {
+                    merged[index].timestamp = entry.timestamp
+                }
+                insertionIndex = index
+            } else {
+                let precedingID = observed[..<position].last { savedIDs.contains($0.id) }?.id
+                let precedingIndex = precedingID.flatMap { id in merged.firstIndex { $0.id == id } }
+                // Timestamps cannot move an entry ahead of a known predecessor.
+                let lowerBound = min(precedingIndex.map { $0 + 1 } ?? 0, insertionIndex)
+                let index = (lowerBound..<insertionIndex).first { index in
+                    let existing = merged[index]
+                    if
+                        let time = entry.timestamp, let existingTime = existing.timestamp,
+                        preferTimestamps || (entry.hasAlignedSequence != true && existingTime != time) {
+                        return existingTime > time
+                    }
+                    return entry.sequence.map { (existing.sequence ?? (index + 1)) >= $0 } ?? false
+                }
+                insertionIndex = index ?? insertionIndex
+                if preferTimestamps, let time = entry.timestamp {
+                    // Walk equal-time entries from the end to preserve their recorded order.
+                    while
+                        insertionIndex > lowerBound,
+                        merged[insertionIndex - 1].timestamp == time,
+                        merged[insertionIndex - 1].id > entry.id {
+                        insertionIndex -= 1
+                    }
+                }
+                merged.insert(entry, at: insertionIndex)
+            }
+        }
+        return merged
     }
 }
 
@@ -86,6 +193,10 @@ actor AgentMessageStore {
     }
 
     func pending() throws -> [AgentMessage] {
+        try recoverableReplies().filter(\.isPending)
+    }
+
+    func recoverableReplies() throws -> [AgentMessage] {
         if let active {
             return Array(active.values)
         }
@@ -96,7 +207,7 @@ actor AgentMessageStore {
         let messages = try files.filter { $0.pathExtension == "json" }.compactMap { file -> AgentMessage? in
             guard let id = UUID(uuidString: file.deletingPathExtension().lastPathComponent) else { return nil }
             let entry = try message(id)
-            return entry?.isPending == true ? entry : nil
+            return entry?.needsReplyRecovery == true ? entry : nil
         }
         active = Dictionary(uniqueKeysWithValues: messages.map { ($0.id, $0) })
         return messages
@@ -115,6 +226,33 @@ actor AgentMessageStore {
     func update(_ id: UUID, _ change: @Sendable (inout AgentMessage) throws -> Void) throws {
         guard var message = try message(id) else { throw AgentWorkflowError("The message was not found.") }
         try change(&message)
+        try save(message)
+    }
+
+    func updateActivity(_ activity: AgentActivitySnapshot, for context: AgentReplyContext) throws -> AgentMessage? {
+        guard
+            var message = try message(context.id), message.isPending,
+            message.instance.matchesConversation(context.instance),
+            message.nativeEvent?.nativeTurnID == context.candidate.nativeTurnID,
+            message.nativeEvent?.transcriptPath == context.candidate.transcriptPath else { return nil }
+        if message.mergeActivity(activity) {
+            try save(message)
+        }
+        return message
+    }
+
+    func saveRecoveredActivity(_ result: AgentActivitySnapshot, for context: AgentReplyContext, finalizing: Bool = true) throws {
+        guard
+            var message = try message(context.id), message.status == .failed,
+            message.nativeEvent == context.candidate, message.needsFailureActivity == true,
+            message.instance.matchesConversation(context.instance) else { return }
+        let isComplete = finalizing && result.isComplete
+        // A complete replay supplies the cross-file order for IDs in a partial save.
+        let changed = message.mergeActivity(result, finalizing: isComplete, preferObservedOrder: isComplete)
+        if isComplete {
+            message.needsFailureActivity = nil
+        }
+        guard changed || isComplete else { return }
         try save(message)
     }
 
@@ -169,7 +307,7 @@ actor AgentMessageStore {
             authorizations.removeValue(forKey: message.id)?.revoke()
         }
         if active != nil {
-            active?[message.id] = message.isPending ? message : nil
+            active?[message.id] = message.needsReplyRecovery ? message : nil
         }
         for observer in observers.values {
             observer.yield(())

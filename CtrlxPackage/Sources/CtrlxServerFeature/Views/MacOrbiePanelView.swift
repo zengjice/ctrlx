@@ -148,7 +148,7 @@ public struct MacOrbiePanelView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 20) {
                         ForEach(messages) { messageRow($0) }
-                        if status != .ready {
+                        if status != .ready, status != .working || pending?.activity?.isEmpty != false {
                             statusCard
                         }
                         if let issue = notice ?? serviceIssue {
@@ -361,6 +361,7 @@ public struct MacOrbiePanelView: View {
                 Text(OrbieAgentCatalog.bounded(message.text, bytes: 4_000)).textSelection(.enabled)
                     .padding(12).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
             }
+            OrbieMessageActivity(entries: message.activity ?? [], isPending: message.isPending)
             if let answer = message.answer {
                 Label(title, symbol: .sparkles).font(.caption).foregroundStyle(.secondary)
                 Text(OrbieAgentCatalog.displayAnswer(OrbieAgentCatalog.bounded(answer, bytes: 8_000))).textSelection(.enabled)

@@ -239,6 +239,7 @@ struct AgentMessageTests {
         try await f.restartInteraction()
         let failed = try #require(try await f.interaction.store.message(message.id))
         #expect(failed.status == .failed && failed.issue == "Saved native failure")
+        #expect(failed.needsFailureActivity == true)
         #expect(await f.interaction.observationCounts().transcripts == 0)
         #expect(f.writes.isEmpty)
         try await f.cleanup()

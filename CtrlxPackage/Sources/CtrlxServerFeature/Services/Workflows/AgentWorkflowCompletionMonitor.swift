@@ -28,7 +28,7 @@ actor AgentWorkflowCompletionMonitor {
             // A stale catalog conversation does not replace the accepted turn.
             // inspect still verifies its live process and native conversation.
             return AgentReplyState(isPending: pending, instance: current)
-        }, completed: { context, live, outcome in
+        }, completed: { context, live, outcome, _ in
             guard let run = try await store.snapshot().runs.first(where: { $0.invocations.contains { $0.id == context.id } }) else { return }
             switch outcome {
             case let .succeeded(answer):

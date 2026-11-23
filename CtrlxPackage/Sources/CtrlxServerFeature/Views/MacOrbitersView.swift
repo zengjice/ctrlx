@@ -277,6 +277,7 @@ struct MacOrbitersView: View {
             }.disabled(service.isBusy)
             ForEach(service.history(record)) { message in
                 Text(message.text).font(.headline).textSelection(.enabled)
+                OrbieMessageActivity(entries: message.activity ?? [], isPending: message.isPending)
                 if let answer = message.answer {
                     Text(answer).textSelection(.enabled)
                     Button("Give to Orbie…") { perform {

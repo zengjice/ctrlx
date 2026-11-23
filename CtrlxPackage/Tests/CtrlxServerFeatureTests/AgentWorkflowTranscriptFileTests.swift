@@ -42,6 +42,40 @@ struct AgentWorkflowTranscriptFileTests {
         }
     }
 
+    @Test
+    func activityDrainReusesUnchangedIncompleteFileWithoutReadingAnyBytes() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-activity-drain-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let transcript = root.appendingPathComponent("native.jsonl")
+        let full = Data("""
+        {"type":"session_meta","payload":{"id":"session"}}
+        {"type":"event_msg","payload":{"type":"task_started","turn_id":"current"}}
+        {"type":"event_msg","payload":{"type":"item_completed","turn_id":"current","item":{"id":"first","type":"ImageView"}}}
+        {"type":"event_msg","payload":{"type":"item_completed","turn_id":"current","item":{"id":"last","type":"ImageView"}}}
+
+        """.utf8)
+        let partial = Data(full.dropLast(8))
+        try partial.write(to: transcript)
+        var parser = CodexWorkflowTranscript(conversationID: "session", nativeTurnID: "current")
+        parser.captureActivity()
+        let reader = try AgentWorkflowTranscriptFile(path: transcript.path, parser: parser)
+        let first = try await reader.drainActivity()
+        #expect(!first.isComplete && first.entries.map(\.id) == ["first"])
+        #expect(await reader.bytesRead == partial.count)
+
+        let retryReader = try AgentWorkflowTranscriptFile(path: transcript.path, parser: parser)
+        let retry = try await retryReader.drainActivity(reusing: first)
+        #expect(!retry.isComplete && retry.entries == first.entries)
+        #expect(await retryReader.bytesRead == 0)
+
+        try full.write(to: transcript)
+        let completedReader = try AgentWorkflowTranscriptFile(path: transcript.path, parser: parser)
+        let completed = try await completedReader.drainActivity(reusing: retry)
+        #expect(completed.isComplete && completed.entries.map(\.id) == ["first", "last"])
+        #expect(await completedReader.bytesRead == full.count)
+    }
+
     @Test(arguments: ["codex", "claude"])
     func legalPNGAndOldImageRecordsDoNotBlockCurrentResult(plugin: String) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-workflow-large-image-\(UUID())")

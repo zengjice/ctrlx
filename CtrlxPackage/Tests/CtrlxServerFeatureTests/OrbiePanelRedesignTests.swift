@@ -2,6 +2,7 @@ import AppKit
 import CtrlxCommon
 import CtrlxEncryption
 import CtrlxNetworking
+import CtrlxPluginProtocol
 import Dependencies
 import SwiftUI
 import Testing
@@ -262,6 +263,9 @@ struct OrbiePanelRedesignTests {
             try await original.create(pluginID: "codex", providerID: nil)
             var message = try AgentMessage(instance: #require(original.instance), text: "Review the Orbie panel interaction and suggest the next step.")
             message.status = .uncertain
+            var activity = AgentTurnActivityLog()
+            activity.record(id: "read", kind: .file, text: "Read panel.swift")
+            message.activity = activity.entries
             try await f.interaction.store.insert(message)
             let store = OrbieStore(paths: f.paths, hostID: f.hostID)
             var saved = try await store.load()
@@ -287,6 +291,7 @@ struct OrbiePanelRedesignTests {
                 let frame = unsafeBitCast(implementation, to: (@convention(c) (AnyObject, Selector) -> CGRect).self)(control, selector)
                 #expect(frame.width > 0 && frame.height > 0 && window.frame.contains(frame), Comment(rawValue: "\(identifier): \(frame), window: \(window.frame)"))
             }
+            #expect(find("Read panel.swift", in: hosting) != nil)
             #expect(find("orbie-panel-search", in: hosting) == nil)
             if let evidence = ProcessInfo.processInfo.environment["CTRLX_ORBIE_UI_EVIDENCE"], let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) {
                 hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
@@ -315,6 +320,50 @@ struct OrbiePanelRedesignTests {
             }
         }
         return nil
+    }
+
+    @Test
+    func nativeOrbiterHistoryShowsActivityFromBeforeTheLastThreeMessages() async throws {
+        try await withDependencies {
+            $0[PreferencesService.self] = .inMemory()
+            $0[SecretsService.self] = .inMemory()
+            $0[SimulatorSystemClient.self] = SimulatorSystemClient()
+        } operation: {
+            _ = NSApplication.shared
+            NSApp.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
+            let f = try await AgentInteractionTestSupport()
+            let service = await f.orbiters()
+            service.draft = .init(title: "Expert", goal: "Review history", directory: f.root.path)
+            let id = try await service.create(pluginID: "codex", providerID: nil)
+            for index in 1...4 {
+                service.drafts[id] = "Prompt \(index)"
+                try await service.send(id)
+                let message = try #require(service.messages.last)
+                try await f.complete(message, answer: "Reply \(index)")
+                if index == 1 {
+                    var activity = AgentTurnActivityLog()
+                    activity.record(id: "read", kind: .file, text: "Read first.md")
+                    let entries = activity.entries
+                    try await f.interaction.store.update(message.id) { $0.activity = entries }
+                }
+            }
+            let coordinator = AppCoordinator()
+            let window = NSWindow(contentRect: .init(x: -10_000, y: -10_000, width: 740, height: 620), styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let hosting = NSHostingView(rootView: MacOrbitersView(service: service, initialSelection: id).environment(coordinator))
+            window.contentView = hosting
+            window.orderBack(nil)
+            defer { window.close() }
+            try await Task.sleep(for: .milliseconds(250))
+            try #require(find("Reply 1", in: hosting) != nil)
+            let activity = try #require(find("Agent activity", in: hosting))
+            #expect(find("Read first.md", in: hosting) == nil)
+            try press(activity)
+            try await Task.sleep(for: .milliseconds(100))
+            #expect(find("Read first.md", in: hosting) != nil)
+            window.contentView = nil
+            try await f.cleanup()
+        }
     }
 
     @Test

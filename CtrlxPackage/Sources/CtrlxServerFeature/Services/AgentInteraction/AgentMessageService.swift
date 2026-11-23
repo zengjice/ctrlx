@@ -19,6 +19,8 @@ actor AgentMessageService {
     private var nextCatalogRefresh = ContinuousClock.now
     private var events: [UUID: (token: UUID, task: Task<Void, Never>)] = [:]
     private var acknowledgements: [UUID: Task<Void, Never>] = [:]
+    private var activityRecoveries: Set<UUID> = []
+    private var reportedActivityRecoveryErrors: Set<UUID> = []
     private var stopped = false
 
     init(
@@ -49,7 +51,7 @@ actor AgentMessageService {
         monitor = AgentReplyMonitor(state: { [weak self] context in
             guard let self else { throw CancellationError() }
             return try await self.replyState(context)
-        }, completed: { [store] context, live, outcome in
+        }, completed: { [store] context, live, outcome, activity in
             try await store.update(context.id) { message in
                 guard
                     message.isPending, message.instance.matchesConversation(live),
@@ -61,6 +63,7 @@ actor AgentMessageService {
                 case let .failed(reason): message.status = .failed
                     message.issue = reason
                 }
+                message.mergeActivity(activity, finalizing: true)
                 message.completedAt = Date()
             }
         }, waiting: { [store] context, reason, temporary in
@@ -74,8 +77,10 @@ actor AgentMessageService {
         }, inspect: inspect, verificationTimeout: verificationTimeout, missingRuntimeTimeout: verificationTimeout, synchronizeRecovery: { [weak self] id in
             guard let self else { throw CancellationError() }
             try await self.synchronizeReplyEvents(id)
+        }, activityChanged: { [store] context, activity in
+            try await store.updateActivity(activity, for: context)
         }, onFailure: onFailure)
-        for message in try await store.pending() {
+        for message in try await store.recoverableReplies() {
             // A process restart is never evidence that a saved write was unsent.
             if message.status == .pending || message.status == .writing || message.status == .awaitingAcceptance {
                 try await store.update(message.id) {
@@ -92,7 +97,7 @@ actor AgentMessageService {
     /// Refreshing a role may retry verification, never terminal submission.
     func resumePendingReplies() async throws {
         guard !stopped else { return }
-        for message in try await store.pending() {
+        for message in try await store.recoverableReplies() {
             if let event = message.nativeEvent {
                 await verify(message, event: event)
             }
@@ -113,7 +118,12 @@ actor AgentMessageService {
     private func replyState(_ context: AgentReplyContext) async throws -> AgentReplyState {
         let message = try await store.message(context.id)
         guard message?.isPending == true, message?.nativeEvent?.nativeTurnID == context.candidate.nativeTurnID else {
-            return AgentReplyState(isPending: false, instance: nil)
+            return AgentReplyState(
+                isPending: false, instance: nil,
+                needsFailureActivity: message?.needsFailureActivity == true
+                    && message?.nativeEvent?.nativeTurnID == context.candidate.nativeTurnID
+                    && message?.nativeEvent?.transcriptPath == context.candidate.transcriptPath
+            )
         }
         // Pending replies must not depend on a visible panel or an active
         // workflow to populate the directory after startup or Agent restart.
@@ -199,7 +209,7 @@ actor AgentMessageService {
     /// Stops watching; it cannot retract terminal bytes or terminate the Agent.
     func stopWaiting(_ id: UUID) async throws {
         try await store.update(id) {
-            guard $0.isPending else { return }
+            guard $0.isPending, $0.nativeEvent?.kind != .failed else { return }
             $0.status = .cancelled
             $0.issue = "Stopped waiting here. The Agent may still be running; continue in its terminal."
         }
@@ -239,7 +249,7 @@ actor AgentMessageService {
 
     private func accept(_ id: UUID, event: PluginEvent, native: PluginWorkflowEvent) async {
         do {
-            guard var message = try await store.message(id), message.isPending else { return }
+            guard let message = try await store.message(id), message.isPending else { return }
             var observed = message.instance
             observed.conversationID = event.sessionID
             let clock = ContinuousClock()
@@ -265,15 +275,20 @@ actor AgentMessageService {
                     }
                     saved.status = .running
                     saved.issue = nil
-                } else if saved.nativeEvent?.nativeTurnID == native.nativeTurnID {
-                    saved.nativeEvent = native
+                } else if AgentReplyEvidence.turn(native, id: saved.nativeEvent?.nativeTurnID, path: saved.nativeEvent?.transcriptPath) {
+                    if native.kind == .failed {
+                        saved.recordNativeFailure(native)
+                    } else {
+                        saved.nativeEvent = native
+                    }
                 }
             }
             acknowledgements.removeValue(forKey: id)?.cancel()
             await catalog.confirm(verified)
-            guard let current = try await store.message(id), current.isPending, let evidence = current.nativeEvent else { return }
-            message = current
-            await verify(message, event: evidence)
+            guard
+                let current = try await store.message(id), let evidence = current.nativeEvent,
+                current.isPending || (current.needsFailureActivity == true && evidence == native) else { return }
+            await verify(current, event: evidence)
         } catch is CancellationError {
             // The saved request remains available for reconciliation after restart.
         } catch {
@@ -287,21 +302,60 @@ actor AgentMessageService {
     }
 
     private func verify(_ message: AgentMessage, event: PluginWorkflowEvent) async {
+        guard !stopped else { return }
+        let context = AgentReplyContext(
+            id: message.id, instance: message.instance, prompt: message.prompt, candidate: event,
+            savedActivity: message.activity ?? [], savedActivitySource: message.activitySource
+        )
         if event.kind == .failed {
+            guard activityRecoveries.insert(message.id).inserted else { return }
+            defer { activityRecoveries.remove(message.id) }
             do {
-                try await store.update(message.id) {
-                    guard $0.isPending, $0.nativeEvent == event else { return }
-                    $0.status = .failed
-                    $0.issue = event.text
-                    $0.completedAt = Date()
+                if message.isPending {
+                    // Earlier versions could persist the receipt before settling the message.
+                    try await store.update(message.id) {
+                        guard $0.isPending, $0.nativeEvent == event else { return }
+                        $0.recordNativeFailure(event)
+                    }
                 }
+                guard
+                    let monitor,
+                    let saved = try await store.message(message.id),
+                    saved.needsFailureActivity == true, saved.nativeEvent == event else { return }
                 acknowledgements.removeValue(forKey: message.id)?.cancel()
-                await monitor?.cancel(message.id)
-            } catch { onFailure(error.localizedDescription) }
+                if let cached = await monitor.cachedActivity(for: context) {
+                    try Task.checkCancellation()
+                    try await store.saveRecoveredActivity(cached, for: context, finalizing: false)
+                }
+                let provider = await provider(message.instance.pluginID)
+                let recovered: AgentActivitySnapshot?
+                do {
+                    recovered = try await monitor.finishActivity(context, provider: provider)
+                } catch {
+                    if let cached = await monitor.cachedActivity(for: context), !stopped {
+                        try Task.checkCancellation()
+                        try await store.saveRecoveredActivity(cached, for: context, finalizing: false)
+                    }
+                    throw error
+                }
+                guard let result = recovered, !stopped else { return }
+                try Task.checkCancellation()
+                try await store.saveRecoveredActivity(result, for: context)
+                await monitor.didSaveActivity(context)
+                reportedActivityRecoveryErrors.remove(message.id)
+            } catch is CancellationError {
+                // The saved failure receipt will be reconciled after restart.
+            } catch let error as CocoaError where error.code == .fileNoSuchFile {
+                // The Agent can create the transcript after sending its receipt.
+            } catch {
+                if reportedActivityRecoveryErrors.insert(message.id).inserted {
+                    onFailure("Could not recover Agent activity: \(error.localizedDescription)")
+                }
+            }
             return
         }
         guard let provider = await provider(message.instance.pluginID) else { return }
-        await monitor?.verify(.init(id: message.id, instance: message.instance, prompt: message.prompt, candidate: event), provider: provider)
+        await monitor?.verify(context, provider: provider)
     }
 
     func observationCounts() async -> (receipts: Int, acknowledgements: Int, transcripts: Int) {

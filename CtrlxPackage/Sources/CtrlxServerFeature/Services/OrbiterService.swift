@@ -112,10 +112,10 @@ final class OrbiterService {
 
     private func refreshContents(inspect: Bool) async {
         do {
-            try await reconcile(inspect: inspect)
             if inspect {
                 try await interaction.resumePendingReplies()
             }
+            try await reconcile(inspect: inspect)
             issue = nil
         } catch is CancellationError {
             return

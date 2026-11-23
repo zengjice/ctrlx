@@ -120,6 +120,7 @@
                         ForEach(orbie.historyPage.messages) { message in
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(message.text).font(.headline)
+                                OrbieMessageActivity(entries: message.activity ?? [], isPending: message.isPending)
                                 if let answer = message.answer {
                                     Text(answer).textSelection(.enabled)
                                 } else {

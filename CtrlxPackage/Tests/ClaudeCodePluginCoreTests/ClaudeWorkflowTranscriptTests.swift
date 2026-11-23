@@ -82,8 +82,17 @@ struct ClaudeWorkflowTranscriptTests {
     @Test
     func toolReplyWithNativeStopWhitespaceNormalizationStillRequiresAnUnblockedSummary() throws {
         var parser = try started()
+        parser.captureActivity()
+        _ = try parser.consume(record("unrelated-tool", parent: "previous-turn", [
+            "type": "assistant", "message": ["id": "other-message", "content": [["type": "tool_use", "id": "other", "name": "Other"]]],
+        ]))
         _ = try parser.consume(record("tool", parent: "user", [
-            "type": "assistant", "message": ["id": "tool-message", "stop_reason": "tool_use", "content": [["type": "tool_use", "id": "list", "name": "Bash"]]],
+            "type": "assistant", "timestamp": "1970-01-01T00:00:01Z",
+            "message": ["id": "tool-message", "stop_reason": "tool_use", "content": [
+                ["type": "thinking", "thinking": "Private reasoning"],
+                ["type": "text", "text": "I’ll check the saved tasks."],
+                ["type": "tool_use", "id": "list", "name": "Bash", "input": ["command": "Hidden input"]],
+            ]],
         ]))
         _ = try parser.consume(record("tool-result", parent: "tool", ["type": "user", "promptId": "prompt", "message": ["content": [["type": "tool_result", "tool_use_id": "list", "content": "Saved tasks"]]]]))
         _ = try parser.consume(answer("answer", parent: "tool-result", text: " \nFinal answer\n\n"))
@@ -91,6 +100,9 @@ struct ClaudeWorkflowTranscriptTests {
         #expect(parser.updateCandidate("Final answer") == nil)
         _ = try parser.consume(answer("final", parent: "blocked", text: "Final answer\n"))
         #expect(try parser.consume(summary("stop", parent: "final")) == .succeeded("Final answer"))
+        #expect(parser.activity.map(\.kind) == [.update, .tool])
+        #expect(parser.activity.map(\.text) == ["I’ll check the saved tasks.", "Called Bash"])
+        #expect(parser.activity.allSatisfy { $0.timestamp == Date(timeIntervalSince1970: 1) })
     }
 
     @Test
