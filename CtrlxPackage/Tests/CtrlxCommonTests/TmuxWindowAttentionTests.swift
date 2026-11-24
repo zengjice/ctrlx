@@ -29,6 +29,23 @@ struct TmuxWindowAttentionTests {
         #expect(workingWindow.needsAttention == false)
     }
 
+    @Test("A question is shown ahead of completion in a split window")
+    func questionTakesPriority() throws {
+        let completed = PaneState(
+            paneId: "%1", sessionName: "work", tmuxWindowId: "@1",
+            agentSession: .init(paneId: "%1", state: .doneWorking(summary: nil))
+        )
+        let question = PaneState(
+            paneId: "%2", sessionName: "work", tmuxWindowId: "@1", paneIndex: 1,
+            agentSession: .init(paneId: "%2", state: .awaitingReplies(.init(questions: []), requestID: "question"))
+        )
+
+        let split = try #require(TmuxWindow.groupPanes([completed, question]).first)
+        #expect(split.attention?.symbol == .questionmarkCircle)
+        let done = try #require(TmuxWindow.groupPanes([completed]).first)
+        #expect(done.attention?.symbol == .bellBadgeFill)
+    }
+
     @Test("Handling a completed agent clears the window attention")
     func handledStateIsNotAttention() {
         var session = AgentSession(paneId: "%1", state: .doneWorking(summary: "Done"))

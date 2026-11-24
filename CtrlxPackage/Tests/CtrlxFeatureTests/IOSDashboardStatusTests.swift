@@ -65,6 +65,24 @@ struct IOSDashboardStatusTests {
         #expect(status(paired: ["home"], panes: panes).pendingCount == 1)
     }
 
+    @Test("The toolbar uses a question mark when a paired Host is waiting for an answer")
+    func attentionSymbol() {
+        let questionKey = PaneKey(pairId: "home", paneId: "%1")
+        let question = PaneState(paneId: "%1", sessionName: "work", agentSession: .init(
+            paneId: "%1", state: .awaitingReplies(.init(questions: []), requestID: "question")
+        ))
+        let done = PaneState(paneId: "%1", sessionName: "work", agentSession: .init(
+            paneId: "%1", state: .doneWorking(summary: nil)
+        ))
+        var panes = [questionKey: question, PaneKey(pairId: "office", paneId: "%1"): done]
+
+        #expect(status(panes: panes).attentionSymbol == .questionmarkCircle)
+        #expect(status(panes: panes).pendingCount == 2)
+        #expect(status(paired: ["office"], panes: panes).attentionSymbol == .bellFill)
+        panes[questionKey]?.cliSessionState = .idle
+        #expect(status(panes: panes).attentionSymbol == .bellFill)
+    }
+
     @Test("Attention rows follow the badge, with distinct targets across Hosts")
     func attentionRows() {
         let waiting = PaneState(paneId: "%1", sessionName: "work", windowName: "review", agentSession: .init(

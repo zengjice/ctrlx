@@ -436,22 +436,21 @@ struct WindowTabBar: View {
             ? selectedRight == payload
             : window.id == selectedWindow?.id && !isAnyFileViewActive
         let isHovered = hoveredWindowId == window.id
-        let hasClaude = window.panes.contains { windowManager.paneStates[$0.paneId]?.agentSession != nil }
-        let needsAttention = window.panes.contains {
-            windowManager.paneStates[$0.paneId]?.agentSession?.needsAttention == true
-        }
-        let progress = window.panes.compactMap { windowManager.paneStates[$0.paneId] }.effectiveProgress
+        let panes = window.panes.compactMap { windowManager.paneStates[$0.paneId] }
+        let hasClaude = panes.contains { $0.agentSession != nil }
+        let attention = AgentAttention(panes: panes)
+        let progress = panes.effectiveProgress
         let windowName = windowTabLabel(windowName: window.windowName, windowIndex: window.windowIndex)
 
         return HStack(spacing: 0) {
             Button {
                 onSelectWindow(window)
             } label: {
-                TerminalWindowTabLabel(name: windowName, hasAgent: hasClaude, needsAttention: needsAttention, progress: progress)
+                TerminalWindowTabLabel(name: windowName, hasAgent: hasClaude, attention: attention, progress: progress)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(window.id) \(windowName)")
-            .accessibilityValue(windowTabAccessibilityValue(isSelected: isSelected, needsAttention: needsAttention, progress: progress))
+            .accessibilityValue(windowTabAccessibilityValue(isSelected: isSelected, attention: attention, progress: progress))
             .background(WindowTabDragSource(windowID: window.stableId, label: windowName) { point in
                 onDetachWindow?(window, point)
             })

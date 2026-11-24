@@ -5,7 +5,7 @@ import SwiftUI
 struct TerminalWindowTabLabel: View {
     let name: String
     let hasAgent: Bool
-    let needsAttention: Bool
+    let attention: AgentAttention?
     let progress: TerminalProgressState?
 
     var body: some View {
@@ -18,8 +18,8 @@ struct TerminalWindowTabLabel: View {
             Text(name)
                 .font(.system(.body, design: .monospaced))
                 .lineLimit(1)
-            if needsAttention {
-                Symbols.bellBadgeFill.image
+            if let attention {
+                attention.symbol.image
                     .font(.caption2)
                     .foregroundStyle(.orange)
                     .accessibilityHidden(true)
@@ -42,13 +42,13 @@ struct TerminalWindowTabLabel: View {
     }
 }
 
-func windowTabAccessibilityValue(isSelected: Bool, needsAttention: Bool, progress: TerminalProgressState?) -> String {
+func windowTabAccessibilityValue(isSelected: Bool, attention: AgentAttention?, progress: TerminalProgressState?) -> String {
     var values: [String] = []
     if isSelected {
         values.append("selected")
     }
-    if needsAttention {
-        values.append("needs attention")
+    if let attention {
+        values.append(attention.accessibilityLabel)
     }
     if let progress {
         values.append("Terminal progress \(progress.accessibilityValueString)")

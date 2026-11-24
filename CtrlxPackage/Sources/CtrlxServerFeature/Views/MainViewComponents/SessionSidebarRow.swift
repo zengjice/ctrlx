@@ -14,8 +14,7 @@ struct SessionSidebarRow: View, Equatable {
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             SessionStatusBadge(
-                cliSessionState: data.cliState,
-                claudeSession: data.agent,
+                status: data.status,
                 customEmoji: data.customEmoji
             )
 
@@ -58,7 +57,7 @@ struct SessionSidebarRow: View, Equatable {
         .accessibilityValue(data.sessionName)
         .overlay {
             SessionAccessibilityOverlay(
-                status: data.cliState?.statusLabel ?? data.agent?.statusLabel,
+                status: data.status?.label,
                 projectName: data.agent?.displayName
             )
         }

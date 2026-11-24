@@ -29,8 +29,7 @@ struct RemoteSessionSidebarRow: View, Equatable {
     private var rowContent: some View {
         HStack(alignment: .top, spacing: 8) {
             SessionStatusBadge(
-                cliSessionState: data.cliState,
-                claudeSession: data.agent,
+                status: data.status,
                 customEmoji: data.customEmoji
             )
 
@@ -60,7 +59,7 @@ struct RemoteSessionSidebarRow: View, Equatable {
         // single label, dropping leaf Texts — these hidden labels give tests stable targets.
         .overlay {
             SessionAccessibilityOverlay(
-                status: data.cliState?.statusLabel ?? data.agent?.statusLabel,
+                status: data.status?.label,
                 projectName: data.agent?.displayName
             )
         }
