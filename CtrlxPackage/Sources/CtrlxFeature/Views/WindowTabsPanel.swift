@@ -197,7 +197,9 @@
                             } label: {
                                 let title = group.paneID.map { linkedTabs.title(for: $0) } ?? tabTitle(first, windows: windows, resources: resources)
                                 let key = group.paneID.flatMap { linkedTabs.colorKey(for: $0) } ?? String(describing: group)
-                                groupLabel(title, count: tabs.count, colorKey: key).frame(minHeight: 44).contentShape(.rect)
+                                let attention = AgentAttention(panes: tabs.compactMap { windows[$0] }.flatMap(\.panes))
+                                groupLabel(title, count: tabs.count, colorKey: key, attention: attention)
+                                    .frame(minHeight: 44).contentShape(.rect)
                                     .tabSeparator()
                                     .tabInsertionLine(dropInsertion?.line, at: entry.id)
                                     .modifier(dropTarget(at: entry.id, layout: layout, destination: .group(tabs)))
@@ -264,10 +266,15 @@
             }
         }
 
-        private func groupLabel(_ title: String, count: Int, colorKey: String?) -> some View {
+        private func groupLabel(_ title: String, count: Int, colorKey: String?, attention: AgentAttention? = nil) -> some View {
             HStack {
                 Text(title).lineLimit(1)
                 Spacer()
+                if let attention {
+                    attention.symbol.image
+                        .foregroundStyle(.orange)
+                        .accessibilityLabel(attention.accessibilityLabel)
+                }
                 Text(count.formatted()).monospacedDigit()
             }
             .foregroundStyle(PaneTabGroupStyle.color(for: colorKey))
