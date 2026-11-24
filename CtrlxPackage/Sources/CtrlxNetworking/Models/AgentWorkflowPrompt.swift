@@ -49,7 +49,9 @@ public enum AgentWorkflowPrompt {
         if node.completion == .explicit {
             context.append("This step may span multiple replies. When its task is complete, run: ctrlx workflow complete-step --invocation \(invocationReference). Then provide the final result. Discussion or a proposal alone does not hand off the step.")
         }
-        if node.allowsFinish {
+        if let exit = definition.loopExit, exit.source == node.id {
+            context.append(loopExitInstructions(definition: definition, exit: exit, invocation: invocationReference))
+        } else if node.allowsFinish {
             context.append("May end workflow: ctrlx workflow finish --invocation \(invocationReference) --reason \"<reason>\"")
         }
         sections.append(context.joined(separator: "\n"))
@@ -58,6 +60,31 @@ public enum AgentWorkflowPrompt {
             text: sections.filter { !$0.isEmpty }.joined(separator: "\n\n"),
             attachmentIDs: attachments.filter { seen.insert($0).inserted }
         )
+    }
+
+    public static func continuation(definition: AgentWorkflowDefinition, nodeID: UUID, invocationID: UUID) -> String {
+        let invocation = invocationID.uuidString
+        let completion: String
+        if let exit = definition.loopExit, exit.source == nodeID {
+            completion = """
+            \(loopExitInstructions(definition: definition, exit: exit, invocation: invocation))
+            If the task is complete and the approval condition is not met, run ctrlx workflow complete-step --invocation \(invocation), then provide the final result.
+            """
+        } else {
+            completion = "If the task is already complete, do not repeat the work: run ctrlx workflow complete-step --invocation \(invocation), then provide the final result."
+        }
+        return """
+        Continue the current workflow step using its existing task and instructions. \(completion) Otherwise continue the remaining work, respecting any outstanding questions or required approvals.
+
+        [CtrlX workflow invocation: \(invocation)]
+        """
+    }
+
+    private static func loopExitInstructions(definition: AgentWorkflowDefinition, exit: AgentWorkflowEdge, invocation: String) -> String {
+        let target = definition.nodes.first { $0.id == exit.target }?.name ?? "the after-loop step"
+        return """
+        When this step's approval condition is met, use ctrlx workflow exit-loop --invocation \(invocation) --reason "<reason>" to continue to \(target). Then provide the final result for that step. Use this route for any approval instructions above that say to end the workflow. If approval conditions are not met, complete this step normally to continue the round.
+        """
     }
 
     /// Content nodes forward task material only. Invocation helper commands
@@ -87,7 +114,7 @@ public enum AgentWorkflowPrompt {
     /// Before execution, upstream answers and the correlation UUID do not yet
     /// exist. The UI labels these placeholders instead of claiming an exact task.
     public static func preview(definition: AgentWorkflowDefinition, node: AgentWorkflowNode, round: Int) -> AgentWorkflowInput {
-        guard definition.activeNodeIDs(round: round).contains(node.id) else { return .init() }
+        guard definition.activeNodeIDs(round: round).contains(node.id) || definition.afterLoopNodeIDs.contains(node.id) else { return .init() }
         let sources: [AgentWorkflowNode]
         let sourceRound: Int
         if node.id == definition.entryNodeID(round: round), round > 1, let loop = definition.loop {

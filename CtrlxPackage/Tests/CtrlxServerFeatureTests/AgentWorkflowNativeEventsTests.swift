@@ -48,7 +48,629 @@ private actor NativeWorkflowTestProvider: AgentWorkflowProviding {
     }
 }
 
+private struct AppendingCodexTestTranscript: AgentWorkflowTranscriptParser {
+    var parser: CodexWorkflowTranscript
+    let watchedTurn: String
+    let onWatchedTurn: @Sendable () throws -> Void
+
+    var startMarkers: [String] {
+        parser.startMarkers
+    }
+
+    var readsSessionHeader: Bool {
+        parser.readsSessionHeader
+    }
+
+    func isTurnStart(_ line: Data) throws -> Bool {
+        try parser.isTurnStart(line)
+    }
+
+    mutating func submittedTurnID(in line: Data) throws -> String? {
+        let turn = try parser.submittedTurnID(in: line)
+        if turn == watchedTurn {
+            try onWatchedTurn()
+        }
+        return turn
+    }
+
+    mutating func updateCandidate(_ candidate: String) -> AgentWorkflowTranscriptOutcome? {
+        parser.updateCandidate(candidate)
+    }
+
+    mutating func consume(_ line: Data) throws -> AgentWorkflowTranscriptOutcome? {
+        try parser.consume(line)
+    }
+}
+
+private actor AppendingCodexTestProvider: AgentWorkflowProviding {
+    nonisolated let watchedTurn: String
+    nonisolated let onWatchedTurn: @Sendable () throws -> Void
+
+    init(watchedTurn: String, onWatchedTurn: @escaping @Sendable () throws -> Void) {
+        self.watchedTurn = watchedTurn
+        self.onWatchedTurn = onWatchedTurn
+    }
+
+    nonisolated var workflowCapabilities: AgentWorkflowCapabilities {
+        .init(maximumInputBytes: 10_000)
+    }
+
+    nonisolated var workflowComposer: AgentWorkflowComposer {
+        .init(prompt: "test> ")
+    }
+
+    nonisolated func workflowTranscript(conversationID: String, nativeTurnID: String, prompt: String, candidate: String) -> any AgentWorkflowTranscriptParser {
+        AppendingCodexTestTranscript(
+            parser: CodexWorkflowTranscript(conversationID: conversationID, nativeTurnID: nativeTurnID),
+            watchedTurn: watchedTurn, onWatchedTurn: onWatchedTurn
+        )
+    }
+}
+
 struct AgentWorkflowNativeEventsTests {
+    @Test(arguments: ["refresh", "synchronize", "inspect"])
+    func exitLoopRejectsARequestWhenExplicitTurnChanges(stage: String) async throws {
+        let f = try await fixture(completion: .explicit, afterLoop: true)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        let changeTurn: @Sendable () async throws -> Void = {
+            try f.writeCodexTurns("turn", "new-turn")
+            _ = try await f.router.receive(f.event(.submitted, text: "Continue reviewing", turn: "new-turn"), peer: f.peer)
+        }
+        let service = AgentWorkflowAgentService(
+            store: f.store,
+            inspect: { instance in
+                if stage == "inspect" {
+                    try await changeTurn()
+                }
+                return instance
+            },
+            synchronizeEvents: { id in
+                if stage == "synchronize" {
+                    try await changeTurn()
+                }
+                try await f.router.requireVerifiedSubmission(id)
+            },
+            refreshInstances: {
+                if stage == "refresh" {
+                    try await changeTurn()
+                }
+            },
+            provider: { _ in CodexPluginCore() }
+        )
+        let request = f.loopExitRequest()
+        #expect(await service.handle(request, peer: f.peer).error?.code == "workflow_denied")
+        let run = try await f.store.snapshot().runs[0]
+        #expect(run.loopExitRequest == nil)
+        #expect(run.invocations[0].stepTurn?.id == "new-turn")
+        #expect(await f.approvalService().handle(request, peer: f.peer).ok)
+    }
+
+    @Test(arguments: [false, true])
+    func oldExplicitReceiptDoesNotReplaceTheCurrentApprovalTurn(replayContinuation: Bool) async throws {
+        let f = try await fixture(completion: .explicit, afterLoop: true)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let original = f.event(.submitted, text: f.invocation.delivery.input.text)
+        let second = f.event(.submitted, text: "Second prompt", turn: "second")
+        _ = try await f.router.receive(original, peer: f.peer)
+        _ = try await f.router.receive(second, peer: f.peer)
+        _ = try await f.router.receive(f.event(.submitted, text: "Third prompt", turn: "third"), peer: f.peer)
+        _ = try await f.router.receive(replayContinuation ? second : original, peer: f.peer)
+
+        try f.writeCodexTurns("turn", "second", "third")
+        #expect(await f.approvalService().handle(f.loopExitRequest(), peer: f.peer).ok)
+        let run = try await f.store.snapshot().runs[0]
+        #expect(run.invocations[0].stepTurn?.id == "third")
+        #expect(run.invocations[0].stepTurn?.completionRequested == true)
+    }
+
+    @Test(arguments: ["turn", "previous-middle", "previous-result"])
+    func archivedReceiptCannotReplaceApprovalInTheNextRun(replayedTurn: String) async throws {
+        let f = try await fixture(completion: .explicit, afterLoop: true)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let original = f.event(.submitted, text: f.invocation.delivery.input.text)
+        let middle = f.event(.submitted, text: "Discuss the findings", turn: "previous-middle")
+        let continuation = f.event(.submitted, text: "Finish the review", turn: "previous-result")
+        _ = try await f.router.receive(original, peer: f.peer)
+        _ = try await f.router.receive(middle, peer: f.peer)
+        _ = try await f.router.receive(continuation, peer: f.peer)
+        try f.writeCodexTurns("turn", "previous-middle", "previous-result")
+        let service = f.approvalService()
+        try #require(await service.handle(f.loopExitRequest(), peer: f.peer).ok)
+        let summary = f.run.definition.nodes[2]
+        let previous = try await f.store.update(runID: f.run.id) {
+            try $0.succeed(.init(invocationID: f.invocation.id, nativeTurnID: "previous-result", text: "Approved", completedAt: .now), instance: f.instance, now: .now)
+            _ = try $0.prepareInvocation(nodeID: summary.id, now: .now)
+        }
+        try #require(previous.status == .completed)
+        let next = try await f.store.start(
+            definitionID: f.run.definition.id, expectedRevision: f.run.definition.revision, requestID: UUID(),
+            now: .now, authorizationExpiresAt: .now.addingTimeInterval(3_600)
+        )
+        let written = try await f.store.update(runID: next.id) {
+            let invocation = try $0.prepareInvocation(nodeID: f.invocation.nodeID, now: .now)
+            try $0.beginWriting(invocationID: invocation.id, instance: f.instance, now: .now)
+        }
+        let invocation = try #require(written.invocations.first)
+        try f.writeCodexTurns("turn", "previous-middle", "previous-result", "current")
+        _ = try await f.router.receive(f.event(.submitted, text: invocation.delivery.input.text, turn: "current"), peer: f.peer)
+        let replay = try #require([original, middle, continuation].first { $0.workflow?.nativeTurnID == replayedTurn })
+        _ = try await f.router.receive(replay, peer: f.peer)
+        #expect(await service.handle(f.loopExitRequest(invocationID: invocation.id), peer: f.peer).ok)
+        let archive = try await f.store.snapshot()
+        #expect(archive.runs.first { $0.id == previous.id } == previous)
+        let saved = try #require(archive.runs.first { $0.id == next.id })
+        #expect(saved.loopExitRequest?.invocationID == invocation.id)
+        #expect(saved.invocations.first?.stepTurn?.id == "current")
+    }
+
+    @Test(arguments: [0, 1, 2], [false, true])
+    func receiptOrderRecoversAfterHostRestart(progressAppends: Int, newerReceipt: Bool) async throws {
+        let f = try await fixture(completion: .explicit, afterLoop: true)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let middle = f.event(.submitted, text: "Discuss the findings", turn: "middle")
+        try f.writeCodexTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        _ = try await f.router.receive(middle, peer: f.peer)
+        #expect(try await f.store.snapshot().runs[0].invocations[0].stepTurn?.id == "middle")
+        try f.writeCodexTurns("turn", "middle")
+        _ = try await f.router.receive(f.event(.submitted, text: "Finish the review", turn: "current"), peer: f.peer)
+        try f.writeCodexTurns("turn", "middle", "current")
+        await f.router.shutdown()
+
+        let reopened = await AgentWorkflowStore(fileURL: f.store.fileURL, hostID: f.instance.hostID)
+        let restored = try await reopened.snapshot().runs[0]
+        try #require(restored.status == .paused && restored.invocations[0].stepTurn?.id == "current")
+        let runner = AgentWorkflowRunner(
+            store: reopened, transport: .init(inspect: { $0 }, prepare: { _, _ in }, write: { _, _ in
+                Issue.record("An accepted step must not be submitted again.")
+            }), onFailure: { Issue.record(Comment(rawValue: $0)) }
+        )
+        let expectedTurn = newerReceipt ? "next" : "current"
+        let receipt = newerReceipt ? f.event(.submitted, text: "Continue the review", turn: expectedTurn) : middle
+        if newerReceipt {
+            try f.writeCodexTurns("turn", "middle", "current", expectedTurn)
+        }
+        let scans = LockIsolated(0)
+        let allowStableRead = LockIsolated(progressAppends < 2)
+        let provider = AppendingCodexTestProvider(watchedTurn: expectedTurn) {
+            let scan = scans.withValue { count in
+                count += 1
+                return count
+            }
+            guard scan <= progressAppends || !allowStableRead.value else { return }
+            let file = try FileHandle(forWritingTo: f.transcript)
+            defer { try? file.close() }
+            _ = try file.seekToEnd()
+            try file.write(contentsOf: Data("{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\"}}\n".utf8))
+        }
+        let router = AgentWorkflowEventRouter(store: reopened, runner: runner, inspect: { $0 }, provider: { _ in provider })
+        let service = AgentWorkflowAgentService(
+            store: reopened, inspect: { $0 }, synchronizeEvents: { try await router.requireVerifiedSubmission($0) },
+            provider: { _ in CodexPluginCore() }
+        )
+        _ = try await router.receive(receipt, peer: f.peer)
+        if progressAppends == 2 {
+            #expect(scans.value >= 2)
+            #expect(try await reopened.snapshot().runs[0] == restored)
+            await #expect(throws: AgentWorkflowError.self) { try await router.requireVerifiedSubmission(f.invocation.id) }
+            if newerReceipt {
+                let repeatReceipt = f.event(.submitted, text: "Finish the review", turn: "current")
+                _ = try await router.receive(repeatReceipt, peer: f.peer)
+            }
+            allowStableRead.setValue(true)
+            for _ in 0..<100 {
+                if (try? await router.requireVerifiedSubmission(f.invocation.id)) != nil {
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            try await router.requireVerifiedSubmission(f.invocation.id)
+            #expect(scans.value >= 3)
+        } else {
+            #expect(scans.value == progressAppends + 1)
+        }
+        let verified = try await reopened.snapshot().runs[0]
+        #expect(verified.invocations[0].stepTurn?.id == expectedTurn)
+        if !newerReceipt {
+            #expect(verified == restored)
+        }
+        #expect(await service.handle(f.loopExitRequest(), peer: f.peer).ok)
+        let saved = try await reopened.snapshot().runs[0]
+        #expect(saved.loopExitRequest?.invocationID == f.invocation.id)
+        #expect(saved.invocations[0].stepTurn?.id == expectedTurn)
+        await router.shutdown()
+        await runner.shutdown()
+    }
+
+    @Test(arguments: ["restart", "restart-and-new", "new"])
+    func changedAgentBindingCanReplaceAnInFlightPendingReceipt(change: String) async throws {
+        let restarted = change != "new"
+        let newConversation = change != "restart"
+        let f = try await fixture(completion: .explicit, afterLoop: true)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let original = f.event(.submitted, text: f.invocation.delivery.input.text)
+        _ = try await f.router.receive(original, peer: f.peer)
+        await f.router.shutdown()
+        try f.writeCodexTurns("turn", "pending")
+
+        let oldInspection = AsyncStream<Void>.makeStream()
+        defer { oldInspection.continuation.finish() }
+        let inspectingOldWriter = LockIsolated(false)
+        let oldInspectionEnded = LockIsolated(false)
+        let unstable = AppendingCodexTestProvider(watchedTurn: "pending") {
+            let file = try FileHandle(forWritingTo: f.transcript)
+            defer { try? file.close() }
+            _ = try file.seekToEnd()
+            try file.write(contentsOf: Data("{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\"}}\n".utf8))
+        }
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: { instance in
+            if instance.matchesBinding(f.instance) {
+                inspectingOldWriter.setValue(true)
+                defer { oldInspectionEnded.setValue(true) }
+                for await _ in oldInspection.stream {
+                    break
+                }
+                throw AgentWorkflowInspectionUnavailable()
+            }
+            return instance
+        }, provider: { _ in unstable }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        _ = try await router.receive(f.event(.submitted, text: "Follow up before restart", turn: "pending"), peer: f.peer)
+        for _ in 0..<100 {
+            if inspectingOldWriter.value {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(inspectingOldWriter.value)
+        #expect(!oldInspectionEnded.value)
+
+        var live = f.instance
+        var peer = f.peer
+        if restarted {
+            var replacement = AgentWorkflowObservation(f.instance)
+            replacement.processID = 20
+            replacement.processRuntimeID = "501:20:200:0"
+            live = try #require(await f.store.reconcile([replacement]).first)
+            peer = try #require(PluginIngressPeer.capture(peerPID: 20, userID: 501) { pid in
+                pid == 20 ? .init(processID: 20, parentProcessID: 1, userID: 501, startSeconds: 200, startMicroseconds: 0) : nil
+            })
+        }
+        let transcript = newConversation ? f.directory.appendingPathComponent("new-session.jsonl") : f.transcript
+        if newConversation {
+            live.conversationID = "new-conversation"
+            try f.writeCodexTurns("resumed", conversationID: live.conversationID, to: transcript)
+        } else {
+            try f.writeCodexTurns("turn", "pending", "resumed")
+        }
+        let receipt = PluginEvent(pluginID: live.pluginID, sessionID: live.conversationID, tmuxPane: live.paneID, workflow: .init(
+            kind: .submitted, nativeTurnID: "resumed", transcriptPath: transcript.path, text: "Continue after restart"
+        ))
+        _ = try await router.receive(receipt, peer: peer)
+        try await router.requireVerifiedSubmission(f.invocation.id)
+        let verified = try await f.store.snapshot().runs[0]
+        #expect(verified.invocations[0].nativeTurnID == "turn")
+        #expect(verified.invocations[0].nativeTranscriptPath == f.transcript.path)
+        #expect(verified.invocations[0].stepTurn?.id == "resumed")
+        #expect(verified.invocations[0].stepTurn?.transcriptPath == transcript.path)
+        #expect(verified.instance(for: verified.invocations[0])?.matchesBinding(live) == true)
+        for _ in 0..<100 {
+            if oldInspectionEnded.value {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(oldInspectionEnded.value)
+        let service = AgentWorkflowAgentService(
+            store: f.store, inspect: { $0 }, synchronizeEvents: { try await router.requireVerifiedSubmission($0) },
+            provider: { _ in CodexPluginCore() }
+        )
+        if restarted {
+            #expect(await !service.handle(f.loopExitRequest(), peer: f.peer).ok)
+        }
+        #expect(await service.handle(f.loopExitRequest(), peer: peer).ok)
+        let saved = try await f.store.snapshot().runs[0]
+        #expect(saved.loopExitRequest?.invocationID == f.invocation.id)
+        #expect(saved.invocations[0].stepTurn?.id == "resumed")
+        await router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true])
+    func replayedPreviousConversationCannotBlockLoopExit(newReceiptPending: Bool) async throws {
+        let f = try await fixture(completion: .explicit, afterLoop: true)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        await f.router.shutdown()
+        try f.writeCodexTurns("turn", "old-pending")
+
+        let changingOldRecord = LockIsolated(true)
+        let canInspectNewConversation = LockIsolated(!newReceiptPending)
+        let provider = AppendingCodexTestProvider(watchedTurn: "old-pending") {
+            guard changingOldRecord.value else { return }
+            let file = try FileHandle(forWritingTo: f.transcript)
+            defer { try? file.close() }
+            _ = try file.seekToEnd()
+            try file.write(contentsOf: Data("{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\"}}\n".utf8))
+        }
+        let conversation = LockIsolated(AgentConversationEvidence(runtimeID: f.instance.processRuntimeID, conversationID: f.instance.conversationID))
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: { instance in
+            guard instance.conversationID == "new-conversation", canInspectNewConversation.value else {
+                throw AgentWorkflowInspectionUnavailable()
+            }
+            return instance
+        }, recheckConversation: { event, peer, admit in
+            var evidence = conversation.value
+            guard evidence.accept(event, nativeConversationID: nil, source: peer.processes.first) else { return .superseded }
+            return admit ? .ready : .deferred
+        }, provider: { _ in provider }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let dispatcher = PluginEventDispatcher(onWorkflow: { event, peer in
+            do { _ = try await router.receive(event, peer: peer) }
+            catch { Issue.record(Comment(rawValue: error.localizedDescription)) }
+        }, onUnconfirmedSubmission: { event, peer in
+            do { try await router.receiveUnconfirmedSubmission(event, peer: peer) }
+            catch { Issue.record(Comment(rawValue: error.localizedDescription)) }
+        }, withCurrentEvent: { event, peer, operation in
+            // The process can retain both writers after /new.
+            guard conversation.withValue({ $0.accept(event, nativeConversationID: nil, source: peer?.processes.first) }) else { return false }
+            await operation()
+            return true
+        })
+        let oldReceipt = f.event(.submitted, text: "Follow up in the old conversation", turn: "old-pending")
+        await dispatcher.dispatch(oldReceipt, ingressPeer: f.peer)
+        await #expect(throws: AgentWorkflowError.self) { try await router.requireVerifiedSubmission(f.invocation.id) }
+
+        let transcript = f.directory.appendingPathComponent("new-session.jsonl")
+        try f.writeCodexTurns("resumed", conversationID: "new-conversation", to: transcript)
+        let newReceipt = PluginEvent(pluginID: f.instance.pluginID, sessionID: "new-conversation", tmuxPane: f.instance.paneID, workflow: .init(
+            kind: .submitted, nativeTurnID: "resumed", transcriptPath: transcript.path, text: "Continue after /new"
+        ))
+        await dispatcher.dispatch(newReceipt, ingressPeer: f.peer)
+        #expect(conversation.value.conversationID == newReceipt.sessionID)
+        #expect(try await f.store.snapshot().runs[0].invocations[0].stepTurn?.id == (newReceiptPending ? "turn" : "resumed"))
+
+        changingOldRecord.setValue(false)
+        await dispatcher.dispatch(oldReceipt, ingressPeer: f.peer)
+        #expect(conversation.value.conversationID == newReceipt.sessionID)
+        canInspectNewConversation.setValue(true)
+        for _ in 0..<100 {
+            if (try? await router.requireVerifiedSubmission(f.invocation.id)) != nil {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let service = AgentWorkflowAgentService(
+            store: f.store, inspect: { $0 }, synchronizeEvents: { try await router.requireVerifiedSubmission($0) },
+            provider: { _ in CodexPluginCore() }
+        )
+        #expect(await service.handle(f.loopExitRequest(), peer: f.peer).ok)
+        let saved = try await f.store.snapshot().runs[0]
+        #expect(saved.invocations[0].nativeTurnID == "turn")
+        #expect(saved.invocations[0].stepTurn?.id == "resumed")
+        #expect(saved.loopExitRequest?.invocationID == f.invocation.id)
+        await router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true], ["first", "continue", "manual"])
+    func submissionSurvivesUnavailableCurrentConversation(hostRestarted: Bool, submission: String) async throws {
+        let continuing = submission != "first"
+        let f = try await fixture(completion: .explicit, afterLoop: true)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.store.update(runID: f.run.id) { try $0.didWrite(invocationID: f.invocation.id) }
+        if continuing {
+            _ = try await f.router.receive(f.event(.submitted, text: f.invocation.submissionText(pluginID: f.instance.pluginID)), peer: f.peer)
+        }
+        if submission == "continue" {
+            let invocation = try await f.store.snapshot().runs[0].invocations[0]
+            let authorization = try #require(await f.store.authorizeContinuation(invocation, instance: f.instance))
+            try await f.store.finishContinuation(invocation, authorization: authorization, written: true)
+        }
+        let ledger = await f.store.fileURL
+        let store = hostRestarted ? AgentWorkflowStore(fileURL: ledger, hostID: f.instance.hostID) : f.store
+        let before = try await store.snapshot().runs[0]
+        #expect(before.invocations[0].status == (continuing ? .running : hostRestarted ? .uncertain : .awaitingAcceptance))
+        #expect(before.invocations[0].continuationInstance == (submission == "continue" ? f.instance : nil))
+
+        let conversation = hostRestarted ? f.instance.conversationID : UUID().uuidString
+        let writerAvailable = LockIsolated(false)
+        let conversationAvailable = LockIsolated(false)
+        let catalog = AgentRuntimeCatalog(hostID: f.instance.hostID, bridgeFile: f.directory.appendingPathComponent("bridges.json")) { _ in [] }
+        let runner = AgentWorkflowRunner(store: store, transport: .init(inspect: { $0 }, prepare: { _, _ in }, write: { _, _ in
+            Issue.record("A written task must not be sent again.")
+        }), onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let router = AgentWorkflowEventRouter(store: store, runner: runner, catalog: catalog, inspect: { instance in
+            guard writerAvailable.value, instance.conversationID == conversation else { throw AgentWorkflowInspectionUnavailable() }
+            var live = instance
+            live.capabilityIssue = await catalog.bridgeIssue(for: instance, allowsFirstSubmission: false)
+            return live
+        }, recheckConversation: { event, _, admit in
+            admit && conversationAvailable.value && event.sessionID == conversation ? .ready : .deferred
+        }, provider: { _ in CodexPluginCore() }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let dispatcher = PluginEventDispatcher(onWorkflow: { event, peer in
+            do { _ = try await router.receive(event, peer: peer) }
+            catch { Issue.record(Comment(rawValue: error.localizedDescription)) }
+        }, onUnconfirmedSubmission: { event, peer in
+            do { try await router.receiveUnconfirmedSubmission(event, peer: peer) }
+            catch { Issue.record(Comment(rawValue: error.localizedDescription)) }
+        }, withCurrentEvent: { _, _, operation in
+            guard writerAvailable.value else { return false }
+            await operation()
+            return true
+        })
+        let prompt = switch submission {
+        case "manual": "Include the follow-up regression in your review."
+        case "continue": AgentWorkflowPrompt.continuation(definition: before.definition, nodeID: f.invocation.nodeID, invocationID: f.invocation.id)
+        default: f.invocation.submissionText(pluginID: f.instance.pluginID)
+        }
+        let turnID = continuing ? "resumed-turn" : "first-turn"
+        let transcript = continuing && !hostRestarted ? f.directory.appendingPathComponent("new-session.jsonl") : f.transcript
+        func receipt(_ text: String) -> PluginEvent {
+            .init(pluginID: f.instance.pluginID, sessionID: conversation, tmuxPane: f.instance.paneID, workflow: .init(
+                kind: .submitted, nativeTurnID: turnID, transcriptPath: transcript.path, text: text
+            ), workflowBridgeVersion: PluginWorkflowHook.bridgeVersion)
+        }
+        if !continuing {
+            await dispatcher.dispatch(receipt("Different task"), ingressPeer: f.peer)
+        }
+        let otherPeer = try #require(PluginIngressPeer.capture(peerPID: 20, userID: 501) { pid in
+            pid == 20 ? .init(processID: 20, parentProcessID: 1, userID: 501, startSeconds: 200, startMicroseconds: 0) : nil
+        })
+        await dispatcher.dispatch(receipt(prompt), ingressPeer: otherPeer)
+        try await router.requireVerifiedSubmission(f.invocation.id)
+        #expect(await catalog.bridgeIssue(for: f.instance, allowsFirstSubmission: false) != nil)
+        await dispatcher.dispatch(receipt(prompt), ingressPeer: f.peer)
+        #expect(try await store.snapshot().runs[0].invocations[0].resultTurnID == (continuing ? "turn" : nil))
+        await #expect(throws: AgentWorkflowError.self) { try await router.requireVerifiedSubmission(f.invocation.id) }
+
+        writerAvailable.setValue(true)
+        if submission == "manual" {
+            conversationAvailable.setValue(true)
+            try await Task.sleep(for: .milliseconds(250))
+            #expect(try await store.snapshot().runs[0].invocations[0].resultTurnID == "turn")
+            conversationAvailable.setValue(false)
+        }
+        if continuing, hostRestarted {
+            try f.writeCodexTurns("turn", turnID, conversationID: conversation)
+        } else {
+            try f.writeCodexTurns(turnID, conversationID: conversation, to: transcript)
+        }
+        if submission == "manual" {
+            try await Task.sleep(for: .milliseconds(250))
+            #expect(try await store.snapshot().runs[0].invocations[0].resultTurnID == "turn")
+            conversationAvailable.setValue(true)
+        }
+        for _ in 0..<100 {
+            if (try? await router.requireVerifiedSubmission(f.invocation.id)) != nil {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let accepted = try await store.snapshot().runs[0]
+        #expect(accepted.invocations[0].nativeTurnID == (continuing ? "turn" : turnID))
+        #expect(accepted.invocations[0].nativeTranscriptPath == f.transcript.path)
+        #expect(accepted.invocations[0].stepTurn?.id == turnID)
+        #expect(accepted.invocations[0].resultTranscriptPath == transcript.path)
+        let service = AgentWorkflowAgentService(
+            store: store, inspect: { $0 }, synchronizeEvents: { try await router.requireVerifiedSubmission($0) },
+            provider: { _ in CodexPluginCore() }
+        )
+        #expect(await service.handle(f.loopExitRequest(), peer: f.peer).ok)
+        let saved = try await store.snapshot().runs[0]
+        #expect(saved.loopExitRequest?.invocationID == f.invocation.id)
+        await router.shutdown()
+        await runner.shutdown()
+    }
+
+    @Test(arguments: ["codex", "claude-code"], ["same", "newer", "partial", "changed-after-scan"])
+    func firstApprovalAfterHostRestartUsesCurrentNativeRecord(plugin: String, transcriptState: String) async throws {
+        let f = try await fixture(plugin: plugin, completion: .explicit, afterLoop: true)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, plugin: plugin), peer: f.peer)
+        func start(_ id: String) throws -> Data {
+            let record: [String: Any] = plugin == "codex"
+                ? ["type": "event_msg", "payload": ["type": "task_started", "turn_id": id]]
+                : ["type": "user", "sessionId": f.instance.conversationID, "isSidechain": false, "promptId": id]
+            return try JSONSerialization.data(withJSONObject: record) + Data([0x0A])
+        }
+        var bytes = Data()
+        if plugin == "codex" {
+            try bytes.append(JSONSerialization.data(withJSONObject: ["type": "session_meta", "payload": ["id": f.instance.conversationID]]))
+            bytes.append(0x0A)
+        }
+        try bytes.append(start("turn"))
+        let newer = try start("newer")
+        if transcriptState == "newer" {
+            bytes.append(newer)
+        } else if transcriptState == "partial" {
+            bytes.append(newer.dropLast())
+        }
+        try bytes.write(to: f.transcript)
+
+        let reopened = await AgentWorkflowStore(fileURL: f.store.fileURL, hostID: f.instance.hostID)
+        let restored = try await reopened.snapshot().runs[0]
+        #expect(restored.status == .paused && restored.invocations[0].status == .running)
+        #expect(restored.invocations[0].stepTurn?.completionRequested == false)
+        let synchs = LockIsolated(0)
+        let changed = bytes + newer
+        let service = AgentWorkflowAgentService(store: reopened, inspect: { $0 }, synchronizeEvents: { _ in
+            let count = synchs.withValue { value in
+                value += 1
+                return value
+            }
+            if transcriptState == "changed-after-scan", count == 2 {
+                try changed.write(to: f.transcript)
+            }
+        }, provider: { plugin in
+            if plugin == "codex" {
+                return CodexPluginCore()
+            }
+            return ClaudeCodePluginCore()
+        })
+        let response = await service.handle(f.loopExitRequest(), peer: f.peer)
+        let saved = try await reopened.snapshot().runs[0]
+        if transcriptState == "same" {
+            #expect(response.ok)
+            #expect(saved.loopExitRequest?.invocationID == f.invocation.id)
+            #expect(saved.invocations[0].stepTurn?.completionRequested == true)
+        } else {
+            #expect(response.error?.code == "workflow_denied")
+            #expect(saved.loopExitRequest == nil)
+        }
+        #expect(saved.status == .paused)
+    }
+
+    @Test(arguments: [false, true])
+    func laterNativeTurnCannotApproveAnEarlierReplyEndedStep(deliveredHook: Bool) async throws {
+        let f = try await fixture(afterLoop: true)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        let earlier = try #require(await f.router.receive(f.event(.stopCandidate, text: "Changes required"), peer: f.peer))
+        #expect(earlier.invocation.stepTurn == nil)
+        if deliveredHook {
+            try f.writeCodexTurns("turn")
+            _ = try await f.router.receive(f.event(.submitted, text: "A separate prompt", turn: "new-turn"), peer: f.peer)
+        } else {
+            try f.writeCodexTurns("turn", "new-turn")
+        }
+        #expect(await f.approvalService().handle(f.loopExitRequest(), peer: f.peer).error?.code == "workflow_denied")
+        let result = AgentWorkflowResult(invocationID: f.invocation.id, nativeTurnID: "turn", text: "Changes required", completedAt: .now)
+        let saved = try await f.store.update(runID: f.run.id) { try $0.succeed(result, instance: f.instance, now: .now) }
+        #expect(saved.loopExitRequest == nil)
+        #expect(try AgentWorkflowExecution(validating: saved).readyNodeIDs == [f.run.definition.nodes[1].id])
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @MainActor
+    @Test
+    func continuesExplicitApprovalWithBothOutcomeCommands() async throws {
+        let f = try await fixture(completion: .explicit, afterLoop: true)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "Waiting for a decision"), peer: f.peer)
+        let delivery = AgentWorkflowTerminalTransport(
+            store: f.store, gate: .init(), temporaryDirectory: f.directory.appendingPathComponent("input"),
+            inspect: { $0 }, submit: { _, file, _, validate, _ in
+                let prompt = try String(contentsOf: file, encoding: .utf8)
+                let invocation = f.invocation.id.uuidString
+                #expect(prompt.contains("approval condition is met, use ctrlx workflow exit-loop --invocation \(invocation)"))
+                #expect(prompt.contains("approval condition is not met, run ctrlx workflow complete-step --invocation \(invocation)"))
+                #expect(prompt.contains("[CtrlX workflow invocation: \(invocation)]"))
+                try validate { }
+            }, onFailure: { Issue.record(Comment(rawValue: $0)) }
+        )
+        let service = AgentWorkflowService(store: f.store, scan: { _ in [AgentWorkflowObservation(f.instance)] }, schedule: { _ in }, resumeStep: {
+            try await delivery.resumeStep($0, instance: $1)
+        })
+        let current = try await f.store.snapshot().runs[0]
+        let paused = try await service.pause(runID: current.id, expectedRevision: current.revision)
+        let resumed = try await service.resume(runID: paused.id, expectedRevision: paused.revision)
+        #expect(resumed.invocations[0].continuationTurnID == "turn")
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
     @Test("A stale catalog conversation cannot swallow an accepted turn's result", arguments: ["codex", "claude-code"])
     func acceptedResultSurvivesStaleCatalog(plugin: String) async throws {
         let f = try await fixture(plugin: plugin)
@@ -649,6 +1271,30 @@ struct AgentWorkflowNativeEventsTests {
         let invocation: AgentWorkflowInvocation
         let peer: PluginIngressPeer
 
+        func loopExitRequest(invocationID: UUID? = nil) -> JSONRPCRequest {
+            .init(id: "exit", method: "workflow.exitLoop", params: [
+                "invocationId": .string((invocationID ?? invocation.id).uuidString), "reason": .string("Approved"),
+            ])
+        }
+
+        func approvalService() -> AgentWorkflowAgentService {
+            AgentWorkflowAgentService(
+                store: store, inspect: { $0 }, synchronizeEvents: { try await router.requireVerifiedSubmission($0) },
+                provider: { _ in CodexPluginCore() }
+            )
+        }
+
+        func writeCodexTurns(_ ids: String..., conversationID: String? = nil, to destination: URL? = nil) throws {
+            var records: [[String: Any]] = [["type": "session_meta", "payload": ["id": conversationID ?? instance.conversationID]]]
+            records += ids.map { ["type": "event_msg", "payload": ["type": "task_started", "turn_id": $0]] }
+            var bytes = Data()
+            for record in records {
+                try bytes.append(JSONSerialization.data(withJSONObject: record))
+                bytes.append(0x0A)
+            }
+            try bytes.write(to: destination ?? transcript)
+        }
+
         func event(_ kind: PluginWorkflowEvent.Kind, text: String, turn: String = "turn", plugin: String = "codex") -> PluginEvent {
             .init(pluginID: plugin, sessionID: "conversation", tmuxPane: "%1", workflow: .init(
                 kind: kind, nativeTurnID: turn, transcriptPath: transcript.path, text: text
@@ -656,7 +1302,7 @@ struct AgentWorkflowNativeEventsTests {
         }
     }
 
-    private func fixture(conversation: String = "conversation", imageCount: Int = 0, plugin: String = "codex", completion: AgentWorkflowNode.Completion = .replyEnded, allowsFinish: Bool = false) async throws -> Fixture {
+    private func fixture(conversation: String = "conversation", imageCount: Int = 0, plugin: String = "codex", completion: AgentWorkflowNode.Completion = .replyEnded, allowsFinish: Bool = false, afterLoop: Bool = false) async throws -> Fixture {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-workflow-events-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let transcript = directory.appendingPathComponent("native.jsonl")
@@ -677,7 +1323,15 @@ struct AgentWorkflowNativeEventsTests {
             imageIDs.append(id)
         }
         let node = AgentWorkflowNode(name: "Developer", agentInstanceID: instance.id, allowsFinish: allowsFinish, completion: completion)
-        let definition = try await store.saveDefinition(.init(name: "Test", hostID: hostID, nodes: [node], edges: [], entryNodeID: node.id, initialInput: .init(attachmentIDs: imageIDs)), expectedRevision: nil)
+        var draft = AgentWorkflowDefinition(name: "Test", hostID: hostID, nodes: [node], edges: [], entryNodeID: node.id, initialInput: .init(attachmentIDs: imageIDs))
+        if afterLoop {
+            let repair = AgentWorkflowNode(name: "Repair", content: .init(text: "Fix findings"))
+            let summary = AgentWorkflowNode(name: "Summary", content: .init(text: "Summarize review"))
+            draft.nodes += [repair, summary]
+            draft.edges = [.init(source: node.id, target: repair.id), .init(source: node.id, target: summary.id)]
+            draft.loop = .init(finalNodeID: repair.id, exitNodeID: summary.id)
+        }
+        let definition = try await store.saveDefinition(draft, expectedRevision: nil)
         let run = try await store.start(definitionID: definition.id, expectedRevision: definition.revision, requestID: UUID(), now: Date(), authorizationExpiresAt: Date().addingTimeInterval(3_600))
         let written = try await store.update(runID: run.id) {
             let invocation = try $0.prepareInvocation(nodeID: node.id, now: Date())
@@ -690,7 +1344,12 @@ struct AgentWorkflowNativeEventsTests {
         let runner = AgentWorkflowRunner(store: store, transport: .init(inspect: { $0 }, prepare: { _, _ in }, write: { _, _ in
             Issue.record("The fixture already wrote its task; it must not be submitted again.")
         }), onFailure: { Issue.record(Comment(rawValue: $0)) })
-        let router = AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 })
+        let router = AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 }, provider: { plugin in
+            if plugin == "claude-code" {
+                return ClaudeCodePluginCore()
+            }
+            return CodexPluginCore()
+        })
         let peer = try #require(PluginIngressPeer.capture(peerPID: 10, userID: 501) { pid in
             pid == 10 ? .init(processID: 10, parentProcessID: 1, userID: 501, startSeconds: 100, startMicroseconds: 0) : nil
         })
@@ -1258,6 +1917,340 @@ struct AgentWorkflowNativeEventsTests {
         #expect(saved.runs[0].instances[0].conversationID == conversation)
         #expect(saved.instances[0].conversationID == conversation)
         await router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test
+    func earlyStopUsesPendingReceiptWhileCatalogIsEmpty() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let reopened = await AgentWorkflowStore(fileURL: f.store.fileURL, hostID: f.instance.hostID)
+        _ = try await reopened.reconcile([])
+        #expect(try await reopened.snapshot().instances.isEmpty)
+        #expect(try await reopened.snapshot().runs[0].invocations[0].status == .uncertain)
+
+        let writerAvailable = LockIsolated(false)
+        let runner = AgentWorkflowRunner(store: reopened, transport: .init(inspect: { $0 }, prepare: { _, _ in }, write: { _, _ in
+            Issue.record("The written task must not be resent.")
+        }), onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let monitor = AgentWorkflowCompletionMonitor(store: reopened, runner: runner, inspect: { $0 }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let stop = f.event(.stopCandidate, text: "Verified result")
+        let router = AgentWorkflowEventRouter(store: reopened, runner: runner, inspect: {
+            guard writerAvailable.value else { throw AgentWorkflowInspectionUnavailable() }
+            return $0
+        }, onVerified: { context in
+            #expect(context.candidate == stop.workflow)
+            await monitor.verify(context, provider: NativeWorkflowTestProvider())
+        }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        try await router.receiveUnconfirmedSubmission(f.event(.submitted, text: f.invocation.submissionText(pluginID: f.instance.pluginID)), peer: f.peer)
+        #expect(try await router.receive(stop, peer: f.peer) == nil)
+        let unrelated = PluginEvent(pluginID: f.instance.pluginID, sessionID: f.instance.conversationID, tmuxPane: f.instance.paneID, workflow: .init(
+            kind: .failed, nativeTurnID: "turn", transcriptPath: f.transcript.path + ".unrelated", text: "Wrong transcript"
+        ))
+        #expect(try await router.receive(unrelated, peer: f.peer) == nil)
+        #expect(try await reopened.snapshot().runs[0].invocations[0].nativeTurnID == nil)
+
+        try Data("{\"final\":\"Verified result\"}\n".utf8).write(to: f.transcript)
+        _ = try await reopened.reconcile([.init(f.instance)])
+        writerAvailable.setValue(true)
+        for _ in 0..<100 {
+            if try await reopened.snapshot().runs[0].invocations[0].status == .succeeded {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let saved = try await reopened.snapshot().runs[0].invocations[0]
+        #expect(saved.nativeTurnID == "turn")
+        #expect(saved.status == .succeeded)
+        #expect(saved.result?.text == "Verified result")
+        await router.shutdown()
+        await monitor.shutdown()
+        await runner.shutdown()
+    }
+
+    @Test(arguments: [false, true])
+    func resultUsesAcceptedReceiptWhileCatalogIsEmpty(failed: Bool) async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let reopened = await AgentWorkflowStore(fileURL: f.store.fileURL, hostID: f.instance.hostID)
+        _ = try await reopened.reconcile([])
+        let runner = AgentWorkflowRunner(store: reopened, transport: .init(inspect: { $0 }, prepare: { _, _ in }, write: { _, _ in
+            Issue.record("The written task must not be resent.")
+        }), onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let router = AgentWorkflowEventRouter(store: reopened, runner: runner, inspect: { $0 }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let monitor = AgentWorkflowCompletionMonitor(store: reopened, runner: runner, inspect: { $0 }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        try await router.receiveUnconfirmedSubmission(f.event(.submitted, text: f.invocation.submissionText(pluginID: f.instance.pluginID)), peer: f.peer)
+        for _ in 0..<100 {
+            if (try? await router.requireVerifiedSubmission(f.invocation.id)) != nil {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try await router.requireVerifiedSubmission(f.invocation.id)
+        let accepted = try await reopened.snapshot()
+        #expect(accepted.instances.isEmpty)
+        try #require(accepted.runs[0].invocations[0].status == .running)
+        let other = PluginEvent(pluginID: f.instance.pluginID, sessionID: f.instance.conversationID, tmuxPane: f.instance.paneID, workflow: .init(
+            kind: .failed, nativeTurnID: "turn", transcriptPath: f.transcript.path + ".other", text: "Wrong transcript"
+        ))
+        #expect(try await router.receive(other, peer: f.peer) == nil)
+        #expect(try await reopened.snapshot().runs[0].invocations[0].status == .running)
+        if failed {
+            #expect(try await router.receive(f.event(.failed, text: "Native failure"), peer: f.peer) == nil)
+        } else {
+            let context = try #require(await router.receive(f.event(.stopCandidate, text: "Verified result"), peer: f.peer))
+            try Data("{\"final\":\"Verified result\"}\n".utf8).write(to: f.transcript)
+            await monitor.verify(context, provider: NativeWorkflowTestProvider())
+            _ = try await reopened.reconcile([.init(f.instance)])
+            for _ in 0..<100 {
+                if try await reopened.snapshot().runs[0].invocations[0].status == .succeeded {
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        let saved = try await reopened.snapshot().runs[0].invocations[0]
+        #expect(saved.status == (failed ? .failed : .succeeded))
+        #expect((failed ? saved.issue : saved.result?.text) == (failed ? "Native failure" : "Verified result"))
+        await router.shutdown()
+        await monitor.shutdown()
+        await runner.shutdown()
+    }
+
+    @Test(arguments: ["first-receipt", "restarted-agent", "late-transcript", "stale-catalog", "mixed-receipts"])
+    func earlyFollowupsUseLatestNativeTurn(scenario: String) async throws {
+        let restartedAgent = scenario == "restarted-agent" || scenario == "stale-catalog"
+        let firstReceiptPending = scenario == "first-receipt"
+        let delayLatestTurn = scenario == "late-transcript" || scenario == "mixed-receipts"
+        let f = try await fixture(completion: .explicit, afterLoop: true)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let initial = f.event(.submitted, text: f.invocation.submissionText(pluginID: f.instance.pluginID))
+        if !firstReceiptPending {
+            _ = try await f.router.receive(initial, peer: f.peer)
+        }
+        let reopened = await AgentWorkflowStore(fileURL: f.store.fileURL, hostID: f.instance.hostID)
+        if scenario == "stale-catalog" {
+            #expect(try await reopened.snapshot().instances.first?.processID == f.instance.processID)
+        } else {
+            _ = try await reopened.reconcile([])
+        }
+        var observation = AgentWorkflowObservation(f.instance)
+        if restartedAgent {
+            observation.processID = 20
+            observation.processRuntimeID = "501:20:200:0"
+        }
+        let peer = restartedAgent ? try #require(PluginIngressPeer.capture(peerPID: 20, userID: 501) { pid in
+            pid == 20 ? .init(processID: 20, parentProcessID: 1, userID: 501, startSeconds: 200, startMicroseconds: 0) : nil
+        }) : f.peer
+        let writerAvailable = LockIsolated(false)
+        let startedScan = LockIsolated(false)
+        let runner = AgentWorkflowRunner(store: reopened, transport: .init(inspect: { $0 }, prepare: { _, _ in }, write: { _, _ in
+            Issue.record("The written task must not be resent.")
+        }), onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let router = AgentWorkflowEventRouter(store: reopened, runner: runner, inspect: {
+            guard writerAvailable.value else { throw AgentWorkflowInspectionUnavailable() }
+            return $0
+        }, recheckConversation: { _, source, admit in
+            admit && writerAvailable.value && source == peer ? .ready : .deferred
+        }, provider: { _ in
+            startedScan.setValue(true)
+            return CodexPluginCore()
+        }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        if firstReceiptPending {
+            try await router.receiveUnconfirmedSubmission(initial, peer: peer)
+        }
+        let earlier = f.event(.submitted, text: "Earlier follow-up", turn: "earlier")
+        let latest = f.event(.submitted, text: "Latest review request", turn: "latest")
+        let receipts = delayLatestTurn ? [earlier, latest] : [latest, earlier]
+        for receipt in receipts {
+            if scenario == "mixed-receipts", receipt == latest {
+                _ = try await reopened.reconcile([observation])
+                _ = try await router.receive(receipt, peer: peer)
+            } else {
+                try await router.receiveUnconfirmedSubmission(receipt, peer: peer)
+            }
+        }
+        #expect(try await reopened.snapshot().runs[0].invocations[0].resultTurnID == (firstReceiptPending ? nil : "turn"))
+        if delayLatestTurn {
+            try f.writeCodexTurns("turn", "earlier")
+            _ = try await reopened.reconcile([observation])
+            writerAvailable.setValue(true)
+            for _ in 0..<100 {
+                if startedScan.value {
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            try #require(startedScan.value)
+            try await Task.sleep(for: .milliseconds(250))
+            #expect(try await reopened.snapshot().runs[0].invocations[0].resultTurnID == "turn")
+            await #expect(throws: AgentWorkflowError.self) { try await router.requireVerifiedSubmission(f.invocation.id) }
+        } else if scenario == "stale-catalog" {
+            // Let the retry inspect the restored entry for the exited process.
+            try await Task.sleep(for: .milliseconds(350))
+            #expect(try await reopened.snapshot().runs[0].invocations[0].resultTurnID == "turn")
+        }
+        try f.writeCodexTurns("turn", "earlier", "latest")
+        _ = try await reopened.reconcile([observation])
+        writerAvailable.setValue(true)
+        for _ in 0..<100 {
+            if try await reopened.snapshot().runs[0].invocations[0].resultTurnID == "latest" {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try await router.requireVerifiedSubmission(f.invocation.id)
+        let saved = try await reopened.snapshot().runs[0]
+        #expect(saved.invocations[0].nativeTurnID == "turn")
+        #expect(saved.invocations[0].resultTurnID == "latest")
+        #expect(saved.instance(for: saved.invocations[0])?.processID == observation.processID)
+        #expect(saved.invocations[0].instance?.id == saved.invocations[0].delivery.toAgentID)
+        let service = AgentWorkflowAgentService(
+            store: reopened, inspect: { $0 }, synchronizeEvents: { try await router.requireVerifiedSubmission($0) }, provider: { _ in CodexPluginCore() }
+        )
+        let approval = await service.handle(f.loopExitRequest(), peer: peer)
+        #expect(approval.ok, Comment(rawValue: approval.error?.message ?? ""))
+        await router.shutdown()
+        await runner.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: ["reworded", "same-input", "same-input-reversed"])
+    func claudeRejectionReleasesOnlyTheMatchingPendingInput(retry: String) async throws {
+        let f = try await fixture(plugin: "claude-code", completion: .explicit, afterLoop: true)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, plugin: f.instance.pluginID), peer: f.peer)
+        let blocked = "Review the first draft."
+        let sameInput = retry != "reworded"
+        func transcript(includeCurrentRejection: Bool) throws -> Data {
+            func rejection(at timestamp: String, prompt: String) -> [String: Any] {
+                [
+                    "type": "system", "subtype": "informational", "timestamp": timestamp, "preventContinuation": true,
+                    "content": "UserPromptSubmit operation blocked by hook:\n[fixture]: Rejected.\n\nOriginal prompt: " + prompt,
+                    "promptSubmitEnding": ["ending": ["kind": "blocked_by_hook", "reason": "Rejected."], "promptKept": false],
+                ]
+            }
+            var records: [[String: Any]] = [
+                ["type": "user", "promptId": "turn"],
+                rejection(at: "1970-01-01T00:02:30.000Z", prompt: blocked),
+                rejection(at: "1970-01-01T00:03:20.500Z", prompt: "An unrelated input\nOriginal prompt: " + blocked),
+            ]
+            if includeCurrentRejection {
+                records.append(rejection(at: "1970-01-01T00:03:21.000Z", prompt: blocked))
+            } else if sameInput {
+                // A matching record at the next hook's start cannot identify the first turn.
+                records.append(rejection(at: "1970-01-01T00:03:22.000Z", prompt: blocked))
+            }
+            records.append(["type": "user", "promptId": "revised"])
+            return try records.enumerated().reduce(into: Data()) { data, entry in
+                var record = entry.element
+                record["uuid"] = "record-\(entry.offset)"
+                record["sessionId"] = f.instance.conversationID
+                record["isSidechain"] = false
+                try data.append(JSONSerialization.data(withJSONObject: record))
+                data.append(10)
+            }
+        }
+        try transcript(includeCurrentRejection: false).write(to: f.transcript)
+        func hookPeer(_ hookPID: Int32, startedAt: UInt64) throws -> PluginIngressPeer {
+            try #require(PluginIngressPeer.capture(peerPID: hookPID, userID: 501) { pid in
+                switch pid {
+                case hookPID: .init(processID: hookPID, parentProcessID: 10, userID: 501, startSeconds: startedAt, startMicroseconds: 0)
+                case 10: .init(processID: 10, parentProcessID: 1, userID: 501, startSeconds: 100, startMicroseconds: 0)
+                default: nil
+                }
+            })
+        }
+        let scanned = LockIsolated(false)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: { $0 }, recheckConversation: { _, _, admit in
+            admit ? .ready : .deferred
+        }, provider: { _ in
+            scanned.setValue(true)
+            return ClaudeCodePluginCore()
+        }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let first = f.event(.submitted, text: blocked, turn: "blocked", plugin: f.instance.pluginID)
+        let second = f.event(.submitted, text: sameInput ? blocked : "Review the revised draft.", turn: "revised", plugin: f.instance.pluginID)
+        let receipts = try [(first, hookPeer(21, startedAt: 200)), (second, hookPeer(22, startedAt: 202))]
+        for (event, peer) in retry == "same-input-reversed" ? Array(receipts.reversed()) : receipts {
+            try await router.receiveUnconfirmedSubmission(event, peer: peer)
+        }
+        for _ in 0..<100 {
+            if scanned.value {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(scanned.value)
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(try await f.store.snapshot().runs[0].invocations[0].resultTurnID == "turn")
+        await #expect(throws: AgentWorkflowError.self) { try await router.requireVerifiedSubmission(f.invocation.id) }
+
+        try transcript(includeCurrentRejection: true).write(to: f.transcript)
+        for _ in 0..<100 {
+            if try await f.store.snapshot().runs[0].invocations[0].resultTurnID == "revised" {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try await router.requireVerifiedSubmission(f.invocation.id)
+        let service = AgentWorkflowAgentService(
+            store: f.store, inspect: { $0 }, synchronizeEvents: { try await router.requireVerifiedSubmission($0) },
+            provider: { _ in ClaudeCodePluginCore() }
+        )
+        let approval = await service.handle(f.loopExitRequest(), peer: f.peer)
+        #expect(approval.ok, Comment(rawValue: approval.error?.message ?? ""))
+        let saved = try await f.store.snapshot().runs[0].invocations[0]
+        #expect(saved.nativeTurnID == "turn")
+        #expect(saved.resultTurnID == "revised")
+        await router.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test
+    func pendingContinuationSuppressesOnlyItsOwnCompletionAfterNewConversation() async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.submissionText(pluginID: f.instance.pluginID)), peer: f.peer)
+        let conversation = "new-conversation"
+        let transcript = f.directory.appendingPathComponent("new-session.jsonl")
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: { $0 }, recheckConversation: { _, _, _ in .deferred })
+        let submitted = PluginEvent(pluginID: f.instance.pluginID, sessionID: conversation, tmuxPane: f.instance.paneID, workflow: .init(
+            kind: .submitted, nativeTurnID: "continued", transcriptPath: transcript.path, text: "Continue review"
+        ))
+        try await router.receiveUnconfirmedSubmission(submitted, peer: f.peer)
+        let notifications = LockIsolated([String]())
+        let dispatcher = PluginEventDispatcher(onNotification: { _, _, notice, _ in
+            notifications.withValue { $0.append(notice.body) }
+        }, onWorkflow: { event, peer in
+            do { _ = try await router.receive(event, peer: peer) }
+            catch { Issue.record(Comment(rawValue: error.localizedDescription)) }
+        }, shouldSuppressAgentCompletion: { event, peer in
+            do { return try await router.suppressesAgentCompletion(event, peer: peer) }
+            catch {
+                Issue.record(Comment(rawValue: error.localizedDescription))
+                return false
+            }
+        })
+        func stop(_ text: String, path: String) -> PluginEvent {
+            .init(
+                pluginID: f.instance.pluginID, sessionID: conversation, state: .doneWorking(summary: nil),
+                notification: .init(title: "Finished", body: text), tmuxPane: f.instance.paneID,
+                workflow: .init(kind: .stopCandidate, nativeTurnID: "continued", transcriptPath: path, text: text)
+            )
+        }
+        let otherPeer = try #require(PluginIngressPeer.capture(peerPID: 20, userID: 501) { pid in
+            pid == 20 ? .init(processID: 20, parentProcessID: 1, userID: 501, startSeconds: 200, startMicroseconds: 0) : nil
+        })
+        let completed = stop("Workflow reply", path: transcript.path)
+        #expect(try await !router.suppressesAgentCompletion(completed, peer: otherPeer))
+        await dispatcher.dispatch(completed, ingressPeer: f.peer)
+        await dispatcher.dispatch(stop("Unrelated reply", path: f.transcript.path), ingressPeer: f.peer)
+        #expect(notifications.value == ["Unrelated reply"])
+        #expect(try await f.store.snapshot().runs[0].invocations[0].resultTurnID == "turn")
+        await router.shutdown()
+        await f.router.shutdown()
         await f.runner.shutdown()
     }
 

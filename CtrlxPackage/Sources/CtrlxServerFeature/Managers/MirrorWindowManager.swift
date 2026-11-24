@@ -501,6 +501,15 @@ final public class MirrorWindowManager {
         return AgentProcessBinding(paneID: paneID, workspacePane: workspace, detected: detected, runtimeID: { _ in runtime })
     }
 
+    func rejectsConversationReplay(_ event: PluginEvent, peer: PluginIngressPeer) -> Bool {
+        guard
+            let paneID = event.tmuxPane, let binding = currentAgentBinding(forPane: paneID),
+            binding.pluginID == event.pluginID, let pid = Int32(binding.processID),
+            peer.contains(processID: pid, runtimeID: binding.runtimeID),
+            var evidence = conversationEvidence[paneID], evidence.runtimeID == binding.runtimeID else { return false }
+        return !evidence.accept(event, nativeConversationID: nil, source: peer.processes.first)
+    }
+
     /// Called on the main actor with no suspension between revalidation and mutation.
     func acceptCurrentEvent(_ event: PluginEvent, binding: AgentProcessBinding, peer: PluginIngressPeer, nativeConversationID: String?) -> AgentEventContext? {
         guard

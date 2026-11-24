@@ -60,6 +60,24 @@ public struct CodexWorkflowTranscript: AgentWorkflowTranscriptParser {
         return payload["turn_id"] as? String == nativeTurnID
     }
 
+    public mutating func submittedTurnID(in line: Data) throws -> String? {
+        guard
+            let record = try JSONSerialization.jsonObject(with: line) as? [String: Any],
+            let payload = record["payload"] as? [String: Any] else { return nil }
+        if record["type"] as? String == "session_meta" {
+            sessionMatches = payload["id"] as? String == conversationID
+        }
+        guard sessionMatches else { return nil }
+        switch (record["type"] as? String, payload["type"] as? String) {
+        case ("event_msg", "task_started"),
+             ("event_msg", "turn_started"),
+             ("turn_context", _):
+            return payload["turn_id"] as? String
+        default:
+            return nil
+        }
+    }
+
     public mutating func consume(_ line: Data) throws -> AgentWorkflowTranscriptOutcome? {
         guard
             let record = try JSONSerialization.jsonObject(with: line) as? [String: Any],

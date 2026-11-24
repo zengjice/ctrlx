@@ -46,16 +46,55 @@ extension AgentWorkflowDefinition {
         return nodes.filter { !sources.contains($0.id) }
     }
 
+    var appendAfterSteps: [AgentWorkflowNode] {
+        let afterLoop = afterLoopNodeIDs
+        return terminalSteps.filter { afterLoop.isEmpty || afterLoop.contains($0.id) }
+    }
+
     /// Appending continues after every current branch, independent of display order.
-    mutating func appendStep(_ node: AgentWorkflowNode) {
-        let previous = terminalSteps
+    mutating func appendStep(_ node: AgentWorkflowNode, afterLoopFrom source: UUID? = nil) {
+        if let source, loop != nil, loop?.exitNodeID == nil {
+            nodes.append(node)
+            edges.append(.init(source: source, target: node.id))
+            loop?.exitNodeID = node.id
+            return
+        }
+        let previous = appendAfterSteps
         if nodes.isEmpty {
             entryNodeID = node.id
         }
         nodes.append(node)
         edges += previous.map { .init(source: $0.id, target: node.id) }
-        if loop != nil {
+        if loop != nil, loop?.exitNodeID == nil {
             loop?.finalNodeID = node.id
+        }
+    }
+
+    var canRemoveLoopExit: Bool {
+        loopExit != nil && appendAfterSteps.count == 1
+    }
+
+    mutating func removeLoopExit(keepingLoop: Bool = true) {
+        guard let exit = loopExit, let final = loop?.finalNodeID else { return }
+        let terminals = appendAfterSteps
+        guard !keepingLoop || terminals.count == 1 else { return }
+        edges.removeAll { $0 == exit }
+        edges.append(.init(source: final, target: exit.target))
+        if keepingLoop, let terminal = terminals.first {
+            loop?.exitNodeID = nil
+            loop?.finalNodeID = terminal.id
+        } else {
+            loop = nil
+        }
+    }
+
+    func upstreamCandidates(for target: UUID) -> [AgentWorkflowNode] {
+        let downstream = descendants(of: target)
+        let reachable = descendants(of: entryNodeID)
+        let afterLoop = afterLoopNodeIDs
+        return nodes.filter { source in
+            !downstream.contains(source.id)
+                && (!reachable.contains(target) || afterLoop.contains(source.id) == afterLoop.contains(target))
         }
     }
 

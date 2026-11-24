@@ -30,6 +30,10 @@ struct AgentWorkflowRunView: View {
                     if let finish = state.finishRequest {
                         Text("Completion requested: \(finish.reason)").textSelection(.enabled)
                     }
+                    if let exit = state.loopExitRequest {
+                        Text(state.hasExitedLoop == true ? "Loop approved: \(exit.reason)" : "Loop exit requested: \(exit.reason)")
+                            .textSelection(.enabled)
+                    }
                     if !endpoint.isConnected {
                         Text("Host offline · showing the last received state").foregroundStyle(.secondary)
                     }
@@ -154,7 +158,7 @@ struct AgentWorkflowRunView: View {
             HStack {
                 Label(node.name, symbol: node.kind == .content ? .docTextFill : .terminal).font(.headline)
                 Spacer()
-                Text(node.isSkipped ? "First round only" : (node.invocation.map { $0.awaitingStepCompletion ? "Waiting for Agent completion" : $0.status.title } ?? (state.summary.status.isTerminal ? "Not run" : "Waiting")))
+                Text(nodeStatus(node, state: state))
                     .font(.caption).foregroundStyle(.secondary)
             }
             if let instance = node.instance {
@@ -177,6 +181,17 @@ struct AgentWorkflowRunView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 4)
         .contentShape(Rectangle())
+    }
+
+    private func nodeStatus(_ node: AgentWorkflowRunState.Node, state: AgentWorkflowRunState) -> String {
+        if node.waitsForLoopExit == true {
+            return "Waiting for loop approval"
+        }
+        if node.isSkipped {
+            return state.hasExitedLoop == true ? "Skipped" : "First round only"
+        }
+        return node.invocation.map { $0.awaitingStepCompletion ? "Waiting for Agent completion" : $0.status.title }
+            ?? (state.summary.status.isTerminal ? "Not run" : "Waiting")
     }
 
     private func refresh() async {

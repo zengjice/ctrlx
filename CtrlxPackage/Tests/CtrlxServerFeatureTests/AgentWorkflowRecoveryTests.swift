@@ -145,7 +145,7 @@ struct AgentWorkflowRecoveryTests {
         #expect(reloaded.runs == restored.runs)
     }
 
-    private func archive(completed: Bool) throws -> AgentWorkflowArchive {
+    private func archive(completed: Bool, legacyAgentOutput: Bool = true) throws -> AgentWorkflowArchive {
         let hostID = UUID()
         let agent = AgentWorkflowInstance(
             hostID: hostID, pluginID: "codex", processID: 42, processRuntimeID: "runtime",
@@ -153,7 +153,7 @@ struct AgentWorkflowRecoveryTests {
             paneID: "%1", conversationID: "conversation", displayName: "Developer", workingDirectory: "/fixture",
             capabilities: .init(maximumInputBytes: 100_000), readiness: .ready
         )
-        let brief = AgentWorkflowNode(name: "Brief", content: .init(text: "Task", attachmentIDs: [UUID()]))
+        let brief = AgentWorkflowNode(name: "Brief", content: .init(text: "Task", attachmentIDs: legacyAgentOutput ? [UUID()] : []))
         let developer = AgentWorkflowNode(name: "Developer", agentInstanceID: agent.id)
         let after = AgentWorkflowNode(name: "After", content: .init(text: "Next"))
         let definition = AgentWorkflowDefinition(
@@ -177,6 +177,9 @@ struct AgentWorkflowRecoveryTests {
             _ = try execution.prepareInvocation(nodeID: after.id, now: now)
         }
         var run = execution.run
+        guard legacyAgentOutput else {
+            return .init(hostID: hostID, definitions: [definition], instances: [agent], runs: [run])
+        }
         let result = try #require(run.invocations[1].result)
         run.invocations[1].result = .init(
             id: result.id, invocationID: result.invocationID, nativeTurnID: result.nativeTurnID,
@@ -196,7 +199,7 @@ struct AgentWorkflowRecoveryTests {
         try JSONEncoder().encode(saved).write(to: file)
         let restored = try await AgentWorkflowStore(fileURL: file, hostID: saved.hostID).snapshot()
         let run = try #require(restored.runs.first)
-        #expect(restored.schemaVersion == 8)
+        #expect(restored.schemaVersion == AgentWorkflowArchive.currentSchemaVersion)
         var expectedDefinitions = saved.definitions
         for index in expectedDefinitions.indices {
             expectedDefinitions[index].rememberTargets(from: saved.instances)
@@ -215,13 +218,13 @@ struct AgentWorkflowRecoveryTests {
         ))
         #expect(try JSONDecoder().decode(AgentWorkflowArchive.self, from: Data(contentsOf: file)) == restored)
         let reloaded = try await AgentWorkflowStore(fileURL: file, hostID: saved.hostID).snapshot()
-        #expect(reloaded.schemaVersion == 8)
+        #expect(reloaded.schemaVersion == AgentWorkflowArchive.currentSchemaVersion)
         #expect(reloaded.definitions == restored.definitions)
         #expect(reloaded.runs[0].status == run.status)
         #expect(reloaded.runs[0].invocations == run.invocations)
     }
 
-    @Test(arguments: ["current-output", "missing-turn", "wrong-host", "future-schema"])
+    @Test(arguments: ["current-output", "missing-turn", "wrong-host"])
     func invalidRecordsAreStillRejectedWithoutRewriting(scenario: String) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("workflow-invalid-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -230,9 +233,6 @@ struct AgentWorkflowRecoveryTests {
         var saved = try archive(completed: true)
         if scenario == "current-output" {
             saved.schemaVersion = 4
-        }
-        if scenario == "future-schema" {
-            saved.schemaVersion = 8
         }
         if scenario == "missing-turn" {
             saved.runs[0].invocations[1].nativeTurnID = nil
@@ -245,6 +245,25 @@ struct AgentWorkflowRecoveryTests {
         let data = try JSONEncoder().encode(saved)
         try data.write(to: file)
         let store = AgentWorkflowStore(fileURL: file, hostID: scenario == "wrong-host" ? UUID() : saved.hostID)
+        await #expect(throws: AgentWorkflowError.self) { try await store.snapshot() }
+        #expect(try Data(contentsOf: file) == data)
+    }
+
+    @Test
+    func aValidLedgerWithAFutureSchemaIsRejectedWithoutRewriting() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("workflow-future-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent("ledger.json")
+        var saved = try archive(completed: true, legacyAgentOutput: false)
+        try JSONEncoder().encode(saved).write(to: file)
+        let supported = try await AgentWorkflowStore(fileURL: file, hostID: saved.hostID).snapshot()
+        #expect(supported.runs.map(\.id) == saved.runs.map(\.id))
+
+        saved.schemaVersion = AgentWorkflowArchive.currentSchemaVersion + 1
+        let data = try JSONEncoder().encode(saved)
+        try data.write(to: file)
+        let store = AgentWorkflowStore(fileURL: file, hostID: saved.hostID)
         await #expect(throws: AgentWorkflowError.self) { try await store.snapshot() }
         #expect(try Data(contentsOf: file) == data)
     }

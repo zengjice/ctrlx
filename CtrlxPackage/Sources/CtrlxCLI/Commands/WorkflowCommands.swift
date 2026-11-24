@@ -4,8 +4,8 @@ import Foundation
 struct WorkflowCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "workflow",
-        abstract: "Read task attachments, complete a step or finish a workflow",
-        subcommands: [WorkflowFinishCommand.self, WorkflowCompleteStepCommand.self, WorkflowAttachmentsCommand.self]
+        abstract: "Read task attachments, complete a step, exit a loop or finish a workflow",
+        subcommands: [WorkflowFinishCommand.self, WorkflowExitLoopCommand.self, WorkflowCompleteStepCommand.self, WorkflowAttachmentsCommand.self]
     )
 }
 
@@ -54,9 +54,35 @@ struct WorkflowFinishCommand: ParsableCommand {
         """
     )
 
+    @OptionGroup var request: WorkflowTerminationOptions
+
+    func parameters() throws -> [String: JSONValue] {
+        try request.parameters()
+    }
+
+    func run() throws {
+        try request.request("workflow.finish")
+    }
+}
+
+struct WorkflowExitLoopCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "exit-loop",
+        abstract: "Continue to the configured after-loop step",
+        discussion: "Call from the authorized step when its configured exit condition is met, then provide the final result. The Host verifies that result before handing it to the after-loop step."
+    )
+
+    @OptionGroup var request: WorkflowTerminationOptions
+
+    func run() throws {
+        try request.request("workflow.exitLoop")
+    }
+}
+
+struct WorkflowTerminationOptions: ParsableArguments {
     @Option(name: .long, help: "Invocation UUID supplied with this workflow task") var invocation: String
 
-    @Option(name: .long, help: "Why this workflow should finish") var reason: String
+    @Option(name: .long, help: "Why the configured condition is met") var reason: String
 
     @OptionGroup var options: GlobalOptions
 
@@ -73,9 +99,9 @@ struct WorkflowFinishCommand: ParsableCommand {
         return ["invocationId": .string(id.uuidString), "reason": .string(reason)]
     }
 
-    func run() throws {
+    func request(_ method: String) throws {
         let response = try executeRequest(
-            method: "workflow.finish", params: parameters(), options: options,
+            method: method, params: parameters(), options: options,
             timeoutSeconds: 30, responseLimit: 64 * 1_024
         )
         if options.json {

@@ -431,7 +431,11 @@ struct AgentWorkflowConfigurationView: View {
             if !node.input.text.isEmpty {
                 Text(verbatim: node.input.text)
             }
-            if node.allowsFinish {
+            if
+                let exit = definition.loopExit, exit.source == node.id,
+                let target = definition.nodes.first(where: { $0.id == exit.target }) {
+                Label("On approval: \(target.name)", symbol: .checkmarkCircle).font(.caption)
+            } else if node.allowsFinish {
                 Label("Can end this workflow", symbol: .checkmarkCircle).font(.caption)
             }
         }

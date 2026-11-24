@@ -15,6 +15,7 @@ struct AgentWorkflowTranscriptRecord {
     // 32 legal 20 MiB images, Base64 with every slash escaped, plus metadata.
     private static let maximumRecordBytes = maximumRetainedBytes + AgentWorkflowWire.maximumAttachments * ((20 * 1_024 * 1_024 + 2) / 3 * 8 + 1_024)
     private let turnMetadataOnly: Bool
+    private let retainSubmissionRejections: Bool
     private var containers: [Container] = []
     private var stringKind: StringKind?
     private var keyBytes: [UInt8] = []
@@ -26,8 +27,9 @@ struct AgentWorkflowTranscriptRecord {
     private var rawBytes = 0
     private(set) var retained = Data()
 
-    init(turnMetadataOnly: Bool = false) {
+    init(turnMetadataOnly: Bool = false, retainSubmissionRejections: Bool = false) {
         self.turnMetadataOnly = turnMetadataOnly
+        self.retainSubmissionRejections = retainSubmissionRejections
     }
 
     mutating func append(_ bytes: Data.SubSequence) throws {
@@ -91,9 +93,13 @@ struct AgentWorkflowTranscriptRecord {
                         let key = containers.last?.key
                         let parentKey = containers.dropLast().last?.key
                         if turnMetadataOnly {
-                            let isRecordType = containers.count == 1 && key == "type"
-                            let isTurnField = containers.count == 2 && parentKey == "payload" && (key == "type" || key == "turn_id")
-                            stringKind = isRecordType || isTurnField ? .text : .discardedText
+                            let isRecordField = containers.count == 1 && (key == "type" || key == "sessionId" || key == "promptId")
+                            let isTurnField = containers.count == 2 && parentKey == "payload" && (key == "type" || key == "turn_id" || key == "id")
+                            let isRejectionField = retainSubmissionRejections && (
+                                (containers.count == 1 && (key == "subtype" || key == "timestamp" || key == "uuid" || key == "content"))
+                                    || (containers.count == 3 && parentKey == "ending" && key == "kind")
+                            )
+                            stringKind = isRecordField || isTurnField || isRejectionField ? .text : .discardedText
                         } else if key == "data", parentKey == "source" {
                             stringKind = .image
                         } else if

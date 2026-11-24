@@ -137,15 +137,17 @@ public struct AgentWorkflowLoop: Codable, Equatable, Sendable {
     public var maximumRounds: Int
     public var entryNodeID: UUID?
     public var includesResult: Bool
+    public var exitNodeID: UUID?
 
-    public init(finalNodeID: UUID, maximumRounds: Int = 5, entryNodeID: UUID? = nil, includesResult: Bool = true) {
+    public init(finalNodeID: UUID, maximumRounds: Int = 5, entryNodeID: UUID? = nil, includesResult: Bool = true, exitNodeID: UUID? = nil) {
         self.finalNodeID = finalNodeID
         self.maximumRounds = maximumRounds
         self.entryNodeID = entryNodeID
         self.includesResult = includesResult
+        self.exitNodeID = exitNodeID
     }
 
-    private enum CodingKeys: String, CodingKey { case finalNodeID, maximumRounds, entryNodeID, includesResult }
+    private enum CodingKeys: String, CodingKey { case finalNodeID, maximumRounds, entryNodeID, includesResult, exitNodeID }
 
     public init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -153,6 +155,7 @@ public struct AgentWorkflowLoop: Codable, Equatable, Sendable {
         self.maximumRounds = try values.decode(Int.self, forKey: .maximumRounds)
         self.entryNodeID = try values.decodeIfPresent(UUID.self, forKey: .entryNodeID)
         self.includesResult = try values.decodeIfPresent(Bool.self, forKey: .includesResult) ?? true
+        self.exitNodeID = try values.decodeIfPresent(UUID.self, forKey: .exitNodeID)
     }
 }
 
@@ -291,8 +294,19 @@ public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendabl
         return reached
     }
 
+    /// The exit is the sole connection from the repeated steps to the final phase.
+    public var loopExit: AgentWorkflowEdge? {
+        guard let target = loop?.exitNodeID else { return nil }
+        return edges.first { $0.target == target }
+    }
+
+    public var afterLoopNodeIDs: Set<UUID> {
+        loop?.exitNodeID.map { descendants(of: $0) } ?? []
+    }
+
     public func activeNodeIDs(round: Int) -> Set<UUID> {
-        round > 1 && loop != nil ? descendants(of: entryNodeID(round: round)) : Set(nodes.map(\.id))
+        let reachable = round > 1 && loop != nil ? descendants(of: entryNodeID(round: round)) : Set(nodes.map(\.id))
+        return reachable.subtracting(afterLoopNodeIDs)
     }
 
     public func validate() throws {
@@ -356,10 +370,15 @@ public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendabl
             remaining.removeAll { visited.contains($0) }
         }
 
+        let afterLoop = afterLoopNodeIDs
         for id in agentInstanceIDs {
             let steps = nodes.filter { $0.agentInstanceID == id }
             for (index, step) in steps.enumerated() {
                 for other in steps.dropFirst(index + 1) {
+                    // The exit phase starts after the repeating phase is done.
+                    if afterLoop.contains(step.id) != afterLoop.contains(other.id) {
+                        continue
+                    }
                     guard descendants(of: step.id).contains(other.id) || descendants(of: other.id).contains(step.id) else {
                         throw AgentWorkflowError("Steps using the same Agent must be connected in sequence, so their terminal inputs cannot overlap.")
                     }
@@ -368,15 +387,28 @@ public struct AgentWorkflowDefinition: Codable, Equatable, Identifiable, Sendabl
         }
 
         if let loop {
-            let sources = Set(edges.map(\.source))
-            let exits = nodeIDs.subtracting(sources)
+            let body = nodeIDs.subtracting(afterLoop)
+            let bodyEdges = edges.filter { body.contains($0.target) }
+            let exits = body.subtracting(bodyEdges.map(\.source))
             let loopEntry = loop.entryNodeID ?? entryNodeID
-            guard loop.maximumRounds > 0, nodeIDs.contains(loopEntry), exits == [loop.finalNodeID] else {
+            guard loop.maximumRounds > 0, body.contains(loopEntry), body.contains(entryNodeID), exits == [loop.finalNodeID] else {
                 throw AgentWorkflowError("A loop needs a positive round limit and one final node reached by every branch.")
             }
-            let repeated = descendants(of: loopEntry)
-            guard edges.allSatisfy({ !repeated.contains($0.target) || repeated.contains($0.source) || $0.target == loopEntry }) else {
+            let repeated = descendants(of: loopEntry).subtracting(afterLoop)
+            guard bodyEdges.allSatisfy({ !repeated.contains($0.target) || repeated.contains($0.source) || $0.target == loopEntry }) else {
                 throw AgentWorkflowError("Repeated steps can depend on first-round steps only at the loop entry.")
+            }
+            if loop.exitNodeID != nil {
+                guard
+                    let exit = loopExit, nodeIDs.contains(exit.target), repeated.contains(exit.source), exit.includesResult,
+                    nodes.contains(where: { $0.id == exit.source && $0.kind == .agent }),
+                    edges.filter({ body.contains($0.source) && afterLoop.contains($0.target) }) == [exit] else {
+                    throw AgentWorkflowError("The after-loop steps need a single connection carrying output from an Agent inside the loop.")
+                }
+                let following = descendants(of: exit.source)
+                guard body.allSatisfy({ following.contains($0) || descendants(of: $0).contains(exit.source) }) else {
+                    throw AgentWorkflowError("The loop exit step must run before or after every other step in the repeating phase.")
+                }
             }
         }
     }

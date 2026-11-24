@@ -64,11 +64,10 @@ final class AgentWorkflowTerminalTransport {
     }
 
     func resumeStep(_ invocation: AgentWorkflowInvocation, instance: AgentWorkflowInstance) async throws {
-        let text = """
-        Continue the current workflow step using its existing task and instructions. If the task is already complete, do not repeat the work: run ctrlx workflow complete-step --invocation \(invocation.id.uuidString), then provide the final result. Otherwise continue the remaining work, respecting any outstanding questions or required approvals.
-
-        [CtrlX workflow invocation: \(invocation.id.uuidString)]
-        """
+        guard let definition = try await store.snapshot().runs.first(where: { $0.id == invocation.delivery.runID })?.definition else {
+            throw AgentWorkflowError("The workflow run no longer exists.")
+        }
+        let text = AgentWorkflowPrompt.continuation(definition: definition, nodeID: invocation.nodeID, invocationID: invocation.id)
         guard let limit = instance.capabilities?.maximumInputBytes, text.utf8.count <= limit else {
             throw AgentWorkflowError("The continuation exceeds this Agent's input limit. Nothing was sent.")
         }

@@ -56,6 +56,8 @@ extension AppCoordinator {
             }, refreshInstances: { [weak self] in
                 guard let service = await self?.agentWorkflowService else { throw AgentWorkflowError("The Host's workflow service is unavailable.") }
                 _ = try await service.refreshInstancesCatalog()
+            }, provider: { [weak self] pluginID in
+                await self?.pluginRegistry?.core(pluginID) as? any AgentWorkflowProviding
             })
             let delivery = AgentWorkflowTerminalTransport(
                 store: store, gate: gate,
@@ -111,9 +113,17 @@ extension AppCoordinator {
                 return snapshot
             }, onFailure: { workflowLogger.error("\($0)") })
             await agentWorkflowService?.startMonitoring()
-            agentWorkflowEvents = AgentWorkflowEventRouter(store: store, runner: runner, inspect: { [weak self] instance in
+            agentWorkflowEvents = AgentWorkflowEventRouter(store: store, runner: runner, catalog: agentRuntimeCatalog, inspect: { [weak self] instance in
                 guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
                 return try await inspectWorkflowInstance(instance, verifyNativeWriter: true)
+            }, recheckConversation: { [weak self] event, peer, admit in
+                guard let self else { return .superseded }
+                if admit, await withCurrentPluginEvent(event, peer: peer, operation: { }) {
+                    return .ready
+                }
+                return await windowManager.rejectsConversationReplay(event, peer: peer) ? .superseded : .deferred
+            }, provider: { [weak self] pluginID in
+                await self?.pluginRegistry?.core(pluginID) as? any AgentWorkflowProviding
             }, onVerified: { [weak self] context in
                 await self?.verifyAgentWorkflowContext(context)
             }, onFailure: { workflowLogger.error("\($0)") })
@@ -161,17 +171,29 @@ extension AppCoordinator {
         controlClientManager.workflowInputGate = nil
     }
 
-    func handleAgentWorkflowEvent(_ event: PluginEvent, peer: PluginIngressPeer) async {
+    func handleAgentWorkflowEvent(_ event: PluginEvent, peer: PluginIngressPeer, unconfirmedSubmission: Bool = false) async {
         do {
-            try await recordWorkflowBridge(event, peer: peer)
+            if !unconfirmedSubmission {
+                try await recordWorkflowBridge(event, peer: peer)
+            }
             try await agentMessages?.receive(event, peer: peer)
+            if unconfirmedSubmission {
+                try await agentWorkflowEvents?.receiveUnconfirmedSubmission(event, peer: peer)
+                return
+            }
+            if event.workflow?.kind != .submitted, await agentWorkflowEvents?.bufferPendingCompletion(event, peer: peer) == true {
+                return
+            }
             if
                 event.workflow != nil, let store = agentWorkflowStore,
                 try await !store.snapshot().instances.contains(where: {
                     $0.pluginID == event.pluginID && $0.paneID == event.tmuxPane
                         && peer.contains(processID: $0.processID, runtimeID: $0.processRuntimeID)
                 }) {
-                _ = try await agentWorkflowService?.refreshInstancesCatalog()
+                do { _ = try await agentWorkflowService?.refreshInstancesCatalog() }
+                catch is AgentWorkflowInspectionUnavailable where event.workflow?.kind != .submitted {
+                    // Results may still match a receipt already saved in the ledger.
+                }
             }
             guard
                 let context = try await agentWorkflowEvents?.receive(event, peer: peer) else { return }
@@ -283,8 +305,8 @@ extension AppCoordinator {
                 throw AgentWorkflowInspectionUnavailable()
             }
         } else if !instance.conversationID.isEmpty || !CodexProcessSessionReader.supports(pluginID: instance.pluginID) {
+            guard let state = windowManager.paneStates[instance.paneID] else { throw AgentWorkflowInspectionUnavailable() }
             guard
-                let state = windowManager.paneStates[instance.paneID],
                 let native = await identities.currentIdentity(in: state, detected: current),
                 pane.binding.matches(native), native.source.sessionID == instance.conversationID,
                 windowManager.paneStates[instance.paneID].flatMap(AgentForkSource.init(pane:)) == native.source else {

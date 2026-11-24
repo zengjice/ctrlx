@@ -30,6 +30,15 @@
             let inode: ino_t
         }
 
+        struct VerifiedSubmission: Sendable {
+            let turn: PluginWorkflowTurn
+            fileprivate let revision: FileRevision
+
+            var isCurrent: Bool {
+                revision.isCurrent(at: turn.transcriptPath)
+            }
+        }
+
         fileprivate struct FileRevision: Equatable, Sendable {
             let identity: FileIdentity
             let size: UInt64
@@ -50,6 +59,11 @@
             func referencesSameFile(as other: Self) -> Bool {
                 identity == other.identity
             }
+
+            func isCurrent(at path: String) -> Bool {
+                var info = stat()
+                return lstat(path, &info) == 0 && info.st_size >= 0 && Self(info) == self
+            }
         }
 
         private let handle: FileHandle
@@ -65,12 +79,13 @@
         private var locating: Bool
         private var readingStart = false
         private let markers: [Data]
+        private let submissionRejectionWindow: Range<Date>?
         private var recordStart: UInt64 = 0
         private var markerTail = Data()
         /// Actual I/O, including seeks and rereads, for bounded-reader diagnostics.
         private(set) var bytesRead: UInt64 = 0
 
-        init(path: String, parser: any AgentWorkflowTranscriptParser) throws {
+        init(path: String, parser: any AgentWorkflowTranscriptParser, submissionRejectionWindow: Range<Date>? = nil) throws {
             let fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
             guard fd >= 0 else {
                 if errno == ENOENT {
@@ -83,15 +98,20 @@
                 close(fd)
                 throw AgentWorkflowError("The native transcript must be a regular file owned by this user.")
             }
-            self.init(handle: FileHandle(fileDescriptor: fd, closeOnDealloc: true), revision: FileRevision(info), parser: parser)
+            self.init(
+                handle: FileHandle(fileDescriptor: fd, closeOnDealloc: true), revision: FileRevision(info),
+                parser: parser, submissionRejectionWindow: submissionRejectionWindow
+            )
         }
 
-        private init(handle: FileHandle, revision: FileRevision, parser: any AgentWorkflowTranscriptParser) {
+        private init(handle: FileHandle, revision: FileRevision, parser: any AgentWorkflowTranscriptParser, submissionRejectionWindow: Range<Date>? = nil) {
             self.handle = handle
             self.openedFile = revision
             self.initialParser = parser
             self.parser = parser
-            self.markers = parser.startMarkers.filter { !$0.isEmpty }.map { Data($0.utf8) }
+            let rejectionMarker = submissionRejectionWindow == nil ? nil : parser.submissionRejectionMarker
+            self.submissionRejectionWindow = rejectionMarker == nil ? nil : submissionRejectionWindow
+            self.markers = (parser.startMarkers + [rejectionMarker].compactMap { $0 }).filter { !$0.isEmpty }.map { Data($0.utf8) }
             self.locating = !markers.isEmpty
             self.readingStart = locating && parser.readsSessionHeader
         }
@@ -129,6 +149,55 @@
             let result = try poll()
             guard result.reachedEnd, pending.retained.isEmpty else { return result }
             return .init(outcome: result.outcome ?? parser.recoveredCompletion, reachedEnd: true)
+        }
+
+        /// Use a fresh reader to locate the accepted turn and check submissions
+        /// through the end of a stable transcript snapshot.
+        func verifyCurrentSubmission(_ turn: PluginWorkflowTurn) async throws -> VerifiedSubmission? {
+            guard
+                let scan = try await scanSubmissions(from: turn),
+                scan.latestTurnID == turn.nativeTurnID, pending.retained.isEmpty else { return nil }
+            return VerifiedSubmission(turn: turn, revision: scan.revision)
+        }
+
+        /// A changing transcript cannot establish submission order.
+        func hasNewerSubmission(than turn: PluginWorkflowTurn, requiringReceipt: Bool = false) async throws -> Bool? {
+            guard
+                let scan = try await scanSubmissions(from: turn),
+                !requiringReceipt || ((scan.foundTurn || scan.rejected) && pending.retained.isEmpty) else { return nil }
+            if !scan.foundTurn, scan.rejected {
+                return true
+            }
+            return scan.foundTurn && scan.latestTurnID != turn.nativeTurnID
+        }
+
+        private func scanSubmissions(from turn: PluginWorkflowTurn) async throws -> (foundTurn: Bool, rejected: Bool, latestTurnID: String?, revision: FileRevision)? {
+            let revision = try FileRevision(fileInfo())
+            pending = .init(turnMetadataOnly: true, retainSubmissionRejections: submissionRejectionWindow != nil)
+            var foundTurn = false
+            var rejected = false
+            var latestTurnID: String?
+            while true {
+                let result = try poll(through: revision.size, turnMetadataOnly: true) { line in
+                    if let submitted = try parser.submittedTurnID(in: line) {
+                        if submitted == turn.nativeTurnID {
+                            foundTurn = true
+                        }
+                        latestTurnID = submitted
+                    } else if let submissionRejectionWindow, !foundTurn, !rejected {
+                        rejected = try parser.rejectsSubmission(line, during: submissionRejectionWindow)
+                    }
+                    return nil
+                }
+                if result.reachedEnd {
+                    break
+                }
+                await Task.yield()
+            }
+            guard
+                offset == revision.size, try FileRevision(fileInfo()) == revision,
+                revision.isCurrent(at: turn.transcriptPath) else { return nil }
+            return (foundTurn, rejected, latestTurnID, revision)
         }
 
         func drainActivity(reusing previous: ActivityDrain? = nil, checking candidates: Set<String> = []) async throws -> ActivityDrain {
@@ -177,6 +246,13 @@
         }
 
         func poll(through end: UInt64? = nil) throws -> Poll {
+            try poll(through: end, turnMetadataOnly: false) { try parser.consume($0) }
+        }
+
+        private func poll(
+            through end: UInt64?, turnMetadataOnly: Bool,
+            consume: (Data) throws -> AgentWorkflowTranscriptOutcome?
+        ) throws -> Poll {
             _ = try fileInfo()
             if let outcome = pendingOutcome {
                 pendingOutcome = nil
@@ -201,14 +277,16 @@
                 while let newline = buffered.firstIndex(of: 10) {
                     try pending.append(buffered[..<newline])
                     let value = try pending.finish()
-                    pending = AgentWorkflowTranscriptRecord()
+                    pending = AgentWorkflowTranscriptRecord(
+                        turnMetadataOnly: turnMetadataOnly, retainSubmissionRejections: submissionRejectionWindow != nil
+                    )
                     buffered = Data(buffered[buffered.index(after: newline)...])
                     if readingStart {
                         readingStart = false
                         locating = try !parser.isTurnStart(value)
                         if locating {
                             if recordStart == 0, parser.readsSessionHeader {
-                                _ = try parser.consume(value)
+                                _ = try consume(value)
                             }
                             recordStart = offset - UInt64(buffered.count)
                             break
@@ -221,7 +299,7 @@
                         replayingActivity = false
                         parser.beginAppendingActivity()
                     }
-                    let outcome = try parser.consume(value)
+                    let outcome = try consume(value)
                     if let outcome {
                         if case .failed = outcome {
                             failure = outcome

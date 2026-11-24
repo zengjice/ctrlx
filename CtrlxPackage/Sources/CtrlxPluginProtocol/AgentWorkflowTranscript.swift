@@ -106,6 +106,9 @@ public protocol AgentWorkflowTranscriptParser: Sendable {
     mutating func captureActivity(aligningWith saved: [AgentTurnActivity])
     mutating func beginAppendingActivity()
     func isTurnStart(_ line: Data) throws -> Bool
+    mutating func submittedTurnID(in line: Data) throws -> String?
+    var submissionRejectionMarker: String? { get }
+    func rejectsSubmission(_ line: Data, during: Range<Date>) throws -> Bool
     /// Update Stop text without resetting the turn; return matching evidence
     /// already consumed so a late callback or inspection retry needs no replay.
     mutating func updateCandidate(_ candidate: String) -> AgentWorkflowTranscriptOutcome?
@@ -144,6 +147,18 @@ public extension AgentWorkflowTranscriptParser {
     }
 
     func isTurnStart(_: Data) throws -> Bool {
+        false
+    }
+
+    mutating func submittedTurnID(in _: Data) throws -> String? {
+        nil
+    }
+
+    var submissionRejectionMarker: String? {
+        nil
+    }
+
+    func rejectsSubmission(_: Data, during _: Range<Date>) throws -> Bool {
         false
     }
 }

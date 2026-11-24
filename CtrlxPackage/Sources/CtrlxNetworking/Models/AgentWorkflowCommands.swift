@@ -1,7 +1,7 @@
 import Foundation
 
 public enum AgentWorkflowWire {
-    public static let version = 8
+    public static let version = 9
     public static let maximumEncodedBytes = 256 * 1_024
     public static let imageEncodedBytes = 576 * 1_024
     public static let maximumDefinitionBytes = 128 * 1_024
@@ -157,7 +157,7 @@ public struct AgentWorkflowRunSummary: Codable, Equatable, Identifiable, Sendabl
         self.revision = run.revision
         self.round = run.round
         self.roundLimit = run.roundLimit
-        self.isLooping = run.definition.loop != nil
+        self.isLooping = run.definition.loop != nil && !run.hasExitedLoop
         self.status = run.status
         self.issue = run.issue
         self.createdAt = run.createdAt
@@ -200,6 +200,7 @@ public struct AgentWorkflowRunState: Codable, Equatable, Sendable {
         public let upstreamIDs: [UUID]
         public let invocation: AgentWorkflowInvocationSummary?
         public let isSkipped: Bool
+        public let waitsForLoopExit: Bool?
         public let participantName: String?
         public let modelSelection: AgentModelSelection?
     }
@@ -207,18 +208,27 @@ public struct AgentWorkflowRunState: Codable, Equatable, Sendable {
     public let summary: AgentWorkflowRunSummary
     public let nodes: [Node]
     public let finishRequest: AgentWorkflowFinishRequest?
+    public let loopExitRequest: AgentWorkflowFinishRequest?
+    public let hasExitedLoop: Bool?
 
     public init(_ run: AgentWorkflowRun, currentInstances: [AgentWorkflowInstance]) {
         self.summary = .init(run)
         self.finishRequest = run.finishRequest
+        self.loopExitRequest = run.loopExitRequest
+        self.hasExitedLoop = run.hasExitedLoop ? true : nil
+        let active = run.activeNodeIDs
+        let afterLoop = run.definition.afterLoopNodeIDs
         self.nodes = run.definition.nodes.map { node in
             let bound = run.definition.instance(for: node.agentInstanceID, in: run.instances)
             let current = bound.flatMap { $0.agentID.resolve(in: currentInstances, identity: \.agentID).value }
+            let invocation = run.invocations.last { $0.nodeID == node.id && $0.round == run.round }
+            let waitsForExit = !run.status.isTerminal && !run.hasExitedLoop && afterLoop.contains(node.id)
             return Node(
                 id: node.id, kind: node.kind, name: node.name, instance: current ?? bound,
                 upstreamIDs: node.id == run.definition.entryNodeID(round: run.round) ? [] : run.definition.upstream(of: node.id).map(\.id),
-                invocation: run.invocations.last { $0.nodeID == node.id && $0.round == run.round }.map(AgentWorkflowInvocationSummary.init),
-                isSkipped: !run.definition.activeNodeIDs(round: run.round).contains(node.id),
+                invocation: invocation.map(AgentWorkflowInvocationSummary.init),
+                isSkipped: !active.contains(node.id) && invocation == nil && !afterLoop.contains(node.id),
+                waitsForLoopExit: waitsForExit ? true : nil,
                 participantName: (current ?? bound)?.displayName,
                 modelSelection: node.modelSelection
             )

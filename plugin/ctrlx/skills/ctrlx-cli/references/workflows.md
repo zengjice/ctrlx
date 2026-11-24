@@ -77,7 +77,8 @@ setting instead.
 
 The task's `[CtrlX workflow invocation: …]` block identifies the current
 invocation. It includes `complete-step` for steps requiring explicit completion,
-and `finish` only when that step may end the whole workflow. Workflow images are delivered as native image attachments
+`exit-loop` for the configured loop approval step, or `finish` when the step may
+end the whole workflow. Workflow images are delivered as native image attachments
 with the task; use those images directly.
 The task and step instructions determine the response; the workflow block adds
 no answer format.
@@ -140,6 +141,19 @@ This command completes one step; `finish` ends the workflow. A step authorized t
 finish the workflow can use `finish` directly without a separate `complete-step`.
 The task defines what completion means; this skill does not impose coding, test,
 report or approval requirements. Steps without this command keep reply-end handoff.
+
+### Approving a loop exit
+
+Use the command supplied in the task once the configured approval condition is met.
+
+```bash
+ctrlx workflow exit-loop --invocation '<UUID from this task>' --reason '<approval reason>'
+```
+
+Then give the final result. The Host verifies the current turn and hands the
+result to the configured after-loop step. An accepted request also completes
+an explicit step after verification. A paused workflow waits for the operator
+to continue. If approval criteria are unmet, use the step's normal completion.
 
 ### Requesting completion
 

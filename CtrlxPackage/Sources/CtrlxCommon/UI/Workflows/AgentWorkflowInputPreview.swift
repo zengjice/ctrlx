@@ -10,13 +10,16 @@ struct AgentWorkflowInputPreview: View {
 
     var body: some View {
         let input = AgentWorkflowPrompt.preview(definition: definition, node: node, round: nextRound ? 2 : 1)
-        let isActive = definition.activeNodeIDs(round: nextRound ? 2 : 1).contains(node.id)
+        let afterLoop = definition.afterLoopNodeIDs.contains(node.id)
+        let isActive = afterLoop || definition.activeNodeIDs(round: nextRound ? 2 : 1).contains(node.id)
         let receivesResults = nextRound && node.id == definition.entryNodeID(round: 2)
             ? definition.loop?.includesResult == true
             : definition.edges.contains { $0.target == node.id && $0.includesResult }
         List {
             Section {
-                if definition.loop != nil {
+                if afterLoop {
+                    Text("Runs once after the loop is approved.")
+                } else if definition.loop != nil {
                     Toggle("Preview a later round", isOn: $nextRound)
                 }
                 Text(node.kind == .content

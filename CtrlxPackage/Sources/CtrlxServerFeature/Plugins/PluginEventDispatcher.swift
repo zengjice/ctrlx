@@ -72,8 +72,9 @@
         private let onAppAction: AppActionSink
         private let isYoloModeEnabled: AutoApproveCheck
         private let onWorkflow: WorkflowSink
+        private let onUnconfirmedSubmission: WorkflowSink
         private let shouldSuppressAgentCompletion: @Sendable (PluginEvent, PluginIngressPeer) async -> Bool
-        public typealias CurrentEventSink = @Sendable (PluginEvent, PluginIngressPeer?, @escaping @Sendable () async -> Void) async -> Void
+        public typealias CurrentEventSink = @Sendable (PluginEvent, PluginIngressPeer?, @escaping @Sendable () async -> Void) async -> Bool
         private let withCurrentEvent: CurrentEventSink
 
         // MARK: - Initialization
@@ -85,8 +86,12 @@
             onAppAction: @escaping AppActionSink = { _, _, _, _ in },
             isYoloModeEnabled: @escaping AutoApproveCheck = { _ in false },
             onWorkflow: @escaping WorkflowSink = { _, _ in },
+            onUnconfirmedSubmission: @escaping WorkflowSink = { _, _ in },
             shouldSuppressAgentCompletion: @escaping @Sendable (PluginEvent, PluginIngressPeer) async -> Bool = { _, _ in false },
-            withCurrentEvent: @escaping CurrentEventSink = { _, _, operation in await operation() }
+            withCurrentEvent: @escaping CurrentEventSink = { _, _, operation in
+                await operation()
+                return true
+            }
         ) {
             self.onState = onState
             self.onNotification = onNotification
@@ -94,6 +99,7 @@
             self.onAppAction = onAppAction
             self.isYoloModeEnabled = isYoloModeEnabled
             self.onWorkflow = onWorkflow
+            self.onUnconfirmedSubmission = onUnconfirmedSubmission
             self.shouldSuppressAgentCompletion = shouldSuppressAgentCompletion
             self.withCurrentEvent = withCurrentEvent
         }
@@ -111,7 +117,10 @@
             } else {
                 quietCompletion = false
             }
-            if event.workflow != nil || event.workflowBridgeVersion != nil, let ingressPeer {
+            if
+                event.workflow?.kind != .submitted,
+                event.workflow != nil || event.workflowBridgeVersion != nil,
+                let ingressPeer {
                 await onWorkflow(event, ingressPeer)
             }
 
@@ -132,12 +141,19 @@
                 return
             }
 
-            await withCurrentEvent(event, ingressPeer) {
+            let isCurrent = await withCurrentEvent(event, ingressPeer) {
                 await self.dispatchCurrent(event, ingressPeer: ingressPeer, quietCompletion: quietCompletion)
+            }
+            if !isCurrent, event.workflow?.kind == .submitted, let ingressPeer {
+                await onUnconfirmedSubmission(event, ingressPeer)
             }
         }
 
         private func dispatchCurrent(_ event: PluginEvent, ingressPeer: PluginIngressPeer?, quietCompletion: Bool) async {
+            // A submission can change the workflow's current turn.
+            if event.workflow?.kind == .submitted, let ingressPeer {
+                await onWorkflow(event, ingressPeer)
+            }
             let paneID = event.tmuxPane ?? event.sessionID
             if let state = event.state {
                 // Yolo auto-approve (spec §6): an auto-approvable permission on a

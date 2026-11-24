@@ -5,6 +5,7 @@ import Foundation
 /// Validated against native Claude Code 2.1.308, including a Stop hook which
 /// blocks the first answer and makes the same prompt continue to a new answer.
 public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
+    private static let rejectionPrefix = "UserPromptSubmit operation blocked by hook:"
     private let conversationID: String
     private let nativeTurnID: String
     private let prompt: String
@@ -66,6 +67,43 @@ public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
                 && (record["content"] as? String)?.hasSuffix("\nOriginal prompt: " + prompt) == true)
     }
 
+    public func submittedTurnID(in line: Data) throws -> String? {
+        guard
+            let record = try JSONSerialization.jsonObject(with: line) as? [String: Any],
+            record["type"] as? String == "user",
+            record["sessionId"] as? String == conversationID,
+            record["isSidechain"] as? Bool == false else { return nil }
+        return record["promptId"] as? String
+    }
+
+    public var submissionRejectionMarker: String? {
+        Self.rejectionPrefix
+    }
+
+    public func rejectsSubmission(_ line: Data, during window: Range<Date>) throws -> Bool {
+        guard
+            let record = try JSONSerialization.jsonObject(with: line) as? [String: Any],
+            let timestamp = AgentTurnActivity.parseTimestamp(record["timestamp"] as? String),
+            window.contains(timestamp) else { return false }
+        return rejectionReason(in: record) != nil
+    }
+
+    private func rejectionReason(in record: [String: Any]) -> String? {
+        guard
+            !prompt.isEmpty, let id = record["uuid"] as? String, !id.isEmpty,
+            record["sessionId"] as? String == conversationID, record["isSidechain"] as? Bool == false,
+            record["type"] as? String == "system", record["subtype"] as? String == "informational",
+            record["preventContinuation"] as? Bool == true,
+            let submission = record["promptSubmitEnding"] as? [String: Any],
+            let ending = submission["ending"] as? [String: Any],
+            ending["kind"] as? String == "blocked_by_hook",
+            let content = record["content"] as? String,
+            content.hasPrefix(Self.rejectionPrefix + "\n"),
+            let original = content.range(of: "\nOriginal prompt: "),
+            content[original.upperBound...] == prompt else { return nil }
+        return ending["reason"] as? String ?? "The native Claude submission was rejected by a hook."
+    }
+
     public mutating func updateCandidate(_ candidate: String) -> AgentWorkflowTranscriptOutcome? {
         self.candidate = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
         return !self.candidate.isEmpty && completedAnswer == self.candidate ? .succeeded(self.candidate) : nil
@@ -83,16 +121,9 @@ public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
             // Rejected submissions have no user message or promptId. Native
             // metadata and the full, invocation-specific input bind the failure.
             if
-                type == "system", record["subtype"] as? String == "informational",
-                record["preventContinuation"] as? Bool == true,
-                let submission = record["promptSubmitEnding"] as? [String: Any],
-                let ending = submission["ending"] as? [String: Any],
-                ending["kind"] as? String == "blocked_by_hook",
                 prompt.contains("[CtrlX workflow invocation: ") || prompt.contains("[CtrlX message: "),
-                let content = record["content"] as? String,
-                content.hasPrefix("UserPromptSubmit operation blocked by hook:\n"),
-                content.hasSuffix("\nOriginal prompt: " + prompt) {
-                return .failed(ending["reason"] as? String ?? "The native Claude submission was rejected by a hook.")
+                let reason = rejectionReason(in: record) {
+                return .failed(reason)
             }
             // Submission text was matched before accepting this native prompt ID.
             // The persisted user message may contain expanded skills or images.

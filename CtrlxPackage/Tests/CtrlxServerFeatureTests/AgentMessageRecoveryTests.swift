@@ -1,8 +1,11 @@
 import ClaudeCodePluginCore
 import CodexPluginCore
 import ConcurrencyExtras
+import CtrlxCommon
+import CtrlxEncryption
 import CtrlxNetworking
 import CtrlxPluginProtocol
+import Dependencies
 import Foundation
 import Testing
 @testable import CtrlxServerFeature
@@ -140,6 +143,55 @@ struct AgentMessageRecoveryTests {
             try await Task.sleep(for: .milliseconds(10))
         }
         Issue.record("Message did not save \(expected)")
+    }
+
+    @Test(arguments: ["codex", "claude-code"])
+    func submissionBeforePaneRestorationCompletesSavedMessage(plugin: String) async throws {
+        let f = try await fixture(plugin, accepted: false)
+        try await f.support.restartInteraction()
+        let messages = try #require(f.support.interaction)
+        let catalog = try #require(f.support.catalog)
+        let store = await messages.store
+        #expect(try await store.message(f.message.id)?.status == .uncertain)
+
+        let paneAvailable = LockIsolated(false)
+        f.support.inspectReply = { instance in
+            guard paneAvailable.value else { throw AgentWorkflowInspectionUnavailable() }
+            var live = instance
+            live.capabilityIssue = await catalog.bridgeIssue(for: instance, allowsFirstSubmission: false)
+            return live
+        }
+        let coordinator = withDependencies {
+            $0[PreferencesService.self] = .inMemory()
+            $0[SecretsService.self] = .inMemory()
+            $0[SimulatorSystemClient.self] = SimulatorSystemClient()
+        } operation: {
+            AppCoordinator()
+        }
+        coordinator.agentMessages = messages
+        let dispatcher = PluginEventDispatcher(onWorkflow: { event, peer in
+            await coordinator.handleAgentWorkflowEvent(event, peer: peer)
+        }, onUnconfirmedSubmission: { event, peer in
+            await coordinator.handleAgentWorkflowEvent(event, peer: peer, unconfirmedSubmission: true)
+        }, withCurrentEvent: { _, _, operation in
+            guard paneAvailable.value else { return false }
+            await operation()
+            return true
+        })
+        var submission = f.event(.submitted)
+        submission.workflowBridgeVersion = PluginWorkflowHook.bridgeVersion
+        await dispatcher.dispatch(submission, ingressPeer: f.peer)
+        #expect(try await store.message(f.message.id)?.nativeEvent == submission.workflow)
+        #expect(try await store.message(f.message.id)?.status == .uncertain)
+
+        paneAvailable.setValue(true)
+        try appendCompletion(f)
+        await dispatcher.dispatch(f.event(.stopCandidate), ingressPeer: f.peer)
+        try await wait(.succeeded, f)
+        #expect(try await store.message(f.message.id)?.answer == "Full reply")
+        #expect(try await messages.availability(f.message.agentID) == nil)
+        #expect(f.support.writes.count == 1)
+        try await f.support.cleanup()
     }
 
     @Test(arguments: ["codex", "claude-code"])

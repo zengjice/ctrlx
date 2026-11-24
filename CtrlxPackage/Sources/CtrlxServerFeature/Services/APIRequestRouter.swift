@@ -35,6 +35,7 @@
         "simulator.action",
         "browser.start",
         "workflow.finish",
+        "workflow.exitLoop",
         "workflow.attachments",
         "orbie.agents.list",
         "orbie.agents.show",

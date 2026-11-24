@@ -146,6 +146,61 @@ struct AgentWorkflowEditingTests {
     }
 
     @Test
+    func addingAnApprovalStepKeepsTheRepeatBoundary() throws {
+        let developer = UUID()
+        var definition = AgentWorkflowDefinition(name: "Review loop", hostID: UUID(), nodes: [], edges: [], entryNodeID: UUID())
+        AgentWorkflowReviewTemplate.apply(to: &definition, developerID: developer, reviewerID: UUID())
+        let review = try #require(definition.nodes.first { $0.name == "Review" })
+        let repair = try #require(definition.loop?.finalNodeID)
+        let summary = AgentWorkflowNode(name: "Summary", agentInstanceID: developer, initialTask: .omit)
+        let handoff = AgentWorkflowNode(name: "Handoff", content: .init(text: "Continue"))
+        definition.appendStep(summary, afterLoopFrom: review.id)
+        definition.appendStep(handoff)
+        try AgentWorkflowWire.validate(definition)
+        #expect(definition.loop?.finalNodeID == repair)
+        #expect(definition.loopExit == .init(source: review.id, target: summary.id))
+        #expect(definition.afterLoopNodeIDs == [summary.id, handoff.id])
+        #expect(definition.upstream(of: handoff.id).map(\.id) == [summary.id])
+        #expect(definition.activeNodeIDs(round: 2).isDisjoint(with: definition.afterLoopNodeIDs))
+
+        definition.setConnectionMode(.none, from: summary.id, to: handoff.id)
+        #expect(definition.upstreamCandidates(for: handoff.id).contains(summary))
+        #expect(!definition.upstreamCandidates(for: summary.id).contains(review))
+        definition.setConnectionMode(.output, from: summary.id, to: handoff.id)
+        try AgentWorkflowWire.validate(definition)
+
+        definition.removeLoopExit()
+        try AgentWorkflowWire.validate(definition)
+        #expect(definition.upstream(of: summary.id).map(\.id) == [repair])
+        #expect(definition.loop?.finalNodeID == handoff.id)
+    }
+
+    @Test
+    func removingApprovalFromBranchedAfterLoopRequiresOneFinalStepWhileRepeating() throws {
+        var definition = AgentWorkflowDefinition(name: "Review loop", hostID: UUID(), nodes: [], edges: [], entryNodeID: UUID())
+        AgentWorkflowReviewTemplate.apply(to: &definition, developerID: UUID(), reviewerID: UUID())
+        let review = try #require(definition.nodes.first { $0.name == "Review" })
+        let summary = AgentWorkflowNode(name: "Summary", content: .init(text: "Summarize this review"))
+        let handoff = AgentWorkflowNode(name: "Handoff", content: .init(text: "Hand off this review"))
+        let notes = AgentWorkflowNode(name: "Notes", content: .init(text: "Record review notes"))
+        definition.appendStep(summary, afterLoopFrom: review.id)
+        definition.appendStep(handoff)
+        definition.nodes.append(notes)
+        definition.setConnectionMode(.output, from: summary.id, to: notes.id)
+        try AgentWorkflowWire.validate(definition)
+
+        let branched = definition
+        #expect(!definition.canRemoveLoopExit)
+        definition.removeLoopExit()
+        #expect(definition == branched)
+
+        definition.removeLoopExit(keepingLoop: false)
+        #expect(definition.loop == nil)
+        #expect(definition.upstream(of: summary.id).map(\.id) == [branched.loop?.finalNodeID])
+        try AgentWorkflowWire.validate(definition)
+    }
+
+    @Test
     func connectionModesUpdateOnlyTheSelectedConnection() throws {
         let a = AgentWorkflowNode(name: "A", content: .init(text: "A"))
         let b = AgentWorkflowNode(name: "B", content: .init(text: "B"))

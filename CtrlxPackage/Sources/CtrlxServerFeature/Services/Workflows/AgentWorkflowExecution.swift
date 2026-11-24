@@ -72,12 +72,14 @@ struct AgentWorkflowExecution: Sendable {
             throw AgentWorkflowError("The saved workflow has inconsistent instance or invocation records.")
         }
         var slots: [String: AgentWorkflowInvocationStatus] = [:]
+        let afterLoop = run.hasExitedLoop ? run.definition.afterLoopNodeIDs : []
         for invocation in run.invocations {
             let node = run.definition.nodes.first { $0.id == invocation.nodeID }
             let attachments = invocation.result?.attachmentIDs ?? []
             guard
                 let node, invocation.round > 0, invocation.round <= run.round,
-                run.definition.activeNodeIDs(round: invocation.round).contains(node.id),
+                run.definition.activeNodeIDs(round: invocation.round).contains(node.id)
+                || (invocation.round == run.round && afterLoop.contains(node.id)),
                 slots["\(invocation.round):\(invocation.nodeID)"].map({ $0 == .failed }) ?? true,
                 invocation.delivery.invocationID == invocation.id,
                 invocation.delivery.runID == run.id,
@@ -116,8 +118,17 @@ struct AgentWorkflowExecution: Sendable {
         if let finish = run.finishRequest {
             guard
                 let invocation = run.invocations.first(where: { $0.id == finish.invocationID }),
+                invocation.nodeID != run.definition.loopExit?.source,
                 run.definition.nodes.first(where: { $0.id == invocation.nodeID })?.allowsFinish == true else {
                 throw AgentWorkflowError("The saved finish request has no authorized invocation.")
+            }
+        }
+        if let exit = run.loopExitRequest {
+            guard
+                let invocation = run.invocations.first(where: { $0.id == exit.invocationID }),
+                invocation.round == run.round, invocation.nodeID == run.definition.loopExit?.source,
+                run.finishRequest == nil || run.hasExitedLoop else {
+                throw AgentWorkflowError("The saved loop exit has no authorized invocation.")
             }
         }
         self.run = run
@@ -147,8 +158,8 @@ struct AgentWorkflowExecution: Sendable {
     }
 
     var readyNodeIDs: [UUID] {
-        guard run.status == .running, run.finishRequest == nil else { return [] }
-        let active = run.definition.activeNodeIDs(round: run.round)
+        guard canSchedule else { return [] }
+        let active = run.activeNodeIDs
         return run.definition.nodes.compactMap { node in
             guard active.contains(node.id), invocation(nodeID: node.id, round: run.round).map({ $0.status == .failed }) ?? true else { return nil }
             if node.id == run.definition.entryNodeID(round: run.round) {
@@ -438,11 +449,15 @@ struct AgentWorkflowExecution: Sendable {
         }
         // A verified human continuation can resume this step in the same tab.
         // Keep the original receipt, but bind the selected result turn to its writer.
-        if bound.matchesProcess(instance) {
+        if bound.id == instance.id, bound.matchesProcess(instance) {
             // Moving the live pane must not rewrite the saved delivery target.
             run.invocations[index].instance?.conversationID = instance.conversationID
         } else {
-            run.invocations[index].instance = instance
+            var writer = instance
+            if bound.matchesProcess(writer) {
+                writer.workspacePane = bound.workspacePane
+            }
+            run.invocations[index].instance = writer
         }
         run.invocations[index].delivery.toAgentID = instance.id
         run.invocations[index].issue = nil
@@ -464,6 +479,7 @@ struct AgentWorkflowExecution: Sendable {
             throw AgentWorkflowError("The step changed or a continuation was already sent. Check the Agent tab before continuing again.")
         }
         run.invocations[index].continuationTurnID = turn.id
+        run.invocations[index].continuationInstance = instance
         run.invocations[index].issue = "Continuation requested. Waiting for the Agent to accept it; the original task will not be resent."
         changed()
     }
@@ -472,6 +488,7 @@ struct AgentWorkflowExecution: Sendable {
         let index = try index(of: expected.id)
         guard run.invocations[index].continuationTurnID == expected.stepTurn?.id else { return }
         run.invocations[index].continuationTurnID = nil
+        run.invocations[index].continuationInstance = nil
         run.invocations[index].issue = nil
         changed()
     }
@@ -602,12 +619,15 @@ struct AgentWorkflowExecution: Sendable {
             run.definition.loop != nil || limit == 1 else {
             throw AgentWorkflowError("The new round limit must preserve the configured loop.")
         }
-        if run.finishRequest == nil, run.definition.loop != nil, roundSucceeded, limit <= run.round {
+        if run.finishRequest == nil, run.definition.loop != nil, !run.hasExitedLoop, roundSucceeded, limit <= run.round {
             throw AgentWorkflowError("Increase the round limit to continue this workflow.")
         }
         let issue = try refreshBindings(instances: instances)
         if let finish = run.finishRequest, run.invocations.first(where: { $0.id == finish.invocationID })?.status == .failed {
             run.finishRequest = nil
+        }
+        if let exit = run.loopExitRequest, run.invocations.first(where: { $0.id == exit.invocationID })?.status == .failed {
+            run.loopExitRequest = nil
         }
         run.roundLimit = limit
         run.status = run.finishRequest == nil ? .running : .finishing
@@ -616,11 +636,18 @@ struct AgentWorkflowExecution: Sendable {
         changed()
     }
 
-    mutating func requestFinish(invocationID: UUID, instance: AgentWorkflowInstance, reason: String, now: Date) throws {
+    mutating func requestFinish(invocationID: UUID, instance: AgentWorkflowInstance, reason: String, now: Date, exitsLoop: Bool = false) throws {
         let index = try index(of: invocationID)
         let invocation = run.invocations[index]
         try validate(instance, for: invocation)
-        guard run.definition.nodes.first(where: { $0.id == invocation.nodeID })?.allowsFinish == true else {
+        let isExitStep = invocation.nodeID == run.definition.loopExit?.source
+        guard exitsLoop ? isExitStep : !isExitStep && run.definition.nodes.first(where: { $0.id == invocation.nodeID })?.allowsFinish == true else {
+            if exitsLoop {
+                throw AgentWorkflowError("This step is not authorized to exit the loop.")
+            }
+            if isExitStep {
+                throw AgentWorkflowError("This step exits the loop with 'ctrlx workflow exit-loop'.")
+            }
             throw AgentWorkflowError("This Agent is not authorized to finish the workflow.")
         }
         guard
@@ -630,19 +657,25 @@ struct AgentWorkflowExecution: Sendable {
             now < run.authorizationExpiresAt, !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw AgentWorkflowError("This invocation cannot request workflow completion.")
         }
-        if run.finishRequest?.invocationID == invocationID {
+        let existing = exitsLoop ? run.loopExitRequest : run.finishRequest
+        if existing?.invocationID == invocationID {
             return
         }
-        guard run.finishRequest == nil else {
-            throw AgentWorkflowError("Another invocation already requested workflow completion.")
+        guard run.finishRequest == nil, run.loopExitRequest == nil || (!exitsLoop && run.hasExitedLoop) else {
+            throw AgentWorkflowError("Another invocation already requested completion or loop exit.")
         }
         if run.definition.nodes.first(where: { $0.id == invocation.nodeID })?.completion == .explicit {
             try requestStepCompletion(invocationID: invocationID, instance: instance, turnID: invocation.stepTurn?.id, now: now)
         }
-        run.finishRequest = .init(invocationID: invocationID, reason: reason, requestedAt: now)
-        if run.status != .paused {
-            run.status = .finishing
-            run.issue = nil
+        let request = AgentWorkflowFinishRequest(invocationID: invocationID, reason: reason, requestedAt: now)
+        if exitsLoop {
+            run.loopExitRequest = request
+        } else {
+            run.finishRequest = request
+            if run.status != .paused {
+                run.status = .finishing
+                run.issue = nil
+            }
         }
         changed()
     }
@@ -677,13 +710,17 @@ struct AgentWorkflowExecution: Sendable {
     }
 
     private func requireScheduling(now: Date) throws {
-        guard run.status == .running, run.finishRequest == nil, now < run.authorizationExpiresAt else {
+        guard canSchedule, now < run.authorizationExpiresAt else {
             throw AgentWorkflowError("The workflow is paused, ended or its authorization has expired.")
         }
     }
 
+    private var canSchedule: Bool {
+        run.status == .running && run.finishRequest == nil && (run.loopExitRequest == nil || run.hasExitedLoop)
+    }
+
     private var roundSucceeded: Bool {
-        run.definition.activeNodeIDs(round: run.round).allSatisfy { invocation(nodeID: $0, round: run.round)?.status == .succeeded }
+        run.activeNodeIDs.allSatisfy { invocation(nodeID: $0, round: run.round)?.status == .succeeded }
     }
 
     private mutating func settle(now: Date) {
@@ -696,7 +733,7 @@ struct AgentWorkflowExecution: Sendable {
             return
         }
         guard run.status == .running else { return }
-        if roundSucceeded, run.definition.loop == nil {
+        if roundSucceeded, run.definition.loop == nil || run.hasExitedLoop {
             run.status = .completed
             run.issue = nil
         } else if now >= run.authorizationExpiresAt {

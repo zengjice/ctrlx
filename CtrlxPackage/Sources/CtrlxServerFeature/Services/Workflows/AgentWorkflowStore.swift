@@ -59,7 +59,8 @@ extension AgentWorkflowObservation {
 }
 
 struct AgentWorkflowArchive: Codable, Equatable, Sendable {
-    var schemaVersion = 8
+    static let currentSchemaVersion = 9
+    var schemaVersion = Self.currentSchemaVersion
     let hostID: UUID
     var definitions: [AgentWorkflowDefinition] = []
     var instances: [AgentWorkflowInstance] = []
@@ -85,6 +86,19 @@ struct AgentWorkflowCatalogChanged: LocalizedError, Sendable {
 /// before exposing it; no await can interleave a check and its committed change.
 /// Terminal writes happen outside this actor, after the writing intent is saved.
 actor AgentWorkflowStore {
+    enum SubmissionDisposition {
+        case ready
+        case superseded
+        case deferred
+    }
+
+    private struct Submissions {
+        let runID: UUID
+        var conversationID: String
+        var latest: PluginWorkflowTurn
+        var paths: [String: String]
+    }
+
     let fileURL: URL
     private let hostID: UUID
     private let onCompleted: @Sendable (AgentWorkflowRun) -> Void
@@ -92,6 +106,7 @@ actor AgentWorkflowStore {
     private var observers: [UUID: AsyncStream<Void>.Continuation] = [:]
     private var writeAuthorizations: [UUID: AgentWorkflowWriteAuthorization] = [:]
     private var continuationAuthorizations: [UUID: (turnID: String, instance: AgentWorkflowInstance, authorization: AgentWorkflowWriteAuthorization)] = [:]
+    private var submittedTurns: [UUID: Submissions] = [:]
     let attachmentUploads = HostFileUploads()
     var pendingAttachments: [UUID: PendingAttachment] = [:]
     var busyAttachmentUploads: Set<UUID> = []
@@ -106,6 +121,89 @@ actor AgentWorkflowStore {
 
     func snapshot() throws -> AgentWorkflowArchive {
         try load()
+    }
+
+    /// The same turn can still resume after a native question.
+    func observeSubmission(
+        _ submission: PluginWorkflowEvent, instance: AgentWorkflowInstance,
+        isSuperseded: (@Sendable (PluginWorkflowTurn) async throws -> Bool?)? = nil
+    ) async throws -> SubmissionDisposition {
+        let runs = try load().runs
+        guard
+            let run = runs.first(where: { run in
+                !run.status.isTerminal && run.definition.loopExit != nil
+                    && run.instances.contains { $0.agentID == instance.agentID && $0.pluginID == instance.pluginID }
+            }),
+            let approval = run.invocations.last(where: {
+                $0.nodeID == run.definition.loopExit?.source && $0.round == run.round
+                    && run.instance(for: $0)?.agentID == instance.agentID
+                    && [.writing, .awaitingAcceptance, .uncertain, .running].contains($0.status)
+            }) else { return .ready }
+        let turn = PluginWorkflowTurn(nativeTurnID: submission.nativeTurnID, transcriptPath: submission.transcriptPath)
+        let history = submittedTurns[instance.id].flatMap { $0.runID == run.id ? $0 : nil }
+        let prior = runs.lazy.flatMap { savedRun in
+            savedRun.invocations.lazy.filter { invocation in
+                guard
+                    invocation.nativeTurnID == turn.nativeTurnID || invocation.resultTurnID == turn.nativeTurnID,
+                    let writer = savedRun.instance(for: invocation), writer.agentID == instance.agentID else { return false }
+                if writer.matchesConversation(instance) {
+                    return true
+                }
+                // The initial receipt can precede a continuation in a different
+                // native conversation. The original participant is still saved.
+                return invocation.nativeTurnID == turn.nativeTurnID
+                    && savedRun.instances.contains { $0.matchesConversation(instance) }
+            }
+        }.first
+        let priorPath = prior.flatMap { $0.nativeTurnID == turn.nativeTurnID ? $0.nativeTranscriptPath : $0.resultTranscriptPath }
+        if let path = history?.paths[turn.nativeTurnID] ?? priorPath, path != turn.transcriptPath {
+            throw AgentWorkflowError("The native turn changed its transcript path.")
+        }
+        if let history, history.paths[turn.nativeTurnID] != nil {
+            return history.conversationID == instance.conversationID && history.latest == turn ? .ready : .superseded
+        }
+        if let prior, prior.id != approval.id || approval.resultTurnID != turn.nativeTurnID {
+            return .superseded
+        }
+        if
+            let isSuperseded, prior == nil,
+            let currentTurnID = approval.resultTurnID, currentTurnID != turn.nativeTurnID {
+            guard let superseded = try await isSuperseded(turn) else { return .deferred }
+            guard !superseded else { return .superseded }
+            // The ledger and receipt cache may have advanced during the read.
+            return try await observeSubmission(submission, instance: instance)
+        }
+        var paths = history?.paths ?? [:]
+        paths[turn.nativeTurnID] = turn.transcriptPath
+        submittedTurns[instance.id] = .init(runID: run.id, conversationID: instance.conversationID, latest: turn, paths: paths)
+        return .ready
+    }
+
+    func loopExitTurn(invocationID: UUID) throws -> PluginWorkflowTurn {
+        guard
+            let invocation = try load().runs.lazy.flatMap(\.invocations).first(where: { $0.id == invocationID }),
+            let turnID = invocation.resultTurnID, let path = invocation.resultTranscriptPath else {
+            throw AgentWorkflowError("This step has no accepted Agent turn for loop exit.")
+        }
+        return .init(nativeTurnID: turnID, transcriptPath: path)
+    }
+
+    func requestLoopExit(
+        runID: UUID, invocationID: UUID, instance: AgentWorkflowInstance,
+        verifiedTranscript: AgentWorkflowTranscriptFile.VerifiedSubmission, reason: String, now: Date
+    ) throws -> AgentWorkflowRun {
+        let turn = verifiedTranscript.turn
+        let observed = submittedTurns[instance.id].flatMap { $0.runID == runID ? $0 : nil }
+        return try update(runID: runID) { execution in
+            guard
+                verifiedTranscript.isCurrent,
+                observed.map({ $0.conversationID == instance.conversationID && $0.latest == turn }) ?? true,
+                let invocation = execution.run.invocations.first(where: { $0.id == invocationID }),
+                invocation.resultTurnID == turn.nativeTurnID, invocation.resultTranscriptPath == turn.transcriptPath else {
+                throw AgentWorkflowError("The current Agent turn does not match this workflow step. Request loop exit from the accepted workflow turn.")
+            }
+            try execution.requestFinish(invocationID: invocationID, instance: instance, reason: reason, now: now, exitsLoop: true)
+        }
     }
 
     func changes() -> AsyncStream<Void> {
@@ -416,7 +514,7 @@ actor AgentWorkflowStore {
         }
         var loaded = try JSONDecoder().decode(AgentWorkflowArchive.self, from: Data(contentsOf: fileURL))
         guard
-            (1...8).contains(loaded.schemaVersion), loaded.hostID == hostID,
+            (1...AgentWorkflowArchive.currentSchemaVersion).contains(loaded.schemaVersion), loaded.hostID == hostID,
             Set(loaded.definitions.map(\.id)).count == loaded.definitions.count,
             Set(loaded.runs.map(\.id)).count == loaded.runs.count,
             Set(loaded.instances.map(\.id)).count == loaded.instances.count else {
@@ -476,20 +574,20 @@ actor AgentWorkflowStore {
             try AgentWorkflowWire.validate(candidate)
             loaded.definitions[index] = candidate
         }
-        if loaded.schemaVersion < 8 {
+        if loaded.schemaVersion < AgentWorkflowArchive.currentSchemaVersion {
             let backup = fileURL.appendingPathExtension("schema-\(loaded.schemaVersion).backup")
             if !FileManager.default.fileExists(atPath: backup.path) {
                 try FileManager.default.copyItem(at: fileURL, to: backup)
             }
         }
-        loaded.schemaVersion = 8
+        loaded.schemaVersion = AgentWorkflowArchive.currentSchemaVersion
         try commit(loaded)
         return loaded
     }
 
     func commit(_ updated: AgentWorkflowArchive) throws {
         var updated = updated
-        updated.schemaVersion = 8
+        updated.schemaVersion = AgentWorkflowArchive.currentSchemaVersion
         guard updated != archive else { return }
         let data = try JSONEncoder().encode(updated)
         try FileManager.default.createDirectory(
@@ -499,6 +597,9 @@ actor AgentWorkflowStore {
         )
         try data.write(to: fileURL, options: .atomic)
         archive = updated
+        let activeInstances = Set(updated.instances.map(\.id))
+        let activeRuns = Set(updated.runs.filter { !$0.status.isTerminal }.map(\.id))
+        submittedTurns = submittedTurns.filter { activeInstances.contains($0.key) && activeRuns.contains($0.value.runID) }
         for observer in observers.values {
             observer.yield(())
         }

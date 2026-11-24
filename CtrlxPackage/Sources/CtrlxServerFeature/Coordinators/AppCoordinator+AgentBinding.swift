@@ -17,9 +17,9 @@ extension AppCoordinator {
         return context.matches(windowManager.paneStates[context.binding.paneID], runtimeID: identities.runtimeID)
     }
 
-    func withCurrentPluginEvent(_ event: PluginEvent, peer: PluginIngressPeer?, operation: @escaping @Sendable () async -> Void) async {
-        guard let peer, let paneID = event.tmuxPane, let registry = pluginRegistry else { return }
-        guard windowManager.paneStates[paneID] != nil else { return }
+    func withCurrentPluginEvent(_ event: PluginEvent, peer: PluginIngressPeer?, operation: @escaping @Sendable () async -> Void) async -> Bool {
+        guard let peer, let paneID = event.tmuxPane, let registry = pluginRegistry else { return false }
+        guard windowManager.paneStates[paneID] != nil else { return false }
         let previous = windowManager.currentAgentBinding(forPane: paneID)
         if
             previous?.pluginID != event.pluginID || previous.flatMap({ binding in
@@ -33,14 +33,15 @@ extension AppCoordinator {
         guard
             let binding = windowManager.currentAgentBinding(forPane: paneID),
             binding.pluginID == event.pluginID, let pid = Int32(binding.processID),
-            peer.contains(processID: pid, runtimeID: binding.runtimeID) else { return }
+            peer.contains(processID: pid, runtimeID: binding.runtimeID) else { return false }
         @Dependency(AgentSessionIdentityClient.self) var identities
         var nativeConversationID: String?
         if CodexProcessSessionReader.supports(pluginID: event.pluginID), windowManager.paneStates[paneID]?.claudeSessionID != event.sessionID {
             nativeConversationID = await identities.codexSessionID(binding.processID, binding.runtimeID)
         }
-        guard let context = windowManager.acceptCurrentEvent(event, binding: binding, peer: peer, nativeConversationID: nativeConversationID) else { return }
+        guard let context = windowManager.acceptCurrentEvent(event, binding: binding, peer: peer, nativeConversationID: nativeConversationID) else { return false }
         await AgentEventContext.$current.withValue(context) { await operation() }
+        return true
     }
 
     func capturePluginEventOrigin(pluginID: String, paneID: String) -> PluginEventOrigin? {

@@ -223,6 +223,7 @@ actor AgentMessageService {
                 guard
                     AgentReplyEvidence.submission(native, prompt: message.prompt, acceptedTurnID: message.nativeEvent?.nativeTurnID),
                     message.instance.conversationID.isEmpty || message.instance.conversationID == event.sessionID else { continue }
+                try await catalog.recordBridge(event, processID: message.instance.processID, runtimeID: message.instance.processRuntimeID, peer: peer)
             } else {
                 guard
                     AgentReplyEvidence.turn(native, id: message.nativeEvent?.nativeTurnID, path: message.nativeEvent?.transcriptPath),

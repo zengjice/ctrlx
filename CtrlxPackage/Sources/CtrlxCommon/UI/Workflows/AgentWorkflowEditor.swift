@@ -31,6 +31,7 @@ struct AgentWorkflowEditor: View {
     @State private var showingAgentPicker = false
     @State private var showingParticipantPicker = false
     @State private var choosingAgentFor: UUID?
+    @State private var addingAfterLoopFrom: UUID?
     @State private var showingInitialTask = false
     @State private var showingAgents = false
     @State private var showingExecution = false
@@ -186,14 +187,43 @@ struct AgentWorkflowEditor: View {
                                         Text("Discussion can continue across replies. Downstream steps wait until the Agent explicitly completes this task.")
                                             .font(.caption).foregroundStyle(.secondary)
                                     }
-                                    Toggle("Allow this step to end the workflow", isOn: $node.allowsFinish)
-                                    if node.allowsFinish {
-                                        Text("Define when to finish in this step's instructions. This switch grants permission; it does not define the completion condition.")
+                                    if
+                                        let exit = draft.loopExit, exit.source == node.id,
+                                        let target = draft.nodes.first(where: { $0.id == exit.target }) {
+                                        LabeledContent("On approval", value: "Exit loop → \(stepTitle(target))")
+                                        Text("Put the approval condition in this step's instructions. The Agent's final result is sent to the after-loop step.")
                                             .font(.caption).foregroundStyle(.secondary)
+                                        Button("Remove loop exit") { draft.removeLoopExit() }
+                                            .disabled(!draft.canRemoveLoopExit)
+                                        if !draft.canRemoveLoopExit {
+                                            Text("Join the after-loop branches into one final step before removing this exit.")
+                                                .font(.caption).foregroundStyle(.secondary)
+                                        }
+                                    } else {
+                                        Toggle("Allow this step to end the workflow", isOn: $node.allowsFinish)
+                                        if node.allowsFinish {
+                                            Text("Define when to finish in this step's instructions. This switch grants permission; it does not define the completion condition.")
+                                                .font(.caption).foregroundStyle(.secondary)
+                                        }
+                                        if draft.loop != nil, draft.loop?.exitNodeID == nil, draft.activeNodeIDs(round: 2).contains(node.id) {
+                                            Menu("Add step on loop approval") {
+                                                Button("Agent step…") {
+                                                    addingAfterLoopFrom = node.id
+                                                    showingAgentPicker = true
+                                                }
+                                                Button("Content step") {
+                                                    addNode(.init(name: "After loop", content: .init(), initialTask: .omit), afterLoopFrom: node.id)
+                                                }
+                                            }
+                                            .accessibilityIdentifier("workflow-add-loop-exit-\(node.id)")
+                                        }
                                     }
                                 }
                                 DisclosureGroup("Wait for upstream steps") {
-                                    ForEach(draft.nodes.filter { $0.id != node.id }) { source in
+                                    if draft.loopExit?.target == node.id, let source = draft.upstream(of: node.id).first {
+                                        LabeledContent(stepTitle(source), value: "Output on loop approval")
+                                    }
+                                    ForEach(draft.upstreamCandidates(for: node.id)) { source in
                                         Picker(stepTitle(source), selection: connection(from: source.id, to: node.id)) {
                                             ForEach(AgentWorkflowConnectionMode.allCases, id: \.self) { mode in
                                                 Text(mode.rawValue).tag(mode)
@@ -206,7 +236,8 @@ struct AgentWorkflowEditor: View {
                                 let targets = draft.nodes.filter { target in
                                     draft.edges.contains { $0.source == node.id && $0.target == target.id }
                                 }
-                                Text(targets.isEmpty ? "No downstream steps." : "Then: " + targets.map { stepTitle($0) }.joined(separator: ", "))
+                                let regular = targets.filter { draft.loopExit?.target != $0.id }
+                                Text(regular.isEmpty ? "No downstream steps in this phase." : "Then: " + regular.map { stepTitle($0) }.joined(separator: ", "))
                                     .font(.caption).foregroundStyle(.secondary)
                             }.disclosureGroupStyle(AgentWorkflowEditorDisclosureStyle(id: "workflow-step-options-\(node.id)", disabled: importing))
                         } label: {
@@ -222,7 +253,7 @@ struct AgentWorkflowEditor: View {
                         addNode(.init(name: "Content", content: .init(), initialTask: draft.nodes.isEmpty ? .textAndAttachments : .omit))
                     } label: { Label("Add content step", symbol: .docTextFill) }
                         .accessibilityIdentifier("workflow-add-content-step")
-                    Text(draft.nodes.isEmpty ? "The first step receives the original task." : "Added after: " + draft.terminalSteps.map { stepTitle($0) }.joined(separator: ", ") + ". Receives their output; change upstream connections to branch.")
+                    Text(draft.nodes.isEmpty ? "The first step receives the original task." : "Added after: " + draft.appendAfterSteps.map { stepTitle($0) }.joined(separator: ", ") + ". Receives their output; change upstream connections to branch.")
                         .font(.caption).foregroundStyle(.secondary).lineLimit(2)
                     if createAgent != nil {
                         Button("New Agent tab") { showingCreation = true }.disabled(createdAgent != nil)
@@ -239,9 +270,12 @@ struct AgentWorkflowEditor: View {
                     Section {
                         DisclosureGroup(isExpanded: $showingExecution) {
                             Picker("First step", selection: $draft.entryNodeID) {
-                                ForEach(draft.nodes) { Text(stepTitle($0)).tag($0.id) }
+                                ForEach(draft.nodes.filter { !draft.afterLoopNodeIDs.contains($0.id) }) { Text(stepTitle($0)).tag($0.id) }
                             }
                             Toggle("Repeat rounds", isOn: Binding(get: { draft.loop != nil }, set: { enabled in
+                                if !enabled {
+                                    draft.removeLoopExit(keepingLoop: false)
+                                }
                                 draft.loop = enabled ? .init(finalNodeID: draft.nodes.last?.id ?? draft.entryNodeID) : nil
                             })).accessibilityIdentifier("workflow-repeat-rounds")
                             Picker("Repeat from", selection: Binding(get: { draft.loop?.entryNodeID ?? draft.entryNodeID }, set: { value in
@@ -249,7 +283,7 @@ struct AgentWorkflowEditor: View {
                                 loop.entryNodeID = value
                                 draft.loop = loop
                             })) {
-                                ForEach(draft.nodes) { Text(stepTitle($0)).tag($0.id) }
+                                ForEach(draft.nodes.filter { !draft.afterLoopNodeIDs.contains($0.id) }) { Text(stepTitle($0)).tag($0.id) }
                             }
                             .pickerStyle(.menu)
                             .disabled(draft.loop == nil)
@@ -259,11 +293,11 @@ struct AgentWorkflowEditor: View {
                             }
                             if draft.loop != nil {
                                 Picker("Final step", selection: Binding(get: { draft.loop?.finalNodeID ?? draft.entryNodeID }, set: { draft.loop?.finalNodeID = $0 })) {
-                                    ForEach(draft.nodes) { Text(stepTitle($0)).tag($0.id) }
+                                    ForEach(draft.nodes.filter { !draft.afterLoopNodeIDs.contains($0.id) }) { Text(stepTitle($0)).tag($0.id) }
                                 }
                                 Toggle("Include final output on repeat", isOn: Binding(get: { draft.loop?.includesResult ?? true }, set: { draft.loop?.includesResult = $0 }))
                                 TextField("Maximum rounds", value: Binding(get: { draft.loop?.maximumRounds ?? 5 }, set: { draft.loop?.maximumRounds = $0 }), format: .number)
-                                Text("The first round starts at First step; later rounds start at Repeat from. Earlier steps are not repeated. All branches must reach Final step. The limit pauses the workflow.")
+                                Text("Later rounds start at Repeat from. Final step ends a round. An after-loop step waits for approval. The round limit pauses the workflow.")
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                         } label: {
@@ -352,14 +386,17 @@ struct AgentWorkflowEditor: View {
                 draft.updateAgentNames(from: instances)
             }
         }
-        .sheet(isPresented: $showingAgentPicker, onDismiss: { choosingAgentFor = nil }) {
+        .sheet(isPresented: $showingAgentPicker, onDismiss: {
+            choosingAgentFor = nil
+            addingAfterLoopFrom = nil
+        }) {
             AgentWorkflowAgentPicker(instances: instances, definition: draft, purpose: .step, refreshing: refreshing, error: error, refresh: refreshInstances) { instance in
                 guard !importing, let participantID = draft.participantID(for: instance, in: instances) else { return }
                 if let choosingAgentFor {
                     guard let index = draft.nodes.firstIndex(where: { $0.id == choosingAgentFor }) else { return }
                     draft.nodes[index].agentInstanceID = participantID
                 } else {
-                    addNode(.init(name: AgentWorkflowWire.boundedName("\(instance.displayName) task"), agentInstanceID: participantID, initialTask: draft.nodes.isEmpty ? .textAndAttachments : .omit))
+                    addNode(.init(name: AgentWorkflowWire.boundedName("\(instance.displayName) task"), agentInstanceID: participantID, initialTask: draft.nodes.isEmpty ? .textAndAttachments : .omit), afterLoopFrom: addingAfterLoopFrom)
                 }
             }
         }
@@ -470,9 +507,9 @@ struct AgentWorkflowEditor: View {
         })
     }
 
-    private func addNode(_ node: AgentWorkflowNode) {
+    private func addNode(_ node: AgentWorkflowNode, afterLoopFrom source: UUID? = nil) {
         guard !importing else { return }
-        draft.appendStep(node)
+        draft.appendStep(node, afterLoopFrom: source)
         expandedStepID = node.id
     }
 
@@ -480,6 +517,9 @@ struct AgentWorkflowEditor: View {
         guard !importing else { return }
         if expandedStepID == nodeID {
             expandedStepID = nil
+        }
+        if let exit = draft.loopExit, exit.source == nodeID || exit.target == nodeID {
+            draft.loop?.exitNodeID = nil
         }
         draft.nodes.removeAll { $0.id == nodeID }
         draft.edges.removeAll { $0.source == nodeID || $0.target == nodeID }
@@ -493,7 +533,7 @@ struct AgentWorkflowEditor: View {
             draft.loop?.entryNodeID = draft.entryNodeID
         }
         if draft.loop?.finalNodeID == nodeID {
-            draft.loop?.finalNodeID = draft.nodes.last?.id ?? draft.entryNodeID
+            draft.loop?.finalNodeID = draft.nodes.last { !draft.afterLoopNodeIDs.contains($0.id) }?.id ?? draft.entryNodeID
         }
     }
 

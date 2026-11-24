@@ -838,11 +838,14 @@
                 onWorkflow: { [weak self] event, peer in
                     await self?.handleAgentWorkflowEvent(event, peer: peer)
                 },
+                onUnconfirmedSubmission: { [weak self] event, peer in
+                    await self?.handleAgentWorkflowEvent(event, peer: peer, unconfirmedSubmission: true)
+                },
                 shouldSuppressAgentCompletion: { [weak self] event, peer in
                     await self?.suppressesWorkflowAgentCompletion(event, peer: peer) ?? false
                 },
                 withCurrentEvent: { [weak self] event, peer, operation in
-                    await self?.withCurrentPluginEvent(event, peer: peer, operation: operation)
+                    await self?.withCurrentPluginEvent(event, peer: peer, operation: operation) ?? false
                 }
             )
             pluginDispatcher = dispatcher
@@ -3292,7 +3295,7 @@
                 if request.method == "simulator.action" {
                     return await agentSimulator.handle(request)
                 }
-                if ["workflow.finish", "workflow.completeStep", "workflow.attachments"].contains(request.method) {
+                if ["workflow.finish", "workflow.exitLoop", "workflow.completeStep", "workflow.attachments"].contains(request.method) {
                     guard let self else { return .internalError(id: request.id, "Host is shutting down.") }
                     return await self.handleWorkflowAgentCommand(request, peer: peer)
                 }

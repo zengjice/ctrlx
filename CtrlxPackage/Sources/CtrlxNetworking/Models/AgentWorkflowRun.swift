@@ -118,6 +118,7 @@ public struct AgentWorkflowInvocation: Codable, Equatable, Identifiable, Sendabl
     /// A Continue reminder was attempted for this turn. Keep it across Host
     /// restarts so an unconfirmed terminal write is not automatically repeated.
     public var continuationTurnID: String?
+    public var continuationInstance: AgentWorkflowInstance?
 
     public var resultTurnID: String? {
         stepTurn?.id ?? nativeTurnID
@@ -180,6 +181,16 @@ public struct AgentWorkflowRun: Codable, Equatable, Identifiable, Sendable {
     public var issue: String?
     public var invocations: [AgentWorkflowInvocation]
     public var finishRequest: AgentWorkflowFinishRequest?
+    public var loopExitRequest: AgentWorkflowFinishRequest?
+
+    public var hasExitedLoop: Bool {
+        guard let request = loopExitRequest else { return false }
+        return invocations.contains { $0.id == request.invocationID && $0.status == .succeeded }
+    }
+
+    public var activeNodeIDs: Set<UUID> {
+        hasExitedLoop ? definition.afterLoopNodeIDs : definition.activeNodeIDs(round: round)
+    }
 
     public func instance(for invocation: AgentWorkflowInvocation) -> AgentWorkflowInstance? {
         invocation.instance ?? instances.first { $0.id == invocation.delivery.toAgentID }

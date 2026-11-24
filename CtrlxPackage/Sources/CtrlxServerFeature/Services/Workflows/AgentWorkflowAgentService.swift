@@ -9,6 +9,7 @@ actor AgentWorkflowAgentService {
     private let inspect: @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance
     private let synchronizeEvents: @Sendable (UUID) async throws -> Void
     private let refreshInstances: @Sendable () async throws -> Void
+    private let provider: @Sendable (String) async -> (any AgentWorkflowProviding)?
     private let now: @Sendable () -> Date
     private let attachmentReader = AgentWorkflowAttachmentReader()
 
@@ -17,12 +18,14 @@ actor AgentWorkflowAgentService {
         inspect: @escaping @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance,
         synchronizeEvents: @escaping @Sendable (UUID) async throws -> Void,
         refreshInstances: @escaping @Sendable () async throws -> Void = { },
+        provider: @escaping @Sendable (String) async -> (any AgentWorkflowProviding)? = { _ in nil },
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.store = store
         self.inspect = inspect
         self.synchronizeEvents = synchronizeEvents
         self.refreshInstances = refreshInstances
+        self.provider = provider
         self.now = now
     }
 
@@ -31,7 +34,8 @@ actor AgentWorkflowAgentService {
             return await attachments(request, peer: peer)
         }
         let completesStep = request.method == "workflow.completeStep"
-        guard completesStep || request.method == "workflow.finish" else {
+        let exitsLoop = request.method == "workflow.exitLoop"
+        guard completesStep || exitsLoop || request.method == "workflow.finish" else {
             return .methodNotFound(id: request.id, request.method)
         }
         guard
@@ -47,6 +51,7 @@ actor AgentWorkflowAgentService {
             return denied(request.id, "Cannot verify the workflow command's caller.")
         }
         do {
+            let requestedTurn = exitsLoop ? try await store.loopExitTurn(invocationID: invocationID) : nil
             try await refreshInstances()
             try await synchronizeEvents(invocationID)
             let archive = try await store.snapshot()
@@ -67,18 +72,46 @@ actor AgentWorkflowAgentService {
             guard live.matchesBinding(instance) else {
                 return denied(request.id, "The Agent process or conversation changed.")
             }
-            try await synchronizeEvents(invocationID)
-            let timestamp = now()
-            let updated = try await store.update(runID: run.id) {
-                if let turn = invocation.stepTurn {
-                    guard $0.run.invocations.first(where: { $0.id == invocationID })?.stepTurn?.id == turn.id else {
-                        throw AgentWorkflowError("The Agent started another turn while verifying the completion request. Retry from the current turn.")
-                    }
+            let updated: AgentWorkflowRun
+            if let requestedTurn {
+                guard
+                    invocation.resultTurnID == requestedTurn.nativeTurnID,
+                    invocation.resultTranscriptPath == requestedTurn.transcriptPath else {
+                    throw AgentWorkflowError("The Agent started another turn while verifying the loop exit request.")
                 }
-                if completesStep {
-                    try $0.requestStepCompletion(invocationID: invocationID, instance: live, turnID: invocation.stepTurn?.id, now: timestamp)
-                } else {
-                    try $0.requestFinish(invocationID: invocationID, instance: live, reason: reason, now: timestamp)
+                guard let provider = await provider(live.pluginID) else {
+                    throw AgentWorkflowError("The Agent's workflow plugin is unavailable.")
+                }
+                let parser = provider.workflowTranscript(
+                    conversationID: live.conversationID, nativeTurnID: requestedTurn.nativeTurnID,
+                    prompt: invocation.stepTurn?.prompt ?? invocation.submissionText(pluginID: live.pluginID), candidate: ""
+                )
+                let transcript = try AgentWorkflowTranscriptFile(path: requestedTurn.transcriptPath, parser: parser)
+                guard let verified = try await transcript.verifyCurrentSubmission(requestedTurn) else {
+                    throw AgentWorkflowError("The current native record does not match this workflow step.")
+                }
+                guard try await inspect(live).matchesBinding(live) else {
+                    throw AgentWorkflowError("The Agent changed while verifying the current turn.")
+                }
+                try await synchronizeEvents(invocationID)
+                updated = try await store.requestLoopExit(
+                    runID: run.id, invocationID: invocationID, instance: live,
+                    verifiedTranscript: verified, reason: reason, now: now()
+                )
+            } else {
+                try await synchronizeEvents(invocationID)
+                let timestamp = now()
+                updated = try await store.update(runID: run.id) {
+                    if let turn = invocation.stepTurn {
+                        guard $0.run.invocations.first(where: { $0.id == invocationID })?.stepTurn?.id == turn.id else {
+                            throw AgentWorkflowError("The Agent started another turn while verifying the completion request. Retry from the current turn.")
+                        }
+                    }
+                    if completesStep {
+                        try $0.requestStepCompletion(invocationID: invocationID, instance: live, turnID: invocation.stepTurn?.id, now: timestamp)
+                    } else {
+                        try $0.requestFinish(invocationID: invocationID, instance: live, reason: reason, now: timestamp)
+                    }
                 }
             }
             return JSONRPCResponse(id: request.id, result: [
@@ -87,6 +120,8 @@ actor AgentWorkflowAgentService {
                 "status": .string(updated.status.rawValue),
                 "message": .string(completesStep
                     ? "Step completion saved. Provide this turn's final result; downstream handoff waits for verification and an unpaused workflow."
+                    : exitsLoop
+                    ? "Loop exit saved. Provide this turn's final result; the after-loop step waits for verification and an unpaused workflow."
                     : updated.status == .paused
                     ? "Finish request saved. The workflow remains paused until an operator continues it."
                     : "Finish request saved. The workflow will complete after the Host verifies this turn's final result."),

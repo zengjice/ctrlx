@@ -321,7 +321,7 @@ struct AgentWorkflowTargetTests {
         try JSONEncoder().encode(saved).write(to: file)
         let store = AgentWorkflowStore(fileURL: file, hostID: host)
         let restored = try await store.snapshot()
-        #expect(restored.schemaVersion == 8)
+        #expect(restored.schemaVersion == AgentWorkflowArchive.currentSchemaVersion)
         let reviewAgentID = try #require(legacy.definition.nodes[1].agentInstanceID)
         #expect(restored.definitions[0].agentTargets?[reviewAgentID] == live[1].target)
         #expect(try restored.runs[0].invocations[1].instance?.matchesBinding(#require(review.instance)) == true)

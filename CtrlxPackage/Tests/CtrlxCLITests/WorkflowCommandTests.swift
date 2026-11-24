@@ -45,6 +45,16 @@ struct WorkflowCommandTests {
         #expect(try CtrlxCLI.parseAsRoot(["workflow", "finish", "--invocation", invocation.uuidString, "--reason", reason]) is WorkflowFinishCommand)
     }
 
+    @Test
+    func exitLoopUsesTheCurrentInvocationAndReason() throws {
+        let id = UUID()
+        let arguments = ["--invocation", id.uuidString, "--reason", "Review passed"]
+        let command = try #require(try CtrlxCLI.parseAsRoot(["workflow", "exit-loop"] + arguments) as? WorkflowExitLoopCommand)
+        #expect(try command.request.parameters() == ["invocationId": .string(id.uuidString), "reason": .string("Review passed")])
+        let override = try WorkflowExitLoopCommand.parse(arguments + ["--pane", "%1"])
+        #expect(throws: (any Error).self) { try override.request.parameters() }
+    }
+
     @Test(arguments: ["--pane", "--session", "--window"])
     func finishCannotTargetAnotherAgent(_ flag: String) throws {
         let command = try WorkflowFinishCommand.parse(["--invocation", UUID().uuidString, "--reason", "Done", flag, "other"])

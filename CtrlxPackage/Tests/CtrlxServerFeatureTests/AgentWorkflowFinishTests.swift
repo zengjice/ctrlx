@@ -1,3 +1,4 @@
+import CodexPluginCore
 import ConcurrencyExtras
 import CtrlxNetworking
 import CtrlxPluginProtocol
@@ -15,8 +16,8 @@ struct AgentWorkflowFinishTests {
         let invocation: AgentWorkflowInvocation
         let peer: PluginIngressPeer
 
-        func request(id: UUID? = nil, reason: String = "Review passed") -> JSONRPCRequest {
-            .init(id: UUID().uuidString, method: "workflow.finish", params: [
+        func request(id: UUID? = nil, reason: String = "Review passed", method: String = "workflow.finish") -> JSONRPCRequest {
+            .init(id: UUID().uuidString, method: method, params: [
                 "invocationId": .string((id ?? invocation.id).uuidString), "reason": .string(reason),
             ])
         }
@@ -26,6 +27,7 @@ struct AgentWorkflowFinishTests {
         allowsFinish: Bool = true,
         completion: AgentWorkflowNode.Completion = .replyEnded,
         loop: Bool = false,
+        afterLoop: Bool = false,
         maximumRounds: Int = 5,
         notifyOnAgentCompletion: Bool? = nil,
         onCompleted: @escaping @Sendable (AgentWorkflowRun) -> Void = { _ in },
@@ -45,8 +47,32 @@ struct AgentWorkflowFinishTests {
             name: "Review", hostID: hostID, nodes: [node], edges: [], entryNodeID: node.id,
             loop: loop ? .init(finalNodeID: node.id, maximumRounds: maximumRounds) : nil
         )
+        if afterLoop {
+            let repair = AgentWorkflowNode(name: "Repair", content: .init(text: "Fix findings"))
+            let summary = AgentWorkflowNode(name: "Summary", content: .init(text: "Summarize review"))
+            let handoff = AgentWorkflowNode(name: "Handoff", content: .init(text: "Final handoff"))
+            draft.nodes += [repair, summary, handoff]
+            draft.edges = [
+                .init(source: node.id, target: repair.id),
+                .init(source: node.id, target: summary.id),
+                .init(source: summary.id, target: handoff.id),
+            ]
+            draft.loop = .init(finalNodeID: repair.id, maximumRounds: maximumRounds, entryNodeID: node.id, exitNodeID: summary.id)
+        }
         draft.notifyOnAgentCompletion = notifyOnAgentCompletion
         let definition = try await store.saveDefinition(draft, expectedRevision: nil)
+        let transcriptPath: String
+        if afterLoop {
+            let transcript = directory.appendingPathComponent("native.jsonl")
+            try Data("""
+            {"type":"session_meta","payload":{"id":"conversation"}}
+            {"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1"}}
+
+            """.utf8).write(to: transcript)
+            transcriptPath = transcript.path
+        } else {
+            transcriptPath = "/fixture/native.jsonl"
+        }
         let run = try await store.start(
             definitionID: definition.id, expectedRevision: definition.revision, requestID: UUID(),
             now: Date(), authorizationExpiresAt: Date().addingTimeInterval(3_600)
@@ -54,7 +80,7 @@ struct AgentWorkflowFinishTests {
         let active = try await store.update(runID: run.id) {
             let invocation = try $0.prepareInvocation(nodeID: node.id, now: Date())
             try $0.beginWriting(invocationID: invocation.id, instance: instance, now: Date())
-            try $0.accept(invocationID: invocation.id, instance: instance, nativeTurnID: "turn-1", transcriptPath: "/fixture/native.jsonl")
+            try $0.accept(invocationID: invocation.id, instance: instance, nativeTurnID: "turn-1", transcriptPath: transcriptPath)
         }
         let peer = try #require(PluginIngressPeer.capture(peerPID: 11, userID: 501) { pid in
             switch pid {
@@ -65,9 +91,79 @@ struct AgentWorkflowFinishTests {
         })
         return try .init(
             directory: directory, store: store,
-            service: AgentWorkflowAgentService(store: store, inspect: inspect, synchronizeEvents: { _ in }),
+            service: AgentWorkflowAgentService(store: store, inspect: inspect, synchronizeEvents: { _ in }, provider: { _ in CodexPluginCore() }),
             instance: instance, run: active, invocation: #require(active.invocations.first), peer: peer
         )
+    }
+
+    @Test(arguments: [false, true])
+    func approvedLoopHandsOffVerifiedResultOnlyOnce(restart: Bool) async throws {
+        let f = try await fixture(afterLoop: true, maximumRounds: 1)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let steps = f.run.definition.nodes
+        let reviewID = f.invocation.id
+        let command = f.request(method: "workflow.exitLoop")
+        #expect(f.invocation.delivery.input.text.contains("ctrlx workflow exit-loop"))
+        let original = AgentWorkflowRunState(f.run, currentInstances: [f.instance])
+        #expect(original.nodes[2].waitsForLoopExit == true)
+        #expect(try AgentWorkflowExecution(validating: f.run).readyNodeIDs.isEmpty)
+        #expect(await f.service.handle(f.request(), peer: f.peer).error?.code == "workflow_denied")
+        #expect(await f.service.handle(command, peer: nil).error?.code == "workflow_denied")
+        let path = try #require(f.invocation.nativeTranscriptPath)
+        try #require(await f.store.observeSubmission(.init(
+            kind: .submitted, nativeTurnID: "turn-1", transcriptPath: path, text: f.invocation.delivery.input.text
+        ), instance: f.instance) == .ready)
+        if restart {
+            try await f.store.update(runID: f.run.id) { $0.pause(reason: "Operator paused") }
+        }
+        #expect(await f.service.handle(command, peer: f.peer).error == nil)
+        #expect(await f.service.handle(command, peer: f.peer).error == nil)
+        let requested = try #require(try await f.store.snapshot().runs.first)
+        #expect(requested.loopExitRequest?.invocationID == reviewID)
+        #expect(requested.finishRequest == nil)
+        #expect(try AgentWorkflowExecution(validating: requested).readyNodeIDs.isEmpty)
+
+        let review = AgentWorkflowResult(invocationID: reviewID, nativeTurnID: "turn-1", text: "VERIFIED_REVIEW", completedAt: .now)
+        try await f.store.update(runID: f.run.id) { try $0.succeed(review, instance: f.instance, now: .now) }
+        let store: AgentWorkflowStore
+        if restart {
+            store = AgentWorkflowStore(fileURL: f.directory.appendingPathComponent("ledger.json"), hostID: f.run.definition.hostID)
+            let restored = try #require(try await store.snapshot().runs.first)
+            #expect(restored.status == .paused && restored.hasExitedLoop)
+            #expect(try AgentWorkflowExecution(validating: restored).readyNodeIDs.isEmpty)
+            try await store.update(runID: f.run.id) { try $0.resume(instances: [f.instance], now: .now) }
+        } else {
+            store = f.store
+        }
+        let result = try await store.update(runID: f.run.id) { execution in
+            #expect(execution.readyNodeIDs == [steps[2].id])
+            let summary = try execution.prepareInvocation(nodeID: steps[2].id, now: .now)
+            #expect(try execution.prepareInvocation(nodeID: steps[2].id, now: .now).id == summary.id)
+            #expect(summary.delivery.sources.map(\.resultID) == [review.id])
+            #expect(summary.result?.text.contains("VERIFIED_REVIEW") == true)
+            #expect(execution.run.status == .running)
+            #expect(execution.readyNodeIDs == [steps[3].id])
+            _ = try execution.prepareInvocation(nodeID: steps[3].id, now: .now)
+        }
+        #expect(result.status == .completed && result.round == 1)
+        #expect(result.invocations.map(\.nodeID) == [steps[0].id, steps[2].id, steps[3].id])
+        #expect(AgentWorkflowRunState(result, currentInstances: [f.instance]).nodes[1].isSkipped)
+        #expect(try AgentWorkflowExecution(validating: result).readyNodeIDs.isEmpty)
+    }
+
+    @Test
+    func noApprovalContinuesRepairAndStillPausesAtRoundLimit() async throws {
+        let f = try await fixture(afterLoop: true, maximumRounds: 1)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let repair = f.run.definition.nodes[1]
+        let result = try await f.store.update(runID: f.run.id) { execution in
+            try execution.succeed(.init(invocationID: f.invocation.id, nativeTurnID: "turn-1", text: "Changes required", completedAt: .now), instance: f.instance, now: .now)
+            #expect(execution.readyNodeIDs == [repair.id])
+            _ = try execution.prepareInvocation(nodeID: repair.id, now: .now)
+        }
+        #expect(result.status == .paused)
+        #expect(result.loopExitRequest == nil)
+        #expect(result.invocations.map(\.nodeID) == [f.invocation.nodeID, repair.id])
     }
 
     @Test("Workflow alerts once and individual stop alerts are opt-in", arguments: [nil, true] as [Bool?])
