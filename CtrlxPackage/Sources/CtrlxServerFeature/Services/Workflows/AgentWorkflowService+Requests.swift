@@ -31,7 +31,7 @@ extension AgentWorkflowService {
                 response.run = try AgentWorkflowRunState(run, currentInstances: archive.instances)
             }
         case let .catalog(offset):
-            let instances = try await refreshInstancesCatalog()
+            let instances = offset == 0 ? try await refreshInstancesCatalog() : archive.instances
             response.instances = try Self.page(instances, offset: offset)
         case let .definitions(offset):
             response.definitions = try Self.page(archive.definitions.map(AgentWorkflowDefinitionSummary.init), offset: offset)

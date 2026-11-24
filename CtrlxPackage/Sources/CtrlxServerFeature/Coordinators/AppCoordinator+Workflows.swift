@@ -232,7 +232,12 @@ extension AppCoordinator {
     }
 
     func inspectWorkflowInput(_ instance: AgentWorkflowInstance) async throws -> AgentWorkflowInstance {
-        var live = try await inspectWorkflowInstance(instance)
+        let live = try await inspectWorkflowInstance(instance)
+        return try await inspectWorkflowReadiness(live)
+    }
+
+    func inspectWorkflowReadiness(_ instance: AgentWorkflowInstance) async throws -> AgentWorkflowInstance {
+        var live = instance
         live.inputIssue = nil
         guard live.capabilityIssue == nil else { return live }
         guard
@@ -279,7 +284,6 @@ extension AppCoordinator {
     /// boundary. A label, saved native ID or reused tmux pane alone is insufficient.
     func inspectWorkflowInstance(_ instance: AgentWorkflowInstance, verifyNativeWriter: Bool = false) async throws -> AgentWorkflowInstance {
         @Dependency(AgentSessionIdentityClient.self) var identities
-        @Dependency(WorkspaceAgentProcessClient.self) var processes
         guard let registry = pluginRegistry, let provider = registry.core(instance.pluginID) as? any AgentWorkflowProviding else {
             throw AgentWorkflowError("The Agent's workflow plugin is no longer available.")
         }
@@ -317,6 +321,14 @@ extension AppCoordinator {
         var live = instance
         live.workspacePane = pane.binding.workspacePane
         live.workingDirectory = pane.info.currentPath
+        return try await inspectWorkflowCapabilities(live, provider: provider, allowsFirstSubmission: !verifyNativeWriter)
+    }
+
+    func inspectWorkflowCapabilities(
+        _ instance: AgentWorkflowInstance, provider: any AgentWorkflowProviding, allowsFirstSubmission: Bool = true
+    ) async throws -> AgentWorkflowInstance {
+        @Dependency(WorkspaceAgentProcessClient.self) var processes
+        var live = instance
         do {
             let invocation = try await processes.invocation(String(instance.processID), instance.processRuntimeID)
             live.capabilityIssue = provider.workflowRuntimeIssue(cliVersion: invocation.version)
@@ -326,8 +338,8 @@ extension AppCoordinator {
             live.capabilityIssue = "Cannot inspect this Agent's CLI: \(error.localizedDescription)"
         }
         if live.capabilityIssue == nil {
-            guard let catalog = await agentRuntimeCatalog else { throw AgentWorkflowError("The Agent directory is not ready.") }
-            live.capabilityIssue = await catalog.bridgeIssue(for: live, allowsFirstSubmission: !verifyNativeWriter)
+            guard let catalog = agentRuntimeCatalog else { throw AgentWorkflowError("The Agent directory is not ready.") }
+            live.capabilityIssue = await catalog.bridgeIssue(for: live, allowsFirstSubmission: allowsFirstSubmission)
         }
         live.capabilities = live.capabilityIssue == nil ? provider.workflowCapabilities : nil
         if live.capabilityIssue != nil {

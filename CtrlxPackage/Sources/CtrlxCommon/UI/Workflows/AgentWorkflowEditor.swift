@@ -13,9 +13,13 @@ struct AgentWorkflowEditor: View {
     let isNew: Bool
     let createAgent: ((UUID) async throws -> AgentWorkflowAgentCreation)?
     private let expectedRevision: Int?
+    private let readInstances: ((Bool) async throws -> [AgentWorkflowInstance])?
+    private let readAttachments: (() async throws -> [UUID: AgentWorkflowAttachment])?
     @Environment(\.dismiss) private var dismiss
     @State private var draft: AgentWorkflowDefinition
     @State private var instances: [AgentWorkflowInstance] = []
+    @State private var loadedInstances: Bool
+    @State private var agentError: String?
     @State private var error: String?
     @State private var saving = false
     @State private var refreshing = false
@@ -37,13 +41,26 @@ struct AgentWorkflowEditor: View {
     @State private var showingExecution = false
     @State private var expandedStepID: UUID?
 
-    init(endpoint: AgentWorkflowEndpoint, definition: AgentWorkflowDefinition, isNew: Bool, createAgent: ((UUID) async throws -> AgentWorkflowAgentCreation)?) {
+    init(
+        endpoint: AgentWorkflowEndpoint, definition: AgentWorkflowDefinition, isNew: Bool,
+        createAgent: ((UUID) async throws -> AgentWorkflowAgentCreation)?,
+        initialInstances: [AgentWorkflowInstance]? = nil,
+        readInstances: ((Bool) async throws -> [AgentWorkflowInstance])? = nil,
+        readAttachments: (() async throws -> [UUID: AgentWorkflowAttachment])? = nil
+    ) {
         self.endpoint = endpoint
         self.isNew = isNew
         self.createAgent = createAgent
         self.expectedRevision = isNew ? nil : definition.revision
-        var editable = definition
+        self.readInstances = readInstances
+        self.readAttachments = readAttachments
+        self._instances = State(initialValue: initialInstances ?? [])
+        self._loadedInstances = State(initialValue: initialInstances != nil)
+        var editable = definition.resolvingAgents(in: initialInstances ?? [])
         editable.participants = definition.agents
+        if let initialInstances {
+            editable.updateAgentNames(from: initialInstances)
+        }
         for index in editable.nodes.indices {
             editable.nodes[index].initialTask = definition.initialTask(for: definition.nodes[index])
         }
@@ -99,7 +116,7 @@ struct AgentWorkflowEditor: View {
                                         Text(instance.displayName).tag(instance.id)
                                     }
                                     if draft.instance(for: participant.id, in: instances) == nil {
-                                        Text("Agent unavailable · choose a replacement").tag(participant.id)
+                                        Text(loadedInstances || agentError != nil ? "Agent unavailable · choose a replacement" : "Checking Agent…").tag(participant.id)
                                     }
                                 }
                                 Button("Remove Agent", role: .destructive) {
@@ -119,7 +136,7 @@ struct AgentWorkflowEditor: View {
                             Text("Participating Agents")
                             Text(draft.agents.isEmpty ? "Add Agents here, then choose them in your steps." : draft.agents.map { agentName($0.id) }.joined(separator: ", "))
                                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                            if draft.agents.contains(where: { draft.instance(for: $0.id, in: instances) == nil }), !refreshing {
+                            if loadedInstances, !refreshing, draft.agents.contains(where: { draft.instance(for: $0.id, in: instances) == nil }) {
                                 Text("Some Agents are unavailable. Choose a replacement.").font(.caption).foregroundStyle(.orange)
                             }
                         }
@@ -311,7 +328,7 @@ struct AgentWorkflowEditor: View {
                 if let validationIssue {
                     Section { Text(validationIssue).font(.callout).foregroundStyle(.secondary) }
                 }
-                if let error {
+                if let error = error ?? agentError {
                     Section { Text(error).foregroundStyle(.red).textSelection(.enabled) }
                 }
             }
@@ -390,7 +407,7 @@ struct AgentWorkflowEditor: View {
             choosingAgentFor = nil
             addingAfterLoopFrom = nil
         }) {
-            AgentWorkflowAgentPicker(instances: instances, definition: draft, purpose: .step, refreshing: refreshing, error: error, refresh: refreshInstances) { instance in
+            AgentWorkflowAgentPicker(instances: instances, definition: draft, purpose: .step, refreshing: refreshing, error: agentError, refresh: { await refreshInstances() }) { instance in
                 guard !importing, let participantID = draft.participantID(for: instance, in: instances) else { return }
                 if let choosingAgentFor {
                     guard let index = draft.nodes.firstIndex(where: { $0.id == choosingAgentFor }) else { return }
@@ -401,15 +418,17 @@ struct AgentWorkflowEditor: View {
             }
         }
         .sheet(isPresented: $showingParticipantPicker) {
-            AgentWorkflowAgentPicker(instances: instances, definition: draft, purpose: .addParticipant, refreshing: refreshing, error: error, refresh: refreshInstances) { instance in
+            AgentWorkflowAgentPicker(instances: instances, definition: draft, purpose: .addParticipant, refreshing: refreshing, error: agentError, refresh: { await refreshInstances() }) { instance in
                 guard !importing else { return }
                 draft.addAgent(instance, in: instances)
             }
         }
         .task {
-            await refreshInstances()
-            await refreshAttachments()
+            if !loadedInstances {
+                await refreshInstances(useCached: true)
+            }
         }
+        .task { await refreshAttachments() }
         .onDisappear {
             let unused = importedIDs
             Task { await discardImports(unused) }
@@ -489,7 +508,8 @@ struct AgentWorkflowEditor: View {
     }
 
     private func agentName(_ id: UUID) -> String {
-        draft.instance(for: id, in: instances)?.displayName ?? "Agent unavailable · \(id.uuidString.prefix(8))"
+        draft.instance(for: id, in: instances)?.displayName
+            ?? (loadedInstances || agentError != nil ? "Agent unavailable · \(id.uuidString.prefix(8))" : "Checking Agent…")
     }
 
     private func participantBinding(_ id: UUID) -> Binding<UUID> {
@@ -537,14 +557,19 @@ struct AgentWorkflowEditor: View {
         }
     }
 
-    private func refreshInstances() async {
+    private func refreshInstances(useCached: Bool = false) async {
         guard !refreshing else { return }
         refreshing = true
         defer { refreshing = false }
         do {
-            let values = try await endpoint.instances(hostID: draft.hostID)
+            let values = if let readInstances {
+                try await readInstances(useCached)
+            } else {
+                try await endpoint.instances(hostID: draft.hostID)
+            }
             try Task.checkCancellation()
             instances = values
+            loadedInstances = true
             draft = draft.resolvingAgents(in: values)
             draft.updateAgentNames(from: values)
             if let target = createdAgent, let instance = values.first(where: { target.matches($0) }) {
@@ -552,10 +577,10 @@ struct AgentWorkflowEditor: View {
                 draft.addAgent(instance, in: instances)
                 createdAgent = nil
             }
-            error = nil
+            agentError = nil
         } catch {
             guard !Task.isCancelled else { return }
-            self.error = error.localizedDescription
+            agentError = error.localizedDescription
         }
     }
 
@@ -590,11 +615,15 @@ struct AgentWorkflowEditor: View {
 
     private func refreshAttachments() async {
         do {
-            let values = try await endpoint.attachments(Array(draft.attachmentIDs), hostID: draft.hostID)
-            try Task.checkCancellation()
-            for value in values {
-                attachments[value.id] = value
+            let values: [UUID: AgentWorkflowAttachment]
+            if let readAttachments {
+                values = try await readAttachments()
+            } else {
+                let metadata = try await endpoint.attachments(Array(draft.attachmentIDs), hostID: draft.hostID)
+                values = Dictionary(uniqueKeysWithValues: metadata.map { ($0.id, $0) })
             }
+            try Task.checkCancellation()
+            attachments.merge(values) { _, loaded in loaded }
         } catch {
             if !Task.isCancelled {
                 self.error = error.localizedDescription

@@ -90,7 +90,8 @@ private struct AgentWorkflowHostView: View {
     let openAgent: (AgentWorkflowInstance) -> Void
     @State private var tagFilter = ""
     @State private var starting: AgentWorkflowDefinitionSummary?
-    @State private var overview: AgentWorkflowOverview?
+    @State private var configurations: (hostID: UUID, items: [AgentWorkflowDefinitionSummary])?
+    @State private var runs: [AgentWorkflowRunSummary]?
     @State private var editing: AgentWorkflowDefinition?
     @State private var error: String?
     @State private var loading = false
@@ -100,7 +101,7 @@ private struct AgentWorkflowHostView: View {
     @State private var duplicating = false
 
     private var filteredDefinitions: [AgentWorkflowDefinitionSummary] {
-        (overview?.definitions ?? []).filter { definition in
+        (configurations?.items ?? []).filter { definition in
             tagFilter.isEmpty || (definition.tags ?? []).contains { $0.localizedStandardContains(tagFilter) }
         }
     }
@@ -136,12 +137,12 @@ private struct AgentWorkflowHostView: View {
 
     var body: some View {
         List {
-            if let overview {
+            if let configurations {
                 Section("Configurations") {
                     TextField("Filter by tag", text: $tagFilter)
                     ForEach(filteredDefinitions) { definition in
                         HStack {
-                            NavigationLink(value: AgentWorkflowNavigation.Destination.configuration(route: endpoint.id, hostID: overview.hostID, id: definition.id)) {
+                            NavigationLink(value: AgentWorkflowNavigation.Destination.configuration(route: endpoint.id, hostID: configurations.hostID, id: definition.id)) {
                                 definitionLabel(definition)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .contentShape(Rectangle())
@@ -157,14 +158,14 @@ private struct AgentWorkflowHostView: View {
                                 .accessibilityIdentifier("workflow-duplicate-\(definition.id)")
                         }
                     }
-                    if overview.definitions.isEmpty {
+                    if configurations.items.isEmpty {
                         Text("Create your first workflow.").foregroundStyle(.secondary)
                     }
                 }
                 Section("Runs") {
-                    ForEach(overview.runs) { run in
+                    ForEach(runs ?? []) { run in
                         HStack {
-                            NavigationLink(value: AgentWorkflowNavigation.Destination.run(route: endpoint.id, hostID: overview.hostID, id: run.id)) {
+                            NavigationLink(value: AgentWorkflowNavigation.Destination.run(route: endpoint.id, hostID: configurations.hostID, id: run.id)) {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(run.name)
                                     runStatusLabel(run)
@@ -192,7 +193,9 @@ private struct AgentWorkflowHostView: View {
                             }
                         }
                     }
-                    if overview.runs.isEmpty {
+                    if runs == nil, loading {
+                        ProgressView("Loading runs…")
+                    } else if runs?.isEmpty == true {
                         Text("No runs yet").foregroundStyle(.secondary)
                     }
                 }
@@ -207,17 +210,17 @@ private struct AgentWorkflowHostView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    guard let hostID = overview?.hostID else { return }
+                    guard let hostID = configurations?.hostID else { return }
                     editing = .init(name: "", hostID: hostID, nodes: [], edges: [], entryNodeID: UUID())
                 } label: { Label("New workflow", symbol: .plus) }
-                    .disabled(overview == nil || duplicating || !endpoint.isConnected || !endpoint.isSupported)
+                    .disabled(configurations == nil || duplicating || !endpoint.isConnected || !endpoint.isSupported)
             }
         }
         .sheet(item: $editing, onDismiss: { Task { await refresh() } }) { draft in
             AgentWorkflowEditor(endpoint: endpoint, definition: draft, isNew: true, createAgent: createAgent)
         }
         .sheet(item: $starting, onDismiss: { Task { await refresh() } }) { definition in
-            if let hostID = overview?.hostID {
+            if let hostID = configurations?.hostID {
                 AgentWorkflowStartView(endpoint: endpoint, hostID: hostID, definitionID: definition.id, navigation: navigation, openAgent: openAgent)
             }
         }
@@ -243,10 +246,13 @@ private struct AgentWorkflowHostView: View {
         loading = true
         defer { loading = false }
         do {
-            let value = try await endpoint.overview(hostID: overview?.hostID)
+            let saved = try await endpoint.configurations(hostID: configurations?.hostID)
             try Task.checkCancellation()
-            overview = value
+            configurations = saved
             error = nil
+            let history = try await endpoint.runs(hostID: saved.hostID)
+            try Task.checkCancellation()
+            runs = history
         } catch {
             guard !Task.isCancelled else { return }
             self.error = error.localizedDescription
@@ -262,7 +268,7 @@ private struct AgentWorkflowHostView: View {
     }
 
     private func duplicate(_ definition: AgentWorkflowDefinitionSummary) {
-        guard !loading, !deleting, !duplicating, let hostID = overview?.hostID else { return }
+        guard !loading, !deleting, !duplicating, let hostID = configurations?.hostID else { return }
         let path = navigation.path
         duplicating = true
         Task {
@@ -278,15 +284,13 @@ private struct AgentWorkflowHostView: View {
     }
 
     private func delete(_ run: AgentWorkflowRunSummary) {
-        guard !loading, !deleting, !duplicating, let hostID = overview?.hostID else { return }
+        guard !loading, !deleting, !duplicating, let hostID = configurations?.hostID else { return }
         deleting = true
         Task {
             defer { deleting = false }
             do {
                 _ = try await endpoint.request(.deleteRun(run.id, expectedRevision: run.revision), hostID: hostID)
-                if let overview {
-                    self.overview = .init(hostID: overview.hostID, definitions: overview.definitions, runs: overview.runs.filter { $0.id != run.id })
-                }
+                runs?.removeAll { $0.id == run.id }
                 error = nil
             } catch { self.error = error.localizedDescription }
         }
@@ -295,6 +299,11 @@ private struct AgentWorkflowHostView: View {
 
 @MainActor
 struct AgentWorkflowConfigurationView: View {
+    private struct CatalogSelection: Equatable {
+        var bindings: [UUID: AgentWorkflowTarget?] = [:]
+        var retry = 0
+    }
+
     let endpoint: AgentWorkflowEndpoint
     let hostID: UUID
     let definitionID: UUID
@@ -303,49 +312,76 @@ struct AgentWorkflowConfigurationView: View {
     var navigation = AgentWorkflowNavigation()
     @Environment(\.dismiss) private var dismiss
     @State private var definition: AgentWorkflowDefinition?
-    @State private var attachments: [UUID: AgentWorkflowAttachment] = [:]
+    @State private var definitionReload = 0
+    @State private var detailVisible = false
+    @State private var attachments: [UUID: AgentWorkflowAttachment]?
+    @State private var attachmentReads: [Set<UUID>: Task<[UUID: AgentWorkflowAttachment], Error>] = [:]
     @State private var editing: AgentWorkflowDefinition?
-    @State private var instances: [AgentWorkflowInstance] = []
+    @State private var instances: [AgentWorkflowInstance]?
+    @State private var instanceRead: (selection: CatalogSelection, task: Task<[AgentWorkflowInstance], Error>)?
+    @State private var catalogSelection = CatalogSelection()
     @State private var showingStart = false
     @State private var busy = false
     @State private var error: String?
+    @State private var attachmentError: String?
+    @State private var agentError: String?
     @State private var confirmingDelete = false
 
+    private var missingAgentLabel: String {
+        instanceRead != nil || instances == nil && agentError == nil ? "Checking Agent…" : "Agent unavailable"
+    }
+
+    private var loadingAttachments: Bool {
+        attachments == nil && attachmentError == nil && definition?.attachmentIDs.isEmpty == false
+    }
+
     var body: some View {
+        let attachmentIDs = definition?.attachmentIDs
+        let selection = catalogSelection
         Form {
             if let definition {
                 Section("Initial task") {
                     Text(verbatim: definition.initialInput.text).textSelection(.enabled)
-                    ForEach(definition.initialInput.attachmentIDs, id: \.self) { AgentWorkflowAttachmentLabel(attachment: attachments[$0]) }
+                    if loadingAttachments, !definition.initialInput.attachmentIDs.isEmpty {
+                        ProgressView("Loading attachments…")
+                    } else {
+                        ForEach(definition.initialInput.attachmentIDs, id: \.self) { AgentWorkflowAttachmentLabel(attachment: attachments?[$0]) }
+                    }
                 }
                 Section("Participating Agents") {
                     ForEach(definition.agents) { participant in
+                        let instance = definition.instance(for: participant.id, in: instances ?? [])
                         VStack(alignment: .leading) {
-                            Text(definition.instance(for: participant.id, in: instances)?.displayName ?? "Agent unavailable").font(.headline)
-                            if let instance = definition.instance(for: participant.id, in: instances) {
+                            Text(instance?.displayName ?? missingAgentLabel).font(.headline)
+                            if let instance {
                                 Text(instance.workingDirectory).font(.caption).foregroundStyle(.secondary)
                             }
                         }
+                    }
+                    if let agentError {
+                        Text(agentError).font(.caption).foregroundStyle(.red)
                     }
                 }
                 Section("Steps") {
                     ForEach(definition.nodes) { node in
                         if node.kind == .content {
                             NavigationLink {
-                                AgentWorkflowInputPreview(definition: definition, node: node, attachments: attachments)
+                                AgentWorkflowInputPreview(definition: definition, node: node, attachments: attachments ?? [:])
                             } label: { nodeLabel(node, definition: definition) }
+                                .disabled(loadingAttachments)
                         } else {
                             VStack(alignment: .leading, spacing: 6) {
-                                let instance = definition.instance(for: node.agentInstanceID, in: instances)
+                                let instance = openableInstance(for: node.agentInstanceID, in: definition)
                                 Button {
                                     if let instance {
                                         openAgent(instance)
                                     }
                                 } label: { nodeLabel(node, definition: definition) }
                                     .buttonStyle(.plain)
-                                    .disabled(!endpoint.isConnected || instance == nil || instance?.readiness == .unavailable)
+                                    .disabled(!endpoint.isConnected || instance == nil)
                                     .accessibilityIdentifier("workflow-open-agent-\(node.id)")
-                                NavigationLink("Preview task input") { AgentWorkflowInputPreview(definition: definition, node: node, attachments: attachments) }
+                                NavigationLink("Preview task input") { AgentWorkflowInputPreview(definition: definition, node: node, attachments: attachments ?? [:]) }
+                                    .disabled(loadingAttachments)
                             }
                         }
                     }
@@ -374,16 +410,23 @@ struct AgentWorkflowConfigurationView: View {
             if let error {
                 Section { Text(error).foregroundStyle(.red).textSelection(.enabled) }
             }
+            if let attachmentError {
+                Section { Text(attachmentError).foregroundStyle(.red).textSelection(.enabled) }
+            }
         }
         .formStyle(.grouped)
         .navigationTitle(definition?.name ?? "Configuration")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button("Edit") { editing = definition }.disabled(definition == nil || busy || !endpoint.isConnected)
+                    .accessibilityIdentifier("workflow-edit-configuration")
             }
         }
-        .sheet(item: $editing, onDismiss: { Task { await load() } }) {
-            AgentWorkflowEditor(endpoint: endpoint, definition: $0, isNew: false, createAgent: createAgent)
+        .sheet(item: $editing, onDismiss: editorDismissed) { draft in
+            AgentWorkflowEditor(
+                endpoint: endpoint, definition: draft, isNew: false, createAgent: createAgent, initialInstances: instances,
+                readInstances: readInstances, readAttachments: { try await readAttachments(draft.attachmentIDs) }
+            )
         }
         .sheet(isPresented: $showingStart) {
             AgentWorkflowStartView(endpoint: endpoint, hostID: hostID, definitionID: definitionID, navigation: navigation, openAgent: openAgent)
@@ -402,7 +445,19 @@ struct AgentWorkflowConfigurationView: View {
                 }
             }
         } message: { Text("Existing runs keep their saved configuration and results.") }
-        .task { await load() }
+        .onAppear { detailVisible = true }
+        .onDisappear {
+            detailVisible = false
+            if editing == nil {
+                cancelReads()
+            }
+        }
+        .task(id: definitionReload) { await loadDefinition() }
+        .task(id: attachmentIDs) {
+            guard let attachmentIDs else { return }
+            _ = try? await readAttachments(attachmentIDs)
+        }
+        .task(id: selection) { await readParticipatingAgents(selection) }
     }
 
     private func nodeLabel(_ node: AgentWorkflowNode, definition: AgentWorkflowDefinition) -> some View {
@@ -410,11 +465,11 @@ struct AgentWorkflowConfigurationView: View {
             Label(node.name, symbol: node.kind == .content ? .docTextFill : .terminal).font(.headline)
             if node.kind == .content {
                 Text("Content node").font(.caption).foregroundStyle(.secondary)
-            } else if let instance = definition.instance(for: node.agentInstanceID, in: instances) {
+            } else if let instance = definition.instance(for: node.agentInstanceID, in: instances ?? []) {
                 Text("\(instance.displayName) · \(instance.readiness.title)")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
-                Text("Agent unavailable").font(.caption).foregroundStyle(.secondary)
+                Text(missingAgentLabel).font(.caption).foregroundStyle(.secondary)
             }
             Text(node.id == definition.entryNodeID ? "Entry" : "Waits for: " + definition.upstream(of: node.id).map(\.name).joined(separator: ", "))
                 .font(.caption).foregroundStyle(.secondary)
@@ -444,20 +499,129 @@ struct AgentWorkflowConfigurationView: View {
         .contentShape(Rectangle())
     }
 
-    private func load() async {
+    private func loadDefinition() async {
         do {
             let response = try await endpoint.request(.definition(definitionID), hostID: hostID)
             guard let value = response.definition else { throw AgentWorkflowError("The configuration is unavailable.") }
-            let metadata = try await endpoint.attachments(Array(value.attachmentIDs), hostID: hostID)
             try Task.checkCancellation()
-            attachments = Dictionary(uniqueKeysWithValues: metadata.map { ($0.id, $0) })
-            instances = value.agentInstanceIDs.isEmpty ? [] : try await endpoint.instances(hostID: hostID)
-            definition = value.resolvingAgents(in: instances)
-            try Task.checkCancellation()
+            if definition?.attachmentIDs != value.attachmentIDs {
+                attachments = nil
+                attachmentError = nil
+            }
+            let resolved = value.resolvingAgents(in: instances ?? [])
+            definition = resolved
+            let bindings = Dictionary(value.agents.map { ($0.id, value.agentTargets?[$0.id]) }, uniquingKeysWith: { first, _ in first })
+            let retry = needsCatalogRead(for: resolved) ? catalogSelection.retry + 1 : catalogSelection.retry
+            catalogSelection = CatalogSelection(bindings: bindings, retry: retry)
             error = nil
+            if attachmentError != nil {
+                _ = try? await readAttachments(value.attachmentIDs)
+            }
         } catch {
             guard !Task.isCancelled else { return }
             self.error = error.localizedDescription
         }
+    }
+
+    private func editorDismissed() {
+        if !detailVisible {
+            cancelReads()
+        }
+        definitionReload += 1
+    }
+
+    private func cancelReads() {
+        instanceRead?.task.cancel()
+        instanceRead = nil
+        for pending in attachmentReads.values {
+            pending.cancel()
+        }
+        attachmentReads.removeAll()
+    }
+
+    private func readAttachments(_ ids: Set<UUID>) async throws -> [UUID: AgentWorkflowAttachment] {
+        try Task.checkCancellation()
+        if let pending = attachmentReads[ids] {
+            return try await pending.value
+        }
+        if definition?.attachmentIDs == ids, let attachments {
+            return attachments
+        }
+        let pending = Task { [endpoint, hostID] in
+            let metadata = try await endpoint.attachments(Array(ids), hostID: hostID)
+            return Dictionary(uniqueKeysWithValues: metadata.map { ($0.id, $0) })
+        }
+        attachmentReads[ids] = pending
+        defer {
+            if !pending.isCancelled {
+                attachmentReads[ids] = nil
+            }
+        }
+        do {
+            let values = try await pending.value
+            guard !pending.isCancelled else { throw CancellationError() }
+            if definition?.attachmentIDs == ids {
+                attachments = values
+                attachmentError = nil
+            }
+            return values
+        } catch {
+            if !pending.isCancelled, definition?.attachmentIDs == ids {
+                attachmentError = error.localizedDescription
+            }
+            throw error
+        }
+    }
+
+    private func openableInstance(for agentID: UUID?, in definition: AgentWorkflowDefinition) -> AgentWorkflowInstance? {
+        guard
+            let instance = definition.instance(for: agentID, in: instances ?? []),
+            instance.readiness != .unavailable else { return nil }
+        return instance
+    }
+
+    private func needsCatalogRead(for definition: AgentWorkflowDefinition) -> Bool {
+        definition.agents.contains { agentError != nil || openableInstance(for: $0.id, in: definition) == nil }
+    }
+
+    private func readParticipatingAgents(_ selection: CatalogSelection) async {
+        guard !selection.bindings.isEmpty else { return }
+        if let pending = instanceRead, pending.selection != selection {
+            _ = try? await pending.task.value
+        }
+        guard selection == catalogSelection, let definition else { return }
+        _ = try? await readInstances(useCached: !needsCatalogRead(for: definition))
+    }
+
+    private func readInstances(useCached: Bool) async throws -> [AgentWorkflowInstance] {
+        try Task.checkCancellation()
+        if let instanceRead {
+            return try await instanceRead.task.value
+        }
+        if useCached, let instances {
+            return instances
+        }
+        let pending = Task {
+            defer {
+                if !Task.isCancelled {
+                    instanceRead = nil
+                }
+            }
+            do {
+                let values = try await endpoint.instances(hostID: hostID)
+                try Task.checkCancellation()
+                instances = values
+                definition = definition?.resolvingAgents(in: values)
+                agentError = nil
+                return values
+            } catch {
+                if !Task.isCancelled {
+                    agentError = error.localizedDescription
+                }
+                throw error
+            }
+        }
+        instanceRead = (catalogSelection, pending)
+        return try await pending.value
     }
 }

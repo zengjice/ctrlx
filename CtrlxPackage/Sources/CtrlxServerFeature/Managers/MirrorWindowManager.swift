@@ -594,20 +594,22 @@ final public class MirrorWindowManager {
         return changed
     }
 
+    @discardableResult
     func refreshDetectedAgentSessions(
         processNamesByPlugin: [String: [String]],
         refreshSnapshot: Bool = false,
         verifyingConversationForProcessID: String? = nil
-    ) async {
+    ) async -> [String: TmuxService.DetectedAgentPane]? {
         guard
             let panes = await tmuxService.detectAgentPanesIfAvailable(
                 processNamesByPlugin: processNamesByPlugin, refreshSnapshot: refreshSnapshot
-            ), !Task.isCancelled else { return }
+            ), !Task.isCancelled else { return nil }
         let changed = reconcileDetectedAgentSessions(panes)
         let restored = await restoreNativeAgentIdentities(from: panes, processNamesByPlugin: processNamesByPlugin, verifyingConversationForProcessID: verifyingConversationForProcessID)
         if changed || restored {
             await onAgentProcessReconciliationChanged?()
         }
+        return Task.isCancelled ? nil : panes
     }
 
     @discardableResult

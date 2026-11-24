@@ -9,9 +9,16 @@ public struct AgentWorkflowOverview: Equatable, Sendable {
 
 public extension AgentWorkflowEndpoint {
     func overview(hostID: UUID? = nil) async throws -> AgentWorkflowOverview {
-        let definitions = try await pages(hostID: hostID, operation: { .definitions(offset: $0) }, content: \.definitions)
-        let runs = try await pages(hostID: definitions.hostID, operation: { .runs(offset: $0) }, content: \.runs)
-        return .init(hostID: definitions.hostID, definitions: definitions.items, runs: runs.items)
+        let configurations = try await configurations(hostID: hostID)
+        return try await .init(hostID: configurations.hostID, definitions: configurations.items, runs: runs(hostID: configurations.hostID))
+    }
+
+    internal func configurations(hostID: UUID?) async throws -> (hostID: UUID, items: [AgentWorkflowDefinitionSummary]) {
+        try await pages(hostID: hostID, operation: { .definitions(offset: $0) }, content: \.definitions)
+    }
+
+    internal func runs(hostID: UUID) async throws -> [AgentWorkflowRunSummary] {
+        try await pages(hostID: hostID, operation: { .runs(offset: $0) }, content: \.runs).items
     }
 
     func instances(hostID: UUID) async throws -> [AgentWorkflowInstance] {

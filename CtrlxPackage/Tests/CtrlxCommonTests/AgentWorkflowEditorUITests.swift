@@ -96,6 +96,348 @@
             try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent(name + ".png"))
         }
 
+        @Test(arguments: [
+            "pending", "save-after-timeout", "cancel-after-timeout", "save-timeout-in-editor", "cancel-timeout-in-editor",
+            "save-catalog-timeout-in-editor", "cancel-catalog-timeout-in-editor",
+        ])
+        func configurationAndEditorShareReads(mode: String) async throws {
+            _ = NSApplication.shared
+            NSApp.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
+            let hostID = UUID()
+            let instance = AgentWorkflowInstance(
+                hostID: hostID, pluginID: "codex", processID: 42, processRuntimeID: "42:start",
+                workspacePane: .init(serverID: "fixture", sessionID: UUID(), windowID: UUID(), paneID: UUID()),
+                paneID: "%0", conversationID: "native", displayName: "Project · Developer", workingDirectory: "/work",
+                capabilities: .init(maximumInputBytes: 100_000), readiness: .ready
+            )
+            let node = AgentWorkflowNode(name: "Develop", agentInstanceID: instance.id)
+            let attachment = AgentWorkflowAttachment(
+                id: UUID(), name: "diagram.png", mediaType: "image/png", byteCount: 900, sha256: String(repeating: "a", count: 64)
+            )
+            let definition = AgentWorkflowDefinition(
+                name: "Saved workflow", hostID: hostID, nodes: [node], edges: [], entryNodeID: node.id,
+                initialInput: .init(text: "Task", attachmentIDs: [attachment.id])
+            )
+            let catalogTimesOut = mode.contains("catalog-")
+            let attachmentTimesOut = mode != "pending" && !catalogTimesOut
+            let timeoutInEditor = mode.hasSuffix("-in-editor")
+            let shouldSave = mode.hasPrefix("save-")
+            let timeout = "Attachment request timed out."
+            let catalogError = "Agent directory request timed out."
+            let history = AsyncStream<Void>.makeStream()
+            let attachments = AsyncStream<Void>.makeStream()
+            let catalog = AsyncStream<Void>.makeStream()
+            defer {
+                history.continuation.finish()
+                attachments.continuation.finish()
+                catalog.continuation.finish()
+            }
+            var requestedHistory = false
+            var definitionReads = 0
+            var attachmentReads = 0
+            var catalogReads = 0
+            var saved: AgentWorkflowDefinition?
+            var openedAgent: AgentWorkflowInstance?
+            let endpoint = AgentWorkflowEndpoint(id: "fixture", name: "Host", connected: { true }, supported: { true }) { request in
+                var response = AgentWorkflowResponse(hostID: hostID)
+                switch request.operation {
+                case .definitions:
+                    response.definitions = .init(items: [.init(definition)], nextOffset: nil)
+                case .runs:
+                    requestedHistory = true
+                    for await _ in history.stream { }
+                    response.runs = .init(items: [], nextOffset: nil)
+                case .definition:
+                    definitionReads += 1
+                    response.definition = saved ?? definition
+                case let .attachments(ids):
+                    #expect(ids == [attachment.id])
+                    attachmentReads += 1
+                    if attachmentReads == 1 {
+                        for await _ in attachments.stream { }
+                        if attachmentTimesOut {
+                            throw AgentWorkflowError(timeout)
+                        }
+                    }
+                    response.attachments = [attachment]
+                case .catalog:
+                    catalogReads += 1
+                    if catalogReads == 1 {
+                        for await _ in catalog.stream { }
+                        if catalogTimesOut {
+                            throw AgentWorkflowError(catalogError)
+                        }
+                    }
+                    response.instances = .init(items: [instance], nextOffset: nil)
+                case let .save(draft, _):
+                    saved = draft
+                    response.definition = draft
+                default:
+                    Issue.record("Unexpected workflow request.")
+                }
+                return response
+            }
+            let navigation = AgentWorkflowNavigation()
+            navigation.path = [.host(endpoint.id)]
+            let window = NSWindow(contentRect: .init(x: -10_000, y: -10_000, width: 760, height: 900), styleMask: .titled, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = NSHostingView(rootView: AgentWorkflowsView(endpoints: { [endpoint] }, openAgent: { _, _ in }, navigation: navigation)
+                .environment(\.scenePhase, .active))
+            window.orderBack(nil)
+            defer { window.close() }
+
+            try await wait("Configuration must appear before run history returns") {
+                requestedHistory && element("workflow-quick-start-\(definition.id)", in: window) != nil
+            }
+            let detailWindow = NSWindow(contentRect: .init(x: -10_000, y: -10_000, width: 760, height: 900), styleMask: .titled, backing: .buffered, defer: false)
+            detailWindow.isReleasedWhenClosed = false
+            detailWindow.contentView = NSHostingView(rootView: NavigationStack {
+                AgentWorkflowConfigurationView(endpoint: endpoint, hostID: hostID, definitionID: definition.id, openAgent: { openedAgent = $0 }, createAgent: nil)
+            })
+            detailWindow.orderBack(nil)
+            defer { detailWindow.close() }
+            func shows(_ text: String, in window: NSWindow) -> Bool {
+                element(text, in: window, attributeName: "accessibilityValue") != nil
+                    || element(text, in: window, attributeName: "accessibilityLabel") != nil
+            }
+            try await wait("Configuration must request its definition") { definitionReads == 1 }
+            try await wait("Configuration must request its attachment metadata") { attachmentReads > 0 }
+            try await wait("Configuration must request its Agent directory") { catalogReads > 0 }
+            try await wait("Configuration details must appear while Agent and attachment reads are pending") {
+                element("Start workflow…", in: detailWindow, attributeName: "accessibilityLabel") != nil
+            }
+            if attachmentTimesOut, !timeoutInEditor {
+                attachments.continuation.finish()
+                try await wait("The detail must show the first attachment error") { shows(timeout, in: detailWindow) }
+            }
+            try await click("workflow-edit-configuration", in: detailWindow)
+            try await wait { element("workflow-editor-save", in: detailWindow) != nil }
+            let editor = try #require(detailWindow.sheets.first)
+            if !attachmentTimesOut || timeoutInEditor {
+                #expect(attachmentReads == 1)
+            }
+            #expect(catalogReads == 1)
+            catalog.continuation.finish()
+            if catalogTimesOut {
+                try await wait("The shared directory request must fail during editing") { shows(catalogError, in: editor) }
+            } else {
+                try await wait("The editor must show the Agent after the catalog returns") {
+                    guard let toggle = element("workflow-agents-toggle", in: editor) else { return false }
+                    return (attribute("accessibilityLabel", from: toggle) as? String)?.contains(instance.displayName) == true
+                }
+            }
+            attachments.continuation.finish()
+            if attachmentTimesOut, timeoutInEditor {
+                try await wait("The shared attachment request must fail during editing") { shows(timeout, in: editor) }
+                #expect(attachmentReads == 1)
+            } else {
+                try await click("workflow-initial-task-toggle", in: editor)
+                try await wait("The editor must show the saved attachment name") {
+                    guard let button = element("workflow-remove-attachment-\(attachment.id)", in: editor) else { return false }
+                    return attribute("accessibilityLabel", from: button) as? String == "Remove \(attachment.name)"
+                }
+            }
+            if shouldSave {
+                try await click("workflow-editor-save", in: editor)
+            } else {
+                try await click("Cancel", in: editor, attributeName: "accessibilityLabel")
+            }
+            try await wait { detailWindow.sheets.isEmpty }
+            try await wait("The detail must show the attachment after returning from the editor") {
+                definitionReads == 2 && shows(attachment.name, in: detailWindow)
+            }
+            if catalogTimesOut {
+                try await wait("Returning to the detail must recover the Agent after a directory timeout") {
+                    if catalogReads > 1, let button = element("workflow-open-agent-\(node.id)", in: detailWindow) {
+                        _ = press(button)
+                    }
+                    return openedAgent == instance
+                }
+                #expect(!shows(catalogError, in: detailWindow))
+            }
+            #expect(!shows(timeout, in: detailWindow))
+            #expect(attachmentReads == (attachmentTimesOut ? 2 : 1))
+            #expect(catalogReads == (catalogTimesOut ? 2 : 1))
+            #expect((saved != nil) == shouldSave)
+        }
+
+        @Test(arguments: ["leave", "leave-with-editor", "replace", "rebind", "replace-while-reading", "rebind-while-reading", "replace-found-while-reading"])
+        func configurationCatalogFollowsPresentationAndBindings(mode: String) async throws {
+            _ = NSApplication.shared
+            NSApp.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
+            let hostID = UUID()
+            let agents = ["Original", "Replacement"].enumerated().map { index, name in
+                AgentWorkflowInstance(
+                    hostID: hostID, pluginID: "codex", processID: Int32(42 + index), processRuntimeID: "fixture:\(index)",
+                    workspacePane: .init(serverID: "fixture", sessionID: UUID(), windowID: UUID(), paneID: UUID()),
+                    paneID: "%\(index)", conversationID: "native-\(index)", displayName: name, workingDirectory: "/work",
+                    capabilities: .init(maximumInputBytes: 100_000), readiness: .ready
+                )
+            }
+            var node = AgentWorkflowNode(name: "Develop", agentInstanceID: agents[0].id)
+            var definition = AgentWorkflowDefinition(name: "Saved workflow", hostID: hostID, nodes: [node], edges: [], entryNodeID: node.id)
+            definition.rememberTargets(from: agents)
+            let firstPage = AsyncStream<Void>.makeStream()
+            defer { firstPage.continuation.finish() }
+            let leaving = mode.hasPrefix("leave")
+            let changingWhileReading = mode.hasSuffix("-while-reading")
+            let firstPageHasReplacement = mode == "replace-found-while-reading"
+            var catalogOffsets: [Int] = []
+            var cancelled = false
+            let endpoint = AgentWorkflowEndpoint(id: "fixture", name: "Host", connected: { true }, supported: { true }) { request in
+                var response = AgentWorkflowResponse(hostID: hostID)
+                switch request.operation {
+                case .definition:
+                    response.definition = definition
+                case let .catalog(offset):
+                    catalogOffsets.append(offset)
+                    if leaving || changingWhileReading, catalogOffsets.count == 1 {
+                        for await _ in firstPage.stream { }
+                        cancelled = Task.isCancelled
+                        response.instances = .init(items: firstPageHasReplacement ? agents : [agents[0]], nextOffset: leaving ? 1 : nil)
+                    } else {
+                        response.instances = .init(items: [agents[definition.revision == 1 ? 0 : 1]], nextOffset: nil)
+                    }
+                default:
+                    Issue.record("Unexpected workflow request.")
+                }
+                return response
+            }
+            let navigation = AgentWorkflowNavigation()
+            navigation.isPresented = true
+            var openedAgent: AgentWorkflowInstance?
+            let detail = AgentWorkflowConfigurationView(endpoint: endpoint, hostID: hostID, definitionID: definition.id, openAgent: { openedAgent = $0 }, createAgent: nil)
+            let window = NSWindow(contentRect: .init(x: -10_000, y: -10_000, width: 760, height: 900), styleMask: .titled, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = NSHostingView(rootView: ConfigurationPresentation(detail: detail, navigation: navigation))
+            window.orderBack(nil)
+            defer { window.close() }
+            try await wait { catalogOffsets == [0] }
+            if leaving {
+                if mode == "leave-with-editor" {
+                    try await click("workflow-edit-configuration", in: window)
+                    try await wait { element("workflow-editor-save", in: window) != nil }
+                }
+                navigation.isPresented = false
+                try await wait("Leaving the detail must cancel the pending catalog request") { cancelled }
+                #expect(catalogOffsets == [0])
+                return
+            }
+
+            try await click("workflow-edit-configuration", in: window)
+            try await wait { element("workflow-editor-save", in: window) != nil }
+            let editor = try #require(window.sheets.first)
+            definition.revision = 2
+            definition.initialInput.text = "Revision two"
+            if mode.hasPrefix("replace") {
+                node.agentInstanceID = agents[1].id
+                definition.nodes = [node]
+                definition.rememberTargets(from: agents)
+            } else {
+                definition.agentTargets = [agents[0].id: agents[1].target]
+            }
+            try await click("Cancel", in: editor, attributeName: "accessibilityLabel")
+            try await wait { window.sheets.isEmpty }
+            if changingWhileReading {
+                try await wait("The new configuration must arrive while the old directory request is still pending") {
+                    element(definition.initialInput.text, in: window, attributeName: "accessibilityValue") != nil
+                        || element(definition.initialInput.text, in: window, attributeName: "accessibilityLabel") != nil
+                }
+                #expect(catalogOffsets == [0])
+                firstPage.continuation.finish()
+            }
+            try await wait("The new Agent must open after the configuration reloads") {
+                if let button = element("workflow-open-agent-\(node.id)", in: window) {
+                    _ = press(button)
+                }
+                return openedAgent == agents[1]
+            }
+            #expect(catalogOffsets == (firstPageHasReplacement ? [0] : [0, 0]))
+        }
+
+        @Test(arguments: [false, true], [false, true])
+        func returningToConfigurationOpensRecoveredAgent(missing: Bool, save: Bool) async throws {
+            _ = NSApplication.shared
+            NSApp.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
+            let hostID = UUID()
+            let agent = AgentWorkflowInstance(
+                hostID: hostID, pluginID: "codex", processID: 42, processRuntimeID: "fixture:start",
+                workspacePane: .init(serverID: "fixture", sessionID: UUID(), windowID: UUID(), paneID: UUID()),
+                paneID: "%0", conversationID: "native", displayName: "Developer", workingDirectory: "/work",
+                capabilities: .init(maximumInputBytes: 100_000), readiness: .ready
+            )
+            var unavailable = agent
+            unavailable.readiness = .unavailable
+            let initialCatalog = missing ? [] : [unavailable]
+            let node = AgentWorkflowNode(name: "Develop", agentInstanceID: agent.id)
+            var definition = AgentWorkflowDefinition(name: "Saved workflow", hostID: hostID, nodes: [node], edges: [], entryNodeID: node.id)
+            definition.rememberTargets(from: [agent])
+            var recovered = false
+            var catalogReads = 0
+            var openedAgent: AgentWorkflowInstance?
+            let endpoint = AgentWorkflowEndpoint(id: "fixture", name: "Host", connected: { true }, supported: { true }) { request in
+                var response = AgentWorkflowResponse(hostID: hostID)
+                switch request.operation {
+                case .definition:
+                    response.definition = definition
+                case .catalog:
+                    catalogReads += 1
+                    response.instances = .init(items: recovered ? [agent] : initialCatalog, nextOffset: nil)
+                case let .save(draft, _):
+                    definition = draft
+                    definition.revision += 1
+                    response.definition = definition
+                default:
+                    Issue.record("Unexpected workflow request.")
+                }
+                return response
+            }
+            let window = NSWindow(contentRect: .init(x: -10_000, y: -10_000, width: 760, height: 900), styleMask: .titled, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = NSHostingView(rootView: NavigationStack {
+                AgentWorkflowConfigurationView(endpoint: endpoint, hostID: hostID, definitionID: definition.id, openAgent: { openedAgent = $0 }, createAgent: nil)
+            })
+            window.orderBack(nil)
+            defer { window.close() }
+            try await wait { catalogReads == 1 }
+            let openButton = "workflow-open-agent-\(node.id)"
+            if let button = element(openButton, in: window) {
+                _ = press(button)
+            }
+            #expect(openedAgent == nil)
+            try await click("workflow-edit-configuration", in: window)
+            try await wait { element("workflow-editor-save", in: window) != nil }
+            let editor = try #require(window.sheets.first)
+            #expect(catalogReads == 1)
+            recovered = true
+            if save {
+                try await click("workflow-editor-save", in: editor)
+            } else {
+                try await click("Cancel", in: editor, attributeName: "accessibilityLabel")
+            }
+            try await wait { window.sheets.isEmpty }
+            try await wait("Returning to the detail must open the recovered Agent") {
+                if let button = element(openButton, in: window) {
+                    _ = press(button)
+                }
+                return openedAgent == agent
+            }
+            #expect(catalogReads == 2)
+        }
+
+        private struct ConfigurationPresentation: View {
+            let detail: AgentWorkflowConfigurationView
+            let navigation: AgentWorkflowNavigation
+
+            var body: some View {
+                NavigationStack {
+                    if navigation.isPresented {
+                        detail
+                    }
+                }
+            }
+        }
+
         @Test
         func copiedStepsBindSameNamedAgentsByDirectoryAndPane() async throws {
             _ = NSApplication.shared

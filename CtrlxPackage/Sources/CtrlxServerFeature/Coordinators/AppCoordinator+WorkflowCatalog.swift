@@ -25,13 +25,16 @@ extension AppCoordinator {
     func scanWorkflowInstances(previous: [AgentWorkflowInstance], hostID: UUID) async throws -> [AgentWorkflowObservation] {
         @Dependency(AgentSessionIdentityClient.self) var identities
         guard let registry = pluginRegistry else { throw AgentWorkflowError("Agent plugins are not ready.") }
-        await windowManager.refreshDetectedAgentSessions(processNamesByPlugin: registry.processNamesByPlugin, refreshSnapshot: true)
         guard
-            let detected = await tmuxService.detectAgentPanesIfAvailable(
+            let detected = await windowManager.refreshDetectedAgentSessions(
                 processNamesByPlugin: registry.processNamesByPlugin, refreshSnapshot: true
-            ) else { throw AgentWorkflowInspectionUnavailable() }
+            ) else {
+            try Task.checkCancellation()
+            throw AgentWorkflowInspectionUnavailable()
+        }
 
         var observations: [AgentWorkflowObservation] = []
+        var instances: [AgentWorkflowInstance] = []
         for paneID in detected.keys.sorted() {
             try Task.checkCancellation()
             guard let candidate = detected[paneID] else { continue }
@@ -70,8 +73,26 @@ extension AppCoordinator {
                 workingDirectory: captured.info.currentPath,
                 capabilities: provider.workflowCapabilities, readiness: .unavailable
             )
-            try observations.append(AgentWorkflowObservation(await inspectWorkflowInput(instance)))
+            // This binding and conversation were already verified above.
+            try instances.append(await inspectWorkflowCapabilities(instance, provider: provider))
         }
-        return observations
+        for offset in stride(from: 0, to: instances.count, by: 4) {
+            try await withThrowingTaskGroup(of: AgentWorkflowInstance.self) { group in
+                for instance in instances.dropFirst(offset).prefix(4) {
+                    group.addTask { try await self.inspectWorkflowReadiness(instance) }
+                }
+                for try await live in group {
+                    guard
+                        let pane = windowManager.paneStates[live.paneID],
+                        pane.workspaceIdentity?.isSamePane(as: live.workspacePane) != false,
+                        live.conversationID.isEmpty || pane.claudeSessionID == live.conversationID,
+                        identities.runtimeID(String(live.processID)) == live.processRuntimeID else {
+                        throw AgentWorkflowCatalogChanged()
+                    }
+                    observations.append(AgentWorkflowObservation(live))
+                }
+            }
+        }
+        return observations.sorted { $0.paneID < $1.paneID }
     }
 }

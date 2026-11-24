@@ -487,19 +487,26 @@ struct AgentWorkflowRequestTests {
     func catalogPagesReturnEveryInstanceWithoutRepeating() async throws {
         let f = try await fixture(count: 85)
         defer { try? FileManager.default.removeItem(at: f.root) }
+        let scans = LockIsolated(0)
+        let service = AgentWorkflowService(store: f.store, scan: { _ in
+            scans.withValue { $0 += 1 }
+            return f.instances.map(AgentWorkflowObservation.init)
+        }, schedule: { _ in })
         var offset: Int? = 0
         var ids: [UUID] = []
         while let current = offset {
-            let response = try await f.service.handle(.init(.catalog(offset: current)))
+            let response = try await service.handle(.init(.catalog(offset: current)))
             let page = try #require(response.instances)
             #expect(page.items.count <= AgentWorkflowWire.maximumPageItems)
             ids += page.items.map(\.id)
             offset = page.nextOffset
         }
         #expect(ids == f.instances.map(\.id))
+        #expect(scans.value == 1)
         await #expect(throws: AgentWorkflowError.self) {
-            try await f.service.handle(.init(.catalog(offset: -1)))
+            try await service.handle(.init(.catalog(offset: -1)))
         }
+        #expect(scans.value == 1)
     }
 
     @Test
