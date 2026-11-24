@@ -1,23 +1,16 @@
 import CtrlxCommon
-import CtrlxNetworking
 import SwiftUI
 
 /// Vertical status icon + emoji badge stack used at the leading edge of every
-/// session sidebar row. The icon prioritises a CLI-driven state override, then
-/// a Claude session indicator, then a plain terminal glyph for non-Claude
-/// panes. The emoji badge appears underneath whenever the user has set one.
+/// session sidebar row. The emoji badge appears underneath whenever the user has set one.
 struct SessionStatusBadge: View {
-    let cliSessionState: CLISessionState?
-    let claudeSession: AgentSession?
+    let status: SessionStatusPresentation?
     let customEmoji: String?
 
     var body: some View {
         VStack(spacing: 8) {
-            if let cliSessionState {
-                SessionStatusIndicator(cliState: cliSessionState)
-                    .font(.system(size: 16))
-            } else if let claudeSession {
-                SessionStatusIndicator(session: claudeSession)
+            if let status {
+                SessionStatusIndicator(status: status)
                     .font(.system(size: 16))
             } else {
                 Symbols.terminal.image

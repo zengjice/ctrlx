@@ -545,12 +545,14 @@
         private func sessionRow(_ session: TmuxSession) -> some View {
             let activeWindow = session.activeWindow
             let activePaneInSession = activeWindow?.activePane ?? activeWindow?.panes.first
-            let claudePaneInSession = session.agentPane
-            // CLI-driven state override propagated from the host, if any pane has one set.
-            let cliSessionState = session.cliSessionState
+            let panes = session.windows.flatMap(\.panes)
+            let claudePaneInSession = panes.representativeAgentPane
+            let status = SessionStatusPresentation(
+                agent: claudePaneInSession?.agentSession, cliState: session.cliSessionState, panes: panes
+            )
             // Real terminal progress wins across the session; a working agent
             // supplies an indeterminate fallback when no pane reports progress.
-            let sessionProgress = session.windows.flatMap(\.panes).effectiveProgress
+            let sessionProgress = panes.effectiveProgress
 
             NavigationLink(value: SessionNavigation(
                 sessionName: session.sessionName,
@@ -558,12 +560,12 @@
                 reference: sessionStore.workspaceCatalogsByHost[host.id]?.reference(sessionName: session.sessionName)
             )) {
                 VStack(spacing: 0) {
-                    if let claudePane = claudePaneInSession, let claudeSession = claudePane.agentSession {
+                    if let claudePane = claudePaneInSession, let claudeSession = claudePane.agentSession, let status {
                         SessionRowView(
                             paneId: claudePane.paneId,
                             sessionName: session.sessionName,
                             session: claudeSession,
-                            cliSessionState: cliSessionState,
+                            status: status,
                             isActive: sessionStore.isPaneActive(paneId: claudePane.paneId, hostId: host.id),
                             customDescription: session.customDescription,
                             customEmoji: session.customEmoji,
@@ -574,6 +576,7 @@
                     } else if let pane = activePaneInSession {
                         TerminalRowView(
                             pane: pane,
+                            status: status,
                             customEmoji: session.customEmoji,
                             windowCount: session.windows.count
                         )
@@ -594,7 +597,7 @@
                     }
                 }
             }
-            .accessibilityValue(cliSessionState?.statusLabel ?? claudePaneInSession?.agentSession?.statusLabel ?? "")
+            .accessibilityValue(status?.label ?? "")
             .modifier(SessionWorktreeStatusModifier(
                 repositories: sessionStore.worktreeRepositoriesByHost[host.id] ?? [],
                 paths: Set(session.windows.flatMap(\.panes).compactMap(\.gitWorktreePath))
@@ -806,7 +809,7 @@
         let paneId: String
         let sessionName: String
         let session: AgentSession
-        var cliSessionState: CLISessionState?
+        let status: SessionStatusPresentation
         let isActive: Bool
         var customDescription: String?
         var customEmoji: String?
@@ -826,14 +829,8 @@
         var body: some View {
             HStack(alignment: .top, spacing: 12) {
                 VStack(spacing: 8) {
-                    Group {
-                        if let cliSessionState {
-                            SessionStatusIndicator(cliState: cliSessionState)
-                        } else {
-                            SessionStatusIndicator(session: session)
-                        }
-                    }
-                    .frame(width: 20, height: 20)
+                    SessionStatusIndicator(status: status)
+                        .frame(width: 20, height: 20)
 
                     if let customEmoji {
                         SessionEmojiBadge(emoji: customEmoji)
@@ -863,9 +860,7 @@
                             .lineLimit(1)
                     }
 
-                    // Status label (the plugin model dropped the per-event buffer,
-                    // so the row shows the live status rather than an event feed).
-                    Text(cliSessionState?.statusLabel ?? session.statusLabel)
+                    Text(status.label)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
 
@@ -884,6 +879,7 @@
     /// Row view for plain terminals (no Claude session)
     struct TerminalRowView: View {
         let pane: PaneState
+        let status: SessionStatusPresentation?
         var customEmoji: String?
         var windowCount = 1
 
@@ -912,8 +908,8 @@
             HStack(alignment: .top, spacing: 12) {
                 VStack(spacing: 8) {
                     Group {
-                        if let cliState = pane.cliSessionState {
-                            SessionStatusIndicator(cliState: cliState)
+                        if let status {
+                            SessionStatusIndicator(status: status)
                         } else {
                             // Terminal icon instead of activity indicator
                             Symbols.terminal.image

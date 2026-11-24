@@ -16,6 +16,7 @@ struct IOSDashboardStatus {
     let connectedCount: Int
     let hostCount: Int
     let pendingCount: Int
+    let attentionSymbol: Symbols
     let lowQuotaCount: Int
 
     init(
@@ -35,7 +36,9 @@ struct IOSDashboardStatus {
             self.connection = isConnecting ? .connecting : .disconnected
         }
 
-        self.pendingCount = Self.pendingCount(pairedHostIDs: pairedHostIDs, paneStates: paneStates)
+        let pending = Self.pendingPanes(pairedHostIDs: pairedHostIDs, paneStates: paneStates)
+        self.pendingCount = pending.count
+        self.attentionSymbol = AgentAttention(panes: pending) == .question ? .questionmarkCircle : .bellFill
 
         let hosts = dashboardHosts.filter { pairedHostIDs.contains($0.id) }.map { host in
             var host = host
@@ -53,12 +56,12 @@ struct IOSDashboardStatus {
         guard
             pairedHostIDs.isSubset(of: refreshedHostIDs),
             pairedHostIDs.allSatisfy({ store.hasReceivedState(for: $0) }) else { return nil }
-        return pendingCount(pairedHostIDs: pairedHostIDs, paneStates: store.paneStates)
+        return pendingPanes(pairedHostIDs: pairedHostIDs, paneStates: store.paneStates).count
     }
 
-    private static func pendingCount(pairedHostIDs: Set<String>, paneStates: [PaneKey: PaneState]) -> Int {
+    private static func pendingPanes(pairedHostIDs: Set<String>, paneStates: [PaneKey: PaneState]) -> [PaneState] {
         let panesByHost = Dictionary(grouping: paneStates.filter { pairedHostIDs.contains($0.key.pairId) }, by: \.key.pairId)
-        return panesByHost.values.reduce(0) { $0 + $1.map(\.value).pendingSessionCount }
+        return panesByHost.values.flatMap { $0.map(\.value).pendingAttentionPanes }
     }
 
     var pendingText: String? {
@@ -80,6 +83,7 @@ struct IOSDashboardStatus {
     }
 
     var attentionAccessibilityValue: String {
-        "\(pendingCount) need attention"
+        let count = "\(pendingCount) need attention"
+        return attentionSymbol == .questionmarkCircle ? "\(count) · Questions waiting" : count
     }
 }

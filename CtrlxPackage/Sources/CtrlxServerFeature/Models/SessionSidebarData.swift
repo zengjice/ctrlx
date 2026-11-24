@@ -8,6 +8,7 @@ struct SessionSidebarData: Equatable, Sendable {
     let agentPaneID: String?
     let agent: AgentSession?
     let cliState: CLISessionState?
+    let status: SessionStatusPresentation?
     let customDescription: String?
     let customColor: SessionColor?
     let customEmoji: String?
@@ -28,6 +29,7 @@ struct SessionSidebarData: Equatable, Sendable {
         self.agentPaneID = representative?.paneId
         self.agent = representative?.agentSession
         self.cliState = states.lazy.compactMap(\.cliSessionState).first
+        self.status = SessionStatusPresentation(agent: agent, cliState: cliState, panes: states)
         self.customDescription = primary?.customDescription
         self.customColor = primary?.customColor
         self.customEmoji = primary?.customEmoji
@@ -44,6 +46,7 @@ struct SessionSidebarData: Equatable, Sendable {
         self.agentPaneID = representative?.paneId
         self.agent = representative?.agentSession
         self.cliState = states.lazy.compactMap(\.cliSessionState).first
+        self.status = SessionStatusPresentation(agent: agent, cliState: cliState, panes: states)
         self.customDescription = session.customDescription
         self.customColor = session.customColor
         self.customEmoji = session.customEmoji

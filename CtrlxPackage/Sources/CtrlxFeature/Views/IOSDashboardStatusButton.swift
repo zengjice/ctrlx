@@ -60,7 +60,7 @@
         var body: some View {
             Button(action: openAttention) {
                 HStack(alignment: .top, spacing: 2) {
-                    Symbols.bellFill.image
+                    status.attentionSymbol.image
                         .foregroundStyle(status.pendingCount > 0 ? Color.accentColor : .primary)
                     if let count = status.pendingText {
                         Text(count)

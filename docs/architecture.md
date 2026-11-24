@@ -207,9 +207,11 @@ updates, but verify decoding, capability gating and envelope limits per change.
   the displayed order as a device-local preference; state changes do not re-rank it.
 - The default automatic order is attention → working → idle → plain terminal.
   A session's representative agent is selected across all windows and panes in
-  that same priority order, keeping window/pane order for ties. Icons, status
-  labels, agent metadata and sorting use this representative on Mac and iOS;
-  a manual session-state override still wins. An idle first tab cannot hide a
+  that same priority order, keeping window/pane order for ties. The
+  representative supplies agent metadata and sorting inputs. Session rows on
+  Mac and iOS show a question mark and `Questions` when any pane is waiting for
+  an answer. Otherwise the row uses the representative's status. A manual
+  session-state override takes precedence. An idle first tab cannot hide a
   working or waiting agent in another tab. Terminal progress remains independent:
   any pane's explicit progress wins, otherwise any working agent supplies a bar.
   The iOS Tabs sheet and Mac local/remote window-tab titles apply the same

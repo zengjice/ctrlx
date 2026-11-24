@@ -28,6 +28,34 @@ struct SessionSidebarDataTests {
         #expect(data.customEmoji == "🐈")
     }
 
+    @Test("Host and Viewer rows observe a question from a nonrepresentative pane")
+    func questionOnSiblingPane() {
+        let local = session()
+        let completed = PaneState(paneId: "%1", sessionName: "work", agentSession: .init(
+            paneId: "%1", state: .doneWorking(summary: nil)
+        ))
+        var sibling = PaneState(paneId: "%2", sessionName: "work", paneIndex: 1, agentSession: .init(paneId: "%2"))
+
+        func rows() -> [SessionSidebarData] {
+            let windows = TmuxWindow.groupPanes([completed, sibling])
+            return [
+                .init(session: local, paneStates: ["%1": completed, "%2": sibling], includeTelemetry: false),
+                .init(session: TmuxSession.groupWindows(windows)[0]),
+            ]
+        }
+
+        let completedRows = rows()
+        #expect(completedRows.map(\.status?.label) == ["Done", "Done"])
+        sibling.agentSession?.state = .awaitingReplies(.init(questions: []), requestID: "question")
+        let questionRows = rows()
+        #expect(questionRows.map(\.status?.label) == ["Questions", "Questions"])
+        #expect(questionRows.map(\.agentPaneID) == ["%1", "%1"])
+        #expect(questionRows != completedRows)
+
+        sibling.cliSessionState = .idle
+        #expect(rows().map(\.status?.label) == ["Idle", "Idle"])
+    }
+
     @Test("Unrelated panes and hidden telemetry do not change row inputs")
     func unrelatedChanges() {
         let session = session()
