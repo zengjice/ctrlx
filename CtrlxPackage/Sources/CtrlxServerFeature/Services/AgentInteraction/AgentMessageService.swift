@@ -51,7 +51,7 @@ actor AgentMessageService {
         monitor = AgentReplyMonitor(state: { [weak self] context in
             guard let self else { throw CancellationError() }
             return try await self.replyState(context)
-        }, completed: { [store] context, live, outcome, activity in
+        }, completed: { [store] context, live, outcome, activity, _ in
             try await store.update(context.id) { message in
                 guard
                     message.isPending, message.instance.matchesConversation(live),

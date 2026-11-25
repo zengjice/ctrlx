@@ -100,12 +100,24 @@ extension AppCoordinator {
                 return try await inspectWorkflowInstance(instance, verifyNativeWriter: true)
             }, provider: { [weak self] pluginID in
                 await self?.pluginRegistry?.core(pluginID) as? any AgentWorkflowProviding
+            }, synchronizeIngress: { [weak self] in
+                guard let self else { throw AgentWorkflowInspectionUnavailable() }
+                try await synchronizeAgentIngress()
             })
             agentWorkflowService = AgentWorkflowService(store: store, scan: { [weak self] _ in
                 guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
                 guard let catalog = await self.agentRuntimeCatalog else { throw AgentWorkflowError("The Agent directory is unavailable.") }
                 return try await catalog.snapshot(refresh: true).map(AgentWorkflowObservation.init)
-            }, schedule: { await runner.schedule(runID: $0) }, checkInputOwner: { [weak self] id in try await self?.checkAgentMessageOccupancy(id) }, resumeStep: { try await delivery.resumeStep($0, instance: $1) }, recoverResults: { try await recovery.recover($0) }, models: { [weak self] instance, refresh in
+            }, schedule: { await runner.schedule(runID: $0) }, checkInputOwner: { [weak self] id in try await self?.checkAgentMessageOccupancy(id) }, synchronizeEvents: { [weak self] id in
+                guard let self else { throw AgentWorkflowInspectionUnavailable() }
+                try await synchronizeWorkflowEvents(id, allowingStoppedReplay: true)
+            }, resumeStep: { invocation, instance in
+                try await delivery.resumeStep(invocation, instance: instance)
+            }, recoverResults: { [weak self] original in
+                let recovered = try await recovery.recover(original)
+                await self?.agentWorkflowEvents?.discardRecoveredSubmissions(in: recovered)
+                return recovered
+            }, models: { [weak self] instance, refresh in
                 guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
                 _ = try await inspectWorkflowInstance(instance)
                 let snapshot = try await handleAgentModels(.init(workspacePane: instance.workspacePane, refresh: refresh), paneID: instance.paneID)
@@ -130,6 +142,9 @@ extension AppCoordinator {
             agentWorkflowCompletion = AgentWorkflowCompletionMonitor(store: store, runner: runner, inspect: { [weak self] instance in
                 guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
                 return try await inspectWorkflowInstance(instance, verifyNativeWriter: true)
+            }, synchronizeIngress: { [weak self] in
+                guard let self else { throw AgentWorkflowInspectionUnavailable() }
+                try await synchronizeAgentIngress()
             }, onFailure: { workflowLogger.error("\($0)") })
             tmuxService.workflowInputGate = gate
             controlClientManager.workflowInputGate = gate
@@ -181,7 +196,7 @@ extension AppCoordinator {
                 try await agentWorkflowEvents?.receiveUnconfirmedSubmission(event, peer: peer)
                 return
             }
-            if event.workflow?.kind != .submitted, await agentWorkflowEvents?.bufferPendingCompletion(event, peer: peer) == true {
+            if event.workflow?.kind != .submitted, try await agentWorkflowEvents?.bufferPendingCompletion(event, peer: peer) == true {
                 return
             }
             if

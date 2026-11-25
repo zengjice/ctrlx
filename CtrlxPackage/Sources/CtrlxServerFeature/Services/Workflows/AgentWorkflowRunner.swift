@@ -59,17 +59,21 @@ actor AgentWorkflowRunner {
         acknowledgements.removeValue(forKey: invocationID)?.cancel()
     }
 
-    func succeeded(runID: UUID, result: AgentWorkflowResult, instance: AgentWorkflowInstance) async throws {
-        let timestamp = now()
-        try await store.update(runID: runID) {
-            try $0.succeed(result, instance: instance, now: timestamp)
-        }
+    func succeeded(
+        runID: UUID, result: AgentWorkflowResult, instance: AgentWorkflowInstance,
+        nativeEnd: AgentWorkflowTranscriptFile.VerifiedRecoveryEnd? = nil
+    ) async throws {
+        try await store.recordVerifiedAnswer(runID: runID, result: result, instance: instance, nativeEnd: nativeEnd, now: now())
         acknowledgements.removeValue(forKey: result.invocationID)?.cancel()
         schedule(runID: runID)
     }
 
-    func failed(runID: UUID, invocationID: UUID, instance: AgentWorkflowInstance, nativeTurnID: String, reason: String) async throws {
+    func failed(
+        runID: UUID, invocationID: UUID, instance: AgentWorkflowInstance, nativeTurnID: String, reason: String,
+        nativeEnd: AgentWorkflowTranscriptFile.VerifiedRecoveryEnd? = nil
+    ) async throws {
         try await store.update(runID: runID) {
+            try nativeEnd?.validate()
             try $0.fail(invocationID: invocationID, instance: instance, nativeTurnID: nativeTurnID, reason: reason)
         }
         acknowledgements.removeValue(forKey: invocationID)?.cancel()

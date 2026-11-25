@@ -911,7 +911,7 @@ struct AgentMessageRecoveryTests {
         let snapshot = LockIsolated<AgentActivitySnapshot?>(nil)
         let monitor = AgentReplyMonitor(
             state: { context in .init(isPending: true, instance: context.instance) },
-            completed: { context, _, outcome, activity in
+            completed: { context, _, outcome, activity, _ in
                 guard case let .succeeded(answer) = outcome else {
                     Issue.record("Expected successful completion")
                     return
@@ -1167,7 +1167,7 @@ struct AgentMessageRecoveryTests {
         try await store.update(f.message.id) { $0.recordNativeFailure(receipt) }
         let monitor = AgentReplyMonitor(
             state: { _ in .init(isPending: false, instance: nil) },
-            completed: { _, _, _, _ in }, waiting: { _, _, _ in },
+            completed: { _, _, _, _, _ in }, waiting: { _, _, _ in },
             inspect: { $0 }, activityChanged: { _, _ in nil },
             onFailure: { Issue.record(Comment(rawValue: $0)) }
         )
@@ -1226,7 +1226,7 @@ struct AgentMessageRecoveryTests {
         let failures = LockIsolated<[String]>([])
         let monitor = AgentReplyMonitor(
             state: { context in .init(isPending: true, instance: context.instance) },
-            completed: { _, _, _, _ in Issue.record("No completion was written") },
+            completed: { _, _, _, _, _ in Issue.record("No completion was written") },
             waiting: { _, reason, _ in Issue.record(Comment(rawValue: reason)) },
             inspect: { $0 },
             activityChanged: { _, activity in
@@ -1374,7 +1374,7 @@ struct AgentMessageRecoveryTests {
         await f.support.interaction.shutdown()
         try appendCompletion(f)
         let completed = LockIsolated<[AgentWorkflowTranscriptOutcome]>([])
-        let monitor = AgentReplyMonitor(state: { context in .init(isPending: true, instance: context.instance) }, completed: { _, _, outcome, _ in
+        let monitor = AgentReplyMonitor(state: { context in .init(isPending: true, instance: context.instance) }, completed: { _, _, outcome, _, _ in
             completed.withValue { $0.append(outcome) }
         }, waiting: { _, reason, _ in Issue.record(Comment(rawValue: reason)) }, inspect: { $0 }, verificationTimeout: .milliseconds(100), onFailure: { Issue.record(Comment(rawValue: $0)) })
         let provider = try #require(await f.support.replyProvider(plugin))
@@ -1404,7 +1404,7 @@ struct AgentMessageRecoveryTests {
         let recovering = LockIsolated(false)
         let release = LockIsolated(false)
         let completed = LockIsolated<[AgentWorkflowTranscriptOutcome]>([])
-        let monitor = AgentReplyMonitor(state: { context in .init(isPending: true, instance: context.instance) }, completed: { context, _, outcome, _ in
+        let monitor = AgentReplyMonitor(state: { context in .init(isPending: true, instance: context.instance) }, completed: { context, _, outcome, _, _ in
             if context.candidate.kind == .submitted {
                 recovering.setValue(true)
                 for _ in 0..<500 {

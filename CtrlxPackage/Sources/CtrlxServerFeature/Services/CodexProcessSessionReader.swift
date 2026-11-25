@@ -302,6 +302,12 @@ actor CodexProcessSessionReader {
     private static func filenameID(_ path: String) -> UUID? {
         let name = URL(fileURLWithPath: path).lastPathComponent
         guard name.hasPrefix("rollout-"), name.hasSuffix(".jsonl") else { return nil }
-        return UUID(uuidString: String(name.dropLast(6).suffix(36)))
+        let stem = name.dropLast(6)
+        // A resumed Codex thread adds the rollout UUID after the thread UUID.
+        if let separator = stem.firstIndex(of: "_") {
+            guard UUID(uuidString: String(stem[stem.index(after: separator)...])) != nil else { return nil }
+            return UUID(uuidString: String(stem[..<separator].suffix(36)))
+        }
+        return UUID(uuidString: String(stem.suffix(36)))
     }
 }

@@ -11,6 +11,7 @@ actor AgentWorkflowCompletionMonitor {
         runner: AgentWorkflowRunner,
         inspect: @escaping @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance,
         verificationTimeout: Duration = .seconds(60),
+        synchronizeIngress: @escaping @Sendable () async throws -> Void = { },
         onFailure: @escaping @Sendable (String) -> Void
     ) {
         self.monitor = AgentReplyMonitor(state: { context in
@@ -28,33 +29,44 @@ actor AgentWorkflowCompletionMonitor {
             // A stale catalog conversation does not replace the accepted turn.
             // inspect still verifies its live process and native conversation.
             return AgentReplyState(isPending: pending, instance: current)
-        }, completed: { context, live, outcome, _ in
-            guard let run = try await store.snapshot().runs.first(where: { $0.invocations.contains { $0.id == context.id } }) else { return }
+        }, completed: { context, live, outcome, _, nativeEnd in
+            let archive = try await store.snapshot()
+            guard let run = archive.runs.first(where: { $0.invocations.contains { $0.id == context.id } }) else { return }
+            if let startedAt = context.hookStartedAt, archive.pendingReceipts?[context.id]?.completionHookStartedAt != startedAt {
+                return
+            }
             switch outcome {
             case let .succeeded(answer):
                 try await runner.succeeded(runID: run.id, result: .init(
                     invocationID: context.id, nativeTurnID: context.candidate.nativeTurnID,
                     text: answer, completedAt: Date()
-                ), instance: live)
+                ), instance: live, nativeEnd: nativeEnd)
             case let .failed(reason):
                 try await runner.failed(
                     runID: run.id,
                     invocationID: context.id,
                     instance: live,
                     nativeTurnID: context.candidate.nativeTurnID,
-                    reason: reason
+                    reason: reason,
+                    nativeEnd: nativeEnd
                 )
             }
         }, waiting: { context, reason, temporary in
             guard let run = try await store.snapshot().runs.first(where: { $0.invocations.contains { $0.id == context.id } }) else { return }
-            try await store.update(runID: run.id) {
-                if temporary {
+            if temporary {
+                try await store.update(runID: run.id) {
                     $0.waitForAgent(context.instance, reason: reason)
-                } else {
-                    $0.pause(reason: reason)
                 }
+            } else {
+                try await store.pauseForUnverifiedResult(
+                    runID: run.id, invocationID: context.id,
+                    turn: .init(nativeTurnID: context.candidate.nativeTurnID, transcriptPath: context.candidate.transcriptPath),
+                    reason: reason
+                )
             }
-        }, inspect: inspect, verificationTimeout: verificationTimeout, onFailure: onFailure)
+        }, inspect: inspect, verificationTimeout: verificationTimeout, synchronizeCompletion: synchronizeIngress, verifyFinalTranscript: true, matchesAnswer: { event, answer in
+            event.kind != .stopCandidate || event.hasPendingWork || event.corroboratesAnswer(answer)
+        }, onFailure: onFailure)
     }
 
     func verify(_ context: AgentWorkflowTurnContext, provider: any AgentWorkflowProviding) async {
@@ -62,7 +74,8 @@ actor AgentWorkflowCompletionMonitor {
             id: context.invocation.id,
             instance: context.instance,
             prompt: context.invocation.stepTurn?.prompt ?? context.invocation.submissionText(pluginID: context.instance.pluginID),
-            candidate: context.candidate
+            candidate: context.candidate,
+            hookStartedAt: context.hookStartedAt, previousStop: context.previousStop
         ), provider: provider)
     }
 

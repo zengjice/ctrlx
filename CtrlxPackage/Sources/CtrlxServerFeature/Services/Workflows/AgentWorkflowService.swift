@@ -8,6 +8,7 @@ actor AgentWorkflowService {
     private let scan: @Sendable ([AgentWorkflowInstance]) async throws -> [AgentWorkflowObservation]
     private let checkInputOwner: @Sendable (AgentID) async throws -> Void
     private let schedule: @Sendable (UUID) async -> Void
+    private let synchronizeEvents: @Sendable (UUID) async throws -> Void
     private let resumeStep: @Sendable (AgentWorkflowInvocation, AgentWorkflowInstance) async throws -> Void
     private let recoverResults: @Sendable (AgentWorkflowRun) async throws -> AgentWorkflowRun
     private let now: @Sendable () -> Date
@@ -23,6 +24,7 @@ actor AgentWorkflowService {
         scan: @escaping @Sendable ([AgentWorkflowInstance]) async throws -> [AgentWorkflowObservation],
         schedule: @escaping @Sendable (UUID) async -> Void,
         checkInputOwner: @escaping @Sendable (AgentID) async throws -> Void = { _ in },
+        synchronizeEvents: @escaping @Sendable (UUID) async throws -> Void = { _ in },
         resumeStep: @escaping @Sendable (AgentWorkflowInvocation, AgentWorkflowInstance) async throws -> Void = { _, _ in throw AgentWorkflowError("Workflow continuation input is unavailable.") },
         recoverResults: @escaping @Sendable (AgentWorkflowRun) async throws -> AgentWorkflowRun = { $0 },
         models: @escaping @Sendable (AgentWorkflowInstance, Bool) async throws -> AgentModelSnapshot = { _, _ in throw AgentWorkflowError("This Agent does not support model selection.") },
@@ -32,6 +34,7 @@ actor AgentWorkflowService {
         self.store = store
         self.scan = scan
         self.schedule = schedule
+        self.synchronizeEvents = synchronizeEvents
         self.checkInputOwner = checkInputOwner
         self.resumeStep = resumeStep
         self.recoverResults = recoverResults
@@ -105,8 +108,10 @@ actor AgentWorkflowService {
                 // or a final hook may be missing. Idle is never success evidence.
                 try await store.update(runID: run.id) { execution in
                     guard !execution.run.hasAskedQuestion(for: bound) else { return }
-                    guard execution.run.invocations.contains(where: { $0.id == invocation.id && $0.status == .running }) else { return }
-                    execution.pause(reason: "\(bound.displayName) returned to its input without a verified final result. Check its terminal; this task will not be resent automatically.")
+                    execution.waitForResult(
+                        invocationID: invocation.id, turnID: invocation.resultTurnID,
+                        reason: "\(bound.displayName) returned to its input without a verified final result. Check its terminal; this task will not be resent automatically."
+                    )
                 }
             }
         }
@@ -199,7 +204,7 @@ actor AgentWorkflowService {
 
     func pause(runID: UUID, expectedRevision: Int) async throws -> AgentWorkflowRun {
         try await store.update(runID: runID, expectedRevision: expectedRevision) {
-            $0.pause(reason: "Paused by a workflow operator. New tasks will not be sent.")
+            $0.pause(reason: "Paused by a workflow operator. New tasks will not be sent.", operatorInitiated: true)
         }
     }
 
@@ -207,33 +212,70 @@ actor AgentWorkflowService {
         guard let original = try await store.snapshot().runs.first(where: { $0.id == runID }), original.revision == expectedRevision else {
             throw AgentWorkflowError("The workflow changed. Reload before continuing.")
         }
-        let instances = original.instances.isEmpty ? [] : try await refreshInstancesCatalog()
-        let recovered = try await recoverResults(original)
-        let timestamp = now()
-        let run = try await store.update(runID: runID, expectedRevision: recovered.revision) {
-            try $0.resume(instances: instances, roundLimit: roundLimit, now: timestamp)
+        if !original.instances.isEmpty {
+            try await refreshInstancesCatalog()
         }
+        let recovered = try await recoverResults(original)
+        let alreadyFailed = Set(original.invocations.lazy.filter { $0.status == .failed }.map(\.id))
+        if recovered.invocations.contains(where: { $0.status == .failed && !alreadyFailed.contains($0.id) }) {
+            return recovered
+        }
+        for invocation in recovered.invocations where invocation.round == recovered.round
+            && [.running, .uncertain, .awaitingAcceptance].contains(invocation.status) {
+            try await synchronizeEvents(invocation.id)
+        }
+        let preflight = try await store.snapshot()
+        guard let verified = preflight.runs.first(where: { $0.id == runID }) else {
+            throw AgentWorkflowError("The workflow changed. Reload before continuing.")
+        }
+        if verified.invocations.contains(where: { $0.status == .failed && !alreadyFailed.contains($0.id) }) {
+            return verified
+        }
+        var comparable = verified
+        comparable.revision = recovered.revision
+        comparable.instances = recovered.instances
+        comparable.invocations = recovered.invocations
+        guard comparable == recovered, verified.invocations.map(\.id) == recovered.invocations.map(\.id) else {
+            throw AgentWorkflowError("The workflow changed. Reload before continuing.")
+        }
+        let instances = preflight.instances
+        let run = try await store.resume(runID: runID, expectedRevision: verified.revision, roundLimit: roundLimit, now: now())
+        guard run.status != .paused else { return run }
         for invocation in run.invocations where invocation.status == .running && invocation.round == run.round {
             guard
                 run.status == .running,
                 let turn = invocation.stepTurn, !turn.completionRequested,
-                invocation.continuationTurnID != turn.id,
                 let node = run.definition.nodes.first(where: { $0.id == invocation.nodeID }), node.completion == .explicit,
-                let instance = run.definition.instance(for: node.agentInstanceID, in: instances), instance.readiness == .ready else { continue }
-            do { try await resumeStep(invocation, instance) }
-            catch {
-                try await store.update(runID: runID) {
+                let instance = run.definition.instance(for: node.agentInstanceID, in: instances) else { continue }
+            var attemptedTurn = turn
+            var agentName = instance.displayName
+            do {
+                let latest = try await store.snapshot()
+                guard
+                    let current = latest.runs.first(where: { $0.id == runID }), current.status == .running,
+                    current.controlRevision == run.controlRevision,
+                    let call = current.invocations.first(where: { $0.id == invocation.id }),
+                    call.status == .running, call.round == current.round,
+                    let turn = call.stepTurn, !turn.completionRequested, call.continuationTurnID != turn.id,
+                    let agent = current.definition.instance(for: node.agentInstanceID, in: latest.instances), agent.readiness == .ready else { continue }
+                attemptedTurn = turn
+                agentName = agent.displayName
+                try await resumeStep(call, agent)
+            } catch {
+                try await store.update(runID: runID) { [attemptedTurn, agentName] in
                     guard
-                        $0.run.status == .running,
+                        $0.run.status == .running, $0.run.controlRevision == run.controlRevision,
                         let current = $0.run.invocations.first(where: { $0.id == invocation.id }),
-                        current.status == .running, current.stepTurn?.id == turn.id,
-                        current.stepTurn?.transcriptPath == turn.transcriptPath,
+                        current.status == .running, current.stepTurn?.id == attemptedTurn.id,
+                        current.stepTurn?.transcriptPath == attemptedTurn.transcriptPath,
                         current.stepTurn?.completionRequested == false else { return }
-                    $0.pause(reason: "Could not confirm the continuation for \(instance.displayName). Check its terminal: \(error.localizedDescription)")
+                    $0.pause(reason: "Could not confirm the continuation for \(agentName). Check its terminal: \(error.localizedDescription)")
                 }
                 break
             }
         }
+        let current = try await store.snapshot().runs.first(where: { $0.id == runID }) ?? run
+        guard current.controlRevision == run.controlRevision else { return current }
         await schedule(run.id)
         return try await store.snapshot().runs.first(where: { $0.id == runID }) ?? run
     }

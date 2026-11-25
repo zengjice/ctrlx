@@ -58,8 +58,132 @@ extension AgentWorkflowObservation {
     }
 }
 
+struct AgentWorkflowContinuationFailure: Codable, Equatable, Sendable {
+    let writer: AgentWorkflowInstance
+    let submission: PluginWorkflowEvent
+    let submittedAt: Date?
+    let failure: PluginWorkflowEvent
+    let failedAt: Date?
+
+    var receipt: AgentWorkflowContinuationReceipt {
+        .init(writer: writer, submission: submission, submittedAt: submittedAt, completion: failure, completedAt: failedAt)
+    }
+}
+
+struct AgentWorkflowContinuationReceipt: Codable, Equatable, Sendable {
+    let writer: AgentWorkflowInstance
+    let submission: PluginWorkflowEvent
+    let submittedAt: Date?
+    var completion: PluginWorkflowEvent?
+    var completedAt: Date?
+    var isRetired: Bool?
+    var nativeStart: AgentWorkflowTranscriptFile.SubmissionBoundary?
+
+    func identifies(_ other: Self) -> Bool {
+        writer.matchesBinding(other.writer) && submission == other.submission && submittedAt == other.submittedAt
+    }
+}
+
+struct AgentWorkflowContinuationCompletion: Codable, Equatable, Sendable {
+    let writer: AgentWorkflowInstance
+    let event: PluginWorkflowEvent
+    let startedAt: Date?
+}
+
+struct AgentWorkflowPendingReceipt: Codable, Equatable, Sendable {
+    let conversationID: String
+    let turn: PluginWorkflowTurn
+    var submittedHookStartedAt: Date?
+    var backgroundTurn: PluginWorkflowTurn?
+    var completion: PluginWorkflowEvent?
+    var stopBoundary: AgentWorkflowTranscriptFile.StopBoundary?
+    var resumedHookStartedAt: Date?
+    var completionHookStartedAt: Date?
+    var needsResultRecovery: Bool?
+    var continuationFailure: AgentWorkflowContinuationFailure?
+    var continuations: [AgentWorkflowContinuationReceipt]?
+    var continuationCompletions: [AgentWorkflowContinuationCompletion]?
+    var selectedSubmission: AgentWorkflowContinuationReceipt?
+
+    mutating func mergeContinuations(_ entries: [AgentWorkflowContinuationReceipt], completions: [AgentWorkflowContinuationCompletion]) {
+        var saved = continuations ?? []
+        var events = continuationCompletions ?? []
+        for entry in saved + entries {
+            if let completion = entry.completion {
+                let event = AgentWorkflowContinuationCompletion(writer: entry.writer, event: completion, startedAt: entry.completedAt)
+                if !events.contains(event) {
+                    events.append(event)
+                }
+            }
+        }
+        for event in completions where !events.contains(event) {
+            events.append(event)
+        }
+        for entry in entries where !saved.contains(where: { $0.identifies(entry) }) {
+            saved.append(entry)
+        }
+        if saved.allSatisfy({ $0.submittedAt != nil }) {
+            saved.sort { ($0.submittedAt ?? .distantPast) < ($1.submittedAt ?? .distantPast) }
+        }
+        for index in saved.indices {
+            let entry = saved[index]
+            let owned = events.filter { event in
+                guard
+                    event.writer.matchesBinding(entry.writer),
+                    AgentReplyEvidence.turn(event.event, id: entry.submission.nativeTurnID, path: entry.submission.transcriptPath) else { return false }
+                let candidates = saved.indices.filter { candidate in
+                    let receipt = saved[candidate]
+                    guard
+                        receipt.writer.matchesBinding(event.writer),
+                        AgentReplyEvidence.turn(event.event, id: receipt.submission.nativeTurnID, path: receipt.submission.transcriptPath) else { return false }
+                    guard let start = event.startedAt, let submittedAt = receipt.submittedAt else { return true }
+                    return submittedAt < start
+                }
+                if
+                    let latest = candidates.filter({ saved[$0].submittedAt != nil }).max(by: {
+                        (saved[$0].submittedAt ?? .distantPast) < (saved[$1].submittedAt ?? .distantPast)
+                    }) {
+                    return latest == index
+                }
+                return candidates.last == index
+            }
+            // Failure wins within one submission regardless of hook delivery or launch order.
+            let failures = owned.filter { $0.event.kind == .failed }
+            let candidates = failures.isEmpty ? owned : failures
+            let selected = candidates.max {
+                if $0.startedAt != $1.startedAt {
+                    return ($0.startedAt ?? .distantPast) < ($1.startedAt ?? .distantPast)
+                }
+                return $0.event.text < $1.event.text
+            }
+            if
+                saved[index].completion != selected?.event || saved[index].completedAt != selected?.startedAt,
+                selected?.event.kind == .failed || selected?.event.hasPendingWork == true {
+                saved[index].isRetired = nil
+            }
+            saved[index].completion = selected?.event
+            saved[index].completedAt = selected?.startedAt
+        }
+        continuations = saved.isEmpty ? nil : saved
+        continuationCompletions = events.isEmpty ? nil : events
+    }
+
+    func completion(for turn: PluginWorkflowTurn) -> PluginWorkflowEvent? {
+        guard let completion, AgentReplyEvidence.turn(completion, id: turn.nativeTurnID, path: turn.transcriptPath) else { return nil }
+        return completion
+    }
+}
+
+extension PluginWorkflowEvent {
+    func corroboratesAnswer(_ answer: String) -> Bool {
+        let candidate = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return kind == .stopCandidate && !hasPendingWork && !candidate.isEmpty
+            && candidate == answer.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 struct AgentWorkflowArchive: Codable, Equatable, Sendable {
-    static let currentSchemaVersion = 9
+    static let currentSchemaVersion = 11
     var schemaVersion = Self.currentSchemaVersion
     let hostID: UUID
     var definitions: [AgentWorkflowDefinition] = []
@@ -68,11 +192,33 @@ struct AgentWorkflowArchive: Codable, Equatable, Sendable {
     var attachments: [AgentWorkflowAttachment]?
     var bridgeEvidence: [AgentWorkflowBridgeEvidence]?
     var retainedRunIDs: [UUID]?
+    var pendingReceipts: [UUID: AgentWorkflowPendingReceipt]?
+    var earlyCompletions: [UUID: [AgentWorkflowContinuationCompletion]]?
 
     var instancesForNames: [AgentWorkflowInstance] {
         // Current locations win; history supplies names only for absent Agents.
         var seen = Set(instances.map(\.agentID))
         return instances + runs.reversed().flatMap(\.instances).filter { seen.insert($0.agentID).inserted }
+    }
+
+    func pendingFailure(for invocation: AgentWorkflowInvocation) -> PluginWorkflowEvent? {
+        guard let receipt = pendingReceipts?[invocation.id] else { return nil }
+        let turn: PluginWorkflowTurn
+        if invocation.nativeTurnID == nil {
+            turn = receipt.turn
+        } else {
+            guard let id = invocation.resultTurnID, let path = invocation.resultTranscriptPath else { return nil }
+            turn = .init(nativeTurnID: id, transcriptPath: path)
+        }
+        guard let event = receipt.completion(for: turn), event.kind == .failed else { return nil }
+        return event
+    }
+
+    func pendingFailure(in run: AgentWorkflowRun) -> PluginWorkflowEvent? {
+        run.invocations.lazy.filter { $0.round == run.round }.compactMap {
+            pendingFailure(for: $0) ?? pendingReceipts?[$0.id]?.continuationFailure?.failure
+                ?? pendingReceipts?[$0.id]?.continuations?.first(where: { $0.completion?.kind == .failed })?.completion
+        }.first
     }
 }
 
@@ -123,12 +269,349 @@ actor AgentWorkflowStore {
         try load()
     }
 
+    /// Called after the router has matched an authenticated peer and the exact delivery text.
+    func recordPendingReceipt(_ context: AgentWorkflowTurnContext) throws -> Bool {
+        var updated = try load()
+        let id = context.invocation.id
+        guard
+            let run = updated.runs.first(where: { $0.id == context.runID }),
+            let invocation = run.invocations.first(where: { $0.id == id }),
+            invocation.round == run.round, invocation.nativeTurnID == nil,
+            [.writing, .awaitingAcceptance, .uncertain].contains(invocation.status),
+            let bound = run.instance(for: invocation), bound.matchesProcess(context.instance),
+            AgentReplyEvidence.submission(context.candidate, prompt: invocation.submissionText(pluginID: bound.pluginID), acceptedTurnID: nil),
+            !context.instance.conversationID.isEmpty, !context.candidate.nativeTurnID.isEmpty,
+            !context.candidate.transcriptPath.isEmpty else { return false }
+        var receipt = AgentWorkflowPendingReceipt(
+            conversationID: context.instance.conversationID,
+            turn: .init(nativeTurnID: context.candidate.nativeTurnID, transcriptPath: context.candidate.transcriptPath),
+            submittedHookStartedAt: context.hookStartedAt
+        )
+        if let previous = updated.pendingReceipts?[id] {
+            return previous.turn == receipt.turn && previous.conversationID == receipt.conversationID
+        }
+        let first = AgentWorkflowContinuationReceipt(writer: context.instance, submission: context.candidate, submittedAt: context.hookStartedAt)
+        receipt.mergeContinuations([first], completions: updated.earlyCompletions?[id] ?? [])
+        if let selected = receipt.continuations?.first {
+            receipt.completion = selected.completion
+            receipt.completionHookStartedAt = selected.completedAt
+            receipt.backgroundTurn = selected.completion?.hasPendingWork == true ? receipt.turn : nil
+        }
+        receipt.continuations = nil
+        updated.earlyCompletions?.removeValue(forKey: id)
+        var receipts = updated.pendingReceipts ?? [:]
+        receipts[id] = receipt
+        updated.pendingReceipts = receipts
+        try commit(updated)
+        return true
+    }
+
+    enum CompletionEvidence {
+        case ignored
+        case recorded(previousStop: AgentWorkflowTranscriptFile.StopBoundary?)
+    }
+
+    func recordContinuationFailure(_ evidence: AgentWorkflowContinuationFailure, runID: UUID, invocationID: UUID) throws {
+        var updated = try load()
+        guard
+            let run = updated.runs.first(where: { $0.id == runID }),
+            let invocation = run.invocations.first(where: { $0.id == invocationID }),
+            invocation.round == run.round, [.running, .uncertain].contains(invocation.status),
+            let id = invocation.nativeTurnID, let path = invocation.nativeTranscriptPath,
+            let bound = run.instance(for: invocation), bound.agentID == evidence.writer.agentID,
+            bound.pluginID == evidence.writer.pluginID, bound.workspacePane.isSamePane(as: evidence.writer.workspacePane),
+            evidence.submission.kind == .submitted, evidence.failure.kind == .failed,
+            AgentReplyEvidence.turn(evidence.failure, id: evidence.submission.nativeTurnID, path: evidence.submission.transcriptPath) else { return }
+        if let submittedAt = evidence.submittedAt, let failedAt = evidence.failedAt, failedAt <= submittedAt {
+            return
+        }
+        var receipts = updated.pendingReceipts ?? [:]
+        var receipt = receipts[invocationID] ?? .init(conversationID: bound.conversationID, turn: .init(nativeTurnID: id, transcriptPath: path))
+        guard receipt.continuationFailure == nil else { return }
+        if
+            let resumedAt = receipt.resumedHookStartedAt,
+            AgentReplyEvidence.turn(evidence.submission, id: invocation.resultTurnID, path: invocation.resultTranscriptPath) {
+            guard let submittedAt = evidence.submittedAt, submittedAt >= resumedAt else { return }
+        }
+        receipt.continuationFailure = evidence
+        receipts[invocationID] = receipt
+        updated.pendingReceipts = receipts
+        revokeWrites(in: run)
+        try commit(updated)
+    }
+
+    func saveContinuations(_ entries: [AgentWorkflowContinuationReceipt], completions: [AgentWorkflowContinuationCompletion] = [], runID: UUID, invocationID: UUID) throws {
+        guard !entries.isEmpty || !completions.isEmpty else { return }
+        var updated = try load()
+        guard
+            let run = updated.runs.first(where: { $0.id == runID }),
+            let call = run.invocations.first(where: { $0.id == invocationID }),
+            [.writing, .awaitingAcceptance, .running, .uncertain].contains(call.status) else { return }
+        let initial: AgentWorkflowPendingReceipt
+        if let existing = updated.pendingReceipts?[invocationID] {
+            initial = existing
+        } else {
+            guard let id = call.nativeTurnID, let path = call.nativeTranscriptPath, let bound = run.instance(for: call) else {
+                var events = updated.earlyCompletions?[invocationID] ?? []
+                for event in completions where !events.contains(event) {
+                    events.append(event)
+                }
+                var early = updated.earlyCompletions ?? [:]
+                early[invocationID] = events
+                updated.earlyCompletions = early
+                try commit(updated)
+                return
+            }
+            initial = .init(conversationID: bound.conversationID, turn: .init(nativeTurnID: id, transcriptPath: path))
+        }
+        var receipt = initial
+        if
+            let bound = run.instance(for: call),
+            let turn = call.stepTurn,
+            entries.contains(where: { entry in
+                guard let selected = receipt.selectedSubmission else { return !entry.writer.matchesProcess(bound) }
+                return !selected.identifies(entry)
+            }) {
+            var selected = receipt.selectedSubmission ?? .init(
+                writer: bound,
+                submission: .init(kind: .submitted, nativeTurnID: turn.id, transcriptPath: turn.transcriptPath, text: turn.prompt),
+                submittedAt: receipt.resumedHookStartedAt ?? (turn.id == call.nativeTurnID ? receipt.submittedHookStartedAt : nil)
+            )
+            selected.completion = receipt.completion(for: .init(nativeTurnID: turn.id, transcriptPath: turn.transcriptPath))
+            selected.completedAt = receipt.completionHookStartedAt
+            selected.isRetired = entries.allSatisfy { $0.writer.matchesProcess(bound) } ? true : nil
+            if receipt.continuations?.contains(where: { $0.identifies(selected) }) != true {
+                receipt.mergeContinuations([selected], completions: [])
+            }
+        }
+        receipt.mergeContinuations(entries, completions: completions)
+        var receipts = updated.pendingReceipts ?? [:]
+        receipts[invocationID] = receipt
+        updated.pendingReceipts = receipts
+        if receipt.continuations?.contains(where: { $0.completion?.kind == .failed }) == true {
+            revokeWrites(in: run)
+        }
+        try commit(updated)
+    }
+
+    func removeContinuations(_ entries: [AgentWorkflowContinuationReceipt], invocationID: UUID, keepingAccepted: Bool = false) throws {
+        var updated = try load()
+        guard var receipt = updated.pendingReceipts?[invocationID] else { return }
+        let remaining = (receipt.continuations ?? []).filter { saved in
+            (keepingAccepted && saved.isRetired == true) || !entries.contains(where: { $0.identifies(saved) })
+        }
+        receipt.continuations = remaining.isEmpty ? nil : remaining
+        if let failure = receipt.continuationFailure, entries.contains(failure.receipt) {
+            receipt.continuationFailure = nil
+        }
+        updated.pendingReceipts?[invocationID] = receipt
+        try commit(updated)
+    }
+
+    func retireContinuation(
+        _ entry: AgentWorkflowContinuationReceipt,
+        invocationID: UUID,
+        nativeEnd: AgentWorkflowTranscriptFile.VerifiedRecoveryEnd
+    ) throws {
+        var archive = try load()
+        guard let index = archive.pendingReceipts?[invocationID]?.continuations?.firstIndex(of: entry) else {
+            throw AgentWorkflowError("The continuation changed while verifying its completion.")
+        }
+        try nativeEnd.validate()
+        archive.pendingReceipts?[invocationID]?.continuations?[index].isRetired = true
+        try commit(archive)
+    }
+
+    func rememberSubmission(_ proof: AgentWorkflowTranscriptFile.VerifiedSubmission, invocationID: UUID) throws {
+        var archive = try load()
+        guard
+            let selected = archive.pendingReceipts?[invocationID]?.selectedSubmission,
+            selected.nativeStart == nil,
+            AgentReplyEvidence.turn(selected.submission, id: proof.turn.nativeTurnID, path: proof.turn.transcriptPath),
+            proof.isCurrent else { return }
+        archive.pendingReceipts?[invocationID]?.selectedSubmission?.nativeStart = proof.nativeStart
+        try commit(archive)
+    }
+
+    func failContinuation(
+        _ entry: AgentWorkflowContinuationReceipt,
+        runID: UUID,
+        invocationID: UUID,
+        reason: String,
+        nativeEnd: AgentWorkflowTranscriptFile.VerifiedRecoveryEnd?
+    ) throws {
+        var archive = try load()
+        guard
+            let runIndex = archive.runs.firstIndex(where: { $0.id == runID }),
+            let invocation = archive.runs[runIndex].invocations.first(where: { $0.id == invocationID }),
+            invocation.nativeTurnID != nil,
+            [.running, .uncertain].contains(invocation.status),
+            archive.pendingReceipts?[invocationID]?.continuations?.contains(entry) == true else {
+            throw AgentWorkflowError("The continuation changed while verifying its failure.")
+        }
+        try nativeEnd?.validate()
+        var execution = try AgentWorkflowExecution(validating: archive.runs[runIndex])
+        try execution.failContinuation(
+            invocationID: invocationID,
+            instance: entry.writer,
+            turn: .init(id: entry.submission.nativeTurnID, transcriptPath: entry.submission.transcriptPath, prompt: entry.submission.text),
+            reason: reason
+        )
+        archive.runs[runIndex] = execution.run
+        revokeWrites(in: execution.run)
+        try commit(archive)
+    }
+
+    private func revokeWrites(in run: AgentWorkflowRun) {
+        for call in run.invocations where call.round == run.round {
+            writeAuthorizations.removeValue(forKey: call.id)?.revoke()
+            continuationAuthorizations.removeValue(forKey: call.id)?.authorization.revoke()
+        }
+    }
+
+    @discardableResult
+    func recordCompletionEvidence(_ context: AgentWorkflowTurnContext) throws -> CompletionEvidence {
+        let event = context.candidate
+        guard event.kind != .submitted else { return .ignored }
+        var updated = try load()
+        let id = context.invocation.id
+        guard
+            let runIndex = updated.runs.firstIndex(where: { $0.id == context.runID }),
+            let invocation = updated.runs[runIndex].invocations.first(where: { $0.id == id }),
+            [.writing, .awaitingAcceptance, .uncertain, .running].contains(invocation.status) else { return .ignored }
+        let run = updated.runs[runIndex]
+        let turn = PluginWorkflowTurn(nativeTurnID: event.nativeTurnID, transcriptPath: event.transcriptPath)
+        var receipts = updated.pendingReceipts ?? [:]
+        let receipt = receipts[id]
+        let savedCompletion = receipt?.completion(for: turn)
+        let matchesAccepted = AgentReplyEvidence.turn(event, id: invocation.resultTurnID, path: invocation.resultTranscriptPath)
+            && run.instance(for: invocation)?.matchesBinding(context.instance) == true
+        guard
+            matchesAccepted || (invocation.nativeTurnID == nil && receipt?.turn == turn
+                && receipt?.conversationID == context.instance.conversationID) else { return .ignored }
+        let previousStop = receipt?.resumedHookStartedAt == nil ? nil : receipt?.stopBoundary
+        let recorded = CompletionEvidence.recorded(previousStop: previousStop)
+        if let resumedAt = receipt?.resumedHookStartedAt {
+            guard let hookStartedAt = context.hookStartedAt, hookStartedAt > resumedAt else { return .ignored }
+        } else if
+            event.kind == .stopCandidate, !event.hasPendingWork,
+            receipt?.stopBoundary?.nativeRecord == true, invocation.stepTurn?.stopped == false {
+            // An already-reopened ledger from an older Host has no Hook order.
+            return .ignored
+        }
+        if event.kind != .failed, let lastHook = receipt?.completionHookStartedAt {
+            guard let hook = context.hookStartedAt, hook >= lastHook else { return .ignored }
+            if hook == lastHook, event != savedCompletion {
+                return .ignored
+            }
+        }
+        if savedCompletion?.kind == .failed {
+            return savedCompletion == event ? recorded : .ignored
+        }
+        var updatedReceipt = receipt ?? .init(conversationID: context.instance.conversationID, turn: turn)
+        let stopsStep = matchesAccepted && invocation.stepTurn?.stopped == false && !event.hasPendingWork
+        if stopsStep {
+            var execution = try AgentWorkflowExecution(validating: run)
+            try execution.stopStepTurn(invocationID: id, turnID: turn.nativeTurnID)
+            updated.runs[runIndex] = execution.run
+        }
+        updatedReceipt.backgroundTurn = event.hasPendingWork ? turn : nil
+        updatedReceipt.completion = event
+        updatedReceipt.completionHookStartedAt = context.hookStartedAt
+        var events = updatedReceipt.continuationCompletions ?? []
+        let observed = AgentWorkflowContinuationCompletion(writer: context.instance, event: event, startedAt: context.hookStartedAt)
+        if !events.contains(observed) {
+            events.append(observed)
+        }
+        updatedReceipt.continuationCompletions = events
+        receipts[id] = updatedReceipt
+        updated.pendingReceipts = receipts
+        if event.kind == .failed, invocation.round == run.round {
+            // A verified failure stops new writes across this round, even
+            // while its invocation still awaits native writer inspection.
+            revokeWrites(in: run)
+        }
+        if updatedReceipt != receipt || stopsStep {
+            try commit(updated)
+        }
+        return recorded
+    }
+
+    func recordVerifiedAnswer(
+        runID: UUID, result: AgentWorkflowResult, instance: AgentWorkflowInstance,
+        nativeEnd: AgentWorkflowTranscriptFile.VerifiedRecoveryEnd?, now: Date
+    ) throws {
+        let archive = try load()
+        let receipt = archive.pendingReceipts?[result.invocationID]
+        guard receipt?.continuationFailure == nil, receipt?.continuations?.contains(where: { $0.isRetired != true }) != true else {
+            throw AgentWorkflowError("A continuation failure is awaiting verification.")
+        }
+        try update(runID: runID) { execution in
+            try nativeEnd?.validate()
+            if
+                let receipt, let id = result.nativeTurnID,
+                let invocation = execution.run.invocations.first(where: { $0.id == result.invocationID }),
+                let path = invocation.resultTranscriptPath {
+                let turn = PluginWorkflowTurn(nativeTurnID: id, transcriptPath: path)
+                guard receipt.backgroundTurn != turn, receipt.completion(for: turn)?.corroboratesAnswer(result.text) != false else {
+                    throw AgentWorkflowError("The Agent's final reply does not match its latest completion event.")
+                }
+                if receipt.resumedHookStartedAt != nil, let previous = receipt.stopBoundary {
+                    guard
+                        receipt.completion(for: turn)?.corroboratesAnswer(result.text) == true,
+                        nativeEnd?.follows(previous) == true else {
+                        throw AgentWorkflowError("The Agent's final reply does not match this continuation.")
+                    }
+                }
+            }
+            if let failure = archive.pendingFailure(in: execution.run) {
+                execution.pause(reason: failure.text)
+            }
+            try execution.succeed(result, instance: instance, now: now)
+        }
+    }
+
+    func pauseForUnverifiedResult(runID: UUID, invocationID: UUID, turn: PluginWorkflowTurn, reason: String) throws {
+        var updated = try load()
+        guard
+            let index = updated.runs.firstIndex(where: { $0.id == runID && !$0.status.isTerminal }),
+            let invocation = updated.runs[index].invocations.first(where: { $0.id == invocationID }),
+            invocation.status == .running,
+            invocation.resultTurnID == turn.nativeTurnID, invocation.resultTranscriptPath == turn.transcriptPath,
+            let instance = updated.runs[index].instance(for: invocation) else { return }
+        var receipts = updated.pendingReceipts ?? [:]
+        var receipt = receipts[invocationID] ?? .init(conversationID: instance.conversationID, turn: turn)
+        receipt.needsResultRecovery = true
+        receipts[invocationID] = receipt
+        updated.pendingReceipts = receipts
+        var execution = try AgentWorkflowExecution(validating: updated.runs[index])
+        execution.pause(reason: reason)
+        updated.runs[index] = execution.run
+        try commit(updated)
+    }
+
     /// The same turn can still resume after a native question.
     func observeSubmission(
         _ submission: PluginWorkflowEvent, instance: AgentWorkflowInstance,
-        isSuperseded: (@Sendable (PluginWorkflowTurn) async throws -> Bool?)? = nil
+        verifiedTranscript: AgentWorkflowTranscriptFile.VerifiedSubmission? = nil,
+        isSuperseded: (@Sendable (PluginWorkflowTurn, Bool) async throws -> Bool?)? = nil
     ) async throws -> SubmissionDisposition {
+        let turn = PluginWorkflowTurn(nativeTurnID: submission.nativeTurnID, transcriptPath: submission.transcriptPath)
+        if let verifiedTranscript, verifiedTranscript.turn != turn || !verifiedTranscript.isCurrent {
+            return .deferred
+        }
         let runs = try load().runs
+        // Historical receipts must not select the current turn of a later run.
+        if
+            runs.contains(where: { run in
+                run.status.isTerminal && run.invocations.contains { invocation in
+                    invocation.nativeTurnID == nil && [.writing, .awaitingAcceptance, .uncertain].contains(invocation.status)
+                        && run.instance(for: invocation)?.matchesProcess(instance) == true
+                        && AgentReplyEvidence.submission(submission, prompt: invocation.submissionText(pluginID: instance.pluginID), acceptedTurnID: nil)
+                }
+            }) {
+            return .ready
+        }
         guard
             let run = runs.first(where: { run in
                 !run.status.isTerminal && run.definition.loopExit != nil
@@ -138,8 +621,17 @@ actor AgentWorkflowStore {
                 $0.nodeID == run.definition.loopExit?.source && $0.round == run.round
                     && run.instance(for: $0)?.agentID == instance.agentID
                     && [.writing, .awaitingAcceptance, .uncertain, .running].contains($0.status)
-            }) else { return .ready }
-        let turn = PluginWorkflowTurn(nativeTurnID: submission.nativeTurnID, transcriptPath: submission.transcriptPath)
+            }) else {
+            guard
+                let isSuperseded, runs.contains(where: { run in
+                    !run.status.isTerminal && run.invocations.contains {
+                        $0.round == run.round && $0.status == .running && $0.stepTurn?.completionRequested == false
+                            && $0.resultTurnID != turn.nativeTurnID && run.instance(for: $0)?.matchesConversation(instance) == true
+                    }
+                }) else { return .ready }
+            guard let newer = try await isSuperseded(turn, true) else { return .deferred }
+            return newer ? .superseded : .ready
+        }
         let history = submittedTurns[instance.id].flatMap { $0.runID == run.id ? $0 : nil }
         let prior = runs.lazy.flatMap { savedRun in
             savedRun.invocations.lazy.filter { invocation in
@@ -159,16 +651,16 @@ actor AgentWorkflowStore {
         if let path = history?.paths[turn.nativeTurnID] ?? priorPath, path != turn.transcriptPath {
             throw AgentWorkflowError("The native turn changed its transcript path.")
         }
-        if let history, history.paths[turn.nativeTurnID] != nil {
+        if verifiedTranscript == nil, let history, history.paths[turn.nativeTurnID] != nil {
             return history.conversationID == instance.conversationID && history.latest == turn ? .ready : .superseded
         }
         if let prior, prior.id != approval.id || approval.resultTurnID != turn.nativeTurnID {
             return .superseded
         }
         if
-            let isSuperseded, prior == nil,
+            verifiedTranscript == nil, let isSuperseded, prior == nil,
             let currentTurnID = approval.resultTurnID, currentTurnID != turn.nativeTurnID {
-            guard let superseded = try await isSuperseded(turn) else { return .deferred }
+            guard let superseded = try await isSuperseded(turn, false) else { return .deferred }
             guard !superseded else { return .superseded }
             // The ledger and receipt cache may have advanced during the read.
             return try await observeSubmission(submission, instance: instance)
@@ -393,6 +885,7 @@ actor AgentWorkflowStore {
         guard
             let run = archive.runs.first(where: { $0.id == invocation.delivery.runID }),
             run.status == .running, run.authorizationExpiresAt > Date(),
+            archive.pendingFailure(in: run) == nil,
             run.invocations.contains(where: { $0.id == invocation.id && $0.status == .writing }),
             writeAuthorizations[invocation.id] == nil,
             (1...(AgentWorkflowWire.maximumAttachments + 1)).contains(numberOfWrites) else {
@@ -415,8 +908,11 @@ actor AgentWorkflowStore {
 
     func authorizeContinuation(_ invocation: AgentWorkflowInvocation, instance: AgentWorkflowInstance) throws -> AgentWorkflowWriteAuthorization? {
         let archive = try load()
+        guard let currentRun = archive.runs.first(where: { $0.id == invocation.delivery.runID }) else {
+            throw AgentWorkflowError("The workflow run does not exist.")
+        }
         if
-            let current = archive.runs.first(where: { $0.id == invocation.delivery.runID })?.invocations.first(where: { $0.id == invocation.id }),
+            let current = currentRun.invocations.first(where: { $0.id == invocation.id }),
             let turnID = invocation.stepTurn?.id, current.continuationTurnID == turnID {
             return nil
         }
@@ -426,12 +922,26 @@ actor AgentWorkflowStore {
         guard let turn = invocation.stepTurn, continuationAuthorizations[invocation.id] == nil else {
             throw AgentWorkflowError("This step already has a continuation in flight.")
         }
+        if let failure = archive.pendingFailure(in: currentRun) {
+            throw AgentWorkflowError(failure.text)
+        }
         let run = try update(runID: invocation.delivery.runID) {
             try $0.beginContinuation(invocation, instance: instance, now: Date())
         }
         let authorization = AgentWorkflowWriteAuthorization(expiresAt: run.authorizationExpiresAt)
         continuationAuthorizations[invocation.id] = (turn.id, instance, authorization)
         return authorization
+    }
+
+    func resume(runID: UUID, expectedRevision: Int, roundLimit: Int?, now: Date) throws -> AgentWorkflowRun {
+        let archive = try load()
+        return try update(runID: runID, expectedRevision: expectedRevision) { execution in
+            if let failure = archive.pendingFailure(in: execution.run) {
+                execution.pause(reason: failure.text)
+            } else {
+                try execution.resume(instances: archive.instances, roundLimit: roundLimit, now: now)
+            }
+        }
     }
 
     func finishContinuation(_ invocation: AgentWorkflowInvocation, authorization: AgentWorkflowWriteAuthorization, written: Bool) throws {
@@ -475,32 +985,153 @@ actor AgentWorkflowStore {
     }
 
     /// Commit the verified first receipt and its catalog join key together.
-    func accept(runID: UUID, invocationID: UUID, instance: AgentWorkflowInstance, nativeTurnID: String, transcriptPath: String?, bindFirstConversation: Bool) throws {
+    func accept(
+        runID: UUID, invocationID: UUID, instance: AgentWorkflowInstance, nativeTurnID: String,
+        transcriptPath: String?, bindFirstConversation: Bool, confirmsSelectedResult: Bool = false
+    ) throws {
         var updated = try load()
         guard let index = updated.runs.firstIndex(where: { $0.id == runID }) else {
             throw AgentWorkflowError("The workflow run does not exist.")
         }
         var execution = try AgentWorkflowExecution(validating: updated.runs[index])
-        try execution.accept(invocationID: invocationID, instance: instance, nativeTurnID: nativeTurnID, transcriptPath: transcriptPath, bindFirstConversation: bindFirstConversation)
+        try execution.accept(
+            invocationID: invocationID, instance: instance, nativeTurnID: nativeTurnID, transcriptPath: transcriptPath,
+            bindFirstConversation: bindFirstConversation, confirmsSelectedResult: confirmsSelectedResult
+        )
+        if
+            updated.runs[index].status == .paused,
+            updated.runs[index].invocations.first(where: { $0.id == invocationID })?.status == .uncertain,
+            let transcriptPath {
+            var receipts = updated.pendingReceipts ?? [:]
+            var receipt = receipts[invocationID] ?? .init(
+                conversationID: instance.conversationID, turn: .init(nativeTurnID: nativeTurnID, transcriptPath: transcriptPath)
+            )
+            receipt.needsResultRecovery = true
+            receipts[invocationID] = receipt
+            updated.pendingReceipts = receipts
+        }
         updated.runs[index] = execution.run
-        if bindFirstConversation, let catalog = updated.instances.firstIndex(where: { $0.matchesProcess(instance) }) {
+        if
+            updated.pendingReceipts?[invocationID]?.selectedSubmission == nil,
+            let call = execution.run.invocations.first(where: { $0.id == invocationID }), call.resultTurnID == nativeTurnID,
+            let path = transcriptPath {
+            let submittedAt = updated.pendingReceipts?[invocationID]?.submittedHookStartedAt
+            updated.pendingReceipts?[invocationID]?.selectedSubmission = .init(
+                writer: instance,
+                submission: .init(kind: .submitted, nativeTurnID: nativeTurnID, transcriptPath: path, text: call.stepTurn?.prompt ?? call.submissionText(pluginID: instance.pluginID)),
+                submittedAt: submittedAt
+            )
+        }
+        if
+            bindFirstConversation, !execution.run.status.isTerminal,
+            let catalog = updated.instances.firstIndex(where: { $0.matchesProcess(instance) }) {
             updated.instances[catalog].conversationID = instance.conversationID
         }
         try commit(updated)
     }
 
-    func observeStepTurn(runID: UUID, invocationID: UUID, instance: AgentWorkflowInstance, turn: AgentWorkflowStepTurn) throws {
+    @discardableResult
+    func observeStepTurn(
+        runID: UUID, invocationID: UUID, instance: AgentWorkflowInstance, turn: AgentWorkflowStepTurn,
+        reopening: AgentWorkflowTranscriptFile.VerifiedSubmission? = nil, expectedReceipt: AgentWorkflowPendingReceipt? = nil,
+        hookStartedAt: Date? = nil, verifiedSubmission: AgentWorkflowTranscriptFile.VerifiedSubmission? = nil
+    ) throws -> Bool {
         var updated = try load()
+        if let verifiedSubmission, !verifiedSubmission.isCurrent {
+            return false
+        }
         guard
             let index = updated.runs.firstIndex(where: { $0.id == runID }),
             let catalog = updated.instances.firstIndex(where: { $0.matchesProcess(instance) }) else {
             throw AgentWorkflowError("The Agent changed before its continuation could be recorded.")
         }
         var execution = try AgentWorkflowExecution(validating: updated.runs[index])
-        try execution.observeStepTurn(invocationID: invocationID, instance: instance, turn: turn)
+        guard let invocation = execution.run.invocations.first(where: { $0.id == invocationID }) else { return true }
+        if let failure = updated.pendingReceipts?[invocationID]?.continuationFailure {
+            guard
+                AgentReplyEvidence.turn(failure.submission, id: turn.id, path: turn.transcriptPath),
+                failure.submission.text == turn.prompt, failure.submittedAt == hookStartedAt,
+                failure.writer.matchesBinding(instance) else { return false }
+        }
+        if let failure = updated.pendingFailure(for: invocation) {
+            guard
+                invocation.resultTurnID == failure.nativeTurnID,
+                execution.run.instance(for: invocation)?.matchesBinding(instance) == true else { return true }
+            try execution.fail(invocationID: invocationID, instance: instance, nativeTurnID: failure.nativeTurnID, reason: failure.text)
+            updated.runs[index] = execution.run
+            try commit(updated)
+            return true
+        }
+        let previous = invocation.stepTurn
+        let awaitingContinuation = invocation.continuationTurnID == turn.id && invocation.continuationInstance != nil
+        if reopening != nil || (previous?.id == turn.id && (previous?.stopped == true || awaitingContinuation)) {
+            guard previous?.id == turn.id, previous?.stopped == true || awaitingContinuation else { return true }
+            guard
+                let reopening, reopening.isCurrent,
+                reopening.turn == PluginWorkflowTurn(nativeTurnID: turn.id, transcriptPath: turn.transcriptPath),
+                reopening.afterStop != nil, updated.pendingReceipts?[invocationID] == expectedReceipt else { return false }
+            if let stoppedAt = expectedReceipt?.completionHookStartedAt {
+                guard let hookStartedAt else { return false }
+                if hookStartedAt <= stoppedAt {
+                    guard
+                        expectedReceipt?.continuations?.contains(where: {
+                            $0.writer.matchesBinding(instance) && $0.submission.nativeTurnID == turn.id
+                                && $0.submission.text == turn.prompt && $0.submittedAt == hookStartedAt
+                                && $0.completedAt == stoppedAt && $0.completion == expectedReceipt?.completion
+                        }) == true else { return false }
+                }
+            }
+        }
+        try execution.observeStepTurn(
+            invocationID: invocationID,
+            instance: instance,
+            turn: turn,
+            confirmsContinuation: reopening != nil,
+            allowingTerminal: updated.pendingReceipts?[invocationID]?.continuations?.contains(where: {
+                $0.submission.nativeTurnID == turn.id && $0.completion?.kind == .failed
+            }) == true || updated.pendingReceipts?[invocationID]?.continuationFailure != nil
+        )
+        if let selected = execution.run.invocations.first(where: { $0.id == invocationID })?.stepTurn, selected != previous || reopening != nil {
+            var receipts = updated.pendingReceipts ?? [:]
+            if let boundary = reopening?.afterStop, !selected.stopped {
+                let initial = PluginWorkflowTurn(
+                    nativeTurnID: invocation.nativeTurnID ?? turn.id, transcriptPath: invocation.nativeTranscriptPath ?? turn.transcriptPath
+                )
+                var receipt = receipts[invocationID] ?? .init(conversationID: instance.conversationID, turn: initial)
+                receipt.completion = nil
+                receipt.stopBoundary = boundary
+                receipt.resumedHookStartedAt = hookStartedAt
+                receipt.completionHookStartedAt = nil
+                receipt.backgroundTurn = nil
+                receipts[invocationID] = receipt
+            } else if selected.id != previous?.id {
+                receipts[invocationID]?.completion = nil
+                receipts[invocationID]?.stopBoundary = nil
+                receipts[invocationID]?.resumedHookStartedAt = nil
+                receipts[invocationID]?.completionHookStartedAt = nil
+                receipts[invocationID]?.backgroundTurn = nil
+            }
+            updated.pendingReceipts = receipts
+        }
         updated.runs[index] = execution.run
+        if
+            let call = execution.run.invocations.first(where: { $0.id == invocationID }),
+            invocation.stepTurn?.completionRequested != true,
+            call.resultTurnID == turn.id, execution.run.instance(for: call)?.matchesBinding(instance) == true {
+            let selected = AgentWorkflowContinuationReceipt(
+                writer: instance,
+                submission: .init(kind: .submitted, nativeTurnID: turn.id, transcriptPath: turn.transcriptPath, text: turn.prompt),
+                submittedAt: hookStartedAt,
+                nativeStart: verifiedSubmission?.nativeStart ?? reopening?.nativeStart
+            )
+            updated.pendingReceipts?[invocationID]?.selectedSubmission = selected
+            if let queued = updated.pendingReceipts?[invocationID]?.continuations?.firstIndex(where: { $0.identifies(selected) }) {
+                updated.pendingReceipts?[invocationID]?.continuations?[queued].nativeStart = selected.nativeStart
+            }
+        }
         updated.instances[catalog].conversationID = instance.conversationID
         try commit(updated)
+        return true
     }
 
     func load() throws -> AgentWorkflowArchive {
@@ -556,7 +1187,18 @@ actor AgentWorkflowStore {
                     )
                 }
             }
-            loaded.runs[index] = try AgentWorkflowExecution(restoring: loaded.runs[index]).run
+            var execution = try AgentWorkflowExecution(restoring: loaded.runs[index])
+            for invocation in execution.run.invocations {
+                guard
+                    [.running, .uncertain].contains(invocation.status),
+                    let turn = invocation.stepTurn, !turn.stopped,
+                    let receipt = loaded.pendingReceipts?[invocation.id], receipt.stopBoundary?.nativeRecord != true,
+                    let stop = receipt.completion(for: .init(nativeTurnID: turn.id, transcriptPath: turn.transcriptPath)),
+                    stop.kind == .stopCandidate, !stop.hasPendingWork else { continue }
+                // Older Hosts saved the Stop before marking its explicit turn stopped.
+                try execution.stopStepTurn(invocationID: invocation.id, turnID: turn.id)
+            }
+            loaded.runs[index] = execution.run
         }
         let namingInstances = loaded.instancesForNames
         for index in loaded.definitions.indices {
@@ -588,6 +1230,22 @@ actor AgentWorkflowStore {
     func commit(_ updated: AgentWorkflowArchive) throws {
         var updated = updated
         updated.schemaVersion = AgentWorkflowArchive.currentSchemaVersion
+        if let receipts = updated.pendingReceipts {
+            let waiting = Set(updated.runs.flatMap { run in
+                run.invocations.filter {
+                    [.writing, .awaitingAcceptance, .uncertain, .running].contains($0.status)
+                }.map(\.id)
+            })
+            let retained = receipts.filter { waiting.contains($0.key) }
+            updated.pendingReceipts = retained.isEmpty ? nil : retained
+        }
+        if let early = updated.earlyCompletions {
+            let waiting = Set(updated.runs.flatMap(\.invocations).filter {
+                [.writing, .awaitingAcceptance, .uncertain, .running].contains($0.status)
+            }.map(\.id))
+            let retained = early.filter { waiting.contains($0.key) }
+            updated.earlyCompletions = retained.isEmpty ? nil : retained
+        }
         guard updated != archive else { return }
         let data = try JSONEncoder().encode(updated)
         try FileManager.default.createDirectory(
@@ -617,6 +1275,7 @@ actor AgentWorkflowStore {
                     && run.invocations.contains {
                         $0.id == id && $0.status == .running && $0.stepTurn?.id == pending.turnID
                             && $0.stepTurn?.completionRequested == false && $0.continuationTurnID == pending.turnID
+                            && $0.continuationInstance?.matchesBinding(pending.instance) == true
                     }
             }
             if !valid {

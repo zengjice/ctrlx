@@ -100,6 +100,8 @@ public protocol AgentWorkflowTranscriptParser: Sendable {
     var readsSessionHeader: Bool { get }
     /// A durable native completion, independent of a Stop callback lost on restart.
     var recoveredCompletion: AgentWorkflowTranscriptOutcome? { get }
+    /// Whether a nil recovery result also invalidates earlier terminal records.
+    var tracksCompletionAtEnd: Bool { get }
     var activity: [AgentTurnActivity] { get }
     var evictedActivityIDs: Set<String> { get }
     mutating func trackActivityEvictions(for ids: Set<String>)
@@ -107,6 +109,7 @@ public protocol AgentWorkflowTranscriptParser: Sendable {
     mutating func beginAppendingActivity()
     func isTurnStart(_ line: Data) throws -> Bool
     mutating func submittedTurnID(in line: Data) throws -> String?
+    mutating func resumedTurnID(in line: Data) throws -> String?
     var submissionRejectionMarker: String? { get }
     func rejectsSubmission(_ line: Data, during: Range<Date>) throws -> Bool
     /// Update Stop text without resetting the turn; return matching evidence
@@ -116,6 +119,10 @@ public protocol AgentWorkflowTranscriptParser: Sendable {
 }
 
 public extension AgentWorkflowTranscriptParser {
+    var tracksCompletionAtEnd: Bool {
+        false
+    }
+
     var activity: [AgentTurnActivity] {
         []
     }
@@ -152,6 +159,10 @@ public extension AgentWorkflowTranscriptParser {
 
     mutating func submittedTurnID(in _: Data) throws -> String? {
         nil
+    }
+
+    mutating func resumedTurnID(in line: Data) throws -> String? {
+        try submittedTurnID(in: line)
     }
 
     var submissionRejectionMarker: String? {

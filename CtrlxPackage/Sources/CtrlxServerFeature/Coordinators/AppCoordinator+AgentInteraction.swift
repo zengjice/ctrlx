@@ -58,7 +58,7 @@ extension AppCoordinator {
             },
             synchronizeEvents: { [weak self] in
                 guard let self else { throw CancellationError() }
-                try await synchronizeAgentMessageEvents()
+                try await synchronizeAgentIngress()
             },
             onFailure: { Logger(label: "com.jicezeng.ctrlx.agent-messages").error("\($0)") }
         )

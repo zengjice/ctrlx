@@ -6,11 +6,13 @@ import Foundation
 /// blocks the first answer and makes the same prompt continue to a new answer.
 public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
     private static let rejectionPrefix = "UserPromptSubmit operation blocked by hook:"
+    private static let stopFeedbackPrefix = "Stop hook feedback:"
     private let conversationID: String
     private let nativeTurnID: String
     private let prompt: String
     private var candidate: String
     private var completedAnswer: String?
+    private var failure: String?
     private var ancestors: Set<String> = []
     private var messageID: String?
     private var answer: [String] = []
@@ -33,8 +35,15 @@ public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
     }
 
     public var recoveredCompletion: AgentWorkflowTranscriptOutcome? {
+        if let failure {
+            return .failed(failure)
+        }
         guard let completedAnswer, !completedAnswer.isEmpty else { return nil }
         return .succeeded(completedAnswer)
+    }
+
+    public var tracksCompletionAtEnd: Bool {
+        true
     }
 
     public var activity: [AgentTurnActivity] {
@@ -62,17 +71,32 @@ public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
             let record = try JSONSerialization.jsonObject(with: line) as? [String: Any],
             record["sessionId"] as? String == conversationID,
             record["isSidechain"] as? Bool == false else { return false }
-        return (record["type"] as? String == "user" && record["promptId"] as? String == nativeTurnID)
+        return submission(in: record) == nativeTurnID
             || (record["type"] as? String == "system"
                 && (record["content"] as? String)?.hasSuffix("\nOriginal prompt: " + prompt) == true)
     }
 
     public func submittedTurnID(in line: Data) throws -> String? {
+        guard let record = try JSONSerialization.jsonObject(with: line) as? [String: Any] else { return nil }
+        return submission(in: record)
+    }
+
+    private func submission(in record: [String: Any]) -> String? {
         guard
-            let record = try JSONSerialization.jsonObject(with: line) as? [String: Any],
             record["type"] as? String == "user",
             record["sessionId"] as? String == conversationID,
-            record["isSidechain"] as? Bool == false else { return nil }
+            record["isSidechain"] as? Bool == false, record["isMeta"] as? Bool != true else { return nil }
+        let content = (record["message"] as? [String: Any])?["content"]
+        if let text = content as? String, text.hasPrefix(Self.stopFeedbackPrefix) {
+            return nil
+        }
+        if
+            let blocks = content as? [[String: Any]], blocks.contains(where: {
+                $0["type"] as? String == "tool_result"
+                    || ($0["type"] as? String == "text" && ($0["text"] as? String)?.hasPrefix(Self.stopFeedbackPrefix) == true)
+            }) {
+            return nil
+        }
         return record["promptId"] as? String
     }
 
@@ -123,20 +147,25 @@ public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
             if
                 prompt.contains("[CtrlX workflow invocation: ") || prompt.contains("[CtrlX message: "),
                 let reason = rejectionReason(in: record) {
+                failure = reason
                 return .failed(reason)
             }
             // Submission text was matched before accepting this native prompt ID.
             // The persisted user message may contain expanded skills or images.
-            guard type == "user", record["promptId"] as? String == nativeTurnID else { return nil }
+            guard submission(in: record) == nativeTurnID else { return nil }
+            failure = nil
             ancestors.insert(id)
             return nil
         }
         guard
             let parent = record["parentUuid"] as? String, ancestors.contains(parent) else { return nil }
-        if type == "user", record["promptId"] as? String != nativeTurnID {
+        if let submitted = submission(in: record), submitted != nativeTurnID {
             // A later human task must not invalidate a completed turn while its
             // Stop notification is in flight, or join that turn's ancestry.
-            return completedAnswer == nil ? .failed("A different user prompt interrupted this workflow turn.") : nil
+            guard completedAnswer == nil else { return nil }
+            let reason = "A different user prompt interrupted this workflow turn."
+            failure = reason
+            return .failed(reason)
         }
         guard ancestors.insert(id).inserted else { return nil }
         guard ancestors.count <= 100_000 else {
@@ -144,6 +173,7 @@ public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
         }
 
         if type == "user" {
+            failure = nil
             completedAnswer = nil
             messageID = nil
             answer = []

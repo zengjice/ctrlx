@@ -11,6 +11,8 @@ struct AgentReplyContext: Sendable {
     let candidate: PluginWorkflowEvent
     var savedActivity: [AgentTurnActivity] = []
     var savedActivitySource: AgentActivitySnapshot.Source?
+    var hookStartedAt: Date?
+    var previousStop: AgentWorkflowTranscriptFile.StopBoundary?
 
     func matchesTurn(_ other: Self) -> Bool {
         (instance.matchesBinding(other.instance) || instance.matchesConversation(other.instance))
@@ -108,25 +110,31 @@ actor AgentReplyMonitor {
     }
 
     private let state: @Sendable (AgentReplyContext) async throws -> AgentReplyState
-    private let completed: @Sendable (AgentReplyContext, AgentWorkflowInstance, AgentWorkflowTranscriptOutcome, AgentActivitySnapshot) async throws -> Void
+    private let completed: @Sendable (AgentReplyContext, AgentWorkflowInstance, AgentWorkflowTranscriptOutcome, AgentActivitySnapshot, AgentWorkflowTranscriptFile.VerifiedRecoveryEnd?) async throws -> Void
     private let waiting: @Sendable (AgentReplyContext, String, Bool) async throws -> Void
     private let inspect: @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance
     private let onFailure: @Sendable (String) -> Void
     private let missingRuntimeTimeout: Duration?
     private let verificationTimeout: Duration
     private let synchronizeRecovery: (@Sendable (UUID) async throws -> Void)?
+    private let synchronizeCompletion: @Sendable () async throws -> Void
+    private let verifyFinalTranscript: Bool
+    private let matchesAnswer: @Sendable (PluginWorkflowEvent, String) -> Bool
     private let activityChanged: (@Sendable (AgentReplyContext, AgentActivitySnapshot) async throws -> AgentMessage?)?
     private var watches: [UUID: Watch] = [:]
     private var activityDrains: [UUID: ActivityRecovery] = [:]
 
     init(
         state: @escaping @Sendable (AgentReplyContext) async throws -> AgentReplyState,
-        completed: @escaping @Sendable (AgentReplyContext, AgentWorkflowInstance, AgentWorkflowTranscriptOutcome, AgentActivitySnapshot) async throws -> Void,
+        completed: @escaping @Sendable (AgentReplyContext, AgentWorkflowInstance, AgentWorkflowTranscriptOutcome, AgentActivitySnapshot, AgentWorkflowTranscriptFile.VerifiedRecoveryEnd?) async throws -> Void,
         waiting: @escaping @Sendable (AgentReplyContext, String, Bool) async throws -> Void,
         inspect: @escaping @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance,
         verificationTimeout: Duration = .seconds(60),
         missingRuntimeTimeout: Duration? = nil,
         synchronizeRecovery: (@Sendable (UUID) async throws -> Void)? = nil,
+        synchronizeCompletion: @escaping @Sendable () async throws -> Void = { },
+        verifyFinalTranscript: Bool = false,
+        matchesAnswer: @escaping @Sendable (PluginWorkflowEvent, String) -> Bool = { _, _ in true },
         activityChanged: (@Sendable (AgentReplyContext, AgentActivitySnapshot) async throws -> AgentMessage?)? = nil,
         onFailure: @escaping @Sendable (String) -> Void
     ) {
@@ -137,6 +145,9 @@ actor AgentReplyMonitor {
         self.verificationTimeout = verificationTimeout
         self.missingRuntimeTimeout = missingRuntimeTimeout
         self.synchronizeRecovery = synchronizeRecovery
+        self.synchronizeCompletion = synchronizeCompletion
+        self.verifyFinalTranscript = verifyFinalTranscript
+        self.matchesAnswer = matchesAnswer
         self.activityChanged = activityChanged
         self.onFailure = onFailure
     }
@@ -148,7 +159,12 @@ actor AgentReplyMonitor {
             // binding cannot inherit the old reader's completion evidence.
             guard context.candidate.kind != .submitted else { return }
             if previous.context.matchesTurn(context) {
-                guard previous.context.candidate != context.candidate else { return }
+                if let current = previous.context.hookStartedAt, let incoming = context.hookStartedAt, incoming < current {
+                    return
+                }
+                guard
+                    previous.context.candidate != context.candidate
+                    || previous.context.hookStartedAt != context.hookStartedAt else { return }
                 // Only this watch publishes activity for its live reader. A
                 // receipt can carry a snapshot read before the latest save.
                 var context = context
@@ -287,13 +303,14 @@ actor AgentReplyMonitor {
                     try await Task.sleep(for: .milliseconds(200))
                 }
             }
-            guard let file = transcript, watches[id]?.token == token else { return }
+            guard var file = transcript, watches[id]?.token == token else { return }
             watches[id]?.transcript = file
             var revision = -1
             var deadline: ContinuousClock.Instant?
             var inspectionDeadline: ContinuousClock.Instant?
             var missingDeadline: ContinuousClock.Instant?
             var nextInspection = clock.now
+            var partialEnd: (outcome: AgentWorkflowTranscriptOutcome, version: AgentWorkflowTranscriptFile.VerifiedRecoveryEnd)?
             var publishedActivity: [AgentTurnActivity] = []
             var activityWriteFailed = false
             while let watch = watches[id], watch.token == token, !Task.isCancelled {
@@ -327,6 +344,7 @@ actor AgentReplyMonitor {
                     if revision != watch.revision {
                         revision = watch.revision
                         deadline = nil
+                        partialEnd = nil
                         await file.updateCandidate(submissionOnly ? "" : context.candidate.text)
                     }
                     if let inspectionDeadline, clock.now >= inspectionDeadline {
@@ -376,7 +394,17 @@ actor AgentReplyMonitor {
                         }
                     }
                     guard isCurrent(id, token: token, revision: revision) else { continue }
-                    if let outcome = poll.outcome {
+                    let retry = if poll.reachedEnd, let partialEnd, !partialEnd.version.isCurrent {
+                        partialEnd.outcome
+                    } else {
+                        nil as AgentWorkflowTranscriptOutcome?
+                    }
+                    if var outcome = poll.outcome ?? retry {
+                        partialEnd = nil
+                        if case let .succeeded(answer) = outcome, !matchesAnswer(context.candidate, answer) {
+                            // Later records of this turn can still corroborate the current Stop.
+                            continue
+                        }
                         if case .succeeded = outcome, submissionOnly, !(recoverNative && poll.reachedEnd) {
                             // Ordinary messages can recover a lost Stop only after
                             // catching up with durable native completion. Workflow
@@ -394,12 +422,57 @@ actor AgentReplyMonitor {
                             await file.updateCandidate(context.candidate.text)
                             continue
                         }
+                        var nativeEnd: AgentWorkflowTranscriptFile.VerifiedRecoveryEnd?
+                        if verifyFinalTranscript {
+                            // The Stop may match an earlier completion of this
+                            // turn. Check the latest native outcome at EOF.
+                            let path = context.candidate.transcriptPath
+                            let final = if await file.hasCurrentReadRevision(at: path) {
+                                file
+                            } else {
+                                try openTranscript(context, provider: provider)
+                            }
+                            if final !== file {
+                                await final.updateCandidate(submissionOnly ? "" : context.candidate.text)
+                            }
+                            let verified = try await final.verifiedOutcome(at: path, hasStop: !submissionOnly)
+                            guard isCurrent(id, token: token, revision: revision) else { continue }
+                            if let (latest, end) = verified {
+                                guard let latest else {
+                                    if end.hasPartialRecord {
+                                        partialEnd = (outcome, end)
+                                    }
+                                    continue
+                                }
+                                if let previousStop = context.previousStop, !end.follows(previousStop) {
+                                    continue
+                                }
+                                if case let .succeeded(answer) = latest, submissionOnly || !matchesAnswer(context.candidate, answer) {
+                                    continue
+                                }
+                                outcome = latest
+                                nativeEnd = end
+                            }
+                        }
+                        try await synchronizeCompletion()
+                        guard isCurrent(id, token: token, revision: revision) else { continue }
                         let live = try await inspect(latest)
                         guard isCurrent(id, token: token, revision: revision) else { continue }
                         guard live.matchesBinding(latest) else {
                             throw AgentWorkflowError("The Agent identity changed while verifying its final answer.")
                         }
-                        try await completed(context, live, outcome, activity)
+                        if verifyFinalTranscript, nativeEnd?.isCurrent != true {
+                            if deadline == nil {
+                                deadline = clock.now.advanced(by: verificationTimeout)
+                            }
+                            if let deadline, clock.now >= deadline {
+                                throw AgentWorkflowError("The Agent's final completion could not be verified. Nothing was handed downstream.")
+                            }
+                            await file.updateCandidate(context.candidate.text)
+                            try await Task.sleep(for: .milliseconds(200))
+                            continue
+                        }
+                        try await completed(context, live, outcome, activity, nativeEnd)
                         guard isCurrent(id, token: token, revision: revision) else { continue }
                         return
                     }
@@ -413,6 +486,17 @@ actor AgentReplyMonitor {
                         throw AgentWorkflowError("The Agent's final completion could not be verified. Nothing was handed downstream.")
                     }
                     if poll.reachedEnd {
+                        if verifyFinalTranscript, !file.stillAtPath(context.candidate.transcriptPath) {
+                            do {
+                                let replacement = try openTranscript(context, provider: provider)
+                                file = replacement
+                                watches[id]?.transcript = replacement
+                                await replacement.updateCandidate(submissionOnly ? "" : context.candidate.text)
+                                continue
+                            } catch let error as CocoaError where error.code == .fileNoSuchFile {
+                                // A new file may be briefly absent during rotation.
+                            }
+                        }
                         try await Task.sleep(for: .milliseconds(200))
                     } else {
                         await Task.yield()
@@ -435,10 +519,10 @@ actor AgentReplyMonitor {
         } catch is CancellationError {
             // Shutdown or a different binding owns the next decision.
         } catch {
-            guard watches[id]?.token == token else { return }
+            guard let watch = watches[id], watch.token == token else { return }
             do {
                 let reason = error.localizedDescription
-                try await waiting(initial, reason, false)
+                try await waiting(watch.context, reason, false)
             } catch {
                 onFailure("Could not save Agent reply verification failure: \(error.localizedDescription)")
             }

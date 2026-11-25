@@ -1,4 +1,5 @@
 import ClaudeCodePluginCore
+import Clocks
 import CodexPluginCore
 import ConcurrencyExtras
 import CryptoKit
@@ -9,9 +10,35 @@ import Foundation
 import Testing
 @testable import CtrlxServerFeature
 
+private struct WorkflowRetryTestClock: Clock {
+    let clock = TestClock()
+    let sleeps = AsyncStream<TestClock<Duration>.Instant>.makeStream()
+
+    var now: TestClock<Duration>.Instant {
+        clock.now
+    }
+
+    var minimumResolution: Duration {
+        clock.minimumResolution
+    }
+
+    func sleep(until deadline: TestClock<Duration>.Instant, tolerance: Duration?) async throws {
+        sleeps.continuation.yield(deadline)
+        try await clock.sleep(until: deadline, tolerance: tolerance)
+    }
+
+    func advancePastNextSleep() async throws {
+        var deadlines = sleeps.stream.makeAsyncIterator()
+        let deadline = try #require(await deadlines.next())
+        // Also wake a sleep that has announced its deadline but has yet to register.
+        await clock.advance(to: deadline.advanced(by: .nanoseconds(1)))
+    }
+}
+
 private struct NativeWorkflowTestParser: AgentWorkflowTranscriptParser {
     var onOutcome: @Sendable () -> Void = { }
     var outcome: AgentWorkflowTranscriptOutcome?
+
     mutating func updateCandidate(_: String) -> AgentWorkflowTranscriptOutcome? {
         outcome
     }
@@ -153,7 +180,9 @@ struct AgentWorkflowNativeEventsTests {
         let original = f.event(.submitted, text: f.invocation.delivery.input.text)
         let second = f.event(.submitted, text: "Second prompt", turn: "second")
         _ = try await f.router.receive(original, peer: f.peer)
+        try f.writeCodexTurns("turn", "second")
         _ = try await f.router.receive(second, peer: f.peer)
+        try f.writeCodexTurns("turn", "second", "third")
         _ = try await f.router.receive(f.event(.submitted, text: "Third prompt", turn: "third"), peer: f.peer)
         _ = try await f.router.receive(replayContinuation ? second : original, peer: f.peer)
 
@@ -172,7 +201,9 @@ struct AgentWorkflowNativeEventsTests {
         let middle = f.event(.submitted, text: "Discuss the findings", turn: "previous-middle")
         let continuation = f.event(.submitted, text: "Finish the review", turn: "previous-result")
         _ = try await f.router.receive(original, peer: f.peer)
+        try f.writeCodexTurns("turn", "previous-middle")
         _ = try await f.router.receive(middle, peer: f.peer)
+        try f.writeCodexTurns("turn", "previous-middle", "previous-result")
         _ = try await f.router.receive(continuation, peer: f.peer)
         try f.writeCodexTurns("turn", "previous-middle", "previous-result")
         let service = f.approvalService()
@@ -211,9 +242,10 @@ struct AgentWorkflowNativeEventsTests {
         let middle = f.event(.submitted, text: "Discuss the findings", turn: "middle")
         try f.writeCodexTurns("turn")
         _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        try f.writeCodexTurns("turn", "middle")
         _ = try await f.router.receive(middle, peer: f.peer)
         #expect(try await f.store.snapshot().runs[0].invocations[0].stepTurn?.id == "middle")
-        try f.writeCodexTurns("turn", "middle")
+        try f.writeCodexTurns("turn", "middle", "current")
         _ = try await f.router.receive(f.event(.submitted, text: "Finish the review", turn: "current"), peer: f.peer)
         try f.writeCodexTurns("turn", "middle", "current")
         await f.router.shutdown()
@@ -268,7 +300,7 @@ struct AgentWorkflowNativeEventsTests {
             try await router.requireVerifiedSubmission(f.invocation.id)
             #expect(scans.value >= 3)
         } else {
-            #expect(scans.value == progressAppends + 1)
+            #expect(scans.value >= progressAppends + 1)
         }
         let verified = try await reopened.snapshot().runs[0]
         #expect(verified.invocations[0].stepTurn?.id == expectedTurn)
@@ -289,16 +321,21 @@ struct AgentWorkflowNativeEventsTests {
         let newConversation = change != "restart"
         let f = try await fixture(completion: .explicit, afterLoop: true)
         defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeCodexTurns("turn")
         let original = f.event(.submitted, text: f.invocation.delivery.input.text)
         _ = try await f.router.receive(original, peer: f.peer)
+        try f.appendCodexAnswer("Original discussion")
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "Original discussion"), peer: f.peer)
+        try f.appendNativeTurn("pending")
         await f.router.shutdown()
-        try f.writeCodexTurns("turn", "pending")
 
         let oldInspection = AsyncStream<Void>.makeStream()
         defer { oldInspection.continuation.finish() }
         let inspectingOldWriter = LockIsolated(false)
         let oldInspectionEnded = LockIsolated(false)
+        let changingOldRecord = LockIsolated(true)
         let unstable = AppendingCodexTestProvider(watchedTurn: "pending") {
+            guard changingOldRecord.value else { return }
             let file = try FileHandle(forWritingTo: f.transcript)
             defer { try? file.close() }
             _ = try file.seekToEnd()
@@ -325,6 +362,10 @@ struct AgentWorkflowNativeEventsTests {
         try #require(inspectingOldWriter.value)
         #expect(!oldInspectionEnded.value)
 
+        changingOldRecord.setValue(false)
+        try f.appendCodexAnswer("Old discussion", turn: "pending")
+        _ = try await router.receive(f.event(.stopCandidate, text: "Old discussion", turn: "pending"), peer: f.peer)
+
         var live = f.instance
         var peer = f.peer
         if restarted {
@@ -341,7 +382,7 @@ struct AgentWorkflowNativeEventsTests {
             live.conversationID = "new-conversation"
             try f.writeCodexTurns("resumed", conversationID: live.conversationID, to: transcript)
         } else {
-            try f.writeCodexTurns("turn", "pending", "resumed")
+            try f.appendNativeTurn("resumed")
         }
         let receipt = PluginEvent(pluginID: live.pluginID, sessionID: live.conversationID, tmuxPane: live.paneID, workflow: .init(
             kind: .submitted, nativeTurnID: "resumed", transcriptPath: transcript.path, text: "Continue after restart"
@@ -420,6 +461,10 @@ struct AgentWorkflowNativeEventsTests {
         await dispatcher.dispatch(oldReceipt, ingressPeer: f.peer)
         await #expect(throws: AgentWorkflowError.self) { try await router.requireVerifiedSubmission(f.invocation.id) }
 
+        changingOldRecord.setValue(false)
+        try f.appendCodexAnswer("Old discussion", turn: "old-pending")
+        await dispatcher.dispatch(f.event(.stopCandidate, text: "Old discussion", turn: "old-pending"), ingressPeer: f.peer)
+
         let transcript = f.directory.appendingPathComponent("new-session.jsonl")
         try f.writeCodexTurns("resumed", conversationID: "new-conversation", to: transcript)
         let newReceipt = PluginEvent(pluginID: f.instance.pluginID, sessionID: "new-conversation", tmuxPane: f.instance.paneID, workflow: .init(
@@ -427,6 +472,9 @@ struct AgentWorkflowNativeEventsTests {
         ))
         await dispatcher.dispatch(newReceipt, ingressPeer: f.peer)
         #expect(conversation.value.conversationID == newReceipt.sessionID)
+        if !newReceiptPending {
+            try await router.requireVerifiedSubmission(f.invocation.id)
+        }
         #expect(try await f.store.snapshot().runs[0].invocations[0].stepTurn?.id == (newReceiptPending ? "turn" : "resumed"))
 
         changingOldRecord.setValue(false)
@@ -459,6 +507,7 @@ struct AgentWorkflowNativeEventsTests {
         defer { try? FileManager.default.removeItem(at: f.directory) }
         _ = try await f.store.update(runID: f.run.id) { try $0.didWrite(invocationID: f.invocation.id) }
         if continuing {
+            try f.writeCodexTurns("turn")
             _ = try await f.router.receive(f.event(.submitted, text: f.invocation.submissionText(pluginID: f.instance.pluginID)), peer: f.peer)
         }
         if submission == "continue" {
@@ -720,7 +769,10 @@ struct AgentWorkflowNativeEventsTests {
     func restartedTabCanCompleteItsExplicitStep(plugin: String, newConversation: Bool) async throws {
         let f = try await fixture(plugin: plugin, completion: .explicit, allowsFinish: true)
         defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
         _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, plugin: plugin), peer: f.peer)
+        try f.appendNativeAnswer("Original discussion")
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "Original discussion", plugin: plugin), peer: f.peer)
         _ = try await f.store.reconcile([])
         let waiting = try await f.store.snapshot().runs[0]
         #expect(waiting.status == .running && waiting.issue?.contains("Waiting for Agent") == true)
@@ -775,9 +827,26 @@ struct AgentWorkflowNativeEventsTests {
         #expect(saved.runs[0].invocations[0].continuationTurnID == "turn")
         let restored = try AgentWorkflowExecution(restoring: saved.runs[0])
         #expect(restored.run.invocations[0].continuationTurnID == "turn")
+        let transcript = newConversation ? f.directory.appendingPathComponent("after-login.jsonl") : f.transcript
         let submitted = PluginEvent(pluginID: plugin, sessionID: live.conversationID, tmuxPane: live.paneID, workflow: .init(
-            kind: .submitted, nativeTurnID: "after-login", transcriptPath: f.transcript.path, text: prompt
+            kind: .submitted, nativeTurnID: "after-login", transcriptPath: transcript.path, text: prompt
         ))
+        if newConversation {
+            if plugin == "codex" {
+                try f.writeCodexTurns("after-login", conversationID: live.conversationID, to: transcript)
+            } else {
+                let record: [String: Any] = [
+                    "type": "user",
+                    "uuid": "after-login-user",
+                    "promptId": "after-login",
+                    "sessionId": live.conversationID,
+                    "isSidechain": false,
+                ]
+                try (JSONSerialization.data(withJSONObject: record) + Data([10])).write(to: transcript)
+            }
+        } else {
+            try f.appendNativeTurn("after-login")
+        }
         _ = try await f.router.receive(submitted, peer: peer)
         try #require(await service.handle(request, peer: peer).ok)
         let continued = try await f.store.snapshot().runs[0]
@@ -796,9 +865,9 @@ struct AgentWorkflowNativeEventsTests {
         ])
         try #require(await service.handle(finish, peer: peer).ok)
 
-        try Data("{\"final\":\"Finished after login\"}\n".utf8).write(to: f.transcript)
+        try Data("{\"final\":\"Finished after login\"}\n".utf8).write(to: transcript)
         let stop = PluginEvent(pluginID: plugin, sessionID: live.conversationID, tmuxPane: live.paneID, workflow: .init(
-            kind: .stopCandidate, nativeTurnID: "after-login", transcriptPath: f.transcript.path, text: "Finished after login"
+            kind: .stopCandidate, nativeTurnID: "after-login", transcriptPath: transcript.path, text: "Finished after login"
         ))
         let context = try #require(await f.router.receive(stop, peer: peer))
         let monitor = AgentWorkflowCompletionMonitor(store: f.store, runner: f.runner, inspect: { $0 }, onFailure: { Issue.record(Comment(rawValue: $0)) })
@@ -872,6 +941,7 @@ struct AgentWorkflowNativeEventsTests {
             _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, plugin: plugin), peer: f.peer)
         } else if stage == "continuation" {
             turn = "discussion"
+            try f.writeNativeTurns("turn", turn)
             _ = try await f.router.receive(f.event(.submitted, text: "Continue this task", turn: turn, plugin: plugin), peer: f.peer)
             let service = AgentWorkflowAgentService(store: f.store, inspect: { $0 }, synchronizeEvents: { _ in })
             let request = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
@@ -899,7 +969,7 @@ struct AgentWorkflowNativeEventsTests {
         _ = try AgentWorkflowExecution(validating: saved)
     }
 
-    @Test(arguments: ["submission", "stop", "inspection"])
+    @Test(arguments: ["submission", "stop", "inspection", "rotation"])
     func completionMonitorFollowsLivePaneMove(stage: String) async throws {
         let f = try await fixture()
         defer { try? FileManager.default.removeItem(at: f.directory) }
@@ -920,7 +990,7 @@ struct AgentWorkflowNativeEventsTests {
             }
             return instance
         }, onFailure: { Issue.record(Comment(rawValue: $0)) })
-        if stage != "stop" {
+        if stage != "stop", stage != "rotation" {
             try Data("{\"final\":\"Finished\"}\n".utf8).write(to: f.transcript)
         }
         await monitor.verify(initial, provider: provider)
@@ -937,7 +1007,7 @@ struct AgentWorkflowNativeEventsTests {
                 let stop = try #require(await f.router.receive(f.event(.stopCandidate, text: "Finished"), peer: f.peer))
                 await monitor.verify(stop, provider: provider)
             } else {
-                try Data("{\"final\":\"Finished\"}\n".utf8).write(to: f.transcript)
+                try Data("{\"final\":\"Finished\"}\n".utf8).write(to: f.transcript, options: stage == "rotation" ? .atomic : [])
             }
         }
         for _ in 0..<200 {
@@ -1196,6 +1266,7 @@ struct AgentWorkflowNativeEventsTests {
         #expect(retried.invocations.count == 1)
         #expect(retried.invocations[0].nativeTurnID == "turn")
         if rejected, let text = inputs.value.first {
+            try f.writeNativeTurns("turn", "continued")
             _ = try await f.router.receive(f.event(.submitted, text: text, turn: "continued", plugin: plugin), peer: f.peer)
             let completed = try await f.store.update(runID: f.run.id) {
                 try $0.requestStepCompletion(invocationID: f.invocation.id, instance: f.instance, turnID: "continued", now: Date())
@@ -1233,6 +1304,7 @@ struct AgentWorkflowNativeEventsTests {
                     await Task.yield()
                 }
             case "turn":
+                try f.writeNativeTurns("turn", "human")
                 _ = try await f.router.receive(f.event(.submitted, text: "Human continuation", turn: "human"), peer: f.peer)
             case "completion":
                 try await f.store.update(runID: f.run.id) {
@@ -1285,8 +1357,21 @@ struct AgentWorkflowNativeEventsTests {
         }
 
         func writeCodexTurns(_ ids: String..., conversationID: String? = nil, to destination: URL? = nil) throws {
+            let path = destination ?? transcript
+            let old = (try? Data(contentsOf: path))?.split(separator: 10).compactMap { line in
+                try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any]
+            } ?? []
+            let sameConversation = (old.first?["payload"] as? [String: Any])?["id"] as? String == (conversationID ?? instance.conversationID)
+            let starts = sameConversation ? old.filter { ($0["payload"] as? [String: Any])?["type"] as? String == "task_started" } : []
             var records: [[String: Any]] = [["type": "session_meta", "payload": ["id": conversationID ?? instance.conversationID]]]
-            records += ids.map { ["type": "event_msg", "payload": ["type": "task_started", "turn_id": $0]] }
+            records += ids.enumerated().map { index, id in
+                let previous = starts.indices.contains(index) && (starts[index]["payload"] as? [String: Any])?["turn_id"] as? String == id ? starts[index]["timestamp"] as? String : nil
+                return [
+                    "type": "event_msg",
+                    "timestamp": previous ?? Date().formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true)),
+                    "payload": ["type": "task_started", "turn_id": id],
+                ]
+            }
             var bytes = Data()
             for record in records {
                 try bytes.append(JSONSerialization.data(withJSONObject: record))
@@ -1295,10 +1380,141 @@ struct AgentWorkflowNativeEventsTests {
             try bytes.write(to: destination ?? transcript)
         }
 
-        func event(_ kind: PluginWorkflowEvent.Kind, text: String, turn: String = "turn", plugin: String = "codex") -> PluginEvent {
+        var nativeProvider: any AgentWorkflowProviding {
+            if instance.pluginID == "claude-code" {
+                ClaudeCodePluginCore()
+            } else {
+                CodexPluginCore()
+            }
+        }
+
+        private func nativeTurn(_ id: String, index: Int) throws -> Data {
+            let record: [String: Any] = if instance.pluginID == "claude-code" {
+                ["type": "user", "sessionId": instance.conversationID, "isSidechain": false, "uuid": UUID().uuidString, "promptId": id]
+            } else {
+                ["type": "event_msg", "payload": ["type": "task_started", "turn_id": id]]
+            }
+            // Use the same logical timeline as hookPeer(startedAt:).
+            let timed = record.merging(["timestamp": Date(timeIntervalSince1970: 100 + Double(index) * 2).formatted(.iso8601)]) { _, new in new }
+            return try JSONSerialization.data(withJSONObject: timed) + Data([10])
+        }
+
+        func writeNativeTurns(_ ids: String...) throws {
+            var bytes = Data()
+            if instance.pluginID == "codex" {
+                bytes = try JSONSerialization.data(withJSONObject: ["type": "session_meta", "payload": ["id": instance.conversationID]]) + Data([10])
+            }
+            for (index, id) in ids.enumerated() {
+                try bytes.append(nativeTurn(id, index: index))
+            }
+            try bytes.write(to: transcript)
+        }
+
+        func appendNativeTurn(_ id: String) throws {
+            let starts = try Data(contentsOf: transcript).split(separator: 10).filter { line in
+                let record = try JSONSerialization.jsonObject(with: Data(line)) as? [String: Any]
+                return (record?["type"] as? String == "user" && record?["promptId"] is String)
+                    || ((record?["payload"] as? [String: Any])?["type"] as? String == "task_started")
+            }.count
+            let file = try FileHandle(forWritingTo: transcript)
+            defer { try? file.close() }
+            try file.seekToEnd()
+            try file.write(contentsOf: nativeTurn(id, index: starts))
+        }
+
+        func appendCodexAnswer(_ answer: String, turn: String = "turn") throws {
+            let record: [String: Any] = [
+                "type": "event_msg", "payload": ["type": "task_complete", "turn_id": turn, "last_agent_message": answer],
+            ]
+            var bytes = try JSONSerialization.data(withJSONObject: record)
+            bytes.append(10)
+            let file = try FileHandle(forWritingTo: transcript)
+            defer { try? file.close() }
+            try file.seekToEnd()
+            try file.write(contentsOf: bytes)
+        }
+
+        func appendCodexAbort(_ turn: String) throws {
+            let record: [String: Any] = ["type": "event_msg", "payload": ["type": "turn_aborted", "turn_id": turn]]
+            let file = try FileHandle(forWritingTo: transcript)
+            defer { try? file.close() }
+            try file.seekToEnd()
+            try file.write(contentsOf: JSONSerialization.data(withJSONObject: record) + Data([10]))
+        }
+
+        func replaceProcess(in store: AgentWorkflowStore) async throws -> PluginIngressPeer {
+            var observation = AgentWorkflowObservation(instance)
+            observation.processID = 20
+            observation.processRuntimeID = "501:20:200:0"
+            _ = try await store.reconcile([observation])
+            return try #require(PluginIngressPeer.capture(peerPID: 20, userID: 501) { pid in
+                pid == 20 ? .init(processID: 20, parentProcessID: 1, userID: 501, startSeconds: 200, startMicroseconds: 0) : nil
+            })
+        }
+
+        func runner(in store: AgentWorkflowStore) -> AgentWorkflowRunner {
+            .init(store: store, transport: .init(inspect: { $0 }, prepare: { _, _ in }, write: { _, _ in
+                Issue.record("Recovery must not resend a task.")
+            }), onFailure: { Issue.record(Comment(rawValue: $0)) })
+        }
+
+        func appendNativeAnswer(_ answer: String, turn: String = "turn") throws {
+            if instance.pluginID == "codex" {
+                try appendCodexAnswer(answer, turn: turn)
+                return
+            }
+            let user = try Data(contentsOf: transcript).split(separator: 10).reversed().compactMap { line -> String? in
+                guard
+                    let record = try JSONSerialization.jsonObject(with: Data(line)) as? [String: Any],
+                    record["type"] as? String == "user", record["promptId"] as? String == turn else { return nil }
+                return record["uuid"] as? String
+            }.first
+            let parent = try #require(user)
+            let reply = UUID().uuidString
+            let records: [[String: Any]] = [
+                [
+                    "type": "assistant",
+                    "uuid": reply,
+                    "parentUuid": parent,
+                    "message": ["id": reply, "stop_reason": "end_turn", "content": [["type": "text", "text": answer]]],
+                ],
+                [
+                    "type": "system",
+                    "subtype": "stop_hook_summary",
+                    "uuid": UUID().uuidString,
+                    "parentUuid": reply,
+                    "hookErrors": [],
+                    "hookAdditionalContext": [],
+                    "preventedContinuation": false,
+                    "stopReason": "",
+                ],
+            ]
+            let file = try FileHandle(forWritingTo: transcript)
+            defer { try? file.close() }
+            try file.seekToEnd()
+            for record in records {
+                let native = record.merging(["sessionId": instance.conversationID, "isSidechain": false]) { current, _ in current }
+                try file.write(contentsOf: JSONSerialization.data(withJSONObject: native) + Data([10]))
+            }
+        }
+
+        func event(
+            _ kind: PluginWorkflowEvent.Kind, text: String, turn: String = "turn", plugin: String = "codex", hasPendingWork: Bool = false
+        ) -> PluginEvent {
             .init(pluginID: plugin, sessionID: "conversation", tmuxPane: "%1", workflow: .init(
-                kind: kind, nativeTurnID: turn, transcriptPath: transcript.path, text: text
+                kind: kind, nativeTurnID: turn, transcriptPath: transcript.path, text: text, hasPendingWork: hasPendingWork
             ))
+        }
+
+        func hookPeer(startedAt: UInt64, source: PluginIngressPeer? = nil) throws -> PluginIngressPeer {
+            let writer = try #require((source ?? peer).processes.first)
+            let hookPID = Int32(startedAt)
+            return try #require(PluginIngressPeer.capture(peerPID: hookPID, userID: writer.userID) { pid in
+                if pid == hookPID {
+                    return .init(processID: hookPID, parentProcessID: writer.processID, userID: writer.userID, startSeconds: startedAt, startMicroseconds: 0)
+                }
+                return pid == writer.processID ? writer : nil
+            })
         }
     }
 
@@ -1382,6 +1598,7 @@ struct AgentWorkflowNativeEventsTests {
                 }
             } else {
                 do {
+                    try f.writeNativeTurns("turn", "B")
                     _ = try await f.router.receive(f.event(.submitted, text: "Implement the design", turn: "B", plugin: plugin), peer: f.peer)
                 } catch { Issue.record(Comment(rawValue: error.localizedDescription)) }
             }
@@ -1433,6 +1650,118 @@ struct AgentWorkflowNativeEventsTests {
         await f.runner.shutdown()
     }
 
+    @Test(arguments: [false, true])
+    func resultCommitDrainsAcknowledgedStop(live: Bool) async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        if !live {
+            try await f.store.update(runID: f.run.id) {
+                $0.waitForResult(invocationID: f.invocation.id, turnID: "turn", reason: "Waiting for final Stop")
+            }
+        }
+        let original = try #require(await f.store.snapshot().runs.first)
+        try f.writeCodexTurns("turn")
+        try f.appendCodexAnswer("Background checks are running")
+        let stop = PluginEvent(pluginID: "codex", sessionID: f.instance.conversationID, tmuxPane: f.instance.paneID, workflow: .init(
+            kind: .stopCandidate, nativeTurnID: "turn", transcriptPath: f.transcript.path,
+            text: "Background checks are running", hasPendingWork: true
+        ))
+        let gate = AsyncStream<Void>.makeStream()
+        defer { gate.continuation.finish() }
+        let queued = LockIsolated(false), scheduled = LockIsolated(false)
+        let activeMonitor = LockIsolated<AgentWorkflowCompletionMonitor?>(nil)
+        let dispatcher = PluginEventDispatcher(onState: { _, _, _, _, _, _ in
+            for await _ in gate.stream {
+                break
+            }
+            do {
+                if let context = try await f.router.receive(stop, peer: f.peer) {
+                    await activeMonitor.value?.verify(context, provider: CodexPluginCore())
+                }
+            } catch { Issue.record(error) }
+        })
+        let path = "\(NSTemporaryDirectory())wf-\(UUID().uuidString.prefix(8)).sock"
+        let ingress = IngressSocketServer(socketPath: path, coreLookup: { _ in EchoPluginCore() }, dispatcher: dispatcher)
+        try await ingress.start()
+        defer { Task { await ingress.stop() } }
+        let passes = LockIsolated(0)
+        let synchronize: @Sendable () async throws -> Void = {
+            let pass = passes.withValue { $0 += 1
+                return $0
+            }
+            if pass == (live ? 1 : 2) {
+                try await enqueueAcknowledgedHook(session: "queued-stop", path: path)
+                queued.setValue(true)
+            }
+            try await ingress.waitForPendingFrames()
+        }
+        let resume: Task<AgentWorkflowRun, any Error>?
+        if live {
+            let monitor = AgentWorkflowCompletionMonitor(
+                store: f.store, runner: f.runner, inspect: { $0 }, synchronizeIngress: synchronize,
+                onFailure: { Issue.record(Comment(rawValue: $0)) }
+            )
+            activeMonitor.setValue(monitor)
+            let interim = try #require(await f.router.receive(f.event(.stopCandidate, text: "Background checks are running"), peer: f.peer))
+            await monitor.verify(interim, provider: CodexPluginCore())
+            resume = nil
+        } else {
+            let recovery = AgentWorkflowResultRecovery(store: f.store, inspect: { $0 }, provider: { _ in CodexPluginCore() }, synchronizeIngress: synchronize)
+            let service = AgentWorkflowService(
+                store: f.store, scan: { _ in [.init(f.instance)] }, schedule: { _ in scheduled.setValue(true) },
+                recoverResults: { try await recovery.recover($0) }
+            )
+            resume = Task { try await service.resume(runID: original.id, expectedRevision: original.revision) }
+        }
+        for _ in 0..<100 {
+            if queued.value {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(queued.value)
+        #expect(try await f.store.snapshot().runs[0].invocations[0].result == nil)
+        gate.continuation.finish()
+        if let resume {
+            await #expect(throws: AgentWorkflowError.self) { try await resume.value }
+        }
+        try await ingress.waitForPendingFrames()
+        let archive = try await f.store.snapshot()
+        #expect(archive.runs[0].status == (live ? .running : .paused))
+        #expect(archive.runs[0].invocations[0].result == nil)
+        #expect(archive.pendingReceipts?[f.invocation.id]?.backgroundTurn?.nativeTurnID == "turn")
+        #expect(!scheduled.value)
+        await activeMonitor.value?.shutdown()
+        await ingress.stop()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test
+    func liveVerificationReadsPastAnEarlierAnswerForTheSameTurn() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        try f.writeCodexTurns("turn")
+        try f.appendCodexAnswer("Previous answer")
+        try f.appendCodexAnswer("Final answer")
+        let stop = try #require(await f.router.receive(f.event(.stopCandidate, text: "Final answer"), peer: f.peer))
+        let monitor = AgentWorkflowCompletionMonitor(store: f.store, runner: f.runner, inspect: { $0 }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        await monitor.verify(stop, provider: CodexPluginCore())
+        for _ in 0..<100 {
+            if try await f.store.snapshot().runs[0].invocations[0].status == .succeeded {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let run = try #require(await f.store.snapshot().runs.first)
+        #expect(run.status == .completed && run.invocations[0].result?.text == "Final answer")
+        await monitor.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
     private func enqueueAcknowledgedHook(session: String, path: String) async throws {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         try #require(fd >= 0)
@@ -1466,11 +1795,13 @@ struct AgentWorkflowNativeEventsTests {
         let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
             guard available.value else { throw AgentWorkflowInspectionUnavailable() }
             return $0
-        }, verificationTimeout: state == "timeout" ? .milliseconds(250) : .seconds(5), onFailure: { _ in timedOut.setValue(true) })
+        }, verificationTimeout: state == "timeout" ? .milliseconds(250) : .seconds(5), provider: { _ in f.nativeProvider }, onFailure: { _ in timedOut.setValue(true) })
         _ = try await router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, plugin: plugin), peer: f.peer)
         available.setValue(false)
+        try f.writeNativeTurns("turn", "B")
         _ = try await router.receive(f.event(.submitted, text: "Implement", turn: "B", plugin: plugin), peer: f.peer)
         if state == "stopped" {
+            try f.appendNativeAnswer("More discussion", turn: "B")
             _ = try await router.receive(f.event(.stopCandidate, text: "More discussion", turn: "B", plugin: plugin), peer: f.peer)
         }
         if state == "timeout" {
@@ -1511,6 +1842,12 @@ struct AgentWorkflowNativeEventsTests {
         }
         if state == "stopped" {
             #expect(await service.handle(complete, peer: f.peer).error != nil)
+            #expect(try await f.store.snapshot().pendingReceipts?[f.invocation.id]?.completion?.text == "More discussion")
+            _ = try await router.receive(f.event(.submitted, text: "Yes, implement", turn: "B", plugin: plugin), peer: f.peer)
+            try f.appendNativeTurn("B")
+            try await router.requireVerifiedSubmission(f.invocation.id)
+            #expect(try await f.store.snapshot().runs[0].invocations[0].stepTurn?.stopped == false)
+            try f.appendNativeTurn("C")
             _ = try await router.receive(f.event(.submitted, text: "Now implement", turn: "C", plugin: plugin), peer: f.peer)
         }
         try #require(await service.handle(complete, peer: f.peer).ok)
@@ -1522,6 +1859,2041 @@ struct AgentWorkflowNativeEventsTests {
         await f.runner.shutdown()
     }
 
+    @Test(arguments: [false, true])
+    func stoppedStepRechecksATranscriptProofOrRebuildsALegacyBoundary(legacy: Bool) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        if legacy {
+            try f.appendCodexAnswer("Earlier proposal")
+            try f.appendNativeTurn("turn")
+        }
+        try f.appendCodexAnswer("Proposal")
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "Proposal"), peer: f.peer)
+        var archive = try await f.store.snapshot()
+        let store: AgentWorkflowStore
+        if legacy {
+            archive.schemaVersion = 9
+            archive.pendingReceipts = nil
+            let path = f.directory.appendingPathComponent("v9-ledger.json")
+            try JSONEncoder().encode(archive).write(to: path)
+            store = AgentWorkflowStore(fileURL: path, hostID: f.instance.hostID)
+            _ = try await store.reconcile([.init(f.instance)])
+        } else {
+            store = f.store
+        }
+        try f.appendNativeTurn("turn")
+        let nativeTurn = PluginWorkflowTurn(nativeTurnID: "turn", transcriptPath: f.transcript.path)
+        let receipt = archive.pendingReceipts?[f.invocation.id]
+        if !legacy {
+            let file = try AgentWorkflowTranscriptFile(
+                path: f.transcript.path, parser: CodexWorkflowTranscript(conversationID: f.instance.conversationID, nativeTurnID: "turn")
+            )
+            let proof = try #require(await file.verifyResumedSubmission(nativeTurn, after: receipt?.stopBoundary, matching: receipt?.completion))
+            let handle = try FileHandle(forWritingTo: f.transcript)
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: Data("{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\"}}\n".utf8))
+            #expect(try await !store.observeStepTurn(
+                runID: f.run.id, invocationID: f.invocation.id, instance: f.instance,
+                turn: .init(id: "turn", transcriptPath: f.transcript.path, prompt: "Continue"), reopening: proof, expectedReceipt: receipt
+            ))
+            #expect(try await store.snapshot().runs[0].invocations[0].stepTurn?.stopped == true)
+        }
+        let runner = AgentWorkflowRunner(store: store, transport: .init(inspect: { $0 }, prepare: { _, _ in }, write: { _, _ in
+            Issue.record("An explicit step must await its completion request.")
+        }), onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let router = AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 }, provider: { _ in CodexPluginCore() })
+        _ = try await router.receive(f.event(.submitted, text: "Continue"), peer: f.peer)
+        try await router.requireVerifiedSubmission(f.invocation.id)
+        let saved = try await store.snapshot()
+        #expect(saved.runs[0].invocations[0].stepTurn?.stopped == false)
+        #expect(saved.pendingReceipts?[f.invocation.id]?.stopBoundary?.nativeRecord == true)
+        await router.shutdown()
+        await runner.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test
+    func replayDoesNotReopenASecondIdenticalAnswer() async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        try f.appendCodexAnswer("Done")
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "Done", hasPendingWork: true), peer: f.peer)
+        let followup = f.event(.submitted, text: "Finish the background work")
+        try f.appendNativeTurn("turn")
+        _ = try await f.router.receive(followup, peer: f.peer)
+        try f.appendCodexAnswer("Done")
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "Done"), peer: f.peer)
+        _ = try await f.router.receive(followup, peer: f.peer)
+        let service = AgentWorkflowAgentService(store: f.store, inspect: { $0 }, synchronizeEvents: {
+            try await f.router.requireVerifiedSubmission($0)
+        })
+        let request = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        #expect(await service.handle(request, peer: f.peer).error != nil)
+        #expect(try await f.store.snapshot().runs[0].invocations[0].stepTurn?.stopped == true)
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func reopeningUsesANewNativeEndingBeforeApplyingStop(completionRequested: Bool, identicalReply: Bool) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        try f.appendCodexAnswer("Done")
+        let stop = f.event(.stopCandidate, text: "Done")
+        let oldPeer = try f.hookPeer(startedAt: 101)
+        let submitPeer = try f.hookPeer(startedAt: 102)
+        let finalPeer = try f.hookPeer(startedAt: 103)
+        _ = try await f.router.receive(stop, peer: oldPeer)
+        try f.appendNativeTurn("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: "Check again"), peer: submitPeer)
+        try await f.router.requireVerifiedSubmission(f.invocation.id)
+        let running = try await f.store.snapshot()
+        #expect(running.runs[0].invocations[0].stepTurn?.stopped == false)
+
+        let monitor = AgentWorkflowCompletionMonitor(store: f.store, runner: f.runner, inspect: { $0 }, onFailure: {
+            Issue.record(Comment(rawValue: $0))
+        })
+        #expect(try await f.router.receive(stop, peer: oldPeer) == nil)
+        #expect(try await f.store.snapshot() == running)
+        if completionRequested {
+            _ = try await f.store.update(runID: f.run.id) {
+                try $0.requestStepCompletion(invocationID: f.invocation.id, instance: f.instance, turnID: "turn", now: Date())
+            }
+        }
+        let answer = identicalReply ? "Done" : "Implemented"
+        if identicalReply {
+            try f.appendCodexAnswer(answer)
+            #expect(try await f.store.snapshot().runs[0].invocations[0].status == .running)
+            #expect(try await f.store.snapshot().pendingReceipts?[f.invocation.id]?.completion == nil)
+        }
+        let nextStop = try await f.router.receive(f.event(.stopCandidate, text: answer), peer: finalPeer)
+        #expect(try await f.store.snapshot().runs[0].invocations[0].stepTurn?.stopped == true)
+        if completionRequested {
+            try await monitor.verify(#require(nextStop), provider: f.nativeProvider)
+        } else {
+            #expect(nextStop == nil)
+            let service = AgentWorkflowAgentService(store: f.store, inspect: { $0 }, synchronizeEvents: {
+                try await f.router.requireVerifiedSubmission($0)
+            })
+            let request = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+            #expect(await service.handle(request, peer: f.peer).error?.code == "workflow_denied")
+        }
+        #expect(try await f.router.receive(stop, peer: oldPeer) == nil)
+        if !identicalReply {
+            try f.appendCodexAnswer(answer)
+        }
+        for _ in 0..<100 {
+            let call = try await f.store.snapshot().runs[0].invocations[0]
+            if completionRequested ? call.status == .succeeded : call.stepTurn?.stopped == true {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        let closed = try await f.store.snapshot()
+        #expect(closed.runs[0].invocations[0].stepTurn?.stopped == true)
+        if completionRequested {
+            #expect(closed.runs[0].invocations[0].result?.text == answer)
+        } else {
+            #expect(closed.pendingReceipts?[f.invocation.id]?.completion?.text == answer)
+            #expect(closed.runs[0].invocations[0].result == nil)
+        }
+        await monitor.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test
+    func backgroundStopSupersedesVerifiedAnswerAcrossRestart() async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        try f.appendCodexAnswer("Proposal")
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "Proposal"), peer: f.hookPeer(startedAt: 101))
+        try f.appendNativeTurn("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: "Implement"), peer: f.hookPeer(startedAt: 102))
+        try await f.router.requireVerifiedSubmission(f.invocation.id)
+        _ = try await f.store.update(runID: f.run.id) {
+            try $0.requestStepCompletion(invocationID: f.invocation.id, instance: f.instance, turnID: "turn", now: Date())
+        }
+        try f.appendCodexAnswer("Done")
+        let final = try #require(await f.router.receive(f.event(.stopCandidate, text: "Done"), peer: f.hookPeer(startedAt: 103)))
+        let flushed = LockIsolated(false)
+        let monitor = AgentWorkflowCompletionMonitor(store: f.store, runner: f.runner, inspect: { $0 }, synchronizeIngress: {
+            let background = f.event(.stopCandidate, text: "Done", hasPendingWork: true)
+            _ = try await f.router.receive(background, peer: f.hookPeer(startedAt: 104))
+            flushed.setValue(true)
+        }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        await monitor.verify(final, provider: f.nativeProvider)
+        for _ in 0..<100 {
+            if flushed.value {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        try #require(flushed.value)
+        await monitor.shutdown()
+        let saved = try await f.store.snapshot()
+        #expect(saved.runs[0].invocations[0].result == nil)
+        #expect(saved.pendingReceipts?[f.invocation.id]?.completion?.hasPendingWork == true)
+        let restarted = AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID)
+        _ = try await restarted.reconcile([.init(f.instance)])
+        let run = try #require(await restarted.snapshot().runs.first)
+        let recovery = AgentWorkflowResultRecovery(store: restarted, inspect: { $0 }, provider: { _ in CodexPluginCore() })
+        let recovered = try await recovery.recover(run)
+        #expect(recovered.invocations[0].status == .uncertain)
+        #expect(recovered.invocations[0].result == nil)
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true])
+    func continueOnlyBypassesAVerifiedReplay(newSubmission: Bool) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let available = LockIsolated(true)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            guard available.value else { throw AgentWorkflowInspectionUnavailable() }
+            return $0
+        }, provider: { _ in f.nativeProvider })
+        try f.writeNativeTurns("turn")
+        _ = try await router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 101))
+        let receipt = f.event(.submitted, text: "An earlier discussion")
+        _ = try await router.receive(receipt, peer: f.hookPeer(startedAt: 102))
+        try f.appendCodexAnswer("Proposal")
+        _ = try await router.receive(f.event(.stopCandidate, text: "Proposal"), peer: f.hookPeer(startedAt: 103))
+        available.setValue(false)
+        if newSubmission {
+            try f.appendNativeTurn("turn")
+            _ = try await router.receive(f.event(.submitted, text: "Implement this"), peer: f.hookPeer(startedAt: 104))
+        } else {
+            _ = try await router.receive(receipt, peer: f.hookPeer(startedAt: 102))
+        }
+        let paused = try await f.store.update(runID: f.run.id) { $0.pause(reason: "Operator paused") }
+        await #expect(throws: AgentWorkflowError.self) {
+            try await router.requireVerifiedSubmission(f.invocation.id)
+        }
+        let writes = LockIsolated<[String]>([])
+        let service = AgentWorkflowService(
+            store: f.store, scan: { _ in [.init(f.instance)] }, schedule: { _ in },
+            synchronizeEvents: { try await router.requireVerifiedSubmission($0, allowingStoppedReplay: true) },
+            resumeStep: { invocation, _ in
+                if let turn = invocation.stepTurn {
+                    writes.withValue { $0.append(turn.id) }
+                }
+            }
+        )
+        if newSubmission {
+            await #expect(throws: AgentWorkflowError.self) {
+                try await service.resume(runID: paused.id, expectedRevision: paused.revision)
+            }
+            #expect(writes.value.isEmpty)
+        } else {
+            let continued = try await service.resume(runID: paused.id, expectedRevision: paused.revision)
+            #expect(continued.status == .running)
+            #expect(writes.value == ["turn"])
+        }
+        await #expect(throws: AgentWorkflowError.self) {
+            try await router.requireVerifiedSubmission(f.invocation.id)
+        }
+        await router.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true])
+    func currentFailureWinsRegardlessOfStopArrivalOrder(failureFirst: Bool) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 101))
+        try f.appendCodexAnswer("Proposal")
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "Proposal"), peer: f.hookPeer(startedAt: 102))
+        try f.appendNativeTurn("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: "Implement"), peer: f.hookPeer(startedAt: 103))
+        try await f.router.requireVerifiedSubmission(f.invocation.id)
+        _ = try await f.router.receive(f.event(.failed, text: "Expired failure"), peer: f.hookPeer(startedAt: 102))
+        #expect(try await f.store.snapshot().runs[0].invocations[0].status == .running)
+        _ = try await f.store.update(runID: f.run.id) {
+            try $0.requestStepCompletion(invocationID: f.invocation.id, instance: f.instance, turnID: "turn", now: Date())
+        }
+        let stop = f.event(.stopCandidate, text: "Done")
+        let failure = f.event(.failed, text: "Current failure")
+        if failureFirst {
+            _ = try await f.router.receive(failure, peer: f.hookPeer(startedAt: 104))
+            _ = try await f.router.receive(stop, peer: f.hookPeer(startedAt: 105))
+        } else {
+            _ = try #require(await f.router.receive(stop, peer: f.hookPeer(startedAt: 105)))
+            _ = try await f.router.receive(failure, peer: f.hookPeer(startedAt: 104))
+        }
+        let call = try await f.store.snapshot().runs[0].invocations[0]
+        #expect(call.status == .failed && call.issue == "Current failure")
+        #expect(call.result == nil)
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: ["unconfirmed", "already-ended", "two-queued", "late-replay"])
+    func sameTurnSubmissionsAreRetainedWhileTheWriterIsUnavailable(scenario: String) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let available = LockIsolated(true)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            guard available.value else { throw AgentWorkflowInspectionUnavailable() }
+            return $0
+        }, recheckConversation: { _, _, _ in available.value ? .ready : .deferred }, provider: { _ in f.nativeProvider })
+        try f.writeNativeTurns("turn")
+        _ = try await router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 101))
+        try f.appendCodexAnswer("Proposal")
+        _ = try await router.receive(f.event(.stopCandidate, text: "Proposal"), peer: f.hookPeer(startedAt: 102))
+        available.setValue(false)
+        try f.appendNativeTurn("turn")
+        let submit = f.event(.submitted, text: "Continue the discussion")
+        if scenario == "unconfirmed" {
+            try await router.receiveUnconfirmedSubmission(submit, peer: f.hookPeer(startedAt: 103))
+        } else {
+            _ = try await router.receive(submit, peer: f.hookPeer(startedAt: 103))
+            try f.appendCodexAnswer("Clarification")
+            _ = try await router.receive(f.event(.stopCandidate, text: "Clarification"), peer: f.hookPeer(startedAt: 104))
+            #expect(try await f.store.snapshot().pendingReceipts?[f.invocation.id]?.completion?.text == "Proposal")
+            if scenario == "two-queued" {
+                try f.appendNativeTurn("turn")
+                _ = try await router.receive(f.event(.submitted, text: "Implement it"), peer: f.hookPeer(startedAt: 105))
+            } else if scenario == "late-replay" {
+                _ = try await router.receive(f.event(.submitted, text: "Earlier discussion"), peer: f.hookPeer(startedAt: 101))
+            }
+        }
+        available.setValue(true)
+        try await router.requireVerifiedSubmission(f.invocation.id)
+        let recovered = try await f.store.snapshot()
+        let receipt = try #require(recovered.pendingReceipts?[f.invocation.id])
+        let hasStop = scenario == "already-ended" || scenario == "late-replay"
+        #expect(recovered.runs[0].invocations[0].stepTurn?.stopped == hasStop)
+        #expect(receipt.resumedHookStartedAt == Date(timeIntervalSince1970: scenario == "two-queued" ? 105 : 103))
+        #expect(receipt.completion?.text == (hasStop ? "Clarification" : nil))
+        if hasStop {
+            let request = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+            let service = AgentWorkflowAgentService(store: f.store, inspect: { $0 }, synchronizeEvents: {
+                try await router.requireVerifiedSubmission($0)
+            })
+            #expect(await service.handle(request, peer: f.peer).error?.code == "workflow_denied")
+        }
+        await router.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true])
+    func queuedReceiptsAreRecheckedAgainstTheLatestNativeTurn(afterLoop: Bool) async throws {
+        let f = try await fixture(completion: .explicit, afterLoop: afterLoop)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 101))
+        let available = LockIsolated(false)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            guard available.value else { throw AgentWorkflowInspectionUnavailable() }
+            return $0
+        }, provider: { _ in f.nativeProvider })
+        try f.appendNativeTurn("B")
+        _ = try await router.receive(f.event(.submitted, text: "Current work", turn: "C"), peer: f.hookPeer(startedAt: 104))
+        _ = try await router.receive(f.event(.submitted, text: "Earlier work", turn: "B"), peer: f.hookPeer(startedAt: 103))
+        available.setValue(true)
+        await #expect(throws: AgentWorkflowError.self) { try await router.requireVerifiedSubmission(f.invocation.id) }
+        #expect(try await f.store.snapshot().runs[0].invocations[0].resultTurnID == "turn")
+        try f.appendNativeTurn("C")
+        try await router.requireVerifiedSubmission(f.invocation.id)
+        let complete = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        let service = AgentWorkflowAgentService(store: f.store, inspect: { $0 }, synchronizeEvents: {
+            try await router.requireVerifiedSubmission($0)
+        }, provider: { _ in f.nativeProvider })
+        try #require(await service.handle(afterLoop ? f.loopExitRequest() : complete, peer: f.peer).ok)
+        #expect(try await f.store.snapshot().runs[0].invocations[0].resultTurnID == "C")
+        await router.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: ["later-submission", "host-restart"])
+    func pendingContinuationFailureSurvivesLaterSubmissionOrRestart(scenario: String) async throws {
+        let restart = scenario == "host-restart"
+        let plugin = restart ? "claude-code" : "codex"
+        let f = try await fixture(plugin: plugin, completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let available = LockIsolated(true)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            guard available.value else { throw AgentWorkflowInspectionUnavailable() }
+            return $0
+        }, provider: { _ in f.nativeProvider })
+        try f.writeNativeTurns("turn")
+        _ = try await router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, plugin: plugin), peer: f.hookPeer(startedAt: 101))
+        try f.appendNativeAnswer("Proposal")
+        _ = try await router.receive(f.event(.stopCandidate, text: "Proposal", plugin: plugin), peer: f.hookPeer(startedAt: 102))
+        available.setValue(false)
+        let failedTurn = restart ? "limited" : "turn"
+        try f.appendNativeTurn(failedTurn)
+        _ = try await router.receive(f.event(.submitted, text: "Start work", turn: failedTurn, plugin: plugin), peer: f.hookPeer(startedAt: 103))
+        _ = try await router.receive(f.event(.failed, text: "Quota exceeded", turn: failedTurn, plugin: plugin), peer: f.hookPeer(startedAt: 104))
+        #expect(try await f.store.snapshot().pendingReceipts?[f.invocation.id]?.continuations?.first(where: { $0.completion?.kind == .failed })?.completion?.text == "Quota exceeded")
+        if restart {
+            await router.shutdown()
+            let reopened = AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID)
+            _ = try await reopened.reconcile([.init(f.instance)])
+            let paused = try #require(await reopened.snapshot().runs.first)
+            let runner = AgentWorkflowRunner(store: reopened, transport: .init(inspect: { $0 }, prepare: { _, _ in }, write: { _, _ in
+                Issue.record("The failed invocation must not be resent.")
+            }), onFailure: { Issue.record(Comment(rawValue: $0)) })
+            let restarted = AgentWorkflowEventRouter(store: reopened, runner: runner, inspect: { $0 }, provider: { _ in f.nativeProvider })
+            let service = AgentWorkflowService(
+                store: reopened, scan: { _ in [.init(f.instance)] }, schedule: { _ in Issue.record("The failure must stay paused.") },
+                synchronizeEvents: { try await restarted.requireVerifiedSubmission($0, allowingStoppedReplay: true) },
+                resumeStep: { _, _ in Issue.record("Continue must not send a reminder while recovering the failure.") }
+            )
+            let recovered = try await service.resume(runID: paused.id, expectedRevision: paused.revision)
+            #expect(recovered.status == .paused)
+            #expect(recovered.invocations[0].status == .failed && recovered.invocations[0].issue == "Quota exceeded")
+            await restarted.shutdown()
+            await runner.shutdown()
+        } else {
+            try f.appendNativeTurn("turn")
+            _ = try await router.receive(f.event(.submitted, text: "A later input"), peer: f.hookPeer(startedAt: 105))
+            available.setValue(true)
+            try await router.requireVerifiedSubmission(f.invocation.id)
+            let call = try await f.store.snapshot().runs[0].invocations[0]
+            #expect(call.status == .failed && call.issue == "Quota exceeded")
+            await router.shutdown()
+        }
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true])
+    func aSingleQueuedReceiptCannotSelectAnOlderNativeTurn(afterLoop: Bool) async throws {
+        let f = try await fixture(completion: .explicit, afterLoop: afterLoop)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        let available = LockIsolated(false)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            guard available.value else { throw AgentWorkflowInspectionUnavailable() }
+            return $0
+        }, provider: { _ in f.nativeProvider })
+        try f.appendNativeTurn("B")
+        _ = try await router.receive(f.event(.submitted, text: "Old work", turn: "B"), peer: f.hookPeer(startedAt: 103))
+        try f.appendNativeTurn("C")
+        available.setValue(true)
+        let service = AgentWorkflowAgentService(store: f.store, inspect: { $0 }, synchronizeEvents: {
+            try await router.requireVerifiedSubmission($0)
+        }, provider: { _ in f.nativeProvider })
+        let complete = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        #expect(await service.handle(complete, peer: f.peer).error?.code == "workflow_denied")
+        #expect(try await f.store.snapshot().runs[0].invocations[0].resultTurnID == "turn")
+        _ = try await router.receive(f.event(.submitted, text: "Current work", turn: "C"), peer: f.hookPeer(startedAt: 104))
+        try #require(await service.handle(complete, peer: f.peer).ok)
+        #expect(try await f.store.snapshot().runs[0].invocations[0].resultTurnID == "C")
+        await router.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true], ["live", "delayed", "restart", "v9-live", "v9-delayed", "v9-restart"])
+    func aPendingContinuationStopSurvivesHostRestart(sameID: Bool, mode: String) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 101))
+        try f.appendCodexAnswer("Old proposal")
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "Old proposal"), peer: f.hookPeer(startedAt: 102))
+        let upgraded: AgentWorkflowStore
+        if mode.hasPrefix("v9-") {
+            var ledger = try await f.store.snapshot()
+            ledger.schemaVersion = 9
+            ledger.pendingReceipts = nil
+            try JSONEncoder().encode(ledger).write(to: await f.store.fileURL, options: .atomic)
+            upgraded = AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID)
+            _ = try await upgraded.reconcile([.init(f.instance)])
+        } else {
+            upgraded = f.store
+        }
+        let available = LockIsolated(mode.hasSuffix("live"))
+        let router = AgentWorkflowEventRouter(store: upgraded, runner: f.runner, inspect: {
+            guard available.value else { throw AgentWorkflowInspectionUnavailable() }
+            return $0
+        }, provider: { _ in f.nativeProvider })
+        let turn = sameID ? "turn" : "B"
+        try f.appendNativeTurn(turn)
+        _ = try await router.receive(f.event(.submitted, text: "Clarify it", turn: turn), peer: f.hookPeer(startedAt: 103))
+        try f.appendNativeAnswer("New proposal", turn: turn)
+        _ = try await router.receive(f.event(.stopCandidate, text: "New proposal", turn: turn), peer: f.hookPeer(startedAt: 104))
+        if mode.hasSuffix("restart") {
+            await router.shutdown()
+        }
+        available.setValue(true)
+        let reopened = mode.hasSuffix("restart") ? AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID) : upgraded
+        if mode.hasSuffix("restart") {
+            _ = try await reopened.reconcile([.init(f.instance)])
+        }
+        let runner = AgentWorkflowRunner(store: reopened, transport: .init(inspect: { $0 }, prepare: { _, _ in }, write: { _, _ in
+            Issue.record("Recovery must not resend the task.")
+        }), onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let restored = mode.hasSuffix("restart") ? AgentWorkflowEventRouter(store: reopened, runner: runner, inspect: { $0 }, provider: { _ in f.nativeProvider }) : router
+        let service = AgentWorkflowAgentService(store: reopened, inspect: { $0 }, synchronizeEvents: {
+            try await restored.requireVerifiedSubmission($0)
+        })
+        let complete = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        #expect(await service.handle(complete, peer: f.peer).error?.code == "workflow_denied")
+        let state = try await reopened.snapshot()
+        #expect(state.runs[0].invocations[0].stepTurn?.id == turn)
+        #expect(state.runs[0].invocations[0].stepTurn?.stopped == true)
+        #expect(state.runs[0].invocations[0].result == nil)
+        #expect(state.pendingReceipts?[f.invocation.id]?.completion?.text == "New proposal")
+        await restored.shutdown()
+        await runner.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true], ["online", "restart", "ended-online", "ended-restart"])
+    func aPendingFailureIsRecoveredBeforeOrAfterEnd(initialUnconfirmed: Bool, mode: String) async throws {
+        let ended = mode.hasPrefix("ended")
+        let restarted = mode.hasSuffix("restart")
+        let f = try await fixture(plugin: "claude-code", completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let available = LockIsolated(!initialUnconfirmed)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            guard available.value else { throw AgentWorkflowInspectionUnavailable() }
+            return $0
+        }, provider: { _ in f.nativeProvider })
+        try f.writeNativeTurns("turn")
+        let first = f.event(.submitted, text: f.invocation.delivery.input.text, plugin: "claude-code")
+        if initialUnconfirmed {
+            try await router.receiveUnconfirmedSubmission(first, peer: f.hookPeer(startedAt: 101))
+        } else {
+            _ = try await router.receive(first, peer: f.hookPeer(startedAt: 101))
+        }
+        available.setValue(false)
+        try f.appendNativeTurn("B")
+        _ = try await router.receive(f.event(.submitted, text: "Continue reviewing", turn: "B", plugin: "claude-code"), peer: f.hookPeer(startedAt: 103))
+        _ = try await router.receive(f.event(.failed, text: "Quota exceeded", turn: "B", plugin: "claude-code"), peer: f.hookPeer(startedAt: 104))
+        if ended {
+            try await f.store.update(runID: f.run.id) { $0.end() }
+        }
+        if restarted {
+            await router.shutdown()
+        }
+        available.setValue(true)
+        let reopened = restarted ? AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID) : f.store
+        if restarted {
+            _ = try await reopened.reconcile([.init(f.instance)])
+        }
+        let runner = AgentWorkflowRunner(store: reopened, transport: .init(inspect: { $0 }, prepare: { _, _ in }, write: { _, _ in
+            Issue.record("Failure recovery must not write a reminder.")
+        }), onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let restored = restarted ? AgentWorkflowEventRouter(store: reopened, runner: runner, inspect: { $0 }, provider: { _ in f.nativeProvider }) : router
+        try await restored.requireVerifiedSubmission(f.invocation.id)
+        let run = try await reopened.snapshot().runs[0]
+        #expect(run.status == (ended ? .ended : .paused))
+        #expect(run.invocations[0].status == .failed && run.invocations[0].issue == "Quota exceeded")
+        await restored.shutdown()
+        await runner.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true])
+    func anOlderTaskFailureCannotTakeOverAnExplicitWorkflow(crossFile: Bool) async throws {
+        let f = try await fixture(plugin: "claude-code", completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("old", "turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, plugin: "claude-code"), peer: f.hookPeer(startedAt: 105))
+        let available = LockIsolated(false)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            guard available.value else { throw AgentWorkflowInspectionUnavailable() }
+            return $0
+        }, recheckConversation: { _, _, _ in .deferred }, provider: { _ in f.nativeProvider })
+        let oldTranscript = crossFile ? f.directory.appendingPathComponent("older-conversation.jsonl") : f.transcript
+        let oldConversation = crossFile ? "older-conversation" : f.instance.conversationID
+        if crossFile {
+            let record: [String: Any] = ["type": "user", "uuid": "old-user", "promptId": "old", "sessionId": oldConversation, "isSidechain": false]
+            try (JSONSerialization.data(withJSONObject: record) + Data([10])).write(to: oldTranscript)
+        }
+        func oldEvent(_ kind: PluginWorkflowEvent.Kind, text: String) -> PluginEvent {
+            .init(pluginID: "claude-code", sessionID: oldConversation, tmuxPane: f.instance.paneID, workflow: .init(
+                kind: kind, nativeTurnID: "old", transcriptPath: oldTranscript.path, text: text
+            ))
+        }
+        try await router.receiveUnconfirmedSubmission(oldEvent(.submitted, text: "Previous task"), peer: f.hookPeer(startedAt: 101))
+        _ = try await router.receive(oldEvent(.failed, text: "Previous quota error"), peer: f.hookPeer(startedAt: 102))
+        available.setValue(true)
+        try await router.requireVerifiedSubmission(f.invocation.id)
+        let run = try await f.store.snapshot().runs[0]
+        #expect(run.invocations[0].resultTurnID == "turn")
+        #expect(run.invocations[0].status == .running && run.invocations[0].issue == nil)
+        await router.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true])
+    func outOfOrderSameIDReceiptsKeepTheirOwnStopAfterRestart(restart: Bool) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 101))
+        try f.appendCodexAnswer("Proposal")
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "Proposal"), peer: f.hookPeer(startedAt: 102))
+        let available = LockIsolated(false)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            guard available.value else { throw AgentWorkflowInspectionUnavailable() }
+            return $0
+        }, provider: { _ in f.nativeProvider })
+        try f.appendNativeTurn("turn")
+        try f.appendCodexAnswer("First discussion")
+        try f.appendNativeTurn("turn")
+        try f.appendCodexAnswer("Latest discussion")
+        _ = try await router.receive(f.event(.submitted, text: "Latest question"), peer: f.hookPeer(startedAt: 105))
+        _ = try await router.receive(f.event(.stopCandidate, text: "Latest discussion"), peer: f.hookPeer(startedAt: 106))
+        _ = try await router.receive(f.event(.submitted, text: "First question"), peer: f.hookPeer(startedAt: 103))
+        if restart {
+            await router.shutdown()
+        }
+        available.setValue(true)
+        let store = restart ? AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID) : f.store
+        if restart {
+            _ = try await store.reconcile([.init(f.instance)])
+        }
+        let runner = AgentWorkflowRunner(store: store, transport: .init(inspect: { $0 }, prepare: { _, _ in }, write: { _, _ in
+            Issue.record("No task should be resent.")
+        }), onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let active = restart ? AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 }, provider: { _ in f.nativeProvider }) : router
+        let service = AgentWorkflowAgentService(store: store, inspect: { $0 }, synchronizeEvents: { try await active.requireVerifiedSubmission($0) })
+        let complete = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        #expect(await service.handle(complete, peer: f.peer).error?.code == "workflow_denied")
+        let archive = try await store.snapshot()
+        #expect(archive.runs[0].invocations[0].stepTurn?.stopped == true)
+        #expect(archive.pendingReceipts?[f.invocation.id]?.completion?.text == "Latest discussion")
+        #expect(archive.pendingReceipts?[f.invocation.id]?.resumedHookStartedAt == Date(timeIntervalSince1970: 105))
+        await active.shutdown()
+        await runner.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true])
+    func anOlderContinueCannotOverrideANewerOperatorPause(otherContinues: Bool) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 101))
+        try f.appendCodexAnswer("Proposal")
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "Proposal"), peer: f.hookPeer(startedAt: 102))
+        try f.appendNativeTurn("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: "Clarify"), peer: f.hookPeer(startedAt: 103))
+        try f.appendCodexAnswer("Clarification")
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "Clarification"), peer: f.hookPeer(startedAt: 104))
+        let other = AgentWorkflowService(store: f.store, scan: { _ in [.init(f.instance)] }, schedule: { _ in }, resumeStep: { _, _ in })
+        let current = try await f.store.snapshot().runs[0]
+        let paused = try await other.pause(runID: f.run.id, expectedRevision: current.revision)
+        let recovery = AgentWorkflowResultRecovery(store: f.store, inspect: { $0 }, provider: { _ in f.nativeProvider }, synchronizeIngress: {
+            let current: AgentWorkflowRun
+            if otherContinues {
+                current = try await other.resume(runID: f.run.id, expectedRevision: paused.revision)
+            } else {
+                current = paused
+            }
+            _ = try await other.pause(runID: f.run.id, expectedRevision: current.revision)
+        })
+        let writes = LockIsolated(0)
+        let first = AgentWorkflowService(
+            store: f.store,
+            scan: { _ in [.init(f.instance)] },
+            schedule: { _ in writes.withValue { $0 += 1 } },
+            resumeStep: { _, _ in writes.withValue { $0 += 1 } },
+            recoverResults: { try await recovery.recover($0) }
+        )
+        await #expect(throws: AgentWorkflowError.self) { try await first.resume(runID: f.run.id, expectedRevision: paused.revision) }
+        #expect(writes.value == 0)
+        #expect(try await f.store.snapshot().runs[0].status == .paused)
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true])
+    func aNewProcessCannotDiscardAnAuthenticatedFailure(restart: Bool) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn", "B")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: { instance in
+            guard instance.processID != f.instance.processID else { throw AgentWorkflowInspectionUnavailable() }
+            return instance
+        }, provider: { _ in f.nativeProvider })
+        _ = try await router.receive(f.event(.submitted, text: "Original continuation", turn: "B"), peer: f.hookPeer(startedAt: 103))
+        _ = try await router.receive(f.event(.failed, text: "Saved failure", turn: "B"), peer: f.hookPeer(startedAt: 104))
+        if restart {
+            await router.shutdown()
+        }
+        let store = restart ? AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID) : f.store
+        var replacement = AgentWorkflowObservation(f.instance)
+        replacement.processID = 20
+        replacement.processRuntimeID = "501:20:200:0"
+        let live = try #require(await store.reconcile([replacement]).first)
+        let peer = try #require(PluginIngressPeer.capture(peerPID: 20, userID: 501) { pid in
+            pid == 20 ? .init(processID: 20, parentProcessID: 1, userID: 501, startSeconds: 200, startMicroseconds: 0) : nil
+        })
+        let runner = AgentWorkflowRunner(store: store, transport: .init(inspect: { $0 }, prepare: { _, _ in }, write: { _, _ in
+            Issue.record("Failure verification must not resend tasks.")
+        }), onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let active = restart ? AgentWorkflowEventRouter(store: store, runner: runner, inspect: { instance in
+            guard instance.matchesProcess(live) else { throw AgentWorkflowInspectionUnavailable() }
+            return instance
+        }, provider: { _ in f.nativeProvider }) : router
+        try f.appendNativeTurn("C")
+        _ = try await active.receive(f.event(.submitted, text: "New process work", turn: "C"), peer: peer)
+        let service = AgentWorkflowAgentService(store: store, inspect: { $0 }, synchronizeEvents: { try await active.requireVerifiedSubmission($0) })
+        let complete = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        #expect(await service.handle(complete, peer: peer).error?.code == "workflow_denied")
+        let saved = try await store.snapshot()
+        #expect(saved.runs[0].invocations[0].issue == "Saved failure"
+            || saved.pendingReceipts?[f.invocation.id]?.continuations?.contains(where: { $0.completion?.text == "Saved failure" }) == true)
+        await active.shutdown()
+        await runner.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true])
+    func anOldProcessFailureCannotAttachToANewProcessReceipt(currentWriter: Bool) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn", "B")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        var replacement = AgentWorkflowObservation(f.instance)
+        replacement.processID = 20
+        replacement.processRuntimeID = "501:20:200:0"
+        _ = try await f.store.reconcile([replacement])
+        let peer = try #require(PluginIngressPeer.capture(peerPID: 20, userID: 501) { pid in
+            pid == 20 ? .init(processID: 20, parentProcessID: 1, userID: 501, startSeconds: 200, startMicroseconds: 0) : nil
+        })
+        func currentHook(_ time: UInt64) throws -> PluginIngressPeer {
+            try #require(PluginIngressPeer.capture(peerPID: Int32(time), userID: 501) { pid in
+                if pid == Int32(time) {
+                    return .init(processID: pid, parentProcessID: 20, userID: 501, startSeconds: time, startMicroseconds: 0)
+                }
+                return peer.processes.first(where: { $0.processID == pid })
+            })
+        }
+        let router = AgentWorkflowEventRouter(
+            store: f.store,
+            runner: f.runner,
+            inspect: { _ in throw AgentWorkflowInspectionUnavailable() },
+            recheckConversation: { _, _, _ in .deferred },
+            provider: { _ in f.nativeProvider }
+        )
+        try await router.receiveUnconfirmedSubmission(f.event(.submitted, text: "New process continuation", turn: "B"), peer: currentHook(301))
+        try f.appendNativeTurn("B")
+        try await router.receiveUnconfirmedSubmission(f.event(.submitted, text: "Later new process input", turn: "B"), peer: currentHook(303))
+        let source = try currentWriter ? currentHook(304) : f.hookPeer(startedAt: 304)
+        _ = try await router.receive(f.event(.failed, text: "Tool failure", turn: "B"), peer: source)
+        let archive = try await f.store.snapshot()
+        let retained = try #require(archive.pendingReceipts?[f.invocation.id]?.continuations)
+        #expect(retained.contains { $0.writer.processID == 10 && $0.submission.nativeTurnID == "turn" && $0.completion == nil })
+        let receipts = retained.filter { $0.writer.processID == 20 }
+        #expect(receipts.count == 2 && receipts.allSatisfy { $0.writer.processID == 20 })
+        #expect(receipts[0].completion == nil)
+        #expect(receipts[1].completion?.text == (currentWriter ? "Tool failure" : nil))
+        #expect(archive.runs[0].invocations[0].status != .failed)
+        await router.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [PluginWorkflowEvent.Kind.stopCandidate, .failed], [false, true])
+    func pendingContinuationsCanBindTheFirstCodexConversation(kind: PluginWorkflowEvent.Kind, restart: Bool) async throws {
+        let f = try await fixture(conversation: "", completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let conversation = UUID().uuidString
+        try f.writeCodexTurns("turn", "B", conversationID: conversation)
+        let available = LockIsolated(false)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            guard available.value else { throw AgentWorkflowInspectionUnavailable() }
+            return $0
+        }, provider: { _ in f.nativeProvider })
+        func event(_ kind: PluginWorkflowEvent.Kind, turn: String, text: String) -> PluginEvent {
+            .init(
+                pluginID: "codex",
+                sessionID: conversation,
+                tmuxPane: f.instance.paneID,
+                workflow: .init(kind: kind, nativeTurnID: turn, transcriptPath: f.transcript.path, text: text)
+            )
+        }
+        try await router.receiveUnconfirmedSubmission(event(.submitted, turn: "turn", text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 101))
+        _ = try await router.receive(event(.submitted, turn: "B", text: "Follow-up"), peer: f.hookPeer(startedAt: 103))
+        try f.appendCodexAnswer("Follow-up answer", turn: "B")
+        _ = try await router.receive(event(kind, turn: "B", text: "Follow-up answer"), peer: f.hookPeer(startedAt: 104))
+        if restart {
+            await router.shutdown()
+        }
+        available.setValue(true)
+        let store = restart ? AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID) : f.store
+        if restart {
+            _ = try await store.reconcile([.init(f.instance)])
+        }
+        let runner = AgentWorkflowRunner(store: store, transport: .init(inspect: { $0 }, prepare: { _, _ in }, write: { _, _ in
+            Issue.record("Recovery cannot resend tasks.")
+        }), onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let active = restart ? AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 }, provider: { _ in f.nativeProvider }) : router
+        try await active.requireVerifiedSubmission(f.invocation.id)
+        let run = try await store.snapshot().runs[0]
+        #expect(run.instances[0].conversationID == conversation)
+        #expect(run.invocations[0].resultTurnID == "B")
+        #expect(run.invocations[0].status == (kind == .failed ? .failed : .running))
+        if kind == .stopCandidate {
+            #expect(run.invocations[0].stepTurn?.stopped == true)
+        }
+        await active.shutdown()
+        await runner.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: ["online", "restart", "legacy-online", "legacy-restart"])
+    func anEarlierSegmentFailureDoesNotBlockContinue(mode: String) async throws {
+        let restart = mode.hasSuffix("restart")
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 101))
+        try f.appendCodexAnswer("Proposal")
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "Proposal"), peer: f.hookPeer(startedAt: 102))
+        try f.appendNativeTurn("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: "Clarify"), peer: f.hookPeer(startedAt: 103))
+        try f.appendCodexAnswer("Clarification")
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "Clarification"), peer: f.hookPeer(startedAt: 104))
+        let router = AgentWorkflowEventRouter(
+            store: f.store,
+            runner: f.runner,
+            inspect: { _ in throw AgentWorkflowInspectionUnavailable() },
+            recheckConversation: { _, _, _ in .deferred },
+            provider: { _ in f.nativeProvider }
+        )
+        try await router.receiveUnconfirmedSubmission(f.event(.submitted, text: "Earlier discussion"), peer: f.hookPeer(startedAt: 101))
+        _ = try await router.receive(f.event(.failed, text: "Earlier segment failure"), peer: f.hookPeer(startedAt: 102))
+        if mode.hasPrefix("legacy") {
+            var archive = try await f.store.snapshot()
+            let entry = try #require(archive.pendingReceipts?[f.invocation.id]?.continuations?.first)
+            let completion = try #require(entry.completion)
+            archive.pendingReceipts?[f.invocation.id]?.continuationFailure = .init(
+                writer: entry.writer,
+                submission: entry.submission,
+                submittedAt: entry.submittedAt,
+                failure: completion,
+                failedAt: entry.completedAt
+            )
+            archive.pendingReceipts?[f.invocation.id]?.continuations = nil
+            try await f.store.commit(archive)
+        }
+        if restart {
+            await router.shutdown()
+        }
+        let store = restart ? AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID) : f.store
+        _ = try await store.reconcile([.init(f.instance)])
+        let runner = AgentWorkflowRunner(store: store, transport: .init(inspect: { $0 }, prepare: { _, _ in }, write: { _, _ in
+            Issue.record("A workflow task cannot be resent.")
+        }), onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let active = AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 }, provider: { _ in f.nativeProvider })
+        let writes = LockIsolated(0)
+        let service = AgentWorkflowService(
+            store: store,
+            scan: { _ in [.init(f.instance)] },
+            schedule: { _ in },
+            synchronizeEvents: { try await active.requireVerifiedSubmission($0, allowingStoppedReplay: true) },
+            resumeStep: { _, _ in writes.withValue { $0 += 1 } }
+        )
+        let before = try await store.snapshot().runs[0]
+        let paused = before.status == .paused ? before : try await service.pause(runID: before.id, expectedRevision: before.revision)
+        let resumed = try await service.resume(runID: paused.id, expectedRevision: paused.revision)
+        #expect(resumed.status == .running && writes.value == 1)
+        let remaining = try await store.snapshot().pendingReceipts?[f.invocation.id]?.continuations?.filter { $0.isRetired != true }
+        #expect(remaining?.isEmpty != false, Comment(rawValue: String(describing: remaining)))
+        #expect(try await store.snapshot().pendingReceipts?[f.invocation.id]?.continuationFailure == nil)
+        await active.shutdown()
+        await router.shutdown()
+        await runner.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: ["native-only", "late-hook", "cold", "late-after-success"])
+    func anAbortedOlderWriterCannotBeReplacedByASuccessfulTurn(mode: String) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        try f.appendCodexAnswer("Original discussion")
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "Original discussion"), peer: f.peer)
+        try f.appendNativeTurn("B")
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: { instance in
+            guard instance.processID != 10 else { throw AgentWorkflowInspectionUnavailable() }
+            return instance
+        }, provider: { _ in f.nativeProvider })
+        _ = try await router.receive(f.event(.submitted, text: "Earlier work", turn: "B"), peer: f.hookPeer(startedAt: 103))
+        if mode == "late-after-success" {
+            try f.appendCodexAnswer("Earlier discussion", turn: "B")
+            _ = try await router.receive(f.event(.stopCandidate, text: "Earlier discussion", turn: "B"), peer: f.hookPeer(startedAt: 104))
+        } else {
+            let file = try FileHandle(forWritingTo: f.transcript)
+            try file.seekToEnd()
+            let aborted: [String: Any] = ["type": "event_msg", "payload": ["type": "turn_aborted", "turn_id": "B"]]
+            try file.write(contentsOf: JSONSerialization.data(withJSONObject: aborted) + Data([10]))
+            try file.close()
+        }
+        if mode == "cold" {
+            _ = try await router.receive(f.event(.failed, text: "Earlier work failed", turn: "B"), peer: f.hookPeer(startedAt: 104))
+            await router.shutdown()
+        }
+        let store = mode == "cold" ? AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID) : f.store
+        var replacement = AgentWorkflowObservation(f.instance)
+        replacement.processID = 20
+        replacement.processRuntimeID = "501:20:200:0"
+        _ = try await store.reconcile([replacement])
+        let peer = try #require(PluginIngressPeer.capture(peerPID: 20, userID: 501) { pid in
+            pid == 20 ? .init(processID: 20, parentProcessID: 1, userID: 501, startSeconds: 200, startMicroseconds: 0) : nil
+        })
+        let runner = AgentWorkflowRunner(store: store, transport: .init(inspect: { $0 }, prepare: { _, _ in }, write: { _, _ in
+            Issue.record("No replacement task may be sent.")
+        }), onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let active = mode == "cold" ? AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 }, provider: { _ in f.nativeProvider }) : router
+        try f.appendNativeTurn("C")
+        _ = try await active.receive(f.event(.submitted, text: "New work", turn: "C"), peer: peer)
+        if mode == "late-after-success" {
+            try await active.requireVerifiedSubmission(f.invocation.id)
+            #expect(try await store.snapshot().runs[0].invocations[0].resultTurnID == "C")
+        }
+        if mode == "late-hook" || mode == "late-after-success" {
+            _ = try await active.receive(f.event(.failed, text: "Earlier work failed", turn: "B"), peer: f.hookPeer(startedAt: 104))
+        }
+        let service = AgentWorkflowAgentService(store: store, inspect: { $0 }, synchronizeEvents: { try await active.requireVerifiedSubmission($0) })
+        let complete = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        #expect(await service.handle(complete, peer: peer).error?.code == "workflow_denied")
+        try f.appendCodexAnswer("New writer answer", turn: "C")
+        _ = try await active.receive(f.event(.stopCandidate, text: "New writer answer", turn: "C"), peer: peer)
+        let call = try await store.snapshot().runs[0].invocations[0]
+        #expect(call.status == .failed && call.result == nil && call.resultTurnID == "B")
+        await active.shutdown()
+        await runner.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func crossConversationMembershipUsesNativeSubmissionTime(historical: Bool, legacy: Bool) async throws {
+        let f = try await fixture(plugin: "claude-code", completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let base = f.run.createdAt
+        func user(_ id: String, session: String, at seconds: Double) throws -> Data {
+            try JSONSerialization.data(withJSONObject: [
+                "type": "user",
+                "uuid": id,
+                "promptId": id,
+                "sessionId": session,
+                "isSidechain": false,
+                "timestamp": base.addingTimeInterval(seconds).formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true)),
+            ]) + Data([10])
+        }
+        try user("turn", session: f.instance.conversationID, at: 60).write(to: f.transcript)
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, plugin: "claude-code"), peer: f.hookPeer(startedAt: 101))
+        if legacy {
+            var archive = try await f.store.snapshot()
+            archive.schemaVersion = 9
+            archive.pendingReceipts = nil
+            try JSONEncoder().encode(archive).write(to: await f.store.fileURL, options: .atomic)
+        }
+        let store = legacy ? AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID) : f.store
+        _ = try await store.reconcile([.init(f.instance)])
+        let other = f.directory.appendingPathComponent("other.jsonl")
+        var bytes = try user("B", session: "other-session", at: historical ? 30 : 90)
+        if !historical {
+            try bytes.append(user("C", session: "other-session", at: 120))
+        }
+        try bytes.write(to: other)
+        let runner = AgentWorkflowRunner(store: store, transport: .init(inspect: { $0 }, prepare: { _, _ in }, write: { _, _ in
+            Issue.record("No task may be resent.")
+        }), onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let router = AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 }, recheckConversation: { _, _, _ in .deferred }, provider: { _ in f.nativeProvider })
+        func event(_ kind: PluginWorkflowEvent.Kind) -> PluginEvent {
+            .init(pluginID: "claude-code", sessionID: "other-session", tmuxPane: f.instance.paneID, workflow: .init(
+                kind: kind, nativeTurnID: "B", transcriptPath: other.path, text: kind == .submitted ? "Other input" : "Quota exceeded"
+            ))
+        }
+        try await router.receiveUnconfirmedSubmission(event(.submitted), peer: f.hookPeer(startedAt: 210))
+        if historical {
+            try await router.requireVerifiedSubmission(f.invocation.id)
+        }
+        _ = try await router.receive(event(.failed), peer: f.hookPeer(startedAt: 211))
+        try await router.requireVerifiedSubmission(f.invocation.id)
+        let call = try await store.snapshot().runs[0].invocations[0]
+        #expect(call.status == (historical ? .running : .failed))
+        #expect(call.resultTurnID == (historical ? "turn" : "B"))
+        if !historical {
+            #expect(call.issue == "Quota exceeded")
+        }
+        await router.shutdown()
+        await runner.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [0, 1, 2, 3, 4, 5], ["online", "restart", "different-id-online", "different-id-restart"])
+    func sameIDStopOwnershipIsIndependentOfReceiptArrival(order: Int, mode: String) async throws {
+        let restart = mode.hasSuffix("restart")
+        let sameID = !mode.hasPrefix("different-id")
+        let firstTurn = sameID ? "turn" : "B", secondTurn = sameID ? "turn" : "C"
+        let orders = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]]
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 101))
+        try f.appendCodexAnswer("Proposal")
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "Proposal"), peer: f.hookPeer(startedAt: 102))
+        try f.appendNativeTurn(firstTurn)
+        try f.appendCodexAnswer("First answer", turn: firstTurn)
+        try f.appendNativeTurn(secondTurn)
+        try f.appendCodexAnswer("Final discussion", turn: secondTurn)
+        let available = LockIsolated(false)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            guard available.value else { throw AgentWorkflowInspectionUnavailable() }
+            return $0
+        }, provider: { _ in f.nativeProvider })
+        for event in orders[order] {
+            switch event {
+            case 0: _ = try await router.receive(f.event(.submitted, text: "First question", turn: firstTurn), peer: f.hookPeer(startedAt: 103))
+            case 1: _ = try await router.receive(f.event(.stopCandidate, text: "Final discussion", turn: secondTurn), peer: f.hookPeer(startedAt: 106))
+            default: _ = try await router.receive(f.event(.submitted, text: "Second question", turn: secondTurn), peer: f.hookPeer(startedAt: 105))
+            }
+        }
+        if restart {
+            await router.shutdown()
+        }
+        available.setValue(true)
+        let store = restart ? AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID) : f.store
+        _ = try await store.reconcile([.init(f.instance)])
+        let runner = AgentWorkflowRunner(store: store, transport: .init(inspect: { $0 }, prepare: { _, _ in }, write: { _, _ in
+            Issue.record("No discussion may be resent.")
+        }), onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let active = restart ? AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 }, provider: { _ in f.nativeProvider }) : router
+        let service = AgentWorkflowAgentService(store: store, inspect: { $0 }, synchronizeEvents: { try await active.requireVerifiedSubmission($0) })
+        let request = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        #expect(await service.handle(request, peer: f.peer).error?.code == "workflow_denied")
+        let archive = try await store.snapshot()
+        #expect(archive.runs[0].invocations[0].stepTurn?.stopped == true && archive.runs[0].invocations[0].result == nil)
+        #expect(archive.pendingReceipts?[f.invocation.id]?.completion?.text == "Final discussion")
+        #expect(archive.runs[0].invocations[0].resultTurnID == secondTurn)
+        if sameID {
+            #expect(archive.pendingReceipts?[f.invocation.id]?.resumedHookStartedAt == Date(timeIntervalSince1970: 105))
+        }
+        await active.shutdown()
+        await runner.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true])
+    func anEarlierFailureOutranksALaterStopAcrossRestart(restart: Bool) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn", "B")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        let available = LockIsolated(false)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            guard available.value else { throw AgentWorkflowInspectionUnavailable() }
+            return $0
+        }, provider: { _ in f.nativeProvider })
+        _ = try await router.receive(f.event(.submitted, text: "Continue", turn: "B"), peer: f.hookPeer(startedAt: 103))
+        try f.appendCodexAnswer("Intermediate answer", turn: "B")
+        _ = try await router.receive(f.event(.stopCandidate, text: "Intermediate answer", turn: "B"), peer: f.hookPeer(startedAt: 105))
+        _ = try await router.receive(f.event(.failed, text: "Failed answer", turn: "B"), peer: f.hookPeer(startedAt: 104))
+        let saved = try await f.store.snapshot().pendingReceipts?[f.invocation.id]?.continuations?.first(where: { $0.submission.nativeTurnID == "B" })
+        #expect(saved?.completion?.kind == .failed)
+        if restart {
+            await router.shutdown()
+        }
+        available.setValue(true)
+        let store = restart ? AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID) : f.store
+        _ = try await store.reconcile([.init(f.instance)])
+        let runner = AgentWorkflowRunner(store: store, transport: .init(inspect: { $0 }, prepare: { _, _ in }, write: { _, _ in
+            Issue.record("A failed task cannot be resent.")
+        }), onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let active = restart ? AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 }, provider: { _ in f.nativeProvider }) : router
+        let service = AgentWorkflowService(
+            store: store,
+            scan: { _ in [.init(f.instance)] },
+            schedule: { _ in },
+            synchronizeEvents: { try await active.requireVerifiedSubmission($0, allowingStoppedReplay: true) },
+            resumeStep: { _, _ in Issue.record("Failure recovery cannot send a reminder.") }
+        )
+        let current = try await store.snapshot().runs[0]
+        let paused = current.status == .paused ? current : try await service.pause(runID: current.id, expectedRevision: current.revision)
+        let recovered = try await service.resume(runID: paused.id, expectedRevision: paused.revision)
+        #expect(recovered.status == .paused && recovered.invocations[0].status == .failed && recovered.invocations[0].issue == "Failed answer")
+        await active.shutdown()
+        await runner.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test
+    func anOldContinuationErrorCannotUndoANewerOperatorsSuccessfulWrite() async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        let writes = LockIsolated(0), staleSchedules = LockIsolated(0)
+        let other = AgentWorkflowService(store: f.store, scan: { _ in [.init(f.instance)] }, schedule: { _ in }, resumeStep: { call, agent in
+            let permit = try #require(await f.store.authorizeContinuation(call, instance: agent))
+            try permit.perform { writes.withValue { $0 += 1 } }
+            try await f.store.finishContinuation(call, authorization: permit, written: true)
+        })
+        let current = try await f.store.snapshot().runs[0]
+        let paused = try await other.pause(runID: current.id, expectedRevision: current.revision)
+        let first = AgentWorkflowService(store: f.store, scan: { _ in [.init(f.instance)] }, schedule: { _ in staleSchedules.withValue { $0 += 1 } }, resumeStep: { _, _ in
+            let current = try await f.store.snapshot().runs[0]
+            let newerPause = try await other.pause(runID: current.id, expectedRevision: current.revision)
+            _ = try await other.resume(runID: current.id, expectedRevision: newerPause.revision)
+            throw AgentWorkflowError("Delayed write failure")
+        })
+        let run = try await first.resume(runID: paused.id, expectedRevision: paused.revision)
+        #expect(run.status == .running && writes.value == 1 && staleSchedules.value == 0)
+        #expect(run.invocations[0].continuationTurnID == "turn")
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func removingAnOutdatedFailureKeepsAutomaticVerificationRunning() async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 101))
+        try f.appendCodexAnswer("Proposal")
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "Proposal"), peer: f.hookPeer(startedAt: 102))
+        try f.appendNativeTurn("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: "Clarify"), peer: f.hookPeer(startedAt: 103))
+        try f.appendCodexAnswer("Clarification")
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "Clarification"), peer: f.hookPeer(startedAt: 104))
+        let clock = WorkflowRetryTestClock()
+        defer { clock.sleeps.continuation.finish() }
+        let available = LockIsolated(false)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            guard available.value else { throw AgentWorkflowInspectionUnavailable() }
+            return $0
+        }, clock: AnyClock(clock), recheckConversation: { _, _, _ in .deferred }, provider: { _ in f.nativeProvider }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        try await router.receiveUnconfirmedSubmission(f.event(.submitted, text: "Earlier discussion"), peer: f.hookPeer(startedAt: 101))
+        _ = try await router.receive(f.event(.failed, text: "Outdated failure"), peer: f.hookPeer(startedAt: 102))
+        try f.appendNativeTurn("B")
+        _ = try await router.receive(f.event(.submitted, text: "Actual work", turn: "B"), peer: f.hookPeer(startedAt: 105))
+        _ = try await router.receive(f.event(.failed, text: "Actual failure", turn: "B"), peer: f.hookPeer(startedAt: 106))
+        available.setValue(true)
+        let changes = await f.store.changes()
+        var updates = changes.makeAsyncIterator()
+        try await clock.advancePastNextSleep()
+        while try await f.store.snapshot().pendingReceipts?[f.invocation.id]?.continuations?.contains(where: { $0.completion?.text == "Outdated failure" }) == true {
+            try #require(await updates.next() != nil)
+        }
+        try await clock.advancePastNextSleep()
+        while try await f.store.snapshot().runs[0].invocations[0].status != .failed {
+            try #require(await updates.next() != nil)
+        }
+        #expect(try await f.store.snapshot().runs[0].invocations[0].issue == "Actual failure")
+        await router.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true])
+    func aSelectedOlderWriterIsCheckedBeforeReplacement(restart: Bool) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 101))
+        try f.appendNativeTurn("B")
+        _ = try await f.router.receive(f.event(.submitted, text: "Earlier work", turn: "B"), peer: f.hookPeer(startedAt: 103))
+        try await f.router.requireVerifiedSubmission(f.invocation.id)
+        #expect(try await f.store.snapshot().runs[0].invocations[0].resultTurnID == "B")
+        try f.appendCodexAbort("B")
+        await f.router.shutdown()
+        let store = restart ? AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID) : f.store
+        let runner = restart ? f.runner(in: store) : f.runner
+        let peer = try await f.replaceProcess(in: store)
+        let router = AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 }, provider: { _ in f.nativeProvider })
+        try f.appendNativeTurn("C")
+        _ = try await router.receive(f.event(.submitted, text: "Replacement work", turn: "C"), peer: peer)
+        let service = AgentWorkflowAgentService(store: store, inspect: { $0 }, synchronizeEvents: { try await router.requireVerifiedSubmission($0) })
+        let request = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        #expect(await service.handle(request, peer: peer).error?.code == "workflow_denied")
+        try f.appendCodexAnswer("Replacement answer", turn: "C")
+        _ = try await router.receive(f.event(.stopCandidate, text: "Replacement answer", turn: "C"), peer: peer)
+        let call = try await store.snapshot().runs[0].invocations[0]
+        #expect(call.status == .failed && call.resultTurnID == "B" && call.result == nil)
+        await router.shutdown()
+        await runner.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true])
+    func aCrossConversationReplayCannotRegressTheSelectedResult(restart: Bool) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        let b = f.directory.appendingPathComponent("B.jsonl"), c = f.directory.appendingPathComponent("C.jsonl")
+        try f.writeCodexTurns("B", conversationID: "session-B", to: b)
+        try f.writeCodexTurns("C", conversationID: "session-C", to: c)
+        // Fix native timestamps independently of wall-clock scheduling.
+        for (file, time) in [(f.transcript, 1_000), (b, 2_000), (c, 3_000)] {
+            let rows = try Data(contentsOf: file).split(separator: 10).map { line -> Data in
+                var row = try #require(JSONSerialization.jsonObject(with: Data(line)) as? [String: Any])
+                row["timestamp"] = Date(timeIntervalSince1970: Double(time)).formatted(.iso8601)
+                return try JSONSerialization.data(withJSONObject: row) + Data([10])
+            }
+            try rows.reduce(into: Data()) { $0.append($1) }.write(to: file)
+        }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        func event(_ kind: PluginWorkflowEvent.Kind, turn: String, file: URL) -> PluginEvent {
+            .init(pluginID: "codex", sessionID: "session-\(turn)", tmuxPane: f.instance.paneID, workflow: .init(
+                kind: kind, nativeTurnID: turn, transcriptPath: file.path, text: kind == .submitted ? "Discuss \(turn)" : "Old answer"
+            ))
+        }
+        _ = try await f.router.receive(event(.submitted, turn: "C", file: c), peer: f.peer)
+        try await f.router.requireVerifiedSubmission(f.invocation.id)
+        _ = try await f.router.receive(event(.stopCandidate, turn: "C", file: c), peer: f.peer)
+        await f.router.shutdown()
+        let store = restart ? AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID) : f.store
+        let runner = restart ? f.runner(in: store) : f.runner
+        var observation = AgentWorkflowObservation(f.instance)
+        observation.conversationID = "session-B"
+        _ = try await store.reconcile([observation])
+        let router = AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 }, provider: { _ in f.nativeProvider })
+        _ = try await router.receive(event(.submitted, turn: "B", file: b), peer: f.peer)
+        try await router.requireVerifiedSubmission(f.invocation.id)
+        let service = AgentWorkflowAgentService(store: store, inspect: { $0 }, synchronizeEvents: { try await router.requireVerifiedSubmission($0) })
+        let request = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        #expect(await service.handle(request, peer: f.peer).error?.code == "workflow_denied")
+        #expect(try await store.snapshot().runs[0].invocations[0].resultTurnID == "C")
+        await router.shutdown()
+        await runner.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true])
+    func aHostContinuationCannotRegressTheSelectedResult(restart: Bool) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        let b = f.directory.appendingPathComponent("B.jsonl"), c = f.directory.appendingPathComponent("C.jsonl")
+        try f.writeCodexTurns("B", conversationID: "session-B", to: b)
+        try f.writeCodexTurns("C", conversationID: "session-C", to: c)
+        // Fix native timestamps independently of wall-clock scheduling.
+        for (file, time) in [(f.transcript, 1_000), (b, 2_000), (c, 3_000)] {
+            let rows = try Data(contentsOf: file).split(separator: 10).map { line -> Data in
+                var row = try #require(JSONSerialization.jsonObject(with: Data(line)) as? [String: Any])
+                row["timestamp"] = Date(timeIntervalSince1970: Double(time)).formatted(.iso8601)
+                return try JSONSerialization.data(withJSONObject: row) + Data([10])
+            }
+            try rows.reduce(into: Data()) { $0.append($1) }.write(to: file)
+        }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        let prompt = AgentWorkflowPrompt.continuation(definition: f.run.definition, nodeID: f.invocation.nodeID, invocationID: f.invocation.id)
+        func event(_ kind: PluginWorkflowEvent.Kind, turn: String, file: URL) -> PluginEvent {
+            .init(pluginID: "codex", sessionID: "session-\(turn)", tmuxPane: f.instance.paneID, workflow: .init(
+                kind: kind, nativeTurnID: turn, transcriptPath: file.path, text: kind == .submitted ? (turn == "B" ? prompt : "Discuss C") : "Old answer"
+            ))
+        }
+        _ = try await f.router.receive(event(.submitted, turn: "B", file: b), peer: f.peer)
+        try await f.router.requireVerifiedSubmission(f.invocation.id)
+        let accepted = try await f.store.snapshot()
+        let writer = try #require(accepted.instances.first)
+        _ = try await f.store.reconcile([.init(writer)])
+        let call = accepted.runs[0].invocations[0]
+        let permit = try #require(await f.store.authorizeContinuation(call, instance: writer))
+        try await f.store.finishContinuation(call, authorization: permit, written: true)
+        _ = try await f.router.receive(event(.submitted, turn: "C", file: c), peer: f.peer)
+        try await f.router.requireVerifiedSubmission(f.invocation.id)
+        _ = try await f.router.receive(event(.stopCandidate, turn: "C", file: c), peer: f.peer)
+        await f.router.shutdown()
+        let store = restart ? AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID) : f.store
+        let runner = restart ? f.runner(in: store) : f.runner
+        var observation = AgentWorkflowObservation(f.instance)
+        observation.conversationID = "session-B"
+        _ = try await store.reconcile([observation])
+        let router = AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 }, provider: { _ in f.nativeProvider })
+        _ = try await router.receive(event(.submitted, turn: "B", file: b), peer: f.peer)
+        try await router.requireVerifiedSubmission(f.invocation.id)
+        let service = AgentWorkflowAgentService(store: store, inspect: { $0 }, synchronizeEvents: { try await router.requireVerifiedSubmission($0) })
+        let request = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        #expect(await service.handle(request, peer: f.peer).error?.code == "workflow_denied")
+        #expect(try await store.snapshot().runs[0].invocations[0].resultTurnID == "C")
+        await router.shutdown()
+        await runner.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [PluginWorkflowEvent.Kind.stopCandidate, .failed], ["online", "restart", "writing-online", "writing-restart"])
+    func unmatchedTerminalEvidenceSurvivesOtherReceiptVerification(kind: PluginWorkflowEvent.Kind, mode: String) async throws {
+        let restart = mode.hasSuffix("restart")
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        if !mode.hasPrefix("writing") {
+            _ = try await f.store.update(runID: f.run.id) { try $0.didWrite(invocationID: f.invocation.id) }
+        }
+        try f.writeNativeTurns("turn", "B")
+        await f.router.shutdown()
+        let available = LockIsolated(false)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            guard available.value else { throw AgentWorkflowInspectionUnavailable() }
+            return $0
+        }, provider: { _ in f.nativeProvider })
+        _ = try await router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 101))
+        _ = try await router.receive(f.event(kind, text: "B ended", turn: "B"), peer: f.hookPeer(startedAt: 104))
+        #expect(try await f.store.snapshot().pendingReceipts?[f.invocation.id]?.continuationCompletions?.contains(where: { $0.event.nativeTurnID == "B" }) == true)
+        available.setValue(true)
+        try await router.requireVerifiedSubmission(f.invocation.id)
+        #expect(try await f.store.snapshot().pendingReceipts?[f.invocation.id]?.continuationCompletions?.contains(where: { $0.event.nativeTurnID == "B" }) == true)
+        if restart {
+            await router.shutdown()
+        }
+        let store = restart ? AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID) : f.store
+        let runner = restart ? f.runner(in: store) : f.runner
+        _ = try await store.reconcile([.init(f.instance)])
+        let active = restart ? AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 }, provider: { _ in f.nativeProvider }) : router
+        _ = try await active.receive(f.event(.submitted, text: "B input", turn: "B"), peer: f.hookPeer(startedAt: 103))
+        try await active.requireVerifiedSubmission(f.invocation.id)
+        let service = AgentWorkflowAgentService(store: store, inspect: { $0 }, synchronizeEvents: { try await active.requireVerifiedSubmission($0) })
+        let request = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        #expect(await service.handle(request, peer: f.peer).error?.code == "workflow_denied")
+        let call = try await store.snapshot().runs[0].invocations[0]
+        #expect(kind == .failed ? call.status == .failed : call.stepTurn?.stopped == true)
+        await active.shutdown()
+        await runner.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true])
+    func crossFileMembershipUsesTheLatestSegmentOfARepeatedNativeID(repeated: Bool) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        let other = f.directory.appendingPathComponent("other.jsonl")
+        try f.writeCodexTurns("old", conversationID: "other", to: other)
+        func start(_ id: String, time: Int) throws -> Data {
+            try JSONSerialization.data(withJSONObject: ["type": "event_msg", "timestamp": Date(timeIntervalSince1970: Double(time)).formatted(.iso8601), "payload": ["type": "task_started", "turn_id": id]]) + Data([10])
+        }
+        let header = try #require(Data(contentsOf: f.transcript).split(separator: 10).first)
+        try (Data(header) + Data([10]) + start("turn", time: 2_000)).write(to: f.transcript)
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        let otherHeader = try #require(Data(contentsOf: other).split(separator: 10).first)
+        let turn = repeated ? "B" : "new-B"
+        try (Data(otherHeader) + Data([10]) + start("B", time: 1_000) + start(turn, time: 3_000)).write(to: other)
+        func event(_ kind: PluginWorkflowEvent.Kind) -> PluginEvent {
+            .init(pluginID: "codex", sessionID: "other", tmuxPane: f.instance.paneID, workflow: .init(
+                kind: kind, nativeTurnID: turn, transcriptPath: other.path, text: kind == .submitted ? "New work" : "New work failed"
+            ))
+        }
+        _ = try await f.router.receive(event(.submitted), peer: f.hookPeer(startedAt: 3_001))
+        _ = try await f.router.receive(event(.failed), peer: f.hookPeer(startedAt: 3_002))
+        try await f.router.requireVerifiedSubmission(f.invocation.id)
+        let call = try await f.store.snapshot().runs[0].invocations[0]
+        #expect(call.status == .failed && call.issue == "New work failed" && call.resultTurnID == turn)
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true])
+    func aLateOlderWriterFailureOverridesFrozenCompletion(restart: Bool) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        try f.appendCodexAnswer("Initial discussion")
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "Initial discussion"), peer: f.hookPeer(startedAt: 102))
+        try f.appendNativeTurn("B")
+        await f.router.shutdown()
+        let old = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: { _ in throw AgentWorkflowInspectionUnavailable() }, provider: { _ in f.nativeProvider })
+        _ = try await old.receive(f.event(.submitted, text: "Old work", turn: "B"), peer: f.hookPeer(startedAt: 103))
+        try f.appendCodexAnswer("Old discussion", turn: "B")
+        _ = try await old.receive(f.event(.stopCandidate, text: "Old discussion", turn: "B"), peer: f.hookPeer(startedAt: 104))
+        await old.shutdown()
+        let peer = try await f.replaceProcess(in: f.store)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: { $0 }, provider: { _ in f.nativeProvider })
+        try f.appendNativeTurn("C")
+        _ = try await router.receive(f.event(.submitted, text: "New work", turn: "C"), peer: peer)
+        try await router.requireVerifiedSubmission(f.invocation.id)
+        let service = AgentWorkflowAgentService(store: f.store, inspect: { $0 }, synchronizeEvents: { try await router.requireVerifiedSubmission($0) })
+        let request = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        #expect(await service.handle(request, peer: peer).ok)
+        _ = try await router.receive(f.event(.failed, text: "Late old failure", turn: "B"), peer: f.hookPeer(startedAt: 105))
+        if restart {
+            await router.shutdown()
+        }
+        let store = restart ? AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID) : f.store
+        let runner = restart ? f.runner(in: store) : f.runner
+        _ = try await f.replaceProcess(in: store)
+        let active = restart ? AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 }, provider: { _ in f.nativeProvider }) : router
+        do { try await active.requireVerifiedSubmission(f.invocation.id) }
+        catch is AgentWorkflowInspectionUnavailable { Issue.record("A verified old failure must not remain pending.") }
+        let call = try await store.snapshot().runs[0].invocations[0]
+        #expect(call.status == .failed && call.resultTurnID == "B" && call.issue == "Late old failure")
+        await active.shutdown()
+        await router.shutdown()
+        await runner.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: ["background-abort", "earlier-unknown"])
+    func retiredWriterVerificationFindsFailurePastWaitingEntries(mode: String) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn", "B")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        await f.router.shutdown()
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: { instance in
+            guard instance.processID != 10 else { throw AgentWorkflowInspectionUnavailable() }
+            return instance
+        }, provider: { _ in f.nativeProvider })
+        _ = try await router.receive(f.event(.submitted, text: "Earlier work", turn: "B"), peer: f.hookPeer(startedAt: 103))
+        let failedTurn: String
+        if mode == "background-abort" {
+            _ = try await router.receive(f.event(.stopCandidate, text: "Still working", turn: "B", hasPendingWork: true), peer: f.hookPeer(startedAt: 104))
+            try f.appendCodexAbort("B")
+            failedTurn = "B"
+        } else {
+            try f.appendNativeTurn("D")
+            _ = try await router.receive(f.event(.submitted, text: "Later work", turn: "D"), peer: f.hookPeer(startedAt: 105))
+            _ = try await router.receive(f.event(.failed, text: "Known later failure", turn: "D"), peer: f.hookPeer(startedAt: 106))
+            failedTurn = "D"
+        }
+        let peer = try await f.replaceProcess(in: f.store)
+        try f.appendNativeTurn("C")
+        _ = try await router.receive(f.event(.submitted, text: "Replacement", turn: "C"), peer: peer)
+        _ = try? await router.requireVerifiedSubmission(f.invocation.id)
+        let call = try await f.store.snapshot().runs[0].invocations[0]
+        #expect(call.status == .failed && call.resultTurnID == failedTurn && call.issue != nil)
+        await router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: ["same-session", "new-session", "restart"])
+    func acceptedSameProcessFailureRemainsAuthoritative(mode: String) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 101))
+        try f.appendNativeTurn("B")
+        _ = try await f.router.receive(f.event(.submitted, text: "B input", turn: "B"), peer: f.hookPeer(startedAt: 103))
+        try await f.router.requireVerifiedSubmission(f.invocation.id)
+        try f.appendCodexAbort("B")
+        await f.router.shutdown()
+        let store = mode == "restart" ? AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID) : f.store
+        _ = try await store.reconcile([.init(f.instance)])
+        let runner = f.runner(in: store)
+        let router = AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 }, provider: { _ in f.nativeProvider })
+        let path = mode == "new-session" ? f.directory.appendingPathComponent("C.jsonl") : f.transcript
+        if mode == "new-session" {
+            try f.writeCodexTurns("C", conversationID: "C-session", to: path)
+        } else {
+            try f.appendNativeTurn("C")
+        }
+        let next = PluginEvent(
+            pluginID: "codex",
+            sessionID: mode == "new-session" ? "C-session" : f.instance.conversationID,
+            tmuxPane: f.instance.paneID,
+            workflow: .init(kind: .submitted, nativeTurnID: "C", transcriptPath: path.path, text: "C input")
+        )
+        _ = try await router.receive(next, peer: f.hookPeer(startedAt: 105))
+        _ = try await router.receive(f.event(.failed, text: "B interrupted", turn: "B"), peer: f.hookPeer(startedAt: 104))
+        let service = AgentWorkflowAgentService(store: store, inspect: { $0 }, synchronizeEvents: { try await router.requireVerifiedSubmission($0) })
+        let request = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        #expect(await service.handle(request, peer: f.peer).error?.code == "workflow_denied")
+        let call = try await store.snapshot().runs[0].invocations[0]
+        #expect(call.status == .failed && call.resultTurnID == "B" && call.result == nil)
+        await router.shutdown()
+        await runner.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [PluginWorkflowEvent.Kind.stopCandidate, .failed], [("turn", false), ("turn", true), ("B", false), ("B", true)])
+    func terminalBeforeFirstReceiptIsRetained(kind: PluginWorkflowEvent.Kind, state: (String, Bool)) async throws {
+        let (target, restart) = state
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.store.update(runID: f.run.id) { try $0.didWrite(invocationID: f.invocation.id) }
+        try f.writeNativeTurns("turn", "B")
+        _ = try await f.router.receive(f.event(kind, text: "Already ended", turn: target), peer: f.hookPeer(startedAt: 104))
+        #expect(try await f.store.snapshot().earlyCompletions?[f.invocation.id]?.count == 1)
+        await f.router.shutdown()
+        let store = restart ? AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID) : f.store
+        _ = try await store.reconcile([.init(f.instance)])
+        let runner = f.runner(in: store)
+        let router = AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 }, provider: { _ in f.nativeProvider })
+        _ = try await router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 101))
+        if target == "B" {
+            _ = try await router.receive(f.event(.submitted, text: "B input", turn: "B"), peer: f.hookPeer(startedAt: 103))
+        }
+        _ = try? await router.requireVerifiedSubmission(f.invocation.id)
+        let service = AgentWorkflowAgentService(store: store, inspect: { $0 }, synchronizeEvents: { try await router.requireVerifiedSubmission($0) })
+        let request = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        #expect(await service.handle(request, peer: f.peer).error?.code == "workflow_denied")
+        let call = try await store.snapshot().runs[0].invocations[0]
+        #expect(kind == .failed ? call.status == .failed : call.stepTurn?.stopped == true)
+        #expect(call.result == nil)
+        await router.shutdown()
+        await runner.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [PluginWorkflowEvent.Kind.stopCandidate, .failed])
+    func unrelatedMissingTimeCannotChangeCompletionOwnership(kind: PluginWorkflowEvent.Kind) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let peer = try await f.replaceProcess(in: f.store)
+        let writer = try #require(await f.store.snapshot().instances.first)
+        let turn = PluginWorkflowTurn(nativeTurnID: "turn", transcriptPath: f.transcript.path)
+        let legacy = try AgentWorkflowContinuationReceipt(writer: f.instance, submission: #require(f.event(.submitted, text: "Legacy").workflow), submittedAt: nil)
+        let early = try AgentWorkflowContinuationReceipt(writer: writer, submission: #require(f.event(.submitted, text: "Early B", turn: "B").workflow), submittedAt: Date(timeIntervalSince1970: 303))
+        let late = try AgentWorkflowContinuationReceipt(writer: writer, submission: #require(f.event(.submitted, text: "Late B", turn: "B").workflow), submittedAt: Date(timeIntervalSince1970: 305))
+        let end = try AgentWorkflowContinuationCompletion(writer: writer, event: #require(f.event(kind, text: "Late B ended", turn: "B").workflow), startedAt: Date(timeIntervalSince1970: 306))
+        var receipt = AgentWorkflowPendingReceipt(conversationID: f.instance.conversationID, turn: turn)
+        receipt.mergeContinuations([legacy, late, early], completions: [end])
+        let restored = try JSONDecoder().decode(AgentWorkflowPendingReceipt.self, from: JSONEncoder().encode(receipt))
+        for value in [receipt, restored] {
+            #expect(value.continuations?.first(where: { $0.identifies(early) })?.completion == nil)
+            #expect(value.continuations?.first(where: { $0.identifies(late) })?.completion == end.event)
+        }
+        #expect(peer.processes.first?.processID == writer.processID)
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: ["v9-old-hook", "restarted-writer"])
+    func reusedIDReceiptUsesItsOwnNativeSegment(mode: String) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        func start(_ id: String, _ time: Int) throws -> Data {
+            try JSONSerialization.data(withJSONObject: ["type": "event_msg", "timestamp": Date(timeIntervalSince1970: Double(time)).formatted(.iso8601), "payload": ["type": "task_started", "turn_id": id]]) + Data([10])
+        }
+        let header = try JSONSerialization.data(withJSONObject: ["type": "session_meta", "payload": ["id": f.instance.conversationID]]) + Data([10])
+        try (header + start("turn", 2_000)).write(to: f.transcript)
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 2_001))
+        if mode == "v9-old-hook" {
+            await f.router.shutdown()
+            var archive = try await f.store.snapshot()
+            archive.schemaVersion = 9
+            archive.pendingReceipts = nil
+            try JSONEncoder().encode(archive).write(to: await f.store.fileURL, options: .atomic)
+            let store = AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID)
+            _ = try await store.reconcile([.init(f.instance)])
+            let path = f.directory.appendingPathComponent("B.jsonl")
+            try (header + start("B", 1_000) + start("B", 3_000)).write(to: path)
+            let runner = f.runner(in: store)
+            let router = AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 }, provider: { _ in f.nativeProvider })
+            for kind in [PluginWorkflowEvent.Kind.submitted, .failed] {
+                let event = PluginEvent(
+                    pluginID: "codex",
+                    sessionID: f.instance.conversationID,
+                    tmuxPane: f.instance.paneID,
+                    workflow: .init(kind: kind, nativeTurnID: "B", transcriptPath: path.path, text: "Old input")
+                )
+                _ = try await router.receive(event, peer: f.hookPeer(startedAt: kind == .submitted ? 1_001 : 1_002))
+            }
+            _ = try? await router.requireVerifiedSubmission(f.invocation.id)
+            let call = try await store.snapshot().runs[0].invocations[0]
+            #expect(call.status != .failed && call.resultTurnID == "turn")
+            await router.shutdown()
+            await runner.shutdown()
+        } else {
+            let file = try FileHandle(forWritingTo: f.transcript)
+            try file.seekToEnd()
+            try file.write(contentsOf: start("B", 3_000))
+            try file.close()
+            _ = try await f.router.receive(f.event(.submitted, text: "Old B", turn: "B"), peer: f.hookPeer(startedAt: 3_001))
+            try await f.router.requireVerifiedSubmission(f.invocation.id)
+            try f.appendCodexAbort("B")
+            let peer = try await f.replaceProcess(in: f.store)
+            let next = try FileHandle(forWritingTo: f.transcript)
+            try next.seekToEnd()
+            try next.write(contentsOf: start("B", 4_000))
+            try next.close()
+            _ = try await f.router.receive(f.event(.submitted, text: "New B", turn: "B"), peer: f.hookPeer(startedAt: 4_001, source: peer))
+            let service = AgentWorkflowAgentService(store: f.store, inspect: { $0 }, synchronizeEvents: { try await f.router.requireVerifiedSubmission($0) })
+            let request = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+            #expect(await service.handle(request, peer: peer).error?.code == "workflow_denied")
+            let call = try await f.store.snapshot().runs[0].invocations[0]
+            #expect(call.status == .failed && call.result == nil)
+        }
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func lateSameIDReceiptCannotBorrowTheFollowingSubmission(restart: Bool, differentID: Bool) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        func start(_ id: String, at time: Int) throws -> Data {
+            try JSONSerialization.data(withJSONObject: [
+                "type": "event_msg", "timestamp": Date(timeIntervalSince1970: Double(time)).formatted(.iso8601),
+                "payload": ["type": "task_started", "turn_id": id],
+            ]) + Data([10])
+        }
+        let header = try JSONSerialization.data(withJSONObject: ["type": "session_meta", "payload": ["id": f.instance.conversationID]]) + Data([10])
+        try (header + start("turn", at: 1_000)).write(to: f.transcript)
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 1_001))
+        try f.appendCodexAnswer("First proposal")
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "First proposal"), peer: f.hookPeer(startedAt: 1_002))
+        await f.router.shutdown()
+        let file = try FileHandle(forWritingTo: f.transcript)
+        try file.seekToEnd()
+        try file.write(contentsOf: start("turn", at: 2_000))
+        try file.close()
+        try f.appendCodexAbort("turn")
+        let following = try FileHandle(forWritingTo: f.transcript)
+        try following.seekToEnd()
+        try following.write(contentsOf: start(differentID ? "C" : "turn", at: 3_000))
+        try following.close()
+
+        let available = LockIsolated(false)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            guard available.value else { throw AgentWorkflowInspectionUnavailable() }
+            return $0
+        }, provider: { _ in f.nativeProvider })
+        _ = try await router.receive(f.event(.submitted, text: "Second input"), peer: f.hookPeer(startedAt: 2_001))
+        if restart {
+            await router.shutdown()
+        }
+        let store = restart ? AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID) : f.store
+        _ = try await store.reconcile([.init(f.instance)])
+        let runner = restart ? f.runner(in: store) : f.runner
+        let active = restart ? AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 }, provider: { _ in f.nativeProvider }) : router
+        available.setValue(true)
+        let service = AgentWorkflowAgentService(store: store, inspect: { $0 }, synchronizeEvents: { try await active.requireVerifiedSubmission($0) })
+        let request = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        #expect(await service.handle(request, peer: f.peer).error?.code == "workflow_denied")
+        let saved = try await store.snapshot()
+        #expect(saved.runs[0].invocations[0].stepTurn?.completionRequested == false)
+        #expect(saved.runs[0].invocations[0].status == .failed && saved.runs[0].invocations[0].issue == "The native Codex turn was interrupted.")
+        #expect(saved.runs[0].invocations[0].result == nil)
+        await active.shutdown()
+        await router.shutdown()
+        await runner.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func claudeSubmissionBoundaryRetainsThePreviousOutcome(restart: Bool, completed: Bool) async throws {
+        let f = try await fixture(plugin: "claude-code", completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        func append(_ fields: [String: Any]) throws {
+            let record = fields.merging(["sessionId": f.instance.conversationID, "isSidechain": false]) { value, _ in value }
+            let file = try FileHandle(forWritingTo: f.transcript)
+            defer { try? file.close() }
+            try file.seekToEnd()
+            try file.write(contentsOf: JSONSerialization.data(withJSONObject: record) + Data([10]))
+        }
+        try append(["type": "user", "uuid": "user", "promptId": "turn", "timestamp": "1970-01-01T00:16:40Z"])
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, plugin: "claude-code"), peer: f.hookPeer(startedAt: 1_001))
+        try append([
+            "type": "assistant", "uuid": "answer", "parentUuid": "user",
+            "message": ["id": "answer", "stop_reason": "end_turn", "content": [["type": "text", "text": "Old answer"]]],
+        ])
+        if completed {
+            try append([
+                "type": "system", "uuid": "stop", "parentUuid": "answer", "subtype": "stop_hook_summary",
+                "hookErrors": [], "hookAdditionalContext": [], "preventedContinuation": false, "stopReason": "",
+            ])
+            _ = try await f.router.receive(f.event(.stopCandidate, text: "Old answer", plugin: "claude-code"), peer: f.hookPeer(startedAt: 1_002))
+        }
+        await f.router.shutdown()
+        let peer = try await f.replaceProcess(in: f.store)
+        try append([
+            "type": "user", "uuid": "next", "parentUuid": completed ? "stop" : "answer", "promptId": "C",
+            "timestamp": "1970-01-01T00:33:20Z", "message": ["content": String(repeating: "x", count: 3 * 1_024 * 1_024)],
+        ])
+        let available = LockIsolated(false)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: { $0 }, provider: { _ in
+            available.value ? f.nativeProvider : nil
+        })
+        _ = try await router.receive(f.event(.submitted, text: "New task", turn: "C", plugin: "claude-code"), peer: f.hookPeer(startedAt: 2_001, source: peer))
+        if restart {
+            await router.shutdown()
+        }
+        let store = restart ? AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID) : f.store
+        let activePeer = try await f.replaceProcess(in: store)
+        let runner = restart ? f.runner(in: store) : f.runner
+        let active = restart ? AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 }, provider: { _ in f.nativeProvider }) : router
+        available.setValue(true)
+        let service = AgentWorkflowAgentService(store: store, inspect: { $0 }, synchronizeEvents: { try await active.requireVerifiedSubmission($0) })
+        let request = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        let response = await service.handle(request, peer: activePeer)
+        let saved = try await store.snapshot().runs[0].invocations[0]
+        if completed {
+            #expect(response.ok && saved.resultTurnID == "C")
+        } else {
+            #expect(response.error?.code == "workflow_denied")
+            #expect(saved.status == .failed && saved.issue == "A different user prompt interrupted this workflow turn.")
+        }
+        #expect(saved.result == nil)
+        await active.shutdown()
+        await router.shutdown()
+        await runner.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: ["none", "tool-result", "stop-feedback"], [("delayed", false), ("delayed", true), ("new-process", false), ("new-process", true)])
+    func claudeInternalMessagesDoNotSplitTheSubmission(kind: String, scenario: (String, Bool)) async throws {
+        let (mode, restart) = scenario
+        let f = try await fixture(plugin: "claude-code", completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        func append(_ fields: [String: Any]) throws {
+            let record = fields.merging(["sessionId": f.instance.conversationID, "isSidechain": false]) { value, _ in value }
+            let file = try FileHandle(forWritingTo: f.transcript)
+            defer { try? file.close() }
+            try file.seekToEnd()
+            try file.write(contentsOf: JSONSerialization.data(withJSONObject: record) + Data([10]))
+        }
+        try f.writeNativeTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, plugin: "claude-code"), peer: f.hookPeer(startedAt: 101))
+        if mode == "delayed" {
+            try f.appendNativeAnswer("Initial proposal")
+            _ = try await f.router.receive(f.event(.stopCandidate, text: "Initial proposal", plugin: "claude-code"), peer: f.hookPeer(startedAt: 102))
+            try append(["type": "user", "uuid": "discussion", "promptId": "B", "timestamp": "1970-01-01T00:33:20Z"])
+        }
+        let turn = mode == "delayed" ? "B" : "turn"
+        let parents = try Data(contentsOf: f.transcript).split(separator: 10).compactMap { line in
+            try (JSONSerialization.jsonObject(with: Data(line)) as? [String: Any])?["uuid"] as? String
+        }
+        let parent = try #require(parents.last)
+        let available = LockIsolated(false)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            guard available.value else { throw AgentWorkflowInspectionUnavailable() }
+            return $0
+        }, provider: { _ in available.value ? f.nativeProvider : nil })
+        if mode == "delayed" {
+            await f.router.shutdown()
+            _ = try await router.receive(f.event(.submitted, text: "Discuss the plan", turn: turn, plugin: "claude-code"), peer: f.hookPeer(startedAt: 2_001))
+        }
+        if kind != "none" {
+            try append([
+                "type": "assistant", "uuid": "working", "parentUuid": parent,
+                "message": ["id": "working", "stop_reason": kind == "tool-result" ? "tool_use" : "end_turn", "content": []],
+            ])
+            let content: Any = kind == "tool-result"
+                ? [["type": "tool_result", "tool_use_id": "tool", "content": "Result"]]
+                : "Stop hook feedback: Continue"
+            try append([
+                "type": "user", "uuid": "internal", "parentUuid": "working", "promptId": turn,
+                "timestamp": "1970-01-01T00:33:22Z", "message": ["role": "user", "content": content],
+            ])
+        }
+        try f.appendNativeAnswer("Verified proposal", turn: turn)
+        let stop = f.event(.stopCandidate, text: "Verified proposal", turn: turn, plugin: "claude-code")
+        if mode == "delayed" {
+            _ = try await router.receive(stop, peer: f.hookPeer(startedAt: 2_010))
+        } else {
+            _ = try await f.router.receive(stop, peer: f.hookPeer(startedAt: 2_010))
+            await f.router.shutdown()
+            let peer = try await f.replaceProcess(in: f.store)
+            let last = try #require(Data(contentsOf: f.transcript).split(separator: 10).last)
+            let previous = try #require((JSONSerialization.jsonObject(with: Data(last)) as? [String: Any])?["uuid"] as? String)
+            try append(["type": "user", "uuid": "next", "parentUuid": previous, "promptId": "C", "timestamp": "1970-01-01T00:50:00Z"])
+            _ = try await router.receive(f.event(.submitted, text: "New task", turn: "C", plugin: "claude-code"), peer: f.hookPeer(startedAt: 3_001, source: peer))
+        }
+        if restart {
+            await router.shutdown()
+        }
+        let store = restart ? AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID) : f.store
+        if mode == "new-process" {
+            _ = try await f.replaceProcess(in: store)
+        } else {
+            _ = try await store.reconcile([.init(f.instance)])
+        }
+        let runner = restart ? f.runner(in: store) : f.runner
+        let active = restart ? AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 }, provider: { _ in f.nativeProvider }) : router
+        available.setValue(true)
+        try await active.requireVerifiedSubmission(f.invocation.id)
+        let writes = LockIsolated(0)
+        let service = AgentWorkflowService(store: store, scan: { _ in
+            try await store.snapshot().instances.map { AgentWorkflowObservation($0) }
+        }, schedule: { _ in }, synchronizeEvents: { try await active.requireVerifiedSubmission($0, allowingStoppedReplay: true) }, resumeStep: { _, _ in
+            writes.withValue { $0 += 1 }
+        })
+        let before = try await store.snapshot().runs[0]
+        let paused = before.status == .paused ? before : try await service.pause(runID: before.id, expectedRevision: before.revision)
+        let resumed = try await service.resume(runID: paused.id, expectedRevision: paused.revision)
+        #expect(resumed.status == .running && writes.value == 1)
+        let saved = try #require(resumed.invocations.first)
+        #expect(saved.resultTurnID == (mode == "delayed" ? "B" : "C"))
+        #expect(saved.stepTurn?.stopped == (mode == "delayed"))
+        #expect(saved.result == nil)
+        await active.shutdown()
+        await router.shutdown()
+        await runner.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: ["ascii", "utf8", "escaped"])
+    func metadataContentPrefixesRemainBoundedAndValid(kind: String) throws {
+        let data: Data
+        if kind == "escaped" {
+            data = Data((#"{"message":{"content":""# + String(repeating: #"\u4e2d\ud83d\ude00"#, count: 80) + #""}}"#).utf8)
+        } else {
+            let text = kind == "ascii" ? "Stop hook feedback: " + String(repeating: "x", count: 3 * 1_024 * 1_024) : "Prefix " + String(repeating: "中😀\\\n\"", count: 80)
+            data = try JSONSerialization.data(withJSONObject: ["message": ["content": text]])
+        }
+        var record = AgentWorkflowTranscriptRecord(turnMetadataOnly: true)
+        let chunk = kind == "ascii" ? 4_093 : 7
+        for start in stride(from: 0, to: data.count, by: chunk) {
+            try record.append(data[start..<min(start + chunk, data.count)])
+        }
+        let value = try JSONSerialization.jsonObject(with: record.finish()) as? [String: Any]
+        let prefix = try #require((value?["message"] as? [String: Any])?["content"] as? String)
+        let original = try #require((JSONSerialization.jsonObject(with: data) as? [String: Any])?["message"] as? [String: Any])
+        #expect((original["content"] as? String)?.hasPrefix(prefix) == true)
+        #expect(record.retained.count < 1_024 && prefix.utf8.count <= 256)
+        if kind == "ascii" {
+            #expect(prefix.hasPrefix("Stop hook feedback:"))
+        }
+    }
+
+    @Test
+    func currentWriterFailureSettlesBeforeAnOlderUnknownTurn() async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn", "B")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 101))
+        _ = try await f.router.receive(f.event(.submitted, text: "B input", turn: "B"), peer: f.hookPeer(startedAt: 103))
+        let peer = try await f.replaceProcess(in: f.store)
+        try f.appendNativeTurn("C")
+        _ = try await f.router.receive(f.event(.submitted, text: "C input", turn: "C"), peer: f.hookPeer(startedAt: 305, source: peer))
+        try f.appendCodexAbort("C")
+        _ = try await f.router.receive(f.event(.failed, text: "C failure", turn: "C"), peer: f.hookPeer(startedAt: 306, source: peer))
+        _ = try? await f.router.requireVerifiedSubmission(f.invocation.id)
+        let call = try await f.store.snapshot().runs[0].invocations[0]
+        #expect(call.status == .failed && call.resultTurnID == "C" && call.issue == "C failure")
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test
+    func legacyStoppedTurnCanResumeInANewProcessWithoutStopReplay() async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        try f.appendCodexAnswer("Proposal")
+        _ = try await f.store.update(runID: f.run.id) { try $0.stopStepTurn(invocationID: f.invocation.id, turnID: "turn") }
+        await f.router.shutdown()
+        var archive = try await f.store.snapshot()
+        archive.schemaVersion = 9
+        archive.pendingReceipts = nil
+        try JSONEncoder().encode(archive).write(to: await f.store.fileURL, options: .atomic)
+        let store = AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID)
+        let peer = try await f.replaceProcess(in: store)
+        let runner = f.runner(in: store)
+        let router = AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 }, provider: { _ in f.nativeProvider })
+        let sent = LockIsolated<[String]>([])
+        let service = AgentWorkflowService(store: store, scan: { _ in try [.init(#require(await store.snapshot().instances.first))] }, schedule: { _ in }, resumeStep: { call, writer in
+            let permit = try #require(await store.authorizeContinuation(call, instance: writer))
+            try permit.perform { sent.withValue { $0.append(AgentWorkflowPrompt.continuation(definition: f.run.definition, nodeID: call.nodeID, invocationID: call.id)) } }
+            try await store.finishContinuation(call, authorization: permit, written: true)
+        })
+        let before = try await store.snapshot().runs[0]
+        _ = try await service.resume(runID: before.id, expectedRevision: before.revision)
+        let prompt = try #require(sent.value.first)
+        #expect(sent.value.count == 1)
+        try f.appendNativeTurn("C")
+        _ = try await router.receive(f.event(.submitted, text: prompt, turn: "C"), peer: peer)
+        try await router.requireVerifiedSubmission(f.invocation.id)
+        let commands = AgentWorkflowAgentService(store: store, inspect: { $0 }, synchronizeEvents: { try await router.requireVerifiedSubmission($0) })
+        let request = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        #expect(await commands.handle(request, peer: peer).ok)
+        await router.shutdown()
+        await runner.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test
+    func continueReusesTheArchivedFrozenTurnFailure() async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn", "B")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        _ = try await f.router.receive(f.event(.submitted, text: "B input", turn: "B"), peer: f.hookPeer(startedAt: 103))
+        try f.appendCodexAnswer("B proposal", turn: "B")
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "B proposal", turn: "B"), peer: f.hookPeer(startedAt: 104))
+        let peer = try await f.replaceProcess(in: f.store)
+        try f.appendNativeTurn("C")
+        _ = try await f.router.receive(f.event(.submitted, text: "C input", turn: "C"), peer: peer)
+        let commands = AgentWorkflowAgentService(store: f.store, inspect: { $0 }, synchronizeEvents: { try await f.router.requireVerifiedSubmission($0) })
+        let request = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        #expect(await commands.handle(request, peer: peer).ok)
+        let paused = try await f.store.update(runID: f.run.id) { $0.pause(reason: "Operator pause", operatorInitiated: true) }
+        let recovery = AgentWorkflowResultRecovery(store: f.store, inspect: { $0 }, provider: { _ in f.nativeProvider }, synchronizeIngress: {
+            _ = try await f.router.receive(f.event(.failed, text: "B late failure", turn: "B"), peer: f.hookPeer(startedAt: 105))
+            _ = try? await f.router.requireVerifiedSubmission(f.invocation.id)
+        })
+        let recovered = try await recovery.recover(paused)
+        #expect(recovered.status == .paused && recovered.invocations[0].status == .failed && recovered.invocations[0].issue == "B late failure")
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test
+    func submissionWindowSkipsUnrelatedLargeRecords() async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let large = String(repeating: "x", count: 3 * 1_024 * 1_024)
+        let records: [[String: Any]] = [
+            ["type": "session_meta", "payload": ["id": f.instance.conversationID]],
+            ["type": "event_msg", "payload": ["type": "user_message", "message": large]],
+            ["type": "event_msg", "timestamp": "1970-01-01T00:01:42Z", "payload": ["type": "task_started", "turn_id": "B"]],
+            ["type": "event_msg", "payload": ["type": "turn_aborted", "turn_id": "B"]],
+            ["type": "event_msg", "payload": ["type": "task_started", "turn_id": "C"]],
+            ["type": "event_msg", "payload": ["type": "user_message", "message": large]],
+        ]
+        let bytes = try records.reduce(into: Data()) { try $0.append(JSONSerialization.data(withJSONObject: $1) + Data([10])) }
+        try bytes.write(to: f.transcript)
+        let parser = CodexWorkflowTranscript(conversationID: f.instance.conversationID, nativeTurnID: "B")
+        let metadata = try AgentWorkflowTranscriptFile(path: f.transcript.path, parser: parser)
+        let proof = try #require(await metadata.verifySubmittedTurn(.init(nativeTurnID: "B", transcriptPath: f.transcript.path)))
+        let reader = try AgentWorkflowTranscriptFile(path: f.transcript.path, parser: parser)
+        let result = try #require(await reader.verifiedOutcome(for: proof, hasStop: false))
+        #expect(result.0 == .failed("The native Codex turn was interrupted."))
+        #expect(await reader.bytesRead < 128 * 1_024)
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true])
+    func continuationWithTheSameIDCanCompleteWithoutResendingItsPrompt(stopArrived: Bool) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 101))
+        try f.appendCodexAnswer("Proposal")
+        if stopArrived {
+            _ = try await f.router.receive(f.event(.stopCandidate, text: "Proposal"), peer: f.hookPeer(startedAt: 102))
+        }
+        let stopped = try await f.store.snapshot().runs[0].invocations[0]
+        let permit = try #require(await f.store.authorizeContinuation(stopped, instance: f.instance))
+        try await f.store.finishContinuation(stopped, authorization: permit, written: true)
+        let command = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        let service = AgentWorkflowAgentService(store: f.store, inspect: { $0 }, synchronizeEvents: {
+            try await f.router.requireVerifiedSubmission($0)
+        })
+        #expect(await service.handle(command, peer: f.peer).error?.code == "workflow_denied")
+        try f.appendNativeTurn("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: "Continue this step"), peer: f.hookPeer(startedAt: 103))
+        try #require(await service.handle(command, peer: f.peer).ok)
+        let accepted = try await f.store.snapshot().runs[0].invocations[0]
+        #expect(accepted.continuationTurnID == "turn" && accepted.continuationInstance == nil)
+        #expect(try await f.store.authorizeContinuation(accepted, instance: f.instance) == nil)
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: ["success", "reopen", "restop", "explicit-success"])
+    func continueAcceptsVerifiedProgressDuringIngressDrain(scenario: String) async throws {
+        let explicit = scenario != "success"
+        let f = try await fixture(completion: explicit ? .explicit : .replyEnded)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 101))
+        try f.appendCodexAnswer("Proposal")
+        if scenario == "reopen" || scenario == "restop" {
+            _ = try await f.router.receive(f.event(.stopCandidate, text: "Proposal"), peer: f.hookPeer(startedAt: 102))
+        } else if explicit {
+            _ = try await f.store.update(runID: f.run.id) {
+                try $0.requestStepCompletion(invocationID: f.invocation.id, instance: f.instance, turnID: "turn", now: Date())
+            }
+        }
+        let paused = try await f.store.update(runID: f.run.id) { $0.pause(reason: "Operator paused") }
+        let recovery = AgentWorkflowResultRecovery(store: f.store, inspect: { $0 }, provider: { _ in f.nativeProvider }, synchronizeIngress: {
+            if scenario == "reopen" || scenario == "restop" {
+                try f.appendNativeTurn("turn")
+                _ = try await f.router.receive(f.event(.submitted, text: "Implement"), peer: f.hookPeer(startedAt: 103))
+                try await f.router.requireVerifiedSubmission(f.invocation.id)
+                if scenario == "restop" {
+                    try f.appendCodexAnswer("Clarification")
+                    _ = try await f.router.receive(f.event(.stopCandidate, text: "Clarification"), peer: f.hookPeer(startedAt: 104))
+                }
+            } else {
+                if explicit {
+                    _ = try await f.router.receive(f.event(.stopCandidate, text: "Proposal"), peer: f.hookPeer(startedAt: 102))
+                }
+                try await f.runner.succeeded(
+                    runID: f.run.id,
+                    result: .init(invocationID: f.invocation.id, nativeTurnID: "turn", text: "Proposal", completedAt: Date()),
+                    instance: f.instance
+                )
+            }
+        })
+        let service = AgentWorkflowService(
+            store: f.store, scan: { _ in [.init(f.instance)] }, schedule: { _ in }, resumeStep: { _, _ in },
+            recoverResults: { try await recovery.recover($0) }
+        )
+        let resumed = try await service.resume(runID: paused.id, expectedRevision: paused.revision)
+        #expect(resumed.status != .paused)
+        if scenario == "reopen" || scenario == "restop" {
+            #expect(resumed.invocations[0].stepTurn?.stopped == (scenario == "restop"))
+        } else {
+            #expect(resumed.invocations[0].result?.text == "Proposal")
+        }
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func stoppedTurnRetainsItsContinuationWhenInspectionTimesOut() async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let available = LockIsolated(true)
+        let clock = WorkflowRetryTestClock()
+        let timedOut = AsyncStream<Void>.makeStream()
+        defer {
+            timedOut.continuation.finish()
+            clock.sleeps.continuation.finish()
+        }
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            if !available.value {
+                throw AgentWorkflowInspectionUnavailable()
+            }
+            return $0
+        }, verificationTimeout: .zero, clock: AnyClock(clock), provider: { _ in f.nativeProvider }, onFailure: { _ in
+            timedOut.continuation.yield(())
+        })
+        try f.writeNativeTurns("turn")
+        _ = try await router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        try f.appendCodexAnswer("Proposal")
+        _ = try await router.receive(f.event(.stopCandidate, text: "Proposal"), peer: f.hookPeer(startedAt: 102))
+        available.setValue(false)
+        try f.appendNativeTurn("turn")
+        _ = try await router.receive(f.event(.submitted, text: "Implement it"), peer: f.hookPeer(startedAt: 103))
+        try await clock.advancePastNextSleep()
+        var expiration = timedOut.stream.makeAsyncIterator()
+        try #require(await expiration.next() != nil)
+        available.setValue(true)
+        try await router.requireVerifiedSubmission(f.invocation.id)
+        #expect(try await f.store.snapshot().runs[0].invocations[0].stepTurn?.stopped == false)
+        await router.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
     @Test
     func laterDiscussionReceiptSurvivesInitialReceiptVerification() async throws {
         let f = try await fixture(completion: .explicit)
@@ -1530,7 +3902,8 @@ struct AgentWorkflowNativeEventsTests {
         let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
             guard available.value else { throw AgentWorkflowInspectionUnavailable() }
             return $0
-        })
+        }, provider: { _ in f.nativeProvider })
+        try f.writeNativeTurns("turn", "next")
         _ = try await router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
         _ = try await router.receive(f.event(.stopCandidate, text: "Proposal"), peer: f.peer)
         _ = try await router.receive(f.event(.submitted, text: "Clarify", turn: "next"), peer: f.peer)
@@ -1550,14 +3923,21 @@ struct AgentWorkflowNativeEventsTests {
         await f.runner.shutdown()
     }
 
-    @Test(arguments: ["codex", "claude-code"])
-    func proposalAndHumanDiscussionWaitUntilAnExplicitlyCompletedTurn(plugin: String) async throws {
+    @Test(arguments: ["codex", "claude-code"], [false, true])
+    func proposalAndHumanDiscussionWaitUntilAnExplicitlyCompletedTurn(plugin: String, logAheadOfStop: Bool) async throws {
         let f = try await fixture(plugin: plugin, completion: .explicit)
         defer { try? FileManager.default.removeItem(at: f.directory) }
-        let service = AgentWorkflowAgentService(store: f.store, inspect: { $0 }, synchronizeEvents: { _ in })
+        let service = AgentWorkflowAgentService(store: f.store, inspect: { $0 }, synchronizeEvents: {
+            try await f.router.requireVerifiedSubmission($0)
+        })
         let request = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        try f.writeNativeTurns("turn")
         #expect(await service.handle(request, peer: f.peer).error != nil)
         #expect(try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, plugin: plugin), peer: f.peer) == nil)
+        try f.appendNativeAnswer("Please confirm the design")
+        if logAheadOfStop {
+            try f.appendNativeTurn("turn")
+        }
         #expect(try await f.router.receive(f.event(.stopCandidate, text: "Please confirm the design", plugin: plugin), peer: f.peer) == nil)
         var saved = try await f.store.snapshot().runs[0]
         #expect(saved.status == .running && saved.invocations[0].result == nil)
@@ -1568,11 +3948,28 @@ struct AgentWorkflowNativeEventsTests {
         #expect(await service.handle(request, peer: f.peer).error != nil) // A stopped proposal is not a current tool turn.
 
         _ = try await f.router.receive(f.event(.submitted, text: "Answer to the question", plugin: plugin), peer: f.peer)
+        if !logAheadOfStop {
+            #expect(try await f.store.snapshot().runs[0].invocations[0].stepTurn?.stopped == true)
+            try f.appendNativeTurn("turn")
+        }
+        try await f.router.requireVerifiedSubmission(f.invocation.id)
         let continued = try await f.store.snapshot().runs[0].invocations[0]
         #expect(continued.stepTurn?.stopped == false && continued.stepTurn?.prompt == f.invocation.delivery.input.text)
-        _ = try await f.router.receive(f.event(.submitted, text: "Discuss an alternative", turn: "discussion", plugin: plugin), peer: f.peer)
+        #expect(try await f.store.snapshot().pendingReceipts?[f.invocation.id]?.completion == nil)
+        try f.appendNativeTurn("discussion")
+        let discussion = f.event(.submitted, text: "Discuss an alternative", turn: "discussion", plugin: plugin)
+        _ = try await f.router.receive(discussion, peer: f.peer)
+        try f.appendNativeAnswer("Alternative proposal", turn: "discussion")
         _ = try await f.router.receive(f.event(.stopCandidate, text: "Alternative proposal", turn: "discussion", plugin: plugin), peer: f.peer)
+        _ = try await f.router.receive(discussion, peer: f.peer)
+        #expect(await service.handle(request, peer: f.peer).error != nil)
+        #expect(try await f.store.snapshot().runs[0].invocations[0].stepTurn?.stopped == true)
+        try f.appendNativeTurn("discussion")
+        try await f.router.requireVerifiedSubmission(f.invocation.id)
+        #expect(try await f.store.snapshot().runs[0].invocations[0].stepTurn?.stopped == false)
+        try f.appendNativeTurn("implementation")
         _ = try await f.router.receive(f.event(.submitted, text: "Implement the agreed design", turn: "implementation", plugin: plugin), peer: f.peer)
+        _ = try await f.router.receive(discussion, peer: f.peer)
         #expect(await service.handle(request, peer: nil).error != nil)
         try #require(await service.handle(request, peer: f.peer).ok)
         try #require(await service.handle(request, peer: f.peer).ok)
@@ -2423,7 +4820,8 @@ struct AgentWorkflowNativeEventsTests {
         #expect(accepted.nativeTranscriptPath == f.transcript.path)
         let candidate = try await f.router.receive(f.event(.stopCandidate, text: "Final"), peer: f.peer)
         #expect(candidate?.invocation.id == f.invocation.id)
-        #expect(try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer) == nil)
+        let replay = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        #expect(replay?.candidate == candidate?.candidate)
         #expect(try await f.store.snapshot().runs[0].invocations[0].result == nil)
         await f.runner.shutdown()
     }
@@ -2645,6 +5043,114 @@ struct AgentWorkflowNativeEventsTests {
             try $0.beginWriting(invocationID: invocation.id, instance: f.instance, now: Date())
             try $0.didWrite(invocationID: invocation.id)
         }
+    }
+
+    @Test
+    func lateFirstReceiptCannotBecomeAnotherRunsContinuation() async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try await f.store.update(runID: f.run.id) { $0.end() }
+        let current = try await startAnotherRun(f)
+        let currentCall = try #require(current.invocations.first)
+        let available = LockIsolated(false)
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            guard available.value else { throw AgentWorkflowInspectionUnavailable() }
+            return $0
+        })
+        _ = try await router.receive(f.event(.submitted, text: currentCall.delivery.input.text, turn: "current"), peer: f.peer)
+        available.setValue(true)
+        _ = try await router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, turn: "old"), peer: f.peer)
+        for _ in 0..<100 {
+            if try await f.store.snapshot().runs.allSatisfy({ $0.invocations[0].nativeTurnID != nil }) {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let archive = try await f.store.snapshot()
+        #expect(archive.runs.first(where: { $0.id == f.run.id })?.invocations[0].nativeTurnID == "old")
+        #expect(archive.runs.first(where: { $0.id == current.id })?.invocations[0].stepTurn?.id == "current")
+        await router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func archivedContinuationCannotSelectTurnInNewRun(unconfirmed: Bool, intermediate: Bool) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        try f.writeCodexTurns("turn", "middle")
+        let middle = f.event(.submitted, text: "Intermediate continuation", turn: "middle")
+        _ = try await f.router.receive(middle, peer: f.peer)
+        try f.appendNativeTurn("old-followup")
+        let old = f.event(.submitted, text: "Historical continuation", turn: "old-followup")
+        _ = try await f.router.receive(old, peer: f.peer)
+        let ended = try await f.store.update(runID: f.run.id) { $0.end() }
+        #expect(ended.invocations[0].stepTurn?.id == "old-followup")
+        let next = try await startAnotherRun(f)
+        let task = try #require(next.invocations.first)
+        try f.writeCodexTurns("turn", "middle", "old-followup", "current")
+        _ = try await f.router.receive(f.event(.submitted, text: task.delivery.input.text, turn: "current"), peer: f.peer)
+        let replay = intermediate ? middle : old
+        if unconfirmed {
+            try await f.router.receiveUnconfirmedSubmission(replay, peer: f.peer)
+        } else {
+            _ = try await f.router.receive(replay, peer: f.peer)
+        }
+        try await f.router.requireVerifiedSubmission(task.id)
+        let saved = try #require(await f.store.snapshot().runs.first(where: { $0.id == next.id }))
+        #expect(saved.invocations[0].stepTurn?.id == "current")
+        _ = try await f.router.receive(f.event(.submitted, text: "New continuation", turn: "new-followup"), peer: f.peer)
+        #expect(try await f.store.snapshot().runs.last?.invocations[0].stepTurn?.id == "current")
+        try f.writeCodexTurns("turn", "middle", "old-followup", "current", "new-followup")
+        try await f.router.requireVerifiedSubmission(task.id)
+        #expect(try await f.store.snapshot().runs.last?.invocations[0].stepTurn?.id == "new-followup")
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test
+    func stableTranscriptRejectsAnEqualLengthRewriteDuringParsing() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try Data("{\"final\":\"First\"}\n".utf8).write(to: f.transcript)
+        let changed = LockIsolated(false)
+        let parser = NativeWorkflowTestParser(onOutcome: {
+            do {
+                let handle = try FileHandle(forWritingTo: f.transcript)
+                defer { try? handle.close() }
+                try handle.write(contentsOf: Data("{\"final\":\"Other\"}\n".utf8))
+                changed.setValue(true)
+            } catch {
+                Issue.record(Comment(rawValue: error.localizedDescription))
+            }
+        })
+        let file = try AgentWorkflowTranscriptFile(path: f.transcript.path, parser: parser)
+        #expect(try await file.verifiedOutcome(at: f.transcript.path, hasStop: true) == nil)
+        #expect(changed.value)
+        let newFile = try AgentWorkflowTranscriptFile(path: f.transcript.path, parser: NativeWorkflowTestParser())
+        let reread = try #require(await newFile.verifiedOutcome(at: f.transcript.path, hasStop: true))
+        #expect(reread.0 == .succeeded("Other"))
+    }
+
+    @Test
+    func resubmittingOriginalTextSelectsTheNewExplicitTurn() async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let prompt = f.invocation.delivery.input.text
+        _ = try await f.router.receive(f.event(.submitted, text: prompt), peer: f.peer)
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "Proposal"), peer: f.peer)
+        try f.writeCodexTurns("turn", "retry")
+        _ = try await f.router.receive(f.event(.submitted, text: prompt, turn: "retry"), peer: f.peer)
+        let service = AgentWorkflowAgentService(store: f.store, inspect: { $0 }, synchronizeEvents: {
+            try await f.router.requireVerifiedSubmission($0)
+        })
+        let request = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        #expect(await service.handle(request, peer: f.peer).ok)
+        let invocation = try #require(await f.store.snapshot().runs.first?.invocations.first)
+        #expect(invocation.nativeTurnID == "turn")
+        #expect(invocation.stepTurn?.id == "retry" && invocation.stepTurn?.completionRequested == true)
+        await f.router.shutdown()
+        await f.runner.shutdown()
     }
 
     @Test(arguments: ["codex", "claude-code"], [false, true])

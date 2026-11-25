@@ -28,6 +28,10 @@ public struct CodexWorkflowTranscript: AgentWorkflowTranscriptParser {
         outcome
     }
 
+    public var tracksCompletionAtEnd: Bool {
+        true
+    }
+
     public var activity: [AgentTurnActivity] {
         activityLog?.entries ?? []
     }
@@ -61,6 +65,14 @@ public struct CodexWorkflowTranscript: AgentWorkflowTranscriptParser {
     }
 
     public mutating func submittedTurnID(in line: Data) throws -> String? {
+        try submission(in: line, includingContext: true)
+    }
+
+    public mutating func resumedTurnID(in line: Data) throws -> String? {
+        try submission(in: line, includingContext: false)
+    }
+
+    private mutating func submission(in line: Data, includingContext: Bool) throws -> String? {
         guard
             let record = try JSONSerialization.jsonObject(with: line) as? [String: Any],
             let payload = record["payload"] as? [String: Any] else { return nil }
@@ -70,8 +82,9 @@ public struct CodexWorkflowTranscript: AgentWorkflowTranscriptParser {
         guard sessionMatches else { return nil }
         switch (record["type"] as? String, payload["type"] as? String) {
         case ("event_msg", "task_started"),
-             ("event_msg", "turn_started"),
-             ("turn_context", _):
+             ("event_msg", "turn_started"):
+            return payload["turn_id"] as? String
+        case ("turn_context", _) where includingContext:
             return payload["turn_id"] as? String
         default:
             return nil
@@ -90,6 +103,10 @@ public struct CodexWorkflowTranscript: AgentWorkflowTranscriptParser {
             sessionMatches, record["type"] as? String == "event_msg",
             payload["turn_id"] as? String == nativeTurnID else { return nil }
         switch payload["type"] as? String {
+        case "task_started",
+             "turn_started":
+            outcome = nil
+            return nil
         case "item_completed":
             if
                 outcome == nil, activityLog != nil,

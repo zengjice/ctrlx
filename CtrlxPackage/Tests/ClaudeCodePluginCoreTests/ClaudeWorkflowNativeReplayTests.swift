@@ -7,6 +7,13 @@ import Testing
 /// UUIDs, paths, prompt content, telemetry and thinking were removed or replaced.
 struct ClaudeWorkflowNativeReplayTests {
     @Test
+    func nativeStopFeedbackKeepsTheOriginalSubmissionBoundary() throws {
+        var parser = ClaudeWorkflowTranscript(conversationID: "session", nativeTurnID: "turn", prompt: "__task__", candidate: "")
+        let starts = try Self.records.split(separator: "\n").compactMap { try parser.resumedTurnID(in: Data($0.utf8)) }
+        #expect(starts == ["turn"])
+    }
+
+    @Test
     func nativeBlockedStopDoesNotReleaseFirstAnswer() throws {
         for candidate in ["WORKFLOW_FIRST_CANDIDATE", "WORKFLOW_SECOND_FINAL"] {
             var parser = ClaudeWorkflowTranscript(conversationID: "session", nativeTurnID: "turn", prompt: "__task__", candidate: candidate)

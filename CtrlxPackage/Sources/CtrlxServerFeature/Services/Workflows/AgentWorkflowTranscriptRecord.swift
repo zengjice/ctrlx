@@ -10,7 +10,7 @@ struct AgentWorkflowTranscriptRecord {
         var key: String?
     }
 
-    private enum StringKind { case key, text, image, imageURL, discardedText }
+    private enum StringKind { case key, text, image, imageURL, asciiPrefix, discardedText }
     private static let maximumRetainedBytes = 2 * 1_024 * 1_024
     // 32 legal 20 MiB images, Base64 with every slash escaped, plus metadata.
     private static let maximumRecordBytes = maximumRetainedBytes + AgentWorkflowWire.maximumAttachments * ((20 * 1_024 * 1_024 + 2) / 3 * 8 + 1_024)
@@ -20,6 +20,7 @@ struct AgentWorkflowTranscriptRecord {
     private var stringKind: StringKind?
     private var keyBytes: [UInt8] = []
     private var urlPrefix: [UInt8] = []
+    private var prefixBytes = 0
     private var escaped = false
     private var unicodeDigits = 0
     private var utf8Remaining = 0
@@ -38,6 +39,11 @@ struct AgentWorkflowTranscriptRecord {
         for byte in bytes {
             if let kind = stringKind {
                 let closing = byte == 34 && !escaped && unicodeDigits == 0
+                // Native control messages have an ASCII prefix. Stop before an
+                // escape or non-ASCII byte so truncation cannot split JSON text.
+                if kind == .asciiPrefix, prefixBytes >= 256 || byte == 92 || byte >= 128 {
+                    stringKind = .discardedText
+                }
                 if kind == .key, keyBytes.count <= 128 {
                     keyBytes.append(byte)
                 }
@@ -53,13 +59,16 @@ struct AgentWorkflowTranscriptRecord {
                         urlPrefix.removeAll(keepingCapacity: true)
                         stringKind = .image
                     }
-                } else if (kind != .image && kind != .discardedText) || closing {
+                } else if (kind != .image && stringKind != .discardedText) || closing {
                     retained.append(byte)
+                    if kind == .asciiPrefix {
+                        prefixBytes += 1
+                    }
                 }
                 if kind == .image, byte >= 128 {
                     throw invalidString()
                 }
-                if kind == .discardedText, byte >= 128 || utf8Remaining != 0 {
+                if kind == .discardedText || kind == .asciiPrefix, byte >= 128 || utf8Remaining != 0 {
                     try validateUTF8(byte)
                 }
                 // Even discarded payloads must be well-formed JSON strings.
@@ -93,13 +102,21 @@ struct AgentWorkflowTranscriptRecord {
                         let key = containers.last?.key
                         let parentKey = containers.dropLast().last?.key
                         if turnMetadataOnly {
-                            let isRecordField = containers.count == 1 && (key == "type" || key == "sessionId" || key == "promptId")
+                            let isRecordField = containers.count == 1 && (key == "type" || key == "sessionId" || key == "promptId" || key == "timestamp" || key == "uuid" || key == "parentUuid")
                             let isTurnField = containers.count == 2 && parentKey == "payload" && (key == "type" || key == "turn_id" || key == "id")
+                            let isMessageContent = containers.count >= 2 && containers[0].key == "message" && containers[1].key == "content"
+                            let isContentKind = isMessageContent && containers.count == 4 && key == "type"
+                            let isContentText = isMessageContent && (containers.count == 2 || (containers.count == 4 && key == "text"))
                             let isRejectionField = retainSubmissionRejections && (
                                 (containers.count == 1 && (key == "subtype" || key == "timestamp" || key == "uuid" || key == "content"))
                                     || (containers.count == 3 && parentKey == "ending" && key == "kind")
                             )
-                            stringKind = isRecordField || isTurnField || isRejectionField ? .text : .discardedText
+                            if isContentText {
+                                stringKind = .asciiPrefix
+                                prefixBytes = 0
+                            } else {
+                                stringKind = isRecordField || isTurnField || isRejectionField || isContentKind ? .text : .discardedText
+                            }
                         } else if key == "data", parentKey == "source" {
                             stringKind = .image
                         } else if

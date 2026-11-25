@@ -131,7 +131,13 @@ struct AgentWorkflowContentNodeTests {
         let recovered = try #require(try await reopened.snapshot().runs.first)
         #expect(recovered.status == .paused)
         #expect(recovered.invocations == saved.invocations)
-        let restarted = AgentWorkflowService(store: reopened, scan: { _ in throw AgentWorkflowError("No Agent scan is available") }, schedule: { _ in }, now: { now })
+        let recovery = AgentWorkflowResultRecovery(store: reopened, inspect: { $0 }, provider: { _ in nil }, synchronizeIngress: {
+            throw AgentWorkflowInspectionUnavailable()
+        })
+        let restarted = AgentWorkflowService(
+            store: reopened, scan: { _ in throw AgentWorkflowError("No Agent scan is available") },
+            schedule: { _ in }, recoverResults: { try await recovery.recover($0) }, now: { now }
+        )
         let resumed = try await restarted.resume(runID: run.id, expectedRevision: recovered.revision)
         #expect(resumed.instances.isEmpty)
         let completed = try await reopened.update(runID: run.id) { _ = try $0.prepareInvocation(nodeID: b.id, now: now) }

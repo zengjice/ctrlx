@@ -1072,7 +1072,7 @@
             #endif
         }
 
-        func synchronizeAgentMessageEvents() async throws {
+        func synchronizeAgentIngress() async throws {
             guard let ingressSocketServer else { throw AgentWorkflowInspectionUnavailable() }
             do { try await ingressSocketServer.waitForPendingFrames() }
             catch is CancellationError {
@@ -1081,12 +1081,12 @@
             }
         }
 
-        func synchronizeWorkflowEvents(_ invocationID: UUID) async throws {
+        func synchronizeWorkflowEvents(_ invocationID: UUID, allowingStoppedReplay: Bool = false) async throws {
             guard let ingressSocketServer, let agentWorkflowEvents else {
                 throw AgentWorkflowError("Workflow event processing is unavailable on this Host.")
             }
             try await ingressSocketServer.waitForPendingFrames()
-            try await agentWorkflowEvents.requireVerifiedSubmission(invocationID)
+            try await agentWorkflowEvents.requireVerifiedSubmission(invocationID, allowingStoppedReplay: allowingStoppedReplay)
         }
 
         #if DEBUG

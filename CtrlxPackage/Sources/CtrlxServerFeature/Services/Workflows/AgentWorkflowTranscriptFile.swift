@@ -30,12 +30,65 @@
             let inode: ino_t
         }
 
+        struct StopBoundary: Codable, Equatable, Sendable {
+            let identity: FileIdentity
+            let size: UInt64
+            /// Older ledgers used the file size at hook processing time.
+            var nativeRecord: Bool? = true
+
+            init(identity: FileIdentity, size: UInt64) {
+                self.identity = identity
+                self.size = size
+            }
+        }
+
+        struct SubmissionBoundary: Codable, Equatable, Sendable {
+            let identity: FileIdentity
+            let offset: UInt64
+            let end: UInt64
+            let timestamp: Date?
+            var nextOffset: UInt64? = nil
+            var nextEnd: UInt64? = nil
+
+            func identifies(_ other: Self) -> Bool {
+                identity == other.identity && offset == other.offset && end == other.end && timestamp == other.timestamp
+            }
+        }
+
         struct VerifiedSubmission: Sendable {
             let turn: PluginWorkflowTurn
+            var afterStop: StopBoundary? = nil
+            var submittedAt: Date? = nil
+            var nativeStart: SubmissionBoundary? = nil
             fileprivate let revision: FileRevision
 
             var isCurrent: Bool {
                 revision.isCurrent(at: turn.transcriptPath)
+            }
+        }
+
+        struct VerifiedRecoveryEnd: Sendable {
+            fileprivate let path: String
+            fileprivate let revision: FileRevision
+            fileprivate let completionOffset: UInt64?
+            let hasPartialRecord: Bool
+
+            var stopBoundary: StopBoundary? {
+                completionOffset.map { .init(identity: revision.identity, size: $0) }
+            }
+
+            var isCurrent: Bool {
+                revision.isCurrent(at: path)
+            }
+
+            func follows(_ previous: StopBoundary) -> Bool {
+                revision.identity == previous.identity && completionOffset.map { $0 > previous.size } == true
+            }
+
+            func validate() throws {
+                guard isCurrent else {
+                    throw AgentWorkflowError("The native transcript changed while verifying its result. Try continuing again.")
+                }
             }
         }
 
@@ -68,6 +121,7 @@
 
         private let handle: FileHandle
         private nonisolated let openedFile: FileRevision
+        private var readRevision: FileRevision
         private var initialParser: any AgentWorkflowTranscriptParser
         private var replayingActivity = true
         private var parser: any AgentWorkflowTranscriptParser
@@ -75,7 +129,8 @@
         private var offset: UInt64 = 0
         private var buffered = Data()
         private var pendingOutcome: AgentWorkflowTranscriptOutcome?
-        private var failure: AgentWorkflowTranscriptOutcome?
+        private var lastOutcome: AgentWorkflowTranscriptOutcome?
+        private var completionOffset: UInt64?
         private var locating: Bool
         private var readingStart = false
         private let markers: [Data]
@@ -107,6 +162,7 @@
         private init(handle: FileHandle, revision: FileRevision, parser: any AgentWorkflowTranscriptParser, submissionRejectionWindow: Range<Date>? = nil) {
             self.handle = handle
             self.openedFile = revision
+            self.readRevision = revision
             self.initialParser = parser
             self.parser = parser
             let rejectionMarker = submissionRejectionWindow == nil ? nil : parser.submissionRejectionMarker
@@ -117,7 +173,13 @@
         }
 
         func updateCandidate(_ candidate: String) {
-            pendingOutcome = failure ?? parser.updateCandidate(candidate)
+            let candidateOutcome = parser.updateCandidate(candidate)
+            let recorded = parser.tracksCompletionAtEnd ? parser.recoveredCompletion : lastOutcome
+            if case .failed? = recorded {
+                pendingOutcome = recorded
+            } else {
+                pendingOutcome = candidateOutcome
+            }
         }
 
         var activityWindow: (entries: [AgentTurnActivity], evicted: Set<String>) {
@@ -151,13 +213,113 @@
             return .init(outcome: result.outcome ?? parser.recoveredCompletion, reachedEnd: true)
         }
 
+        func hasCurrentReadRevision(at path: String) -> Bool {
+            readRevision.isCurrent(at: path)
+        }
+
+        /// Finish parsing the same file version that supplied the earlier bytes.
+        func verifiedOutcome(at path: String, hasStop: Bool = false) async throws -> (AgentWorkflowTranscriptOutcome?, VerifiedRecoveryEnd)? {
+            let revision = readRevision
+            guard offset <= revision.size, revision.isCurrent(at: path) else { return nil }
+            while true {
+                let result = try poll(through: revision.size)
+                if result.reachedEnd {
+                    break
+                }
+                await Task.yield()
+            }
+            guard offset == revision.size, revision.isCurrent(at: path) else { return nil }
+            let hasPartialRecord = !pending.retained.isEmpty || readingStart
+            var outcome: AgentWorkflowTranscriptOutcome?
+            if !hasPartialRecord {
+                outcome = parser.recoveredCompletion
+                if outcome == nil, !parser.tracksCompletionAtEnd {
+                    if hasStop {
+                        outcome = lastOutcome
+                    } else if case .failed? = lastOutcome {
+                        outcome = lastOutcome
+                    }
+                }
+            }
+            return (outcome, .init(path: path, revision: revision, completionOffset: completionOffset, hasPartialRecord: hasPartialRecord))
+        }
+
+        nonisolated func stillAtPath(_ path: String) -> Bool {
+            var info = stat()
+            return lstat(path, &info) == 0 && openedFile.identity == FileIdentity(device: info.st_dev, inode: info.st_ino)
+        }
+
+        func verifyResumedSubmission(
+            _ turn: PluginWorkflowTurn, after boundary: StopBoundary?, matching stop: PluginWorkflowEvent?, resumedStop: PluginWorkflowEvent? = nil
+        ) async throws -> VerifiedSubmission? {
+            let revision = try FileRevision(fileInfo())
+            let prior = boundary.flatMap { $0.nativeRecord == true ? $0 : nil }
+            if let prior, prior.identity != revision.identity || prior.size >= revision.size {
+                return nil
+            }
+            var recordEnd: UInt64 = 0
+            var stopEnd = prior?.size
+            var latestSubmission: String?
+            var stopBeforeSubmission: UInt64?
+            var completedSubmission = false
+            while true {
+                let result = try poll(through: revision.size, turnMetadataOnly: false) { line in
+                    let lineStart = recordEnd
+                    recordEnd = offset - UInt64(buffered.count)
+                    if let outcome = try consumeOutcome(line).completion, recordEnd > (prior?.size ?? 0) {
+                        if stopBeforeSubmission != nil, let resumedStop {
+                            completedSubmission = resumedStop.kind == .failed
+                            if case let .succeeded(answer) = outcome, resumedStop.corroboratesAnswer(answer) {
+                                completedSubmission = true
+                            }
+                        }
+                        // Any later ending closes the submissions seen so far.
+                        latestSubmission = nil
+                        if stopEnd != nil {
+                            stopEnd = recordEnd
+                        } else if case let .succeeded(answer) = outcome, stop?.corroboratesAnswer(answer) != false {
+                            stopEnd = recordEnd
+                        }
+                    }
+                    if let stopEnd, lineStart >= stopEnd, let id = try parser.resumedTurnID(in: line) {
+                        latestSubmission = id
+                        stopBeforeSubmission = id == turn.nativeTurnID ? stopEnd : nil
+                        completedSubmission = false
+                    }
+                    return nil
+                }
+                if result.reachedEnd {
+                    break
+                }
+                await Task.yield()
+            }
+            guard
+                let stopEnd = stopBeforeSubmission, latestSubmission == turn.nativeTurnID || completedSubmission,
+                offset == revision.size, pending.retained.isEmpty, !readingStart,
+                revision.isCurrent(at: turn.transcriptPath) else { return nil }
+            return VerifiedSubmission(turn: turn, afterStop: .init(identity: revision.identity, size: stopEnd), revision: revision)
+        }
+
         /// Use a fresh reader to locate the accepted turn and check submissions
         /// through the end of a stable transcript snapshot.
-        func verifyCurrentSubmission(_ turn: PluginWorkflowTurn) async throws -> VerifiedSubmission? {
+        func verifyCurrentSubmission(_ turn: PluginWorkflowTurn, hookStartedAt: Date? = nil) async throws -> VerifiedSubmission? {
             guard
-                let scan = try await scanSubmissions(from: turn),
-                scan.latestTurnID == turn.nativeTurnID, pending.retained.isEmpty else { return nil }
-            return VerifiedSubmission(turn: turn, revision: scan.revision)
+                let scan = try await scanSubmissions(from: turn, hookStartedAt: hookStartedAt),
+                scan.latestTurnID == turn.nativeTurnID, let selected = scan.nativeStart, let latest = scan.latestStart,
+                selected.identifies(latest), pending.retained.isEmpty else { return nil }
+            return VerifiedSubmission(turn: turn, submittedAt: scan.submittedAt, nativeStart: scan.nativeStart, revision: scan.revision)
+        }
+
+        func verifySubmittedTurn(
+            _ turn: PluginWorkflowTurn, firstOccurrence: Bool = false, hookStartedAt: Date? = nil, nativeStart: SubmissionBoundary? = nil
+        ) async throws -> VerifiedSubmission? {
+            guard
+                let scan = try await scanSubmissions(from: turn, hookStartedAt: hookStartedAt, nativeStart: nativeStart),
+                scan.foundTurn, let selected = firstOccurrence ? scan.firstStart : scan.nativeStart,
+                pending.retained.isEmpty else { return nil }
+            return VerifiedSubmission(
+                turn: turn, submittedAt: firstOccurrence ? scan.firstSubmittedAt : scan.submittedAt, nativeStart: selected, revision: scan.revision
+            )
         }
 
         /// A changing transcript cannot establish submission order.
@@ -171,16 +333,102 @@
             return scan.foundTurn && scan.latestTurnID != turn.nativeTurnID
         }
 
-        private func scanSubmissions(from turn: PluginWorkflowTurn) async throws -> (foundTurn: Bool, rejected: Bool, latestTurnID: String?, revision: FileRevision)? {
+        func submissionFollows(_ turn: PluginWorkflowTurn, after anchor: PluginWorkflowTurn) async throws -> Bool? {
+            guard anchor.transcriptPath == turn.transcriptPath else { return nil }
+            let revision = try FileRevision(fileInfo())
+            locating = false
+            readingStart = false
+            pending = .init(turnMetadataOnly: true)
+            var foundAnchor = false
+            var follows: Bool?
+            while true {
+                let result = try poll(through: revision.size, turnMetadataOnly: true) { line in
+                    if let id = try parser.submittedTurnID(in: line) {
+                        if id == anchor.nativeTurnID {
+                            foundAnchor = true
+                        }
+                        if id == turn.nativeTurnID {
+                            follows = foundAnchor
+                        }
+                    }
+                    return nil
+                }
+                if result.reachedEnd {
+                    break
+                }
+                await Task.yield()
+            }
+            guard offset == revision.size, pending.retained.isEmpty, revision.isCurrent(at: turn.transcriptPath) else { return nil }
+            return follows
+        }
+
+        private func scanSubmissions(
+            from turn: PluginWorkflowTurn, hookStartedAt: Date? = nil, nativeStart: SubmissionBoundary? = nil
+        ) async throws -> (
+            foundTurn: Bool, rejected: Bool, latestTurnID: String?, submittedAt: Date?, firstSubmittedAt: Date?,
+            nativeStart: SubmissionBoundary?, firstStart: SubmissionBoundary?, latestStart: SubmissionBoundary?, revision: FileRevision
+        )? {
             let revision = try FileRevision(fileInfo())
             pending = .init(turnMetadataOnly: true, retainSubmissionRejections: submissionRejectionWindow != nil)
             var foundTurn = false
             var rejected = false
             var latestTurnID: String?
+            var firstStart: SubmissionBoundary?
+            var latestStart: SubmissionBoundary?
+            var selectedStart: SubmissionBoundary?
+            var count = 0
+            var actualCount = 0
+            var previousEnd: UInt64 = 0
             while true {
                 let result = try poll(through: revision.size, turnMetadataOnly: true) { line in
-                    if let submitted = try parser.submittedTurnID(in: line) {
+                    let start = max(previousEnd, recordStart)
+                    let end = offset - UInt64(buffered.count)
+                    previousEnd = end
+                    let resumed = try parser.resumedTurnID(in: line)
+                    if resumed != nil {
+                        if let value = firstStart, value.nextOffset == nil, value.offset < start {
+                            firstStart?.nextOffset = start
+                            firstStart?.nextEnd = end
+                        }
+                        if let value = latestStart, value.nextOffset == nil, value.offset < start {
+                            latestStart?.nextOffset = start
+                            latestStart?.nextEnd = end
+                        }
+                        if let value = selectedStart, value.nextOffset == nil, value.offset < start {
+                            selectedStart?.nextOffset = start
+                            selectedStart?.nextEnd = end
+                        }
+                    }
+                    if let submitted = try resumed ?? parser.submittedTurnID(in: line) {
                         if submitted == turn.nativeTurnID {
+                            let record = try JSONSerialization.jsonObject(with: line) as? [String: Any]
+                            let timestamp = AgentTurnActivity.parseTimestamp(record?["timestamp"] as? String)
+                            let position = SubmissionBoundary(identity: revision.identity, offset: start, end: end, timestamp: timestamp)
+                            if resumed != nil || !foundTurn {
+                                if resumed != nil {
+                                    if actualCount == 0 {
+                                        count = 0
+                                        selectedStart = nil
+                                    }
+                                    actualCount += 1
+                                }
+                                if count == 0 {
+                                    firstStart = position
+                                }
+                                latestStart = position
+                                count += 1
+                                if let nativeStart {
+                                    if nativeStart.identifies(position) {
+                                        selectedStart = position
+                                    }
+                                } else if let hookStartedAt {
+                                    if let timestamp, timestamp <= hookStartedAt {
+                                        selectedStart = position
+                                    }
+                                } else {
+                                    selectedStart = position
+                                }
+                            }
                             foundTurn = true
                         }
                         latestTurnID = submitted
@@ -197,7 +445,97 @@
             guard
                 offset == revision.size, try FileRevision(fileInfo()) == revision,
                 revision.isCurrent(at: turn.transcriptPath) else { return nil }
-            return (foundTurn, rejected, latestTurnID, revision)
+            if nativeStart == nil, count == 1 {
+                selectedStart = latestStart
+            }
+            return (foundTurn, rejected, latestTurnID, selectedStart?.timestamp, firstStart?.timestamp, selectedStart, firstStart, latestStart, revision)
+        }
+
+        /// Read the verified submission and the next input's envelope, which
+        /// some native parsers need to recognize an interrupted turn.
+        func verifiedOutcome(
+            for proof: VerifiedSubmission, hasStop: Bool
+        ) async throws -> (AgentWorkflowTranscriptOutcome?, VerifiedRecoveryEnd)? {
+            let revision = readRevision
+            guard
+                let start = proof.nativeStart, proof.revision == revision,
+                start.identity == revision.identity, revision.isCurrent(at: proof.turn.transcriptPath) else { return nil }
+            let end = start.nextOffset ?? revision.size
+            let boundaryEnd = start.nextEnd ?? end
+            guard start.offset < start.end, start.end <= end, end <= boundaryEnd, boundaryEnd <= revision.size else { return nil }
+            locating = false
+            readingStart = false
+            if parser.readsSessionHeader {
+                pending = .init(turnMetadataOnly: true)
+                _ = try poll(through: start.offset, turnMetadataOnly: true) { line in
+                    _ = try parser.consume(line)
+                    return .succeeded("")
+                }
+            }
+            offset = start.offset
+            buffered = Data()
+            pending = .init()
+            lastOutcome = nil
+            completionOffset = nil
+            var found = false
+            var first = true
+            while true {
+                let result = try poll(through: end, turnMetadataOnly: false) { line in
+                    if first {
+                        first = false
+                        found = try parser.submittedTurnID(in: line) == proof.turn.nativeTurnID
+                        if let timestamp = start.timestamp {
+                            let record = try JSONSerialization.jsonObject(with: line) as? [String: Any]
+                            found = found && AgentTurnActivity.parseTimestamp(record?["timestamp"] as? String) == timestamp
+                        }
+                    }
+                    if found {
+                        let consumed = try consumeOutcome(line)
+                        if let value = consumed.announced {
+                            lastOutcome = value
+                        }
+                        if consumed.completion != nil {
+                            completionOffset = offset - UInt64(buffered.count)
+                        }
+                    }
+                    return nil
+                }
+                if result.reachedEnd {
+                    break
+                }
+                await Task.yield()
+            }
+            if found, boundaryEnd > end {
+                pending = .init(turnMetadataOnly: true)
+                while true {
+                    let result = try poll(through: boundaryEnd, turnMetadataOnly: true) { line in
+                        // Reusing the ID begins a different submission; it must
+                        // not reset this segment's native failure or success.
+                        guard try parser.submittedTurnID(in: line) != proof.turn.nativeTurnID else { return nil }
+                        let consumed = try consumeOutcome(line)
+                        if let value = consumed.announced {
+                            lastOutcome = value
+                        }
+                        if consumed.completion != nil {
+                            completionOffset = offset - UInt64(buffered.count)
+                        }
+                        return nil
+                    }
+                    if result.reachedEnd {
+                        break
+                    }
+                    await Task.yield()
+                }
+            }
+            guard found, offset == boundaryEnd, revision.isCurrent(at: proof.turn.transcriptPath) else { return nil }
+            let partial = !pending.retained.isEmpty
+            var outcome = parser.tracksCompletionAtEnd ? parser.recoveredCompletion : lastOutcome
+            if partial {
+                outcome = nil
+            } else if !hasStop, !parser.tracksCompletionAtEnd, case .succeeded? = outcome {
+                outcome = nil
+            }
+            return (outcome, .init(path: proof.turn.transcriptPath, revision: revision, completionOffset: completionOffset, hasPartialRecord: partial))
         }
 
         func drainActivity(reusing previous: ActivityDrain? = nil, checking candidates: Set<String> = []) async throws -> ActivityDrain {
@@ -246,7 +584,25 @@
         }
 
         func poll(through end: UInt64? = nil) throws -> Poll {
-            try poll(through: end, turnMetadataOnly: false) { try parser.consume($0) }
+            if end == nil, bytesRead == 0 {
+                readRevision = try FileRevision(fileInfo())
+            }
+            return try poll(through: end, turnMetadataOnly: false) { line in
+                let outcome = try consumeOutcome(line)
+                if outcome.completion != nil {
+                    completionOffset = offset - UInt64(buffered.count)
+                }
+                return outcome.announced
+            }
+        }
+
+        private func consumeOutcome(_ line: Data) throws -> (announced: AgentWorkflowTranscriptOutcome?, completion: AgentWorkflowTranscriptOutcome?) {
+            let previous = parser.recoveredCompletion
+            if let outcome = try parser.consume(line) {
+                return (outcome, outcome)
+            }
+            let latest = parser.recoveredCompletion
+            return (nil, latest == previous ? nil : latest)
         }
 
         private func poll(
@@ -256,6 +612,7 @@
             _ = try fileInfo()
             if let outcome = pendingOutcome {
                 pendingOutcome = nil
+                lastOutcome = outcome
                 return .init(outcome: outcome, reachedEnd: false)
             }
             // Yield after 1 MiB so a large transcript cannot monopolize a task.
@@ -301,9 +658,7 @@
                     }
                     let outcome = try consume(value)
                     if let outcome {
-                        if case .failed = outcome {
-                            failure = outcome
-                        }
+                        lastOutcome = outcome
                         // Preserve bytes after this record when Stop follows a
                         // submission watch which has already seen completion.
                         return .init(outcome: outcome, reachedEnd: false)

@@ -190,12 +190,20 @@ struct CodexProcessSessionReaderTests {
 
     @Test(
         "Only matching CLI session metadata identifies a rollout; forked_from_id is never the active ID",
-        arguments: ["child", "parent-mismatch", "subagent", "event", "incomplete", "oversized", "wrong-name"]
+        arguments: ["child", "resumed", "resumed-mismatch", "invalid-rollout-id", "parent-mismatch", "subagent", "event", "incomplete", "oversized", "wrong-name"]
     )
     func metadata(scenario: String) {
         var data = header(childID)
         var path = "/custom-codex/sessions/rollout-2026-10-11T08-36-10-\(childID).jsonl"
         switch scenario {
+        case "resumed",
+             "resumed-mismatch":
+            path = "/custom-codex/sessions/rollout-2026-10-11T08-36-10-\(childID)_\(parentID).jsonl"
+            if scenario == "resumed-mismatch" {
+                data = header(parentID)
+            }
+        case "invalid-rollout-id":
+            path = "/custom-codex/sessions/rollout-2026-10-11T08-36-10-\(childID)_invalid.jsonl"
         case "parent-mismatch": data = header(parentID)
         case "subagent": data = header(childID, source: "exec")
         case "event": data = header(childID, type: "event_msg")
@@ -204,7 +212,7 @@ struct CodexProcessSessionReaderTests {
         case "wrong-name": path = "/tmp/\(childID).jsonl"
         default: break
         }
-        #expect(CodexProcessSessionReader.sessionID(header: data, path: path) == (scenario == "child" ? childID : nil))
+        #expect(CodexProcessSessionReader.sessionID(header: data, path: path) == (["child", "resumed"].contains(scenario) ? childID : nil))
     }
 
     @Test("The active writer changes independently of Codex process identity")
@@ -234,12 +242,13 @@ struct CodexProcessSessionReaderTests {
         #expect(AgentSessionIdentityClient.processRuntimeID(pid) == runtime)
     }
 
-    @Test("Native FD recovery ignores read-only parent history, rejects ambiguous writers and verifies process lifetime")
-    func openWriter() async throws {
+    @Test("Native FD recovery ignores read-only parent history, rejects ambiguous writers and verifies process lifetime", arguments: [false, true])
+    func openWriter(resumed: Bool) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-codex-writer-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let child = directory.appendingPathComponent("rollout-2026-10-11T08-36-10-\(childID).jsonl")
+        let suffix = resumed ? "\(childID)_\(UUID().uuidString)" : childID
+        let child = directory.appendingPathComponent("rollout-2026-10-11T08-36-10-\(suffix).jsonl")
         let parent = directory.appendingPathComponent("rollout-2026-10-10T08-36-10-\(parentID).jsonl")
         try (header(childID) + Data("\nignored transcript".utf8)).write(to: child)
         try (header(parentID) + Data("\n".utf8)).write(to: parent)

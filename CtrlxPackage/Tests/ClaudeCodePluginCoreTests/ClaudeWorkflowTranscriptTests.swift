@@ -77,6 +77,12 @@ struct ClaudeWorkflowTranscriptTests {
         }
         var parser = ClaudeWorkflowTranscript(conversationID: "session", nativeTurnID: "prompt", prompt: prompt, candidate: "")
         #expect(try parser.consume(record("rejected", parent: "previous", fields)) == .failed("Not allowed."))
+        #expect(parser.recoveredCompletion == .failed("Not allowed."))
+        _ = try parser.consume(record("user", parent: "previous", ["type": "user", "promptId": "prompt", "message": ["content": prompt]]))
+        #expect(parser.recoveredCompletion == nil)
+        _ = try parser.consume(answer("retry-answer", parent: "user"))
+        _ = try parser.consume(summary("retry-stop", parent: "retry-answer"))
+        #expect(parser.recoveredCompletion == .succeeded("Final answer"))
     }
 
     @Test
@@ -113,6 +119,26 @@ struct ClaudeWorkflowTranscriptTests {
         #expect(parser.updateCandidate("Final answer") == nil)
         #expect(parser.updateCandidate("  \nFinal\n  answer\r\n") == .succeeded("Final\n  answer"))
         #expect(parser.updateCandidate(" \n ") == nil)
+    }
+
+    @Test(arguments: ["tool-result", "feedback", "feedback-block", "meta", "same-id-input", "new-input"])
+    func onlyHumanInputsDefineSubmissionBoundaries(kind: String) throws {
+        let human = kind == "same-id-input" || kind == "new-input"
+        let id = kind == "new-input" ? "next" : "prompt"
+        let content: Any = switch kind {
+        case "tool-result": [["type": "tool_result", "tool_use_id": "tool", "content": "Result"]]
+        case "feedback": "Stop hook feedback: Continue"
+        case "feedback-block": [["type": "text", "text": "Stop hook feedback: Continue"]]
+        default: "Continue this task"
+        }
+        let line = try record("input", parent: "previous", [
+            "type": "user", "promptId": id, "isMeta": kind == "meta", "message": ["role": "user", "content": content],
+        ])
+        let parser = ClaudeWorkflowTranscript(conversationID: "session", nativeTurnID: "prompt", prompt: "Review", candidate: "")
+        #expect(try parser.submittedTurnID(in: line) == (human ? id : nil))
+        var resumed = parser
+        #expect(try resumed.resumedTurnID(in: line) == (human ? id : nil))
+        #expect(try parser.isTurnStart(line) == (human && id == "prompt"))
     }
 
     @Test
