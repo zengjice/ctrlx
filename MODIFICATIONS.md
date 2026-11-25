@@ -7,6 +7,33 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.180 — Reliable Workflow recovery and Agent visibility
+
+- Preserve Workflow submission receipts, terminal evidence and native submission
+  boundaries across delayed events and Host restarts. Retain failure and
+  background-work state while migrating storage to schema 11 with legacy
+  recovery support. See [multi-agent design](docs/multi-agent-design.md).
+- Continue Workflows after loop approval, including guarded retries around
+  concurrent operator controls. Reduce Workflow configuration and Agent-check
+  latency.
+- Show Agent activity in Orbie conversations, distinguish Agent questions in
+  session indicators, and mark iOS tab groups that need attention.
+- Restore iOS Tab drag reordering and grouping, including shared iPad-window
+  layouts. Open Mac Markdown editing in a separate window and keep the preview
+  visible when switching documents.
+
+- Validation: the latest Workflow change passed 514 related tests across the
+  affected suites; 3 optional native tests were skipped. Eight focused Browser
+  Annotation rendering and lifecycle tests passed after SwiftFormat normalized
+  the merged annotation toolbar. SwiftFormat, brand-boundary,
+  technical-boundary and diff checks passed. The unfiltered test run was
+  attempted; Apple Intelligence evaluations require an eligible device, one
+  file-upload test timed out, and the host Vision text-recognition service
+  stalled during the run.
+- This release builds macOS only. Full cross-platform E2E and physical-iPhone
+  acceptance were not rerun. The final artifact is produced by the formal
+  Developer ID signed and notarized release workflow.
+
 ## 3.0.179 — Live file previews and precise tab movement
 
 - Refresh open file previews from the Host, including terminal-linked previews,
