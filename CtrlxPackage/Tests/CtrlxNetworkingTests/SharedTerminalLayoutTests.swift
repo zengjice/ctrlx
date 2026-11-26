@@ -53,4 +53,13 @@ struct SharedTerminalLayoutTests {
 
         #expect(decoded == .setSharedTerminalLayout(request))
     }
+
+    @Test("Explicit hidden-terminal removals round-trip and older requests still decode")
+    func explicitRemovalsRemainOptional() throws {
+        let legacy = Data(#"{"sessionName":"coding","leftWindowId":"@1","rightWindowIds":[],"splitRatio":0.5}"#.utf8)
+        #expect(try JSONDecoder().decode(SetSharedTerminalLayout.self, from: legacy).removedRightWindowIds == nil)
+        let request = SetSharedTerminalLayout(sessionName: "coding", leftWindowId: "@1", removedRightWindowIds: ["@2", "@3"])
+        let decoded = try JSONDecoder().decode(CommandType.self, from: JSONEncoder().encode(request.commandType))
+        #expect(decoded == .setSharedTerminalLayout(request))
+    }
 }

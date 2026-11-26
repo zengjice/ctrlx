@@ -8,6 +8,131 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct DetachedTerminalWindowsTests {
+    @Test("Files catalog refresh leaves returning left selection for scene reconciliation", arguments: [false, true])
+    func filesCatalogPreservesLeftRestoration(explicitSelection: Bool) {
+        let manager = DetachedTerminalWindows()
+        let tabs = manager.mainTabs.tabs(hostID: "viewer", session: "work")
+        let ids = ["@1", "@2", "@3", "@4"]
+        let layout = SharedTerminalLayout(
+            leftWindowId: "@1", rightWindowIds: ["@3", "@4"], selectedRightWindowId: "@4", revision: 1, sessionWindowIds: ids
+        )
+        tabs.applySharedTerminalLayout(layout, liveWindowIds: Set(ids))
+        tabs.projectRemoteTerminalLayout(layout, liveWindowIDs: Set(ids.dropFirst()), sessionWindowIDs: Set(ids))
+        if explicitSelection {
+            tabs.recordRemoteLeftTerminalSelection("@2")
+        }
+
+        manager.syncFileTabs(hostID: "viewer", descriptors: [], sessionWindows: ["work": ids], sharedLayout: { _ in layout })
+
+        #expect(tabs.needsSharedTerminalVisibilityProjection(layout, liveWindowIDs: Set(ids), sessionWindowIDs: Set(ids)))
+        let restored = tabs.projectRemoteTerminalLayout(layout, liveWindowIDs: Set(ids), sessionWindowIDs: Set(ids))
+        #expect(restored == (explicitSelection ? nil : "@1"))
+        #expect(tabs.explicitRemoteLeftTerminalID == (explicitSelection ? "@2" : nil))
+    }
+
+    @Test("Legacy Files reuse repairs source selection before presentation refresh", arguments: [false, true])
+    func legacyFilesClaimRepairsSource(selectedRight: Bool) throws {
+        let manager = DetachedTerminalWindows()
+        let ids = ["@1", "@2", "@3", "@4"]
+        let file = HostFileTab(sessionName: "work", windowID: "@4", sourcePaneID: "%3", initialDirectory: "/host")
+        #expect(file.resourceSessionID == nil)
+        manager.syncFileTabs(hostID: "viewer", descriptors: [file], sessionWindows: ["work": ids])
+        let source = manager.mainTabs.tabs(hostID: "viewer", session: "work")
+        let model = try #require(source.directoryTabs[file.id])
+        model.navigate("/host/child")
+        let target = try #require(DetachedTerminalTarget(hostID: "viewer", windowID: "@4"))
+        let workspace = try #require(manager.detach(target, position: nil, session: { _ in "work" }))
+        let shared = SharedTerminalLayout(
+            leftWindowId: "@1", rightWindowIds: ["@3", "@4"], selectedRightWindowId: "@4", revision: 1, sessionWindowIds: ids
+        )
+        let visible = Array(ids.dropLast())
+        source.applySharedTerminalLayout(shared, liveWindowIds: Set(visible))
+        let other = BrowserTab(url: URL(fileURLWithPath: "/tmp/kept"))
+        source.openBrowserTabs.append(other)
+        source.rightSide.formUnion([.file(file.id), .browser(other.id)])
+        source.selectedRight = selectedRight ? .file(file.id) : .browser(other.id)
+        let revision = manager.presentationRevision
+        var notifications = 0
+        manager.mainTabs.onResourceTransferred = { host, session, wasSelectedRight in
+            #expect(host == "viewer" && session == "work")
+            #expect(wasSelectedRight == selectedRight)
+            #expect(source.selectedRight == (selectedRight ? nil : .browser(other.id)))
+            #expect(manager.presentationRevision == revision)
+            notifications += 1
+            source.reconcileRemoteRightPaneSelection(
+                sharedLayout: shared, sessionWindowIDs: ids, visibleWindowIDs: visible,
+                userInitiated: true, recordSelection: wasSelectedRight
+            )
+        }
+
+        manager.claimFile(file.id, hostID: "viewer", session: "work", workspaceID: workspace.id)
+
+        #expect(notifications == 1)
+        #expect(manager.presentationRevision == revision + 1)
+        #expect(source.selectedRight == (selectedRight ? .window("@3") : .browser(other.id)))
+        let request = try #require(source.remoteTerminalLayoutRequest(
+            sessionName: "work", sessionWindowIDs: ids, visibleWindowIDs: visible, selectedLeftWindowID: "@1", shared: shared
+        ))
+        #expect(request.selectedRightWindowId == (selectedRight ? "@3" : "@4"))
+        let destination = workspace.tabs.tabs(hostID: "viewer", session: "work")
+        #expect(destination.directoryTabs[file.id] === model)
+        #expect(model.path == "/host/child" && model.hostTab == file)
+        manager.syncFileTabs(hostID: "viewer", descriptors: [file], sessionWindows: ["work": ids])
+        manager.claimFile(file.id, hostID: "viewer", session: "work", workspaceID: workspace.id)
+        #expect(notifications == 1)
+        #expect(destination.directoryTabs[file.id] === model)
+    }
+
+    @Test("Remote Files removal projects the main layout without changing detached splits", arguments: [false, true], [false, true])
+    func remoteFilesRemovalKeepsPrivatePlacement(detached: Bool, layoutAppliedFirst: Bool) throws {
+        let manager = DetachedTerminalWindows()
+        let ids = ["@1", "@2", "@3", "@4"]
+        let workspace = detached ? try #require(manager.detach(
+            #require(DetachedTerminalTarget(hostID: "viewer", windowID: "@1")), position: nil, session: { _ in "work" }
+        )) : nil
+        let visible = detached ? Array(ids.dropFirst()) : ids
+        if let workspace {
+            let native = workspace.tabs.tabs(hostID: "viewer", session: "work")
+            let browser = BrowserTab(url: URL(fileURLWithPath: "/tmp/native"))
+            native.openBrowserTabs.append(browser)
+            native.selectedBrowserTabId = browser.id
+            native.rightSide = [.window("@1")]
+            native.selectedRight = .window("@1")
+        }
+        let files = HostFileTab(sessionName: "work", initialDirectory: "/tmp")
+        manager.syncFileTabs(hostID: "viewer", descriptors: [files], sessionWindows: ["work": ids])
+        let tabs = manager.mainTabs.tabs(hostID: "viewer", session: "work")
+        let other = BrowserTab(url: URL(fileURLWithPath: "/tmp/kept"))
+        tabs.openBrowserTabs.append(other)
+        tabs.selectedFileTabId = files.id
+        tabs.applySharedTerminalLayout(
+            .init(leftWindowId: "@1", rightWindowIds: ["@2", "@3", "@4"], selectedRightWindowId: "@4", revision: 1, sessionWindowIds: ids),
+            liveWindowIds: Set(visible), sessionWindowIds: Set(ids)
+        )
+        if !detached {
+            tabs.placeRemoteTerminal("@1", onRight: true, sessionWindowIDs: ids)
+        }
+        tabs.rightSide.insert(.browser(other.id))
+        tabs.selectedRight = .browser(other.id)
+        let latest = SharedTerminalLayout(
+            leftWindowId: "@2", rightWindowIds: ["@3", "@4"], selectedRightWindowId: "@4", revision: 2, sessionWindowIds: ids
+        )
+        if layoutAppliedFirst {
+            tabs.applySharedTerminalLayout(latest, liveWindowIds: Set(visible), sessionWindowIds: Set(ids))
+        }
+        manager.syncFileTabs(hostID: "viewer", descriptors: [], sessionWindows: ["work": ids], sharedLayout: { _ in latest })
+        #expect(tabs.rightSide.contains(.browser(other.id)))
+        #expect(tabs.selectedRight == .browser(other.id))
+        #expect(!tabs.rightSide.contains(.window("@2")))
+        let saved = LayoutSnapshotMapper.viewerPrivateLayout(from: LayoutSnapshotMapper.snapshot(from: tabs, fileBrowser: nil) { ids.firstIndex(of: $0) })
+        #expect(saved.rightSide.contains(.browser(id: other.id)))
+        if let workspace {
+            let native = workspace.tabs.tabs(hostID: "viewer", session: "work")
+            #expect(native.rightSideWindowIds == ["@1"])
+            #expect(native.selectedRight == .window("@1"))
+        }
+    }
+
     @Test(arguments: [TabDragPayload.git, .fileExplorer])
     func closingHostFilesKeepsRemainingLocalRightContent(fallback: TabDragPayload) {
         let manager = DetachedTerminalWindows()
@@ -50,7 +175,7 @@ struct DetachedTerminalWindowsTests {
         manager.syncFileTabs(hostID: host, descriptors: [], sessionWindows: windows)
         tabs.cancelClosingHostFileTab(file.id)
 
-        #expect(completions == [.init(wasSelectedLeft: true, origin: .terminalWindow("work:2"))])
+        #expect(completions == [.init(wasSelectedLeft: true, wasSelectedRight: false, origin: .terminalWindow("work:2"))])
         #expect(tabs.openFileTabs.isEmpty && tabs.selectedFileTabId == nil)
     }
 
@@ -89,7 +214,7 @@ struct DetachedTerminalWindowsTests {
         if ["cancelled", "moved", "passive"].contains(action) {
             #expect(completions.isEmpty)
         } else {
-            #expect(completions == [.init(wasSelectedLeft: false, origin: nil)])
+            #expect(completions == [.init(wasSelectedLeft: false, wasSelectedRight: action == "right", origin: nil)])
         }
         if action == "git" {
             #expect(tabs.isGitSelected)

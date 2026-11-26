@@ -21,6 +21,8 @@
         /// Insert or replace the folder's record (most-recent write wins when two
         /// sessions share a folder).
         var save: @Sendable (_ record: SavedFolderRecord) async -> Void
+        /// Apply an edit to the latest record in the same operation as the write.
+        var updateLayout: @Sendable (_ key: SavedFolderRecord.Key, _ edit: @Sendable (SavedFolderLayout?) -> SavedFolderLayout?) async -> Void
         /// Remove a folder's record.
         var remove: @Sendable (_ key: SavedFolderRecord.Key) async -> Void
         /// Garbage-collect stale records: drop anything older than `maxAge`, then
@@ -71,6 +73,7 @@
             self.init(
                 record: { await storage.record(for: $0) },
                 save: { await storage.save($0) },
+                updateLayout: { await storage.updateLayout($0, edit: $1) },
                 remove: { await storage.remove($0) },
                 prune: { await storage.prune(maxAge: $0, maxCount: $1, now: Date()) },
                 pruneHosts: { await storage.pruneHosts(keeping: $0) }
@@ -144,6 +147,12 @@
             ensureLoaded()
             records[record.key] = record
             persist()
+        }
+
+        func updateLayout(_ key: SavedFolderRecord.Key, edit: @Sendable (SavedFolderLayout?) -> SavedFolderLayout?) {
+            ensureLoaded()
+            guard let layout = edit(records[key]?.layout) else { return }
+            save(.init(host: key.host, folder: key.folder, lastActive: Date(), layout: layout))
         }
 
         func remove(_ key: SavedFolderRecord.Key) {

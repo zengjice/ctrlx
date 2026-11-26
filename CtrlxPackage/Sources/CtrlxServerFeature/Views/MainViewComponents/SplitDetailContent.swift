@@ -16,6 +16,8 @@ enum SplitLayout {
 /// [0.15, 0.85] so neither pane can be made unusably small.
 struct SplitDetailContent<Left: View, Right: View>: View {
     @Bindable var sessionTabs: SessionFileTabsState
+    var onSplitRatioEdited: (CGFloat) -> Void = { _ in }
+    var onSplitRatioChanged: () -> Void = { }
     @ViewBuilder var left: () -> Left
     @ViewBuilder var right: () -> Right
 
@@ -61,9 +63,15 @@ struct SplitDetailContent<Left: View, Right: View>: View {
                         let initial = dragInitialRatio ?? sessionTabs.splitRatio
                         let delta = value.translation.width / totalWidth
                         let next = initial + delta
-                        sessionTabs.splitRatio = min(max(next, SplitLayout.minRatio), SplitLayout.maxRatio)
+                        let ratio = min(max(next, SplitLayout.minRatio), SplitLayout.maxRatio)
+                        guard sessionTabs.splitRatio != ratio else { return }
+                        sessionTabs.splitRatio = ratio
+                        onSplitRatioEdited(ratio)
                     }
                     .onEnded { _ in
+                        if let dragInitialRatio, dragInitialRatio != sessionTabs.splitRatio {
+                            onSplitRatioChanged()
+                        }
                         dragInitialRatio = nil
                     }
             )

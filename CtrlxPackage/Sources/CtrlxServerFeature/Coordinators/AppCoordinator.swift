@@ -4126,7 +4126,7 @@
                 // viewer connecting or refreshing gets current totals; `nil` when
                 // empty, so an older viewer sees no field at all (graceful skew).
                 let usageOverview = await self?.currentUsageOverview()
-                let sharedTerminalLayouts = await windowManager.sharedTerminalLayouts
+                let sharedTerminalLayouts = await windowManager.sharedTerminalLayoutsForViewers()
                 let recoveryHostID = await self?.workspaceRecovery?.hostID
                 let workspaceIdentity = HostSessionStateSnapshot.workspaceIdentity(hostID: recoveryHostID, panes: paneStates)
 
@@ -4586,29 +4586,23 @@
                     }
                 } catch { return .failure(for: command.id, error: error.localizedDescription) }
             }
-            let liveWindowIds = Set(tmuxService.windows.lazy
+            let liveWindowIds = Set(tmuxService.layoutPanes.lazy
                 .filter { $0.sessionName == spec.sessionName }
-                .map(\.stableId))
+                .map(\.stableWindowId))
             guard liveWindowIds.contains(spec.leftWindowId) else {
                 return .failure(for: command.id, error: "Left window no longer exists")
             }
             guard
                 Set(spec.rightWindowIds).count == spec.rightWindowIds.count,
                 spec.rightWindowIds.allSatisfy(liveWindowIds.contains),
+                Set(spec.rightWindowIds).isDisjoint(with: spec.removedRightWindowIds ?? []),
                 !spec.rightWindowIds.contains(spec.leftWindowId),
                 spec.selectedRightWindowId.map(spec.rightWindowIds.contains) ?? spec.rightWindowIds.isEmpty
             else {
                 return .failure(for: command.id, error: "Right-side windows are invalid")
             }
 
-            if
-                windowManager.setSharedTerminalLayout(
-                    sessionName: spec.sessionName,
-                    leftWindowId: spec.leftWindowId,
-                    rightWindowIds: spec.rightWindowIds,
-                    selectedRightWindowId: spec.selectedRightWindowId,
-                    splitRatio: spec.splitRatio
-                ) {
+            if await windowManager.setViewerTerminalLayout(spec) {
                 await connectionManager?.pushSessionStateToAll()
             }
             return .success(for: command.id)

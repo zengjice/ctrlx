@@ -7,6 +7,87 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct DetachedResourceTabsTests {
+    @Test("A transfer repairs provisional selection against current placement", arguments: [false, true], Kind.allCases)
+    func transferUsesLatestPlacement(layoutAppliedFirst: Bool, kind: Kind) throws {
+        for selectedRight in [false, true] {
+            let manager = DetachedTerminalWindows()
+            let source = manager.mainTabs.tabs(hostID: "viewer", session: "work")
+            let ids = ["@1", "@2", "@3", "@4"]
+            let payload = resource(kind, in: source)
+            let other = BrowserTab(url: URL(staticString: "about:blank"))
+            source.openBrowserTabs.append(other)
+            source.applySharedTerminalLayout(
+                .init(leftWindowId: "@1", rightWindowIds: ["@2", "@3", "@4"], selectedRightWindowId: "@4", revision: 1, sessionWindowIds: ids),
+                liveWindowIds: Set(ids)
+            )
+            source.rightSide.formUnion([payload, .browser(other.id)])
+            source.selectedRight = selectedRight ? payload : .browser(other.id)
+            source.tabOrder = [.window("@1"), .window("@2"), .browser(other.id), .window("@3"), .window("@4"), payload]
+            let latest = SharedTerminalLayout(
+                leftWindowId: "@2", rightWindowIds: ["@3", "@4"], selectedRightWindowId: "@4", revision: 2, sessionWindowIds: ids
+            )
+            if layoutAppliedFirst {
+                source.applySharedTerminalLayout(latest, liveWindowIds: Set(ids))
+            }
+            manager.mainTabs.onResourceTransferred = { _, _, wasSelectedRight in
+                source.reconcileRemoteRightPaneSelection(
+                    sharedLayout: latest, sessionWindowIDs: ids, visibleWindowIDs: ids,
+                    userInitiated: true, recordSelection: wasSelectedRight
+                )
+            }
+            _ = try #require(manager.detach(
+                .init(workspaceID: nil, hostID: "viewer", sessionName: "work", tab: payload),
+                anchor: nil, position: nil, session: { _ in "work" }
+            ))
+            let request = try #require(source.remoteTerminalLayoutRequest(
+                sessionName: "work", sessionWindowIDs: ids, visibleWindowIDs: ids, selectedLeftWindowID: nil, shared: latest
+            ))
+            #expect(source.selectedRight == (selectedRight ? .window("@3") : .browser(other.id)))
+            #expect(request.selectedRightWindowId == (selectedRight ? "@3" : "@4"))
+            #expect(source.rightSide.contains(.browser(other.id)))
+        }
+    }
+
+    @Test("Resource transfers notify the source window before its presentation refresh", arguments: [nil, "viewer"] as [String?], Kind.allCases.flatMap { kind in [false, true].map { (kind, $0) } })
+    func transferNotifiesSourceWindow(host: String?, variant: (Kind, Bool)) throws {
+        let (kind, selectedRight) = variant
+        let manager = DetachedTerminalWindows()
+        let source = manager.mainTabs.tabs(hostID: host, session: "work")
+        let payload = resource(kind, in: source)
+        source.tabOrder = [payload, .window("@1"), .window("@2")]
+        source.rightSide = [.window("@1"), .window("@2")]
+        source.selectedRight = .window("@2")
+        if selectedRight {
+            source.rightSide.insert(payload)
+            source.selectedRight = payload
+        }
+        source.locallySplitTerminalID = "@1"
+        var events: [String] = []
+        manager.mainTabs.onResourceTransferred = { movedHost, session, wasSelectedRight in
+            #expect(movedHost == host && session == "work")
+            #expect(wasSelectedRight == selectedRight)
+            #expect(!source.hasLeftResourceTab)
+            #expect(source.locallySplitTerminalID == "@1")
+            #expect(source.rightSideWindowIds == ["@1", "@2"])
+            #expect(manager.presentationRevision == 0)
+            events.append("main")
+        }
+        let group = try #require(manager.detach(
+            .init(workspaceID: nil, hostID: host, sessionName: "work", tab: payload),
+            anchor: nil, position: nil, session: { _ in "work" }
+        ))
+        #expect(events == ["main"])
+        group.tabs.onResourceTransferred = { movedHost, session, _ in
+            #expect(movedHost == host && session == "work")
+            events.append("detached")
+        }
+        #expect(manager.transfer(
+            .init(workspaceID: group.id, hostID: host, sessionName: "work", tab: payload),
+            to: nil, session: { _ in "work" }
+        ))
+        #expect(events == ["main", "detached"])
+    }
+
     enum Kind: CaseIterable, Equatable, Sendable {
         case files
         case browser

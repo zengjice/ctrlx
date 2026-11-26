@@ -24,8 +24,9 @@ struct PaneLinkedTabStripTests {
         let catalog = [aID, bID, xID, yID]
         func displayed(_ layout: SessionTabLayout, _ order: [TabDragPayload]) -> [TabDragPayload] {
             let snapshot = SharedWorkbenchTabLayout.Snapshot(ids: ids, layout: layout)
+            let displayedOrder = tabs.presentedTabOrder(order, panes: panes, layout: snapshot)
             tabs.sharedManualTabGroups = snapshot.groups
-            return tabs.tabStripEntries(tabs.presentedTabOrder(order, panes: panes, layout: snapshot)).flatMap(\.tabs)
+            return tabs.tabStripEntries(displayedOrder).flatMap(\.tabs)
         }
 
         var layout = SessionTabLayout(order: catalog)

@@ -31,7 +31,7 @@ final class WorkspaceRecoveryController {
     @ObservationIgnored private let mode: () -> WorkspaceRecoveryMode
     @ObservationIgnored private let captureExtras: (WorkspaceRecoverySnapshot) async throws -> WorkspaceRecoverySnapshot
     @ObservationIgnored private let captureViewer: (WorkspaceRecoverySnapshot) -> WorkspaceRecoverySnapshot
-    @ObservationIgnored private let present: (WorkspaceRecoverySnapshot, WorkspaceTmuxState) async throws -> Void
+    @ObservationIgnored private let present: (inout WorkspaceRecoverySnapshot, WorkspaceTmuxState) async throws -> Void
     @ObservationIgnored private let resumeAgents: WorkspaceAgentRecoveryHandler
     @ObservationIgnored private let resolveHostID: @Sendable (UUID?) async throws -> UUID
     @ObservationIgnored private var bootID: String?
@@ -51,7 +51,7 @@ final class WorkspaceRecoveryController {
         system: WorkspaceRecoverySystem,
         mode: @escaping () -> WorkspaceRecoveryMode,
         captureExtras: @escaping (WorkspaceRecoverySnapshot) async throws -> WorkspaceRecoverySnapshot,
-        present: @escaping (WorkspaceRecoverySnapshot, WorkspaceTmuxState) async throws -> Void,
+        present: @escaping (inout WorkspaceRecoverySnapshot, WorkspaceTmuxState) async throws -> Void,
         resumeAgents: @escaping WorkspaceAgentRecoveryHandler,
         captureViewer: @escaping (WorkspaceRecoverySnapshot) -> WorkspaceRecoverySnapshot = { $0 },
         resolveHostID: @escaping @Sendable (UUID?) async throws -> UUID = { $0 ?? UUID() }
@@ -88,16 +88,18 @@ final class WorkspaceRecoveryController {
             case .disabled:
                 phase = .ready
             case .observe:
-                if let snapshot {
-                    try await present(snapshot, live)
+                if var saved = snapshot {
+                    try await present(&saved, live)
+                    snapshot = saved
                 }
                 phase = .ready
                 try await save(live)
             case .restore:
                 try await recover(live: live)
             case .offerRestore:
-                if let snapshot {
-                    try await present(snapshot, live)
+                if var saved = snapshot {
+                    try await present(&saved, live)
+                    snapshot = saved
                 }
                 phase = .needsRecovery
             }
@@ -419,7 +421,8 @@ final class WorkspaceRecoveryController {
         let pendingShells = result.state.placeholderPaneIDs.intersection(shells)
             .intersection(result.createdPaneIDs.union(result.state.deadPaneIDs))
         source.recovery?.pendingAgentPaneIDs.formUnion(pendingShells)
-        try await present(source, result.state)
+        try await present(&source, result.state)
+        snapshot = source
         let (updated, agentFailures) = try await resumeAgents(source, result, intent, recordProgress)
         source = updated
         failures = result.failures + agentFailures

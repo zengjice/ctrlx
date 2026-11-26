@@ -46,6 +46,30 @@
             #expect(await store.record(key("/proj")) == newer)
         }
 
+        @Test("Concurrent browser closes edit the latest record for their shared folder")
+        func concurrentBrowserCloses() async {
+            let folder = key("/proj")
+            let first = SavedBrowserTab(id: UUID(), url: URL(fileURLWithPath: "/one"))
+            let second = SavedBrowserTab(id: UUID(), url: URL(fileURLWithPath: "/two"))
+            let remaining = SavedBrowserTab(id: UUID(), url: URL(fileURLWithPath: "/three"))
+            let store = LayoutStore.inMemory([.init(
+                host: folder.host, folder: folder.folder, lastActive: Date(),
+                layout: .init(browserTabs: [first, second, remaining])
+            )])
+
+            await withTaskGroup(of: Void.self) { group in
+                for id in [first.id, second.id] {
+                    group.addTask {
+                        await store.updateLayout(folder) { saved in
+                            saved.map { LayoutSnapshotMapper.applyingBrowserEdits([id: .close], to: $0) }
+                        }
+                    }
+                }
+            }
+
+            #expect(await store.record(folder)?.layout.browserTabs == [remaining])
+        }
+
         @Test("records on different folders are independent")
         func foldersAreIndependent() async {
             let store = LayoutStore.inMemory([

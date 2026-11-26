@@ -222,6 +222,16 @@ final class DetachedTerminalWindows {
         return mainTabs
     }
 
+    func hasOpenEditor(at path: String, session: String, folder: String) -> Bool {
+        let stores = [mainTabs] + workspaces.values.map(\.tabs)
+        return stores.contains { store in
+            guard let tabs = store.local[session] else { return false }
+            return tabs.openFileTabs.contains {
+                !$0.isDirectory && !$0.isDeleted && $0.path == path && tabs.tabFolders[.file($0.id)]?.contains(folder) != false
+            }
+        }
+    }
+
     /// Migrate every owner before any scene reconciles a renamed browser catalog.
     func renameSession(hostID: String?, from oldName: String, to newName: String, windowIDs: [String: String]) {
         mainTabs.renameSession(hostID: hostID, from: oldName, to: newName, windowIDs: windowIDs)
@@ -236,13 +246,22 @@ final class DetachedTerminalWindows {
     }
 
     /// Project each Host tab once across this Mac's native windows; retain navigation when moving it.
-    func syncFileTabs(hostID: String?, descriptors: [HostFileTab], sessionWindows: [String: [String]]) {
+    func syncFileTabs(
+        hostID: String?, descriptors: [HostFileTab], sessionWindows: [String: [String]],
+        sharedLayout: (String) -> SharedTerminalLayout? = { _ in nil }
+    ) {
         let stores = [mainTabs] + workspaces.values.map(\.tabs)
         func sessions(_ store: WorkbenchTabStore) -> [String: SessionFileTabsState] {
             if let hostID {
                 return Dictionary(uniqueKeysWithValues: store.remote.filter { $0.key.hostId == hostID }.map { ($0.key.sessionName, $0.value) })
             }
             return store.local
+        }
+        for (session, tabs) in sessions(mainTabs) {
+            guard let layout = sharedLayout(session), tabs.appliedSharedTerminalLayout != layout else { continue }
+            let ids = sessionWindows[session] ?? layout.sessionWindowIds ?? []
+            let visible = ids.filter { self.store(for: owner(hostID: hostID, windowID: $0)) === mainTabs }
+            tabs.projectRemoteTerminalLayout(layout, liveWindowIDs: Set(visible), sessionWindowIDs: Set(ids))
         }
         let live = Set(descriptors.map(\.id))
         var movedFrom: Set<ObjectIdentifier> = []
@@ -290,7 +309,9 @@ final class DetachedTerminalWindows {
             guard
                 let source = store.existing(hostID: hostID, session: session), source !== destination,
                 source.directoryTabs[id] != nil else { continue }
+            let wasSelectedRight = source.selectedRight == .file(id)
             if source.move(.file(id), to: destination) {
+                repairTransferredResource(source: source, store: store, hostID: hostID, session: session, wasSelectedRight: wasSelectedRight)
                 presentationRevision += 1
                 closeEmptyWorkspaces()
             }
@@ -382,6 +403,7 @@ final class DetachedTerminalWindows {
             let sourceStore = store(for: drag.workspaceID), let destinationStore = store(for: destinationID) else { return false }
         let source = sourceStore.tabs(hostID: drag.hostID, session: drag.sessionName)
         let destination = destinationStore.tabs(hostID: drag.hostID, session: drag.sessionName)
+        let wasSelectedRight = source.selectedRight == drag.tab
         if case let .window(id) = drag.tab, let target = DetachedTerminalTarget(hostID: drag.hostID, windowID: id) {
             if let old = workspace(containing: target) {
                 old.members.removeAll { $0 == target }
@@ -396,9 +418,20 @@ final class DetachedTerminalWindows {
             group.selection = drag.tab
             group.selectionRevision += 1
         }
+        if drag.tab.windowId == nil {
+            repairTransferredResource(source: source, store: sourceStore, hostID: drag.hostID, session: drag.sessionName, wasSelectedRight: wasSelectedRight)
+        }
         presentationRevision += 1
         closeEmptyWorkspaces()
         return true
+    }
+
+    private func repairTransferredResource(source: SessionFileTabsState, store: WorkbenchTabStore, hostID: String?, session: String, wasSelectedRight: Bool) {
+        if wasSelectedRight, store.onResourceTransferred != nil {
+            // The source scene chooses a fallback using its current terminal layout.
+            source.selectedRight = nil
+        }
+        store.onResourceTransferred?(hostID, session, wasSelectedRight)
     }
 
     private func closeWorkspace(_ id: UUID) {
