@@ -57,6 +57,9 @@ struct AgentWorkflowWireTests {
 
     @Test
     func commandAndOptionalResponseRoundTrip() throws {
+        let renewal = ManageAgentWorkflows(.renewAndResume(UUID(), expectedRevision: 3, roundLimit: 100, authorizationExpiresAt: .init(timeIntervalSince1970: 2_000_000_000)), expectedHostID: UUID())
+        #expect(renewal.operation.isMutation)
+        #expect(try JSONDecoder().decode(ManageAgentWorkflows.self, from: JSONEncoder().encode(renewal)) == renewal)
         let command = ManageAgentWorkflows(.start(definitionID: UUID(), expectedRevision: 3, requestID: UUID(), authorizationExpiresAt: .init(timeIntervalSince1970: 100)), expectedHostID: UUID())
         #expect(try JSONDecoder().decode(CommandType.self, from: JSONEncoder().encode(command.commandType)) == command.commandType)
         #expect(command.commandType.requiresResponse)

@@ -72,6 +72,17 @@ public struct CodexWorkflowTranscript: AgentWorkflowTranscriptParser {
         try submission(in: line, includingContext: false)
     }
 
+    public func submittedInput(in line: Data) throws -> String? {
+        guard
+            sessionMatches,
+            let record = try JSONSerialization.jsonObject(with: line) as? [String: Any],
+            record["type"] as? String == "response_item",
+            let payload = record["payload"] as? [String: Any], payload["type"] as? String == "message",
+            payload["role"] as? String == "user", let content = payload["content"] as? [[String: Any]] else { return nil }
+        let text = content.compactMap { $0["type"] as? String == "input_text" ? $0["text"] as? String : nil }
+        return text.isEmpty ? nil : text.joined(separator: "\n")
+    }
+
     private mutating func submission(in line: Data, includingContext: Bool) throws -> String? {
         guard
             let record = try JSONSerialization.jsonObject(with: line) as? [String: Any],

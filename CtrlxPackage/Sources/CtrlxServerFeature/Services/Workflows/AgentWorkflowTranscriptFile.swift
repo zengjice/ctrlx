@@ -300,6 +300,46 @@
             return VerifiedSubmission(turn: turn, afterStop: .init(identity: revision.identity, size: stopEnd), revision: revision)
         }
 
+        /// Locate the original delivery, not a later replay of the same task text.
+        func findSubmission(prompt: String, notBefore: Date, path: String) async throws -> VerifiedSubmission? {
+            let revision = readRevision
+            locating = false
+            readingStart = false
+            pending = .init(turnMetadataOnly: true, retainSubmissionText: true)
+            var current: (String, SubmissionBoundary)?
+            var selected: (String, SubmissionBoundary)?
+            var previousEnd: UInt64 = 0
+            while true {
+                let result = try poll(through: revision.size, turnMetadataOnly: true, retainSubmissionText: true) { line in
+                    let end = offset - UInt64(buffered.count)
+                    let start = previousEnd
+                    previousEnd = end
+                    if let id = try parser.resumedTurnID(in: line) {
+                        let record = try JSONSerialization.jsonObject(with: line) as? [String: Any]
+                        let timestamp = AgentTurnActivity.parseTimestamp(record?["timestamp"] as? String)
+                        if selected != nil, selected?.1.nextOffset == nil {
+                            selected?.1.nextOffset = start
+                            selected?.1.nextEnd = end
+                            return .succeeded("")
+                        }
+                        current = (id, .init(identity: revision.identity, offset: start, end: end, timestamp: timestamp))
+                    }
+                    if
+                        selected == nil, let current, let time = current.1.timestamp, time >= notBefore,
+                        try parser.submittedInput(in: line) == prompt {
+                        selected = current
+                    }
+                    return nil
+                }
+                if result.outcome != nil || result.reachedEnd {
+                    break
+                }
+                await Task.yield()
+            }
+            guard let selected, pending.retained.isEmpty, revision.isCurrent(at: path) else { return nil }
+            return VerifiedSubmission(turn: .init(nativeTurnID: selected.0, transcriptPath: path), submittedAt: selected.1.timestamp, nativeStart: selected.1, revision: revision)
+        }
+
         /// Use a fresh reader to locate the accepted turn and check submissions
         /// through the end of a stable transcript snapshot.
         func verifyCurrentSubmission(_ turn: PluginWorkflowTurn, hookStartedAt: Date? = nil) async throws -> VerifiedSubmission? {
@@ -606,7 +646,7 @@
         }
 
         private func poll(
-            through end: UInt64?, turnMetadataOnly: Bool,
+            through end: UInt64?, turnMetadataOnly: Bool, retainSubmissionText: Bool = false,
             consume: (Data) throws -> AgentWorkflowTranscriptOutcome?
         ) throws -> Poll {
             _ = try fileInfo()
@@ -635,7 +675,7 @@
                     try pending.append(buffered[..<newline])
                     let value = try pending.finish()
                     pending = AgentWorkflowTranscriptRecord(
-                        turnMetadataOnly: turnMetadataOnly, retainSubmissionRejections: submissionRejectionWindow != nil
+                        turnMetadataOnly: turnMetadataOnly, retainSubmissionRejections: submissionRejectionWindow != nil, retainSubmissionText: retainSubmissionText
                     )
                     buffered = Data(buffered[buffered.index(after: newline)...])
                     if readingStart {

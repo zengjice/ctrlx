@@ -16,6 +16,7 @@ struct AgentWorkflowTranscriptRecord {
     private static let maximumRecordBytes = maximumRetainedBytes + AgentWorkflowWire.maximumAttachments * ((20 * 1_024 * 1_024 + 2) / 3 * 8 + 1_024)
     private let turnMetadataOnly: Bool
     private let retainSubmissionRejections: Bool
+    private let retainSubmissionText: Bool
     private var containers: [Container] = []
     private var stringKind: StringKind?
     private var keyBytes: [UInt8] = []
@@ -28,9 +29,10 @@ struct AgentWorkflowTranscriptRecord {
     private var rawBytes = 0
     private(set) var retained = Data()
 
-    init(turnMetadataOnly: Bool = false, retainSubmissionRejections: Bool = false) {
+    init(turnMetadataOnly: Bool = false, retainSubmissionRejections: Bool = false, retainSubmissionText: Bool = false) {
         self.turnMetadataOnly = turnMetadataOnly
         self.retainSubmissionRejections = retainSubmissionRejections
+        self.retainSubmissionText = retainSubmissionText
     }
 
     mutating func append(_ bytes: Data.SubSequence) throws {
@@ -103,8 +105,8 @@ struct AgentWorkflowTranscriptRecord {
                         let parentKey = containers.dropLast().last?.key
                         if turnMetadataOnly {
                             let isRecordField = containers.count == 1 && (key == "type" || key == "sessionId" || key == "promptId" || key == "timestamp" || key == "uuid" || key == "parentUuid")
-                            let isTurnField = containers.count == 2 && parentKey == "payload" && (key == "type" || key == "turn_id" || key == "id")
-                            let isMessageContent = containers.count >= 2 && containers[0].key == "message" && containers[1].key == "content"
+                            let isTurnField = containers.count == 2 && parentKey == "payload" && (key == "type" || key == "turn_id" || key == "id" || key == "role")
+                            let isMessageContent = containers.count >= 2 && (containers[0].key == "message" || (retainSubmissionText && containers[0].key == "payload")) && containers[1].key == "content"
                             let isContentKind = isMessageContent && containers.count == 4 && key == "type"
                             let isContentText = isMessageContent && (containers.count == 2 || (containers.count == 4 && key == "text"))
                             let isRejectionField = retainSubmissionRejections && (
@@ -112,7 +114,7 @@ struct AgentWorkflowTranscriptRecord {
                                     || (containers.count == 3 && parentKey == "ending" && key == "kind")
                             )
                             if isContentText {
-                                stringKind = .asciiPrefix
+                                stringKind = retainSubmissionText ? .text : .asciiPrefix
                                 prefixBytes = 0
                             } else {
                                 stringKind = isRecordField || isTurnField || isRejectionField || isContentKind ? .text : .discardedText

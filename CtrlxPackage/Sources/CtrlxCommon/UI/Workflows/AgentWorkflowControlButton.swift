@@ -12,6 +12,7 @@ public struct AgentWorkflowControlButton: View {
     @State private var changing = false
     @State private var unavailableReason: String?
     @State private var error: String?
+    @State private var authorizationRun: AgentWorkflowRunState?
 
     public init(endpoint: AgentWorkflowEndpoint, pane: WorkspacePaneIdentity) {
         self.endpoint = endpoint
@@ -62,10 +63,35 @@ public struct AgentWorkflowControlButton: View {
         })) {
             Button("OK") { error = nil }
         } message: { Text(error ?? "") }
+        .sheet(isPresented: Binding(get: { authorizationRun != nil }, set: {
+            if !$0 {
+                authorizationRun = nil
+            }
+        })) {
+            if let target = authorizationRun, let hostID {
+                AgentWorkflowAuthorizationSheet(canSubmit: !changing && endpoint.isConnected, cancel: {
+                    authorizationRun = nil
+                }, confirm: { expiresAt in
+                    authorizationRun = nil
+                    changing = true
+                    Task {
+                        defer { changing = false }
+                        do {
+                            run = try await endpoint.request(.renewAndResume(target.summary.id, expectedRevision: target.summary.revision, roundLimit: nil, authorizationExpiresAt: expiresAt), hostID: hostID).run
+                            error = nil
+                        } catch { self.error = error.localizedDescription }
+                    }
+                })
+            }
+        }
     }
 
     private func change() {
         guard !changing, let hostID else { return }
+        if let run, run.summary.status == .paused, run.summary.authorizationExpiresAt <= Date() {
+            authorizationRun = run
+            return
+        }
         let paused = run?.summary.status != .paused
         changing = true
         Task {

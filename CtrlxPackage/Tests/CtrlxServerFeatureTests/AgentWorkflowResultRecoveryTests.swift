@@ -8,6 +8,143 @@ import Testing
 @testable import CtrlxServerFeature
 
 struct AgentWorkflowResultRecoveryTests {
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CTRLX_WORKFLOW_RECOVERY_LEDGER"] != nil))
+    func savedLegacyLedgerRecoversInAnIsolatedCopy() async throws {
+        let env = ProcessInfo.processInfo.environment
+        let source = try URL(fileURLWithPath: #require(env["CTRLX_WORKFLOW_RECOVERY_LEDGER"]))
+        let runIDText = try #require(env["CTRLX_WORKFLOW_RECOVERY_RUN"])
+        let runID = try #require(UUID(uuidString: runIDText))
+        let data = try Data(contentsOf: source)
+        let archive = try JSONDecoder().decode(AgentWorkflowArchive.self, from: data)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-legacy-recovery-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let copy = root.appendingPathComponent("ledger.json")
+        try data.write(to: copy)
+        #expect(copy != source)
+        let store = AgentWorkflowStore(fileURL: copy, hostID: archive.hostID)
+        let observations = archive.instances.map(AgentWorkflowObservation.init)
+        _ = try await store.reconcile(observations)
+        let before = try #require(await store.snapshot().runs.first { $0.id == runID })
+        let original = try #require(before.invocations.last { $0.status == .uncertain && $0.nativeTurnID == nil })
+        let reader = CodexProcessSessionReader()
+        let recovery = AgentWorkflowResultRecovery(store: store, inspect: { instance in
+            guard
+                AgentSessionIdentityClient.processRuntimeID(String(instance.processID)) == instance.processRuntimeID,
+                await reader.ownsSession(processID: String(instance.processID), runtimeID: instance.processRuntimeID, conversationID: instance.conversationID) else {
+                throw AgentWorkflowInspectionUnavailable()
+            }
+            return instance
+        }, provider: { _ in CodexPluginCore() }, transcriptPath: {
+            await reader.transcriptPath(processID: String($0.processID), runtimeID: $0.processRuntimeID, conversationID: $0.conversationID)
+        })
+        let scheduled = LockIsolated(0)
+        let service = AgentWorkflowService(store: store, scan: { _ in observations }, schedule: { _ in scheduled.withValue { $0 += 1 } }, resumeStep: { _, _ in
+            Issue.record("An isolated recovery must not write to a terminal.")
+        }, recoverResults: { try await recovery.recover($0) })
+        let after = try await service.resume(runID: runID, expectedRevision: before.revision, authorizationExpiresAt: Date().addingTimeInterval(86_400))
+        let recovered = try #require(after.invocations.first { $0.id == original.id })
+        #expect(after.id == before.id && after.round == before.round && after.status == .running)
+        #expect(after.invocations.map(\.id) == before.invocations.map(\.id))
+        #expect(recovered.status == .succeeded && recovered.result != nil && recovered.nativeTurnID != nil)
+        #expect(scheduled.value == 1)
+        #expect(try !AgentWorkflowExecution(validating: after).readyNodeIDs.isEmpty)
+        print("Isolated legacy recovery: run \(runID), invocation \(original.id), native turn \(recovered.nativeTurnID ?? ""), result characters \(recovered.result?.text.count ?? 0)")
+    }
+
+    @Test(arguments: ["same", "restarted", "first-conversation"], ["success", "explicit", "failed", "unfinished"])
+    func missingReceiptUsesTheOriginalVerifiedSubmission(binding: String, outcome: String) async throws {
+        let f = try await fixture(plugin: "codex", accepted: false, explicit: outcome == "explicit", conversation: binding == "first-conversation" ? "" : "conversation")
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let call = try #require(f.run.invocations.first)
+        var observation = AgentWorkflowObservation(f.instance)
+        observation.conversationID = "conversation"
+        if binding != "same" {
+            observation.processID = 20
+            observation.processRuntimeID = "501:20:456:7"
+        }
+        let writer = try #require(await f.store.reconcile([observation]).first)
+        let prompt = call.submissionText(pluginID: "codex")
+        func input(_ turn: String, time: Date, answer: String?) -> [[String: Any]] {
+            var result: [[String: Any]] = [
+                ["type": "event_msg", "timestamp": time.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true)), "payload": ["type": "task_started", "turn_id": turn]],
+                ["type": "response_item", "payload": ["type": "message", "role": "user", "content": [["type": "input_text", "text": prompt]]]],
+            ]
+            if let answer {
+                result.append(["type": "event_msg", "payload": ["type": "task_complete", "turn_id": turn, "last_agent_message": answer]])
+            }
+            return result
+        }
+        var records: [[String: Any]] = [["type": "session_meta", "payload": ["id": "conversation"]]]
+        records += input("before-delivery", time: call.createdAt.addingTimeInterval(-60), answer: "Too early")
+        records += input("original", time: call.createdAt.addingTimeInterval(1), answer: ["failed", "unfinished"].contains(outcome) ? nil : "Original findings")
+        if outcome == "failed" {
+            records.append(["type": "event_msg", "payload": ["type": "turn_aborted", "turn_id": "original"]])
+        }
+        if outcome != "unfinished" {
+            records += input("repeated", time: call.createdAt.addingTimeInterval(10), answer: "Wrong later answer")
+        }
+        try records.reduce(into: Data()) { try $0.append(JSONSerialization.data(withJSONObject: $1) + Data([10])) }.write(to: f.transcript)
+        let recovery = AgentWorkflowResultRecovery(store: f.store, inspect: { value in
+            #expect(value.matchesBinding(writer))
+            return value
+        }, provider: { _ in CodexPluginCore() }, transcriptPath: { _ in f.transcript.path })
+        let before = try await f.store.snapshot().runs[0]
+        let recovered = try await recovery.recover(before)
+        let saved = try #require(recovered.invocations.first)
+        #expect(recovered.id == before.id && recovered.round == before.round && recovered.status == .paused)
+        if outcome == "unfinished" {
+            #expect(saved.status == .uncertain && saved.nativeTurnID == nil)
+        } else {
+            #expect(saved.nativeTurnID == "original" && saved.instance?.matchesBinding(writer) == true)
+            switch outcome {
+            case "success": #expect(saved.status == .succeeded && saved.result?.text == "Original findings")
+            case "failed": #expect(saved.status == .failed && saved.issue == "The native Codex turn was interrupted.")
+            default: #expect(saved.status == .running && saved.stepTurn?.stopped == true && saved.stepTurn?.completionRequested == false && saved.result == nil)
+            }
+            let restarted = AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: writer.hostID)
+            #expect(try await restarted.snapshot().runs[0].invocations[0].nativeTurnID == "original")
+        }
+    }
+
+    @Test(arguments: ["wrong-input", "wrong-conversation", "changed-writer", "changed-path", "capability"])
+    func missingReceiptNeverBorrowsUnverifiedHistory(scenario: String) async throws {
+        let f = try await fixture(plugin: "codex", accepted: false)
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let call = try #require(f.run.invocations.first)
+        let input = scenario == "wrong-input" ? "Other task" : call.delivery.input.text
+        let records: [[String: Any]] = [
+            ["type": "session_meta", "payload": ["id": "conversation"]],
+            ["type": "event_msg", "timestamp": call.createdAt.addingTimeInterval(1).formatted(.iso8601), "payload": ["type": "task_started", "turn_id": "original"]],
+            ["type": "response_item", "payload": ["type": "message", "role": "user", "content": [["type": "input_text", "text": input]]]],
+            ["type": "event_msg", "payload": ["type": "task_complete", "turn_id": "original", "last_agent_message": "Findings"]],
+        ]
+        try records.reduce(into: Data()) { try $0.append(JSONSerialization.data(withJSONObject: $1) + Data([10])) }.write(to: f.transcript)
+        if scenario == "wrong-conversation" {
+            var other = AgentWorkflowObservation(f.instance)
+            other.conversationID = "other"
+            _ = try await f.store.reconcile([other])
+        }
+        let inspected = LockIsolated(0), synchronized = LockIsolated(0)
+        let recovery = AgentWorkflowResultRecovery(store: f.store, inspect: { instance in
+            inspected.withValue { $0 += 1 }
+            var live = instance
+            if scenario == "changed-writer", inspected.value > 2 {
+                live.conversationID = "other"
+            }
+            if scenario == "capability" {
+                live.capabilityIssue = "Hooks incompatible"
+            }
+            return live
+        }, provider: { _ in CodexPluginCore() }, synchronizeIngress: {
+            synchronized.withValue { $0 += 1 }
+        }, transcriptPath: { _ in scenario == "changed-path" && synchronized.value > 1 ? nil : f.transcript.path })
+        let before = try await f.store.snapshot().runs[0]
+        await #expect(throws: (any Error).self) { try await recovery.recover(before) }
+        let saved = try await f.store.snapshot().runs[0].invocations[0]
+        #expect(saved.status == .uncertain && saved.nativeTurnID == nil && saved.result == nil)
+    }
+
     private struct Fixture: Sendable {
         let root: URL
         let transcript: URL
@@ -177,7 +314,11 @@ struct AgentWorkflowResultRecoveryTests {
             bytes.removeLast()
         }
         try bytes.write(to: f.transcript)
-        #expect(try await f.recovery.recover(f.run) == f.run)
+        if change == "unaccepted" {
+            await #expect(throws: AgentWorkflowError.self) { try await f.recovery.recover(f.run) }
+        } else {
+            #expect(try await f.recovery.recover(f.run) == f.run)
+        }
         #expect(try await f.store.snapshot().runs[0] == f.run)
         #expect(try AgentWorkflowExecution(validating: f.run).readyNodeIDs.isEmpty)
         if change != "proposal" {

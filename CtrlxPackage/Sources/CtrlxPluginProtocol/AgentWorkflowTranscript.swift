@@ -110,6 +110,8 @@ public protocol AgentWorkflowTranscriptParser: Sendable {
     func isTurnStart(_ line: Data) throws -> Bool
     mutating func submittedTurnID(in line: Data) throws -> String?
     mutating func resumedTurnID(in line: Data) throws -> String?
+    /// Native user input, excluding generated tool results and hook feedback.
+    func submittedInput(in line: Data) throws -> String?
     var submissionRejectionMarker: String? { get }
     func rejectsSubmission(_ line: Data, during: Range<Date>) throws -> Bool
     /// Update Stop text without resetting the turn; return matching evidence
@@ -163,6 +165,10 @@ public extension AgentWorkflowTranscriptParser {
 
     mutating func resumedTurnID(in line: Data) throws -> String? {
         try submittedTurnID(in: line)
+    }
+
+    func submittedInput(in _: Data) throws -> String? {
+        nil
     }
 
     var submissionRejectionMarker: String? {

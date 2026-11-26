@@ -88,6 +88,10 @@ struct CodexProcessSessionReaderTests {
         let writer = try FileHandle(forWritingTo: file)
         defer { try? writer.close() }
         #expect(await reader.turnCompleted(processID: pid, runtimeID: runtime))
+        let transcript = try #require(await reader.transcriptPath(processID: pid, runtimeID: runtime, conversationID: childID))
+        #expect(URL(fileURLWithPath: transcript).resolvingSymlinksInPath() == file.resolvingSymlinksInPath())
+        #expect(await reader.transcriptPath(processID: pid, runtimeID: "reused-pid", conversationID: childID) == nil)
+        #expect(await reader.transcriptPath(processID: pid, runtimeID: runtime, conversationID: parentID) == nil)
         #expect(await !reader.turnCompleted(processID: pid, runtimeID: "reused-pid"))
         try writer.seekToEnd()
         try writer.write(contentsOf: event("task_started", turn: parentID))

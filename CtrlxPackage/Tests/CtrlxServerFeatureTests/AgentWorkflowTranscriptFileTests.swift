@@ -10,6 +10,27 @@ import Testing
 @testable import CtrlxServerFeature
 
 struct AgentWorkflowTranscriptFileTests {
+    @Test
+    func originalSubmissionDiscoveryStopsBeforeUnrelatedFutureInput() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-original-submission-\(UUID()).jsonl")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let submittedAt = Date(timeIntervalSince1970: 1_800_000_001)
+        let prompt = "原始任务\n[CtrlX workflow invocation: example]"
+        let records: [[String: Any]] = [
+            ["type": "session_meta", "payload": ["id": "session"]],
+            ["type": "event_msg", "timestamp": submittedAt.formatted(.iso8601), "payload": ["type": "task_started", "turn_id": "original"]],
+            ["type": "response_item", "payload": ["type": "message", "role": "user", "content": [["type": "input_text", "text": prompt]]]],
+            ["type": "event_msg", "payload": ["type": "task_complete", "turn_id": "original", "last_agent_message": "Original answer"]],
+            ["type": "event_msg", "timestamp": submittedAt.addingTimeInterval(10).formatted(.iso8601), "payload": ["type": "task_started", "turn_id": "later"]],
+            ["type": "response_item", "payload": ["type": "message", "role": "user", "content": [["type": "input_text", "text": String(repeating: "x", count: 3 * 1_024 * 1_024)]]]],
+        ]
+        try records.reduce(into: Data()) { try $0.append(JSONSerialization.data(withJSONObject: $1) + Data([10])) }.write(to: file)
+        let reader = try AgentWorkflowTranscriptFile(path: file.path, parser: CodexWorkflowTranscript(conversationID: "session", nativeTurnID: ""))
+        let proof = try #require(await reader.findSubmission(prompt: prompt, notBefore: submittedAt.addingTimeInterval(-1), path: file.path))
+        #expect(proof.turn.nativeTurnID == "original" && proof.nativeStart?.nextOffset != nil)
+        #expect(await reader.bytesRead < 256 * 1_024)
+    }
+
     private func png() throws -> Data {
         var seed: UInt32 = 42
         let pixels = Data((0..<(900 * 900 * 4)).map { _ -> UInt8 in

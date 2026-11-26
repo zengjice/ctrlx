@@ -81,6 +81,16 @@ public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
         return submission(in: record)
     }
 
+    public func submittedInput(in line: Data) throws -> String? {
+        guard let record = try JSONSerialization.jsonObject(with: line) as? [String: Any], submission(in: record) != nil else { return nil }
+        let content = (record["message"] as? [String: Any])?["content"]
+        if let text = content as? String {
+            return text
+        }
+        let text = (content as? [[String: Any]])?.compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil } ?? []
+        return text.isEmpty ? nil : text.joined(separator: "\n")
+    }
+
     private func submission(in record: [String: Any]) -> String? {
         guard
             record["type"] as? String == "user",

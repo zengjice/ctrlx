@@ -7,6 +7,28 @@ import Testing
 
 @MainActor
 struct AgentWorkflowServiceTests {
+    @Test
+    func expiredRunRequiresExplicitRenewalAndKeepsItsIdentity() async throws {
+        let clock = LockIsolated(Date(timeIntervalSince1970: 1_800_000_000))
+        let f = try await fixture(clock: { clock.value })
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        let run = try await f.service.start(definitionID: f.definition.id, expectedRevision: f.definition.revision, requestID: UUID(), authorizationExpiresAt: clock.value.addingTimeInterval(60))
+        let paused = try await f.service.pause(runID: run.id, expectedRevision: run.revision)
+        clock.withValue { $0 = $0.addingTimeInterval(120) }
+        let scans = f.backend.scans, schedules = f.backend.scheduled.count
+        await #expect(throws: AgentWorkflowError.self) { try await f.service.resume(runID: run.id, expectedRevision: paused.revision) }
+        #expect(f.backend.scans == scans && f.backend.scheduled.count == schedules)
+        let expiresAt = clock.value.addingTimeInterval(86_400)
+        let response = try await f.service.handle(.init(.renewAndResume(run.id, expectedRevision: paused.revision, roundLimit: nil, authorizationExpiresAt: expiresAt), expectedHostID: run.definition.hostID))
+        let resumed = try #require(response.run)
+        #expect(resumed.summary.id == run.id && resumed.summary.round == run.round && resumed.summary.authorizationExpiresAt == expiresAt)
+        #expect(resumed.summary.status == .running)
+        #expect(try await f.store.snapshot().runs[0].invocations == paused.invocations)
+        let restarted = AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: run.definition.hostID)
+        #expect(try await restarted.snapshot().runs[0].authorizationExpiresAt == expiresAt)
+        await #expect(throws: AgentWorkflowError.self) { try await f.service.resume(runID: run.id, expectedRevision: paused.revision, authorizationExpiresAt: expiresAt) }
+    }
+
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
     @MainActor

@@ -1,7 +1,7 @@
 import Foundation
 
 public enum AgentWorkflowWire {
-    public static let version = 9
+    public static let version = 10
     public static let maximumEncodedBytes = 256 * 1_024
     public static let imageEncodedBytes = 576 * 1_024
     public static let maximumDefinitionBytes = 128 * 1_024
@@ -65,6 +65,7 @@ public struct ManageAgentWorkflows: CommandSpec, Equatable {
         case text(runID: UUID, invocationID: UUID, part: TextPart, offset: Int)
         case pause(UUID, expectedRevision: Int)
         case resume(UUID, expectedRevision: Int, roundLimit: Int?)
+        case renewAndResume(UUID, expectedRevision: Int, roundLimit: Int?, authorizationExpiresAt: Date)
         case end(UUID, expectedRevision: Int)
         case deleteRun(UUID, expectedRevision: Int)
         case attachments([UUID])
@@ -79,6 +80,7 @@ public struct ManageAgentWorkflows: CommandSpec, Equatable {
                  .start,
                  .pause,
                  .resume,
+                 .renewAndResume,
                  .end,
                  .deleteRun,
                  .uploadAttachment,

@@ -79,6 +79,9 @@ extension AgentWorkflowService {
         case let .resume(id, revision, roundLimit):
             let run = try await resume(runID: id, expectedRevision: revision, roundLimit: roundLimit)
             response.run = try AgentWorkflowRunState(run, currentInstances: await snapshot().instances)
+        case let .renewAndResume(id, revision, roundLimit, expiresAt):
+            let run = try await resume(runID: id, expectedRevision: revision, roundLimit: roundLimit, authorizationExpiresAt: expiresAt)
+            response.run = try AgentWorkflowRunState(run, currentInstances: await snapshot().instances)
         case let .end(id, revision):
             response.run = try AgentWorkflowRunState(await end(runID: id, expectedRevision: revision), currentInstances: archive.instances)
         case let .deleteRun(id, revision):

@@ -55,6 +55,10 @@ actor CodexProcessSessionReader {
     /// Authenticated receipts already name a conversation. Verify that exact
     /// CLI writer even when /new has retained a previous conversation's file.
     func ownsSession(processID: String, runtimeID: String, conversationID: String) -> Bool {
+        transcriptPath(processID: processID, runtimeID: runtimeID, conversationID: conversationID) != nil
+    }
+
+    func transcriptPath(processID: String, runtimeID: String, conversationID: String) -> String? {
         guard
             !Task.isCancelled, let pid = Int32(processID), let id = UUID(uuidString: conversationID),
             AgentSessionIdentityClient.processRuntimeID(processID) == runtimeID,
@@ -64,8 +68,8 @@ actor CodexProcessSessionReader {
             !Task.isCancelled,
             AgentSessionIdentityClient.processRuntimeID(processID) == runtimeID,
             activeRollout(pid: pid, conversationID: id) == writer
-        else { return false }
-        return true
+        else { return nil }
+        return writer.path
     }
 
     private struct Rollout: Equatable {

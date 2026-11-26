@@ -208,9 +208,20 @@ actor AgentWorkflowService {
         }
     }
 
-    func resume(runID: UUID, expectedRevision: Int, roundLimit: Int? = nil) async throws -> AgentWorkflowRun {
-        guard let original = try await store.snapshot().runs.first(where: { $0.id == runID }), original.revision == expectedRevision else {
+    func resume(runID: UUID, expectedRevision: Int, roundLimit: Int? = nil, authorizationExpiresAt: Date? = nil) async throws -> AgentWorkflowRun {
+        guard var original = try await store.snapshot().runs.first(where: { $0.id == runID }), original.revision == expectedRevision else {
             throw AgentWorkflowError("The workflow changed. Reload before continuing.")
+        }
+        if let authorizationExpiresAt {
+            original = try await store.update(runID: runID, expectedRevision: expectedRevision) {
+                try $0.renewAuthorization(until: authorizationExpiresAt, now: now())
+            }
+        }
+        guard original.status == .paused else {
+            throw AgentWorkflowError("Only a paused workflow can continue.")
+        }
+        guard original.authorizationExpiresAt > now() else {
+            throw AgentWorkflowError("This workflow authorization has expired. Open the run and renew authorization before continuing.")
         }
         if !original.instances.isEmpty {
             try await refreshInstancesCatalog()

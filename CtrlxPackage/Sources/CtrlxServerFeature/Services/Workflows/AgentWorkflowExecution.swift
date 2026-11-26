@@ -328,6 +328,24 @@ struct AgentWorkflowExecution: Sendable {
             && calls.allSatisfy { $0.nativeTurnID == nil && $0.result == nil }
     }
 
+    /// Used only after the original input was found in this target's verified native transcript.
+    mutating func recoverAcceptance(invocationID: UUID, instance: AgentWorkflowInstance, turn: PluginWorkflowTurn) throws {
+        let index = try index(of: invocationID)
+        let invocation = run.invocations[index]
+        guard
+            invocation.status == .uncertain, invocation.nativeTurnID == nil,
+            let bound = run.instance(for: invocation), bound.agentID == instance.agentID, bound.pluginID == instance.pluginID,
+            bound.workspacePane.isSamePane(as: instance.workspacePane), !instance.conversationID.isEmpty,
+            bound.conversationID.isEmpty || bound.conversationID == instance.conversationID,
+            let participant = run.instances.firstIndex(where: { $0.agentID == instance.agentID }) else {
+            throw AgentWorkflowError("Restore the original task's Agent tab and conversation before recovering it.")
+        }
+        run.instances[participant] = instance
+        run.invocations[index].instance = instance
+        run.invocations[index].delivery.toAgentID = instance.id
+        try accept(invocationID: invocationID, instance: instance, nativeTurnID: turn.nativeTurnID, transcriptPath: turn.transcriptPath)
+    }
+
     mutating func accept(
         invocationID: UUID, instance: AgentWorkflowInstance, nativeTurnID: String, transcriptPath: String? = nil,
         bindFirstConversation: Bool = false, confirmsSelectedResult: Bool = false
@@ -662,6 +680,15 @@ struct AgentWorkflowExecution: Sendable {
             changed()
         }
         return issue
+    }
+
+    mutating func renewAuthorization(until expiresAt: Date, now: Date) throws {
+        guard run.status == .paused, expiresAt > now, expiresAt > run.authorizationExpiresAt else {
+            throw AgentWorkflowError("Renew authorization for a paused workflow using a later, future expiry.")
+        }
+        run.authorizationExpiresAt = expiresAt
+        run.controlRevision = (run.controlRevision ?? 0) + 1
+        changed()
     }
 
     mutating func resume(instances: [AgentWorkflowInstance], roundLimit: Int? = nil, now: Date) throws {

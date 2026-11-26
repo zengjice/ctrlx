@@ -95,6 +95,7 @@ extension AppCoordinator {
             )
             let runner = AgentWorkflowRunner(store: store, transport: delivery.transport, onFailure: { workflowLogger.error("\($0)") })
             agentWorkflowRunner = runner
+            let recoveryTranscripts = CodexProcessSessionReader()
             let recovery = AgentWorkflowResultRecovery(store: store, inspect: { [weak self] instance in
                 guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
                 return try await inspectWorkflowInstance(instance, verifyNativeWriter: true)
@@ -103,6 +104,8 @@ extension AppCoordinator {
             }, synchronizeIngress: { [weak self] in
                 guard let self else { throw AgentWorkflowInspectionUnavailable() }
                 try await synchronizeAgentIngress()
+            }, transcriptPath: { instance in
+                await recoveryTranscripts.transcriptPath(processID: String(instance.processID), runtimeID: instance.processRuntimeID, conversationID: instance.conversationID)
             })
             agentWorkflowService = AgentWorkflowService(store: store, scan: { [weak self] _ in
                 guard let self else { throw AgentWorkflowError("The Host is shutting down.") }

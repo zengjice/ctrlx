@@ -173,7 +173,7 @@ public struct AgentWorkflowRun: Codable, Equatable, Identifiable, Sendable {
     public var definition: AgentWorkflowDefinition
     public var instances: [AgentWorkflowInstance]
     public let createdAt: Date
-    public let authorizationExpiresAt: Date
+    public var authorizationExpiresAt: Date
     public var revision: Int
     /// Changes only for explicit operator control, independently of receipt verification.
     public var controlRevision: Int?

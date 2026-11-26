@@ -8,6 +8,7 @@ struct AgentWorkflowResultRecovery: Sendable {
     let inspect: @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance
     let provider: @Sendable (String) async -> (any AgentWorkflowProviding)?
     var synchronizeIngress: @Sendable () async throws -> Void = { }
+    var transcriptPath: @Sendable (AgentWorkflowInstance) async throws -> String? = { _ in nil }
 
     func recover(_ original: AgentWorkflowRun) async throws -> AgentWorkflowRun {
         guard original.status == .paused, !original.definition.agentInstanceIDs.isEmpty else { return original }
@@ -27,11 +28,39 @@ struct AgentWorkflowResultRecovery: Sendable {
                 var bound = reconciled.instance(for: invocation),
                 let node = original.definition.nodes.first(where: { $0.id == invocation.nodeID }) else { continue }
             let turn: PluginWorkflowTurn
+            var discovered: AgentWorkflowTranscriptFile.VerifiedSubmission?
             let needsAcceptance = invocation.nativeTurnID == nil
             if needsAcceptance {
-                guard let receipt else { continue }
-                bound.conversationID = receipt.conversationID
-                turn = receipt.turn
+                if let receipt {
+                    bound.conversationID = receipt.conversationID
+                    turn = receipt.turn
+                } else {
+                    guard invocation.status == .uncertain, archive.earlyCompletions?[invocation.id]?.isEmpty != false else { continue }
+                    guard
+                        let current = archive.instances.first(where: {
+                            $0.agentID == bound.agentID && $0.pluginID == bound.pluginID && $0.workspacePane.isSamePane(as: bound.workspacePane)
+                        }), !current.conversationID.isEmpty,
+                        bound.conversationID.isEmpty || bound.conversationID == current.conversationID else {
+                        throw AgentWorkflowError("\(bound.displayName): Restore the original task's conversation before continuing. Nothing was resent.")
+                    }
+                    let live = try await inspect(current)
+                    guard live.matchesBinding(current) else { throw AgentWorkflowInspectionUnavailable() }
+                    if let issue = live.capabilityIssue {
+                        throw AgentWorkflowError(issue)
+                    }
+                    guard let path = try await transcriptPath(live), let plugin = await provider(live.pluginID) else {
+                        throw AgentWorkflowError("\(bound.displayName): No verified native transcript is available to recover the missing submission receipt. Nothing was resent.")
+                    }
+                    let file = try AgentWorkflowTranscriptFile(path: path, parser: plugin.workflowTranscript(
+                        conversationID: live.conversationID, nativeTurnID: "", prompt: invocation.submissionText(pluginID: live.pluginID), candidate: ""
+                    ))
+                    guard let proof = try await file.findSubmission(prompt: invocation.submissionText(pluginID: live.pluginID), notBefore: invocation.createdAt, path: path) else {
+                        throw AgentWorkflowError("\(bound.displayName): The original task input was not found in the verified native transcript. Nothing was resent.")
+                    }
+                    discovered = proof
+                    bound = live
+                    turn = proof.turn
+                }
             } else {
                 guard let turnID = invocation.resultTurnID, let path = invocation.resultTranscriptPath else { continue }
                 turn = .init(nativeTurnID: turnID, transcriptPath: path)
@@ -60,11 +89,14 @@ struct AgentWorkflowResultRecovery: Sendable {
             }
             guard
                 let (outcome, nativeEnd) = try await nativeOutcome(
-                    for: invocation, turn: turn, instance: live, completion: completion
+                    for: invocation, turn: turn, instance: live, completion: completion, discovered: discovered
                 ) else { continue }
             try await synchronizeIngress()
             let verified = try await inspect(live)
             guard verified.matchesBinding(live) else { throw AgentWorkflowError("The Agent changed while recovering its result.") }
+            if discovered != nil, try await transcriptPath(verified) != turn.transcriptPath {
+                throw AgentWorkflowError("The Agent transcript changed while recovering its missing receipt. Try continuing again.")
+            }
             try Task.checkCancellation()
             let result: AgentWorkflowTranscriptOutcome?
             if case .succeeded = outcome, !canSucceed {
@@ -76,7 +108,7 @@ struct AgentWorkflowResultRecovery: Sendable {
             run = try await store.recoverResult(
                 invocation: invocation, in: run, turn: turn, instance: verified,
                 catalogConversation: archive.instances.first(where: { $0.matchesProcess(verified) })?.conversationID,
-                completion: completion, outcome: result, nativeEnd: nativeEnd, now: Date()
+                completion: completion, outcome: result, nativeEnd: nativeEnd, now: Date(), discoveredSubmission: discovered
             )
             if run.hasNewFailure(since: original) {
                 return run
@@ -87,7 +119,7 @@ struct AgentWorkflowResultRecovery: Sendable {
 
     private func nativeOutcome(
         for invocation: AgentWorkflowInvocation, turn: PluginWorkflowTurn, instance: AgentWorkflowInstance,
-        completion: PluginWorkflowEvent?
+        completion: PluginWorkflowEvent?, discovered: AgentWorkflowTranscriptFile.VerifiedSubmission? = nil
     ) async throws -> (AgentWorkflowTranscriptOutcome, AgentWorkflowTranscriptFile.VerifiedRecoveryEnd?)? {
         if let completion, completion.kind == .failed {
             return (.failed(completion.text), nil)
@@ -103,7 +135,12 @@ struct AgentWorkflowResultRecovery: Sendable {
         } catch let error as CocoaError where error.code == .fileNoSuchFile {
             return nil
         }
-        guard let (result, end) = try await file.verifiedOutcome(at: turn.transcriptPath), let outcome = result else { return nil }
+        let recovered = if let discovered {
+            try await file.verifiedOutcome(for: discovered, hasStop: completion?.kind == .stopCandidate)
+        } else {
+            try await file.verifiedOutcome(at: turn.transcriptPath)
+        }
+        guard let (result, end) = recovered, let outcome = result else { return nil }
         if case let .succeeded(text) = outcome, completion?.corroboratesAnswer(text) == false {
             return nil
         }
@@ -219,7 +256,8 @@ extension AgentWorkflowStore {
         invocation: AgentWorkflowInvocation, in expected: AgentWorkflowRun, turn: PluginWorkflowTurn,
         instance: AgentWorkflowInstance, catalogConversation: String?,
         completion: PluginWorkflowEvent?, outcome: AgentWorkflowTranscriptOutcome?,
-        nativeEnd: AgentWorkflowTranscriptFile.VerifiedRecoveryEnd?, now: Date
+        nativeEnd: AgentWorkflowTranscriptFile.VerifiedRecoveryEnd?, now: Date,
+        discoveredSubmission: AgentWorkflowTranscriptFile.VerifiedSubmission? = nil
     ) throws -> AgentWorkflowRun {
         var archive = try load()
         let changed = AgentWorkflowError("The workflow run changed. Reload before applying this action.")
@@ -259,7 +297,10 @@ extension AgentWorkflowStore {
             invocation.resultTurnID != turn.nativeTurnID || invocation.resultTranscriptPath != turn.transcriptPath {
             return current
         }
-        let receipt = archive.pendingReceipts?[invocation.id]
+        var receipt = archive.pendingReceipts?[invocation.id]
+        if discoveredSubmission != nil, receipt != nil {
+            return current
+        }
         if receipt?.continuationFailure != nil || receipt?.continuations?.contains(where: { $0.isRetired != true }) == true {
             return current
         }
@@ -278,6 +319,20 @@ extension AgentWorkflowStore {
         }
         var execution = try AgentWorkflowExecution(validating: current)
         if invocation.nativeTurnID == nil {
+            if receipt == nil, let proof = discoveredSubmission {
+                guard
+                    proof.isCurrent, proof.turn == turn, proof.nativeStart != nil,
+                    proof.submittedAt.map({ $0 >= invocation.createdAt }) == true,
+                    archive.earlyCompletions?[invocation.id]?.isEmpty != false,
+                    archive.instances.contains(where: { $0.matchesBinding(instance) }) else { return current }
+                try execution.recoverAcceptance(invocationID: invocation.id, instance: instance, turn: turn)
+                var recovered = AgentWorkflowPendingReceipt(conversationID: instance.conversationID, turn: turn)
+                recovered.selectedSubmission = .init(writer: instance, submission: .init(kind: .submitted, nativeTurnID: turn.nativeTurnID, transcriptPath: turn.transcriptPath, text: invocation.submissionText(pluginID: instance.pluginID)), submittedAt: nil, nativeStart: proof.nativeStart)
+                var receipts = archive.pendingReceipts ?? [:]
+                receipts[invocation.id] = recovered
+                archive.pendingReceipts = receipts
+                receipt = recovered
+            }
             guard receipt?.conversationID == instance.conversationID, receipt?.turn == turn else { throw changed }
             if let issue = instance.capabilityIssue {
                 throw AgentWorkflowError(issue)
@@ -290,10 +345,12 @@ extension AgentWorkflowStore {
                     currentWriter.conversationID == catalogConversation || currentWriter.conversationID == instance.conversationID else { throw changed }
             }
             let bindFirstConversation = current.instance(for: invocation)?.conversationID != instance.conversationID
-            try execution.accept(
-                invocationID: invocation.id, instance: instance, nativeTurnID: turn.nativeTurnID,
-                transcriptPath: turn.transcriptPath, bindFirstConversation: bindFirstConversation
-            )
+            if discoveredSubmission == nil {
+                try execution.accept(
+                    invocationID: invocation.id, instance: instance, nativeTurnID: turn.nativeTurnID,
+                    transcriptPath: turn.transcriptPath, bindFirstConversation: bindFirstConversation
+                )
+            }
             if bindFirstConversation, let catalog {
                 archive.instances[catalog].conversationID = instance.conversationID
             }

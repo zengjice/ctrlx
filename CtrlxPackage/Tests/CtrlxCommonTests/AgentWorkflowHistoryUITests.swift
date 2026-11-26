@@ -129,6 +129,56 @@
             #expect(navigation.path == [.host(endpoint.id)])
         }
 
+        @Test(arguments: [false, true])
+        func expiredContinueRequiresConfirmation(fromTerminal: Bool) async throws {
+            _ = NSApplication.shared
+            NSApp.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
+            let hostID = UUID(), pane = WorkspacePaneIdentity(serverID: "private", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+            let node = AgentWorkflowNode(name: "Brief", content: .init(text: "Task"))
+            let definition = AgentWorkflowDefinition(name: "Expired", hostID: hostID, nodes: [node], edges: [], entryNodeID: node.id)
+            var run = AgentWorkflowRun(definition: definition, instances: [], createdAt: Date().addingTimeInterval(-120), authorizationExpiresAt: Date().addingTimeInterval(-60))
+            run.status = .paused
+            var renewals = 0
+            let endpoint = AgentWorkflowEndpoint(id: "renewal-fixture", name: "Private Host", connected: { true }, supported: { true }) { request in
+                var response = AgentWorkflowResponse(hostID: hostID)
+                switch request.operation {
+                case .run,
+                     .terminal: response.run = .init(run, currentInstances: [])
+                case .invocations: response.invocations = .init(items: [], nextOffset: nil)
+                case let .renewAndResume(id, revision, _, expiresAt):
+                    #expect(id == run.id && revision == run.revision && expiresAt > Date() && request.expectedHostID == hostID)
+                    renewals += 1
+                    run.authorizationExpiresAt = expiresAt
+                    run.status = .running
+                    run.revision += 1
+                    response.run = .init(run, currentInstances: [])
+                default: Issue.record("Expired Continue must only renew after confirmation")
+                }
+                return response
+            }
+            let view: AnyView = fromTerminal
+                ? AnyView(AgentWorkflowControlButton(endpoint: endpoint, pane: pane))
+                : AnyView(NavigationStack { AgentWorkflowRunView(endpoint: endpoint, hostID: hostID, runID: run.id, openAgent: { _ in }) })
+            let window = NSWindow(contentRect: CGRect(x: -10_000, y: -10_000, width: 700, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = NSHostingView(rootView: view.environment(\.scenePhase, .active))
+            window.orderBack(nil)
+            defer { window.close() }
+            let identifier = fromTerminal ? "workflow-terminal-control" : "workflow-run-control"
+            try await waitUntil { element(identifier, in: window) != nil }
+            _ = try press(#require(element(identifier, in: window)))
+            let cancel = try await waitForElement("workflow-cancel-renewal")
+            #expect(renewals == 0 && run.status == .paused)
+            _ = press(cancel)
+            try await waitUntil { window.sheets.isEmpty }
+            _ = try press(#require(element(identifier, in: window)))
+            let confirm = try await waitForElement("workflow-confirm-renewal")
+            #expect(renewals == 0)
+            _ = press(confirm)
+            try await waitUntil { renewals == 1 }
+            #expect(run.status == .running)
+        }
+
         @Test(arguments: [AgentWorkflowRunStatus.running, .paused, .finishing])
         func toolbarStopRequiresConfirmationAndEndsTheSelectedRun(status: AgentWorkflowRunStatus) async throws {
             _ = NSApplication.shared

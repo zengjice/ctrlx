@@ -15,6 +15,7 @@ struct AgentWorkflowRunView: View {
     @State private var changing = false
     @State private var confirmingEnd = false
     @State private var confirmingDelete = false
+    @State private var renewingAuthorization = false
     @State private var roundLimit = 1
 
     var body: some View {
@@ -60,9 +61,7 @@ struct AgentWorkflowRunView: View {
                             if state.summary.isLooping {
                                 TextField("Maximum rounds", value: $roundLimit, format: .number)
                             }
-                            Button("Continue") {
-                                change(.resume(runID, expectedRevision: state.summary.revision, roundLimit: roundLimit))
-                            }
+                            Button(state.summary.authorizationExpiresAt <= Date() ? "Renew authorization and continue…" : "Continue", action: continueRun)
                         } else {
                             Button("Pause workflow") { change(.pause(runID, expectedRevision: state.summary.revision)) }
                                 .accessibilityIdentifier("workflow-pause")
@@ -107,9 +106,11 @@ struct AgentWorkflowRunView: View {
                     let paused = state.summary.status == .paused
                     let title = paused ? "Continue workflow" : "Pause workflow"
                     Button {
-                        change(paused
-                            ? .resume(runID, expectedRevision: state.summary.revision, roundLimit: roundLimit)
-                            : .pause(runID, expectedRevision: state.summary.revision))
+                        if paused {
+                            continueRun()
+                        } else {
+                            change(.pause(runID, expectedRevision: state.summary.revision))
+                        }
                     } label: {
                         Label(title, symbol: paused ? .play : .pause).labelStyle(.iconOnly)
                     }
@@ -143,6 +144,15 @@ struct AgentWorkflowRunView: View {
                 Button("Delete run", role: .destructive) { change(.deleteRun(runID, expectedRevision: state.summary.revision)) }
             }
         } message: { Text("The configuration and Agent tabs stay available.") }
+        .sheet(isPresented: $renewingAuthorization) {
+            AgentWorkflowAuthorizationSheet(canSubmit: !changing && endpoint.isConnected, cancel: {
+                renewingAuthorization = false
+            }, confirm: { expiresAt in
+                guard let state else { return }
+                renewingAuthorization = false
+                change(.renewAndResume(runID, expectedRevision: state.summary.revision, roundLimit: roundLimit, authorizationExpiresAt: expiresAt))
+            })
+        }
         .task(id: scenePhase) {
             guard scenePhase == .active else { return }
             while !Task.isCancelled {
@@ -212,6 +222,15 @@ struct AgentWorkflowRunView: View {
             if !Task.isCancelled {
                 self.error = error.localizedDescription
             }
+        }
+    }
+
+    private func continueRun() {
+        guard let state, !changing else { return }
+        if state.summary.authorizationExpiresAt <= Date() {
+            renewingAuthorization = true
+        } else {
+            change(.resume(runID, expectedRevision: state.summary.revision, roundLimit: roundLimit))
         }
     }
 
