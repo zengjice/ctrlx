@@ -1717,6 +1717,7 @@
             let windowSwipe = TerminalWindowSwipeGesture(viewport: scrollView, terminal: terminalView)
             windowSwipe.onSwitchWindow = onSwitchWindow
             context.coordinator.windowSwipe = windowSwipe
+            scrollView.addGestureRecognizer(TerminalSelectionNavigationGuard(terminal: terminalView))
             scrollView.cursorTop = { [weak terminalView, weak scrollView] in
                 guard let terminalView, let scrollView, let rect = terminalView.liveCursorRect else { return nil }
                 return terminalView.convert(rect, to: scrollView).minY

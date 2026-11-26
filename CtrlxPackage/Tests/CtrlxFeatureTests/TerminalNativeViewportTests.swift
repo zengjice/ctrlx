@@ -133,8 +133,11 @@ struct TerminalNativeViewportTests {
         let fixture = makeViewport(rows: 57)
         defer { fixture.close() }
         let root = try #require(fixture.window.rootViewController)
+        fixture.window.rootViewController = nil
         let navigation = UINavigationController(rootViewController: root)
         fixture.window.rootViewController = navigation
+        fixture.window.layoutIfNeeded()
+        try #require(fixture.viewport.window === fixture.window)
         let swipe = TerminalWindowSwipeGesture(viewport: fixture.viewport, terminal: fixture.terminal)
         swipe.onSwitchWindow = { _ in }
         let contentBack = try #require(navigation.interactiveContentPopGestureRecognizer)

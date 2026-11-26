@@ -987,6 +987,12 @@ combined with a partial-row viewport reaches the same tail; earlier pages keep n
 Offset and layout changes also refresh local scroll availability. A subsequent gesture
 at the live tail can then send remote wheel input again. Horizontal
 overflow remains owned by the outer viewport; selection does not enable Window switching.
+Selection drags also reserve the terminal viewport against native edge Back and iOS 26
+content Back. A viewport-local pan guard allows the selection handles and both scroll
+views to keep recognizing; it never changes the navigation controller's gestures or
+delegates. The guard captures selection at touch-down, so clearing it during output
+cannot turn that drag into navigation. The next unselected touch resumes normal Back
+and Window swiping. Back protection also works when there is no adjacent Window.
 Switching from local scrolling back to remote wheel input calls native tail scrolling once
 to clear both SwiftTerm history-freeze flags. Touch and momentum returns then follow newly
 appended output; remaining in history never forces a jump to the live screen.
