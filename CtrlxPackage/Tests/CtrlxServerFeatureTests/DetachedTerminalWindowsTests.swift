@@ -701,6 +701,45 @@ struct DetachedTerminalWindowsTests {
         #expect(DetachedTerminalWindows.mainSelection(target: "@2", windows: windows, rightSide: ["@1", "@2"]) == nil)
     }
 
+    @Test(arguments: [nil, "viewer-host"] as [String?])
+    func fileRequestFromRightSplitUsesOwnedSelectionBeforeAndAfterReconciliation(host: String?) throws {
+        let manager = DetachedTerminalWindows()
+        let other = try #require(DetachedTerminalTarget(hostID: host, windowID: "@1"))
+        let left = try #require(DetachedTerminalTarget(hostID: host, windowID: "@2"))
+        let right = try #require(DetachedTerminalTarget(hostID: host, windowID: "@3"))
+        manager.reserve(other)
+        manager.reserve(left)
+        let workspace = try #require(manager.workspace(containing: left))
+        #expect(manager.merge(right, into: workspace.id, session: { _ in "work" }))
+        let tabs = workspace.tabs.tabs(hostID: host, session: "work")
+        tabs.rightSide = [.window("@3")]
+        tabs.selectedRight = .window("@3")
+        let windows = [(stableID: "@1", id: "work:0"), (stableID: "@2", id: "work:1"), (stableID: "@3", id: "work:2")]
+        let owns = { manager.owner(hostID: host, windowID: $0) == workspace.id }
+        let selection = DetachedTerminalWindows.mainSelection(target: "@3", current: "@1", windows: windows, rightSide: tabs.rightSideWindowIds, owns: owns)
+        #expect(selection == "work:1")
+        func snapshot(_ selected: String?) -> BrowserOpenSelection {
+            .init(
+                localWindowID: host == nil ? selected : nil,
+                remoteSession: host.map { .init(hostId: $0, hostName: "Peer", sessionName: "work") },
+                remoteWindowID: host == nil ? nil : selected,
+                tabs: tabs,
+                fileBrowserActiveWindowIDs: []
+            )
+        }
+        let initial = snapshot(selection)
+        let repaired = WorkspaceTerminalSelection.leftWindowID(
+            current: windows.first { $0.id == selection }?.stableID, orderedIDs: windows.map(\.stableID),
+            activeID: "@1", rightSide: tabs.rightSideWindowIds, owns: owns
+        )
+        #expect(repaired == "@2")
+        #expect(initial == snapshot(windows.first { $0.stableID == repaired }?.id))
+        tabs.selectedFileTabId = UUID()
+        #expect(initial != snapshot(selection), "Real navigation must still invalidate an asynchronous open")
+        #expect(DetachedTerminalWindows.mainSelection(target: "@3", current: "@2", windows: windows, rightSide: ["@3"], owns: { $0 == "@3" }) == nil)
+        #expect(DetachedTerminalWindows.mainSelection(target: "@2", windows: windows, rightSide: [], owns: owns) == "work:1")
+    }
+
     @Test
     func dragOriginStaysInsideItsTabEvenWhenHostingVisibleRectIsLarger() {
         let bounds = CGRect(x: 0, y: 0, width: 109, height: 25)

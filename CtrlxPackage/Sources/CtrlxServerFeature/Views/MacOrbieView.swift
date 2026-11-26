@@ -102,41 +102,23 @@
                     }
                 }
                 Divider()
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 16) {
-                        if let legacyIssue = orbie.legacyIssue {
-                            Text(legacyIssue).foregroundStyle(.secondary)
-                        }
-                        HStack {
-                            if let older = orbie.historyPage.olderPageEndID {
-                                Button("Earlier Messages") { Task { await orbie.loadHistory(endingAt: older) } }
-                            }
-                            Spacer()
-                            if let newer = orbie.historyPage.newerPageEndID {
-                                Button("Newer Messages") { Task { await orbie.loadHistory(endingAt: newer) } }
-                                Button("Latest Messages") { Task { await orbie.loadHistory(endingAt: nil) } }
-                            }
-                        }.disabled(orbie.isBusy)
-                        ForEach(orbie.historyPage.messages) { message in
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(message.text).font(.headline)
-                                OrbieMessageActivity(entries: message.activity ?? [], isPending: message.isPending)
-                                if let answer = message.answer {
-                                    Text(answer).textSelection(.enabled)
-                                } else {
-                                    Text(message.issue ?? (message.status == .cancelled ? "Stopped waiting. Check the Orbie tab for any work still in progress." : "Waiting for a verified reply…"))
-                                        .foregroundStyle(.secondary).textSelection(.enabled)
-                                }
-                                if let attachments = message.attachments, !attachments.isEmpty {
-                                    Button("Show Saved Attachments") { NSWorkspace.shared.activateFileViewerSelecting(attachments.map { URL(fileURLWithPath: $0.path) }) }
-                                }
-                                if message.isPending {
-                                    Button("Stop Waiting") { Task { await orbie.endMessage(message) } }.disabled(orbie.isBusy)
-                                }
-                            }.frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
+                if let legacyIssue = orbie.legacyIssue {
+                    Text(legacyIssue).foregroundStyle(.secondary)
                 }
+                HStack {
+                    if let older = orbie.historyPage.olderPageEndID {
+                        Button("Earlier Messages") { Task { await orbie.loadHistory(endingAt: older) } }
+                    }
+                    Spacer()
+                    if let newer = orbie.historyPage.newerPageEndID {
+                        Button("Newer Messages") { Task { await orbie.loadHistory(endingAt: newer) } }
+                        Button("Latest Messages") { Task { await orbie.loadHistory(endingAt: nil) } }
+                    }
+                }.disabled(orbie.isBusy)
+                OrbieConversationView(messages: orbie.historyPage.messages, title: "Orbie", onStop: { message in
+                    Task { await orbie.endMessage(message) }
+                })
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 TextEditor(text: $orbie.draft)
                     .font(.body).frame(minHeight: 72, maxHeight: 120)
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))

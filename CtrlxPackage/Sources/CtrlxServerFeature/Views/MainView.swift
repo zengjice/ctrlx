@@ -570,7 +570,9 @@ public struct MainView: View {
                 await openTerminalFile(request)
             }
             .task(id: coordinator.detachedWindows.mainRequest?.id) {
-                guard detachedWorkspace == nil, let request = coordinator.detachedWindows.mainRequest else { return }
+                guard
+                    let request = coordinator.detachedWindows.mainRequest,
+                    ownsTerminal(hostID: request.target.hostID, windowID: request.target.windowID) else { return }
                 await handleDetachedWindowRequest(request)
                 if coordinator.detachedWindows.mainRequest?.id == request.id {
                     coordinator.detachedWindows.mainRequest = nil
@@ -4584,9 +4586,11 @@ public struct MainView: View {
             reconcileRemoteRightPaneSelection(hostId: host, sessionName: sessionName, sessionWindows: windows)
             let tabs = remoteSessionTabsStates[remoteTabsKey(hostId: host, sessionName: sessionName)]
             selectedRemoteWindowId = DetachedTerminalWindows.mainSelection(
-                target: window.stableId, windows: windows.map { ($0.stableId, $0.id) },
-                rightSide: tabs?.rightSideWindowIds ?? []
-            ) ?? window.id
+                target: window.stableId, current: windows.first { $0.id == selectedRemoteWindowId }?.stableId,
+                windows: windows.map { ($0.stableId, $0.id) },
+                rightSide: tabs?.rightSideWindowIds ?? [],
+                owns: { ownsTerminal(hostID: host, windowID: $0) }
+            )
         } else {
             guard let window = tmuxService.windows.first(where: { $0.stableId == target.windowID }) else {
                 attachError = "The source Window is no longer available."
@@ -4598,11 +4602,15 @@ public struct MainView: View {
             activePaneID = window.activePane?.paneId
             selectedRemoteSession = nil
             selectedRemoteWindowId = nil
+            selectedLocalSessionName = sessionName
+            detachedWorkspace?.sessionName = sessionName
             let selection = DetachedTerminalWindows.mainSelection(
-                target: window.stableId, windows: tmuxService.windows.filter { $0.sessionName == sessionName }.map { ($0.stableId, $0.id) },
-                rightSide: sessionFileTabsStates[sessionName]?.rightSideWindowIds ?? []
+                target: window.stableId, current: selectedWindow?.stableId,
+                windows: tmuxService.windows.filter { $0.sessionName == sessionName }.map { ($0.stableId, $0.id) },
+                rightSide: sessionFileTabsStates[sessionName]?.rightSideWindowIds ?? [],
+                owns: { ownsTerminal(hostID: nil, windowID: $0) }
             )
-            selectedWindow = tmuxService.windows.first { $0.id == selection } ?? window
+            selectedWindow = tmuxService.windows.first { $0.id == selection }
         }
         switch request.action {
         case let .tab(tab):
@@ -4665,9 +4673,14 @@ public struct MainView: View {
             )
         case let .fork(paneID, destination):
             pendingAgentFork = agentForkConfiguration(panes: panes, hostID: target.hostID, destination: destination, focusedPaneID: paneID)
-        case let .fileLink(link):
-            guard link.hostID == target.hostID, panes.contains(where: { $0.paneId == link.paneID }) else { return }
-            await openTerminalFile(link, detachedRequestID: request.id)
+        case let .fileLink(link, context, workspacePane):
+            guard
+                link.hostID == target.hostID,
+                panes.contains(where: { $0.paneId == link.paneID }) else {
+                attachError = "The reply’s source workspace changed. Open the file link again."
+                return
+            }
+            await openTerminalFile(link, detachedRequestID: request.id, requiredContext: context, requiredWorkspacePane: workspacePane)
         case let .url(raw, paneID):
             guard let url = URL(string: raw), let pane = panes.first(where: { $0.paneId == paneID }) else { return }
             if let host = target.hostID {
@@ -5269,7 +5282,10 @@ public struct MainView: View {
     }
 
     /// Bind resolution to the clicked pane, not whichever pane becomes focused later.
-    private func openTerminalFile(_ request: TerminalFileLinkRequest, detachedRequestID: UUID? = nil) async {
+    private func openTerminalFile(
+        _ request: TerminalFileLinkRequest, detachedRequestID: UUID? = nil,
+        requiredContext: RepositoryFileContext? = nil, requiredWorkspacePane: WorkspacePaneIdentity? = nil
+    ) async {
         let source: FileBrowserSource
         let sessionName: String
         let windowID: String
@@ -5307,11 +5323,16 @@ public struct MainView: View {
             fileContext = RepositoryFileContext(pane: pane)
             inputBinding = nil
             expectedWorkspacePane = pane.workspaceIdentity
-            source = .local(paneID: request.paneID, tmux: tmuxService, windows: windowManager)
+            source = .local(paneID: request.paneID, tmux: tmuxService, windows: windowManager, expectedWorkspacePane: requiredWorkspacePane)
         }
         let target = ManualBrowserTarget(hostID: request.hostID, sessionName: sessionName)
         let initialSelection = browserOpenSelection(for: target)
         do {
+            guard
+                requiredContext.map({ $0 == fileContext }) ?? true,
+                requiredWorkspacePane.map({ $0.isSamePane(as: expectedWorkspacePane) }) ?? true else {
+                throw FileBrowserError.message("The reply’s source workspace changed. Open the file link again.")
+            }
             let destination = try await TerminalFileDestination.resolve(path: request.path, context: fileContext, source: source)
             let shouldPreview = request.prefersPreview && TerminalArtifactPreview.supports(path: destination.file)
             let descriptor = shouldPreview ? nil : try await requestHostFileTab(hostID: request.hostID, sessionName: sessionName, paneID: request.paneID, new: request.opensNewTab, inputBinding: inputBinding, expectedWorkspacePane: expectedWorkspacePane)

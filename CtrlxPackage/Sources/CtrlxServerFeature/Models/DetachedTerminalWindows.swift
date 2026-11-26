@@ -24,7 +24,7 @@ final class DetachedTerminalWindows {
         case tab(TabDragPayload)
         case files(paneID: String?)
         case fork(paneID: String?, destination: AgentForkDestination)
-        case fileLink(TerminalFileLinkRequest)
+        case fileLink(TerminalFileLinkRequest, context: RepositoryFileContext, workspacePane: WorkspacePaneIdentity)
         case url(String, paneID: String)
     }
 
@@ -639,10 +639,16 @@ final class DetachedTerminalWindows {
     }
 
     /// A returning right-side tab must not also become the left renderer.
-    static func mainSelection(target: String, windows: [(stableID: String, id: String)], rightSide: Set<String>) -> String? {
-        if !rightSide.contains(target) {
-            return windows.first { $0.stableID == target }?.id
-        }
-        return windows.first { !rightSide.contains($0.stableID) }?.id
+    static func mainSelection(
+        target: String, current: String? = nil,
+        windows: [(stableID: String, id: String)], rightSide: Set<String>,
+        owns: (String) -> Bool = { _ in true }
+    ) -> String? {
+        guard windows.contains(where: { $0.stableID == target }), owns(target) else { return nil }
+        let stableID = WorkspaceTerminalSelection.leftWindowID(
+            current: rightSide.contains(target) ? current : target,
+            orderedIDs: windows.map(\.stableID), activeID: nil, rightSide: rightSide, owns: owns
+        )
+        return windows.first { $0.stableID == stableID }?.id
     }
 }

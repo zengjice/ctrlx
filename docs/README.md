@@ -51,6 +51,9 @@ including follow-up review fixes. No production deployment has occurred.
 The [Orbie global Agent design](global-agent-design.md) prioritizes finding and
 continuing work, selection-based delegation and a Mac global entry point. Orbie
 and Orbiters reuse ordinary tmux Agent lifecycles, New Agent and native Fork.
+The [mixed-reply rendering design](v3.1.0/orbie/RICH_CONTENT_RENDERING.md) records
+the confirmed Mac chat scope, open-source component choices, inline HTML/JavaScript
+isolation and current implementation evidence.
 Vocabulary is a separate small experiment; automatic Dreaming and autonomous
 delegation follow evidence from real use.
 Stage 1 implements explicit local-Host creation, pinned delivery and verified replies;

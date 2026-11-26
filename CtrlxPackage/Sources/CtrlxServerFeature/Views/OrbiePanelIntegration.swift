@@ -19,6 +19,21 @@ private struct OrbiePanelSceneIntegration: ViewModifier {
 }
 
 extension AppCoordinator {
+    func queueOrbieFileTab(_ link: TerminalFileLinkRequest, context: RepositoryFileContext, pane: PaneState) throws -> UUID? {
+        guard
+            link.hostID == nil, link.paneID == pane.paneId,
+            RepositoryFileContext(pane: pane) == context,
+            let identity = pane.workspaceIdentity,
+            let current = windowManager.paneStates[pane.paneId],
+            identity.isSamePane(as: current.workspaceIdentity),
+            current.stableWindowId == pane.stableWindowId, RepositoryFileContext(pane: current) == context,
+            let target = DetachedTerminalTarget(hostID: nil, windowID: pane.stableWindowId) else {
+            throw AgentWorkflowError("The reply’s source workspace changed. Open the file link again.")
+        }
+        detachedWindows.request(.fileLink(link, context: context, workspacePane: identity), from: target)
+        return detachedWindows.owner(hostID: nil, windowID: pane.stableWindowId)
+    }
+
     func openOrbieTerminal(openWindow: OpenWindowAction) async throws {
         windowManager.updatePaneStates(from: await tmuxService.refreshPanes())
         guard

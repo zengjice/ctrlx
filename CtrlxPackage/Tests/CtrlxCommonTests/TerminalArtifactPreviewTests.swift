@@ -66,6 +66,18 @@ struct TerminalArtifactPreviewTests {
         #expect(try fixture.preview.documentLink("../images/图%2520片.png").path == "images/图%20片.png")
     }
 
+    @Test
+    func chatAndDocumentImagesShareWorkspacePathNormalization() throws {
+        #expect(try TerminalArtifactPreview.workspacePath(for: "./images/plot.png") == "images/plot.png")
+        #expect(try TerminalArtifactPreview.workspacePath(for: "images/图%20片.png") == "images/图 片.png")
+        #expect(try TerminalArtifactPreview.workspacePath(for: "images/a%2520b.png") == "images/a%20b.png")
+        #expect(try TerminalArtifactPreview.workspacePath(for: "./images/../plot.png") == "plot.png")
+        #expect(try TerminalArtifactPreview.workspacePath(for: "../plot.png", documentPath: "docs/guide.md") == "plot.png")
+        for reference in ["../secret.png", "%2e%2e/secret.png", "https://example.com/a.png", "/tmp/a.png", "//host/a.png", "data:image/png;base64,AA"] {
+            #expect(throws: FileBrowserError.self) { try TerminalArtifactPreview.workspacePath(for: reference) }
+        }
+    }
+
     @Test(arguments: ["../../secret.png", "%2e%2e/%2e%2e/secret.png", "/etc/file.png", "//other/file.png", "https://other/file.png", "file:///tmp/a.png", "data:image/png;base64,AA", "..\\secret.png"])
     func documentLinksCannotLeaveRepository(reference: String) {
         let fixture = Fixture(host: "A", text: "# Test", filename: "docs/guide.md")

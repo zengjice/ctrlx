@@ -38,7 +38,7 @@ public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
         if let failure {
             return .failed(failure)
         }
-        guard let completedAnswer, !completedAnswer.isEmpty else { return nil }
+        guard let completedAnswer, !completedAnswer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return .succeeded(completedAnswer)
     }
 
@@ -140,7 +140,10 @@ public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
 
     public mutating func updateCandidate(_ candidate: String) -> AgentWorkflowTranscriptOutcome? {
         self.candidate = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !self.candidate.isEmpty && completedAnswer == self.candidate ? .succeeded(self.candidate) : nil
+        guard
+            let completedAnswer, !self.candidate.isEmpty,
+            completedAnswer.trimmingCharacters(in: .whitespacesAndNewlines) == self.candidate else { return nil }
+        return .succeeded(completedAnswer)
     }
 
     public mutating func consume(_ line: Data) throws -> AgentWorkflowTranscriptOutcome? {
@@ -224,9 +227,9 @@ public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
                 record["preventedContinuation"] as? Bool == false,
                 record["stopReason"] as? String == "" else { return nil }
             // Native Stop trims the text while the transcript retains outer whitespace.
-            let final = answer.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            let final = answer.joined(separator: "\n")
             completedAnswer = final
-            return !candidate.isEmpty && final == candidate ? .succeeded(final) : nil
+            return !candidate.isEmpty && final.trimmingCharacters(in: .whitespacesAndNewlines) == candidate ? .succeeded(final) : nil
         }
         return nil
     }

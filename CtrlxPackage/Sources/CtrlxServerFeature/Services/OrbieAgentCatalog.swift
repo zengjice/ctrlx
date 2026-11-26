@@ -89,6 +89,6 @@ enum OrbieAgentCatalog {
         for id in workflowCandidates(in: text) {
             result = result.replacingOccurrences(of: "[CtrlX Workflow: \(id.uuidString)]", with: "", options: .caseInsensitive)
         }
-        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+        return result
     }
 }

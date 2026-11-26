@@ -19,7 +19,7 @@ public struct MacOrbiePanelView: View {
     @State private var orbitersSheet: OrbitersSheet?
     @State private var sending = false
     @State private var retryingStartup = false
-    @State private var conversationPosition = ScrollPosition(edge: .bottom)
+    @State private var mountsConversation = true
     @State private var conversationHeight: CGFloat = 180
     @State private var composerHeight: CGFloat = 100
 
@@ -145,31 +145,19 @@ public struct MacOrbiePanelView: View {
             header
             Divider()
             if showsConversation {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
-                        ForEach(messages) { messageRow($0) }
-                        if status != .ready, status != .working || pending?.activity?.isEmpty != false {
-                            statusCard
-                        }
-                        if let issue = notice ?? serviceIssue {
-                            DisclosureGroup("Details") { Text(issue).textSelection(.enabled).font(.caption) }
-                                .foregroundStyle(.secondary)
-                        }
-                    }.padding(22).frame(maxWidth: .infinity, alignment: .leading)
-                        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { conversationHeight = $0 }
+                if mountsConversation, !messages.isEmpty {
+                    OrbieConversationView(messages: messages, title: title, orbiterID: selectedID, onStop: { stopMessage = $0 }, onHeight: { conversationHeight = $0 }, onSelectOrbiter: { selectAgent($0) })
+                        .id(selectedID ?? "orbie")
+                        .accessibilityIdentifier("orbie-panel-conversation")
+                        .frame(maxHeight: .infinity)
                 }
-                .scrollPosition($conversationPosition)
-                .defaultScrollAnchor(.bottom, for: .initialOffset)
-                .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { old, new in
-                    // Layout growth must use the previous viewport; the new bottom
-                    // may already be outside it. User scrolling alone never follows.
-                    guard old.contentSize != new.contentSize || old.containerSize != new.containerSize else { return }
-                    if old.visibleRect.maxY >= old.contentSize.height + old.contentInsets.bottom - 24 {
-                        conversationPosition.scrollTo(edge: .bottom)
-                    }
+                if status != .ready, status != .working || pending?.activity?.isEmpty != false {
+                    statusCard.padding(.horizontal, 22).padding(.vertical, 10)
                 }
-                .accessibilityIdentifier("orbie-panel-conversation")
-                .frame(maxHeight: .infinity)
+                if let issue = notice ?? serviceIssue {
+                    DisclosureGroup("Details") { Text(issue).textSelection(.enabled).font(.caption) }
+                        .foregroundStyle(.secondary).padding(.horizontal, 22)
+                }
                 Divider()
             }
             composer.onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { composerHeight = $0 }
@@ -180,9 +168,8 @@ public struct MacOrbiePanelView: View {
         .background(OrbiePanelWindowAttachment(controller: coordinator.orbiePanel, preferredHeight: max(240, (showsConversation ? min(conversationHeight, 340) : 0) + composerHeight + 94)))
         .onExitCommand { dismissOrCloseMenu() }
         .onChange(of: coordinator.orbiePanel.isVisible) { _, visible in
-            if visible {
-                conversationPosition.scrollTo(edge: .bottom)
-            } else {
+            mountsConversation = visible
+            if !visible {
                 showsSwitcher = false
                 showsActions = false
                 showsModelPicker = false
@@ -354,39 +341,6 @@ public struct MacOrbiePanelView: View {
             .background(status.needsAttention ? Color.orange.opacity(0.07) : Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
     }
 
-    private func messageRow(_ message: AgentMessage) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Spacer(minLength: 32)
-                Text(OrbieAgentCatalog.bounded(message.text, bytes: 4_000)).textSelection(.enabled)
-                    .padding(12).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
-            }
-            OrbieMessageActivity(entries: message.activity ?? [], isPending: message.isPending)
-            if let answer = message.answer {
-                Label(title, symbol: .sparkles).font(.caption).foregroundStyle(.secondary)
-                Text(OrbieAgentCatalog.displayAnswer(OrbieAgentCatalog.bounded(answer, bytes: 8_000))).textSelection(.enabled)
-                HStack {
-                    Button { NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(answer, forType: .string)
-                    } label: { Label("Copy Reply", symbol: .docOnDoc) }
-                    if let attachments = message.attachments, !attachments.isEmpty {
-                        Button("Saved Attachments…") { NSWorkspace.shared.activateFileViewerSelecting(attachments.map { URL(fileURLWithPath: $0.path) }) }
-                    }
-                }.font(.caption).buttonStyle(.borderless).foregroundStyle(.secondary)
-                ForEach(OrbieAgentCatalog.candidates(in: answer), id: \.self) { id in
-                    if let agent = coordinator.orbiters?.agents.first(where: { $0.id == id }) {
-                        Button(agent.title) { selectAgent(id) }
-                    }
-                }
-                ForEach(OrbieAgentCatalog.workflowCandidates(in: answer), id: \.self) { id in
-                    Button("Open Suggested Workflow") { perform { try await coordinator.openOrbieWorkflow(id, openWindow: openWindow) } }
-                }
-            } else if !message.isPending {
-                Text(message.issue ?? "Stopped waiting. Check the terminal tab for work still in progress.").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-            }
-        }.frame(maxWidth: .infinity, alignment: .leading)
-    }
-
     private var switcher: some View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("Find a conversation or project", text: $query).textFieldStyle(.roundedBorder).accessibilityIdentifier("orbie-panel-search")
@@ -454,7 +408,6 @@ public struct MacOrbiePanelView: View {
 
     private func selectAgent(_ id: String?) {
         selectedID = id
-        conversationPosition.scrollTo(edge: .bottom)
         coordinator.orbiters?.historyAgentID = id
         query = ""
         notice = nil

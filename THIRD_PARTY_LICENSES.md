@@ -56,6 +56,21 @@ and `dompurify-upstream.json` record the exact npm archive integrity and JavaScr
 SHA-256; upstream dependency notices remain in the bundles. The renderer is
 loaded locally, with no runtime CDN dependency.
 
+## Orbie conversation rendering (macOS)
+
+| Project | License |
+|---|---|
+| [Generative Frame 0.0.12](https://github.com/assistant-ui/assistant-ui/tree/main/packages/generative-frame) | MIT |
+| [Safe Content Frame 0.0.34](https://github.com/assistant-ui/assistant-ui/tree/main/packages/safe-content-frame) | MIT |
+| [highlight.js 11.11.1](https://github.com/highlightjs/highlight.js) | BSD-3-Clause |
+| [github-markdown-css 5.8.1](https://github.com/sindresorhus/github-markdown-css) | MIT |
+
+The browser bundle, stylesheet assets and full licenses are included in
+`CtrlxCommon/Resources/OrbieChat`. `upstream.json` records archive integrity and
+the bundled JavaScript SHA-256. Rebuild with `bash scripts/build-orbie-chat-assets.sh`.
+Markdown parsing, sanitization and diagrams reuse the artifact-preview libraries above.
+The runtime uses local opaque-origin frames, without the external hosted shim or CDNs.
+
 ## Agent Browser (macOS development runtime)
 
 | Project | License |

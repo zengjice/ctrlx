@@ -6,6 +6,7 @@ import CtrlxPluginProtocol
 import Dependencies
 import SwiftUI
 import Testing
+import WebKit
 @testable import CtrlxServerFeature
 
 @MainActor
@@ -147,6 +148,52 @@ struct OrbiePanelRedesignTests {
         }
     }
 
+    @Test
+    func suggestedOrbiterSelectsConversationAndDraftInsidePanel() async throws {
+        try await withDependencies {
+            $0[PreferencesService.self] = .inMemory()
+            $0[SecretsService.self] = .inMemory()
+            $0[SimulatorSystemClient.self] = SimulatorSystemClient()
+        } operation: {
+            _ = NSApplication.shared
+            let f = try await AgentInteractionTestSupport()
+            let orbie = await f.orbie()
+            try await orbie.create(pluginID: "codex", providerID: nil)
+            let orbiters = await f.orbiters()
+            orbiters.draft = .init(title: "Suggested expert", goal: "Review", directory: f.root.path)
+            let id = try await orbiters.create(pluginID: "codex", providerID: nil)
+            try await orbiters.send(id)
+            try await f.complete(#require(orbiters.messages.first), answer: "Expert conversation")
+            await orbiters.refresh(inspect: false)
+            orbiters.drafts[id] = "Expert draft"
+            orbie.draft = "Recommend an expert"
+            await orbie.send()
+            try await f.complete(#require(orbie.messages.last), answer: "Use this expert. [CtrlX Agent: \(id)]")
+            await orbie.refresh(inspect: false)
+            orbie.draft = "Orbie draft"
+            let coordinator = AppCoordinator()
+            coordinator.orbie = orbie
+            coordinator.orbiters = orbiters
+            let window = NSWindow(contentRect: .init(x: -10_000, y: -10_000, width: 680, height: 500), styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let hosting = NSHostingView(rootView: MacOrbiePanelView().environment(coordinator))
+            window.contentView = hosting
+            window.orderBack(nil)
+            defer { window.close() }
+            let web = try await waitForConversation("[...document.querySelectorAll('.actions button')].some(b=>b.textContent==='Suggested expert')", in: hosting)
+            _ = try await web.evaluateJavaScript("[...document.querySelectorAll('.actions button')].find(b=>b.textContent==='Suggested expert').click()")
+            _ = try await waitForConversation("document.body.textContent.includes('Expert conversation')", in: hosting)
+            #expect(orbiters.historyAgentID == id)
+            #expect(coordinator.detachedWindows.sourcePaneRequest == nil)
+            #expect(textView(in: hosting)?.string == "Expert draft")
+            #expect(orbie.draft == "Orbie draft")
+            window.contentView = nil
+            coordinator.orbie = nil
+            coordinator.orbiters = nil
+            try await f.cleanup()
+        }
+    }
+
     @Test(arguments: [false, true])
     func nativeOrbiterRefreshKeepsConversationUntilItCompletes(scanFails: Bool) async throws {
         try await withDependencies {
@@ -182,6 +229,10 @@ struct OrbiePanelRedesignTests {
             try await Task.sleep(for: .milliseconds(200))
             try press(#require(NSApp.windows.compactMap { find("orbie-panel-agent-\(id)", in: $0) }.first))
             try await Task.sleep(for: .milliseconds(200))
+            _ = try await waitForConversation("document.getElementById('messages')?.scrollHeight > 500", in: hosting)
+            for _ in 0..<100 where window.frame.height <= 500 {
+                try await Task.sleep(for: .milliseconds(20))
+            }
             let height = window.frame.height
             try #require(height > 500)
             let gate = ScanGate()
@@ -291,7 +342,7 @@ struct OrbiePanelRedesignTests {
                 let frame = unsafeBitCast(implementation, to: (@convention(c) (AnyObject, Selector) -> CGRect).self)(control, selector)
                 #expect(frame.width > 0 && frame.height > 0 && window.frame.contains(frame), Comment(rawValue: "\(identifier): \(frame), window: \(window.frame)"))
             }
-            #expect(find("Read panel.swift", in: hosting) != nil)
+            _ = try await waitForConversation("document.body.innerText.includes('Read panel.swift')", in: hosting)
             #expect(find("orbie-panel-search", in: hosting) == nil)
             if let evidence = ProcessInfo.processInfo.environment["CTRLX_ORBIE_UI_EVIDENCE"], let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) {
                 hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
@@ -355,12 +406,12 @@ struct OrbiePanelRedesignTests {
             window.orderBack(nil)
             defer { window.close() }
             try await Task.sleep(for: .milliseconds(250))
-            try #require(find("Reply 1", in: hosting) != nil)
-            let activity = try #require(find("Agent activity", in: hosting))
-            #expect(find("Read first.md", in: hosting) == nil)
-            try press(activity)
-            try await Task.sleep(for: .milliseconds(100))
-            #expect(find("Read first.md", in: hosting) != nil)
+            let web = try await waitForConversation("document.querySelectorAll('article').length === 4", in: hosting)
+            _ = try await web.evaluateJavaScript("window.scrollTo(0,0)")
+            _ = try await waitForConversation("document.body.innerText.includes('Reply 1')", in: hosting)
+            #expect(try await web.evaluateJavaScript("document.body.innerText.includes('Read first.md')") as? Bool == false)
+            _ = try await web.evaluateJavaScript("document.querySelector('.activity details summary').click()")
+            _ = try await waitForConversation("document.body.innerText.includes('Read first.md')", in: hosting)
             window.contentView = nil
             try await f.cleanup()
         }
@@ -462,37 +513,37 @@ struct OrbiePanelRedesignTests {
             defer { window.close() }
             try await Task.sleep(for: .milliseconds(250))
             window.orderBack(nil)
-            let scroll = try #require(conversationScroll(in: hosting))
-            try #require((scroll.documentView?.bounds.height ?? 0) > scroll.contentSize.height + 200)
-            #expect(atBottom(scroll), "Opening a conversation must reveal its latest exchange")
+            var web = try await waitForConversation("document.getElementById('messages')?.scrollHeight > innerHeight + 200", in: hosting)
+            #expect(try await atBottom(web), "Opening a conversation must reveal its latest exchange")
 
             service.draft = "New question"
             await service.send()
-            try await Task.sleep(for: .milliseconds(150))
-            #expect(atBottom(scroll), "The new message and pending status must stay visible")
+            _ = try await waitForConversation("document.body.innerText.includes('New question')", in: hosting)
+            #expect(try await atBottom(web), "The new message and pending status must stay visible")
             let latest = try #require(service.messages.last)
             try await f.complete(latest, answer: String(repeating: "Long new reply\n", count: 45))
             await service.refresh(inspect: false)
-            try await Task.sleep(for: .milliseconds(150))
-            #expect(atBottom(scroll), "A reader at the bottom follows reply growth")
+            _ = try await waitForConversation("document.body.innerText.includes('Long new reply')", in: hosting)
+            #expect(try await atBottom(web), "A reader at the bottom follows reply growth")
 
-            scroll.contentView.scroll(to: .init(x: 0, y: 100))
-            scroll.reflectScrolledClipView(scroll.contentView)
+            _ = try await web.evaluateJavaScript("window.scrollTo(0,100)")
             try await Task.sleep(for: .milliseconds(100))
-            try #require(!atBottom(scroll))
-            let earlierOffset = scroll.documentVisibleRect.minY
+            try #require(try await !atBottom(web))
+            let earlierOffset = try #require(try await web.evaluateJavaScript("window.scrollY") as? Double)
             try await f.interaction.store.update(latest.id) { $0.answer = String(repeating: "Additional reply detail\n", count: 70) }
             await service.refresh(inspect: false)
-            try await Task.sleep(for: .milliseconds(150))
-            #expect(!atBottom(scroll))
-            #expect(abs(scroll.documentVisibleRect.minY - earlierOffset) < 2, "New replies must not pull the reader away from earlier text")
+            _ = try await waitForConversation("document.querySelector('article:last-child .markdown-body')?.textContent.includes('Additional reply detail') || document.querySelector('article:last-child .markdown-body')?.textContent.includes('Preparing reply')", in: hosting)
+            #expect(try await !atBottom(web))
+            let offset = try #require(try await web.evaluateJavaScript("window.scrollY") as? Double)
+            #expect(abs(offset - earlierOffset) < 2, "New replies must not pull the reader away from earlier text")
 
             for id in [orbiterID, "orbie"] {
                 try press(#require(find("orbie-panel-switcher", in: hosting)))
                 try await Task.sleep(for: .milliseconds(150))
                 try press(#require(NSApp.windows.compactMap { find("orbie-panel-agent-\(id)", in: $0) }.first))
-                try await Task.sleep(for: .milliseconds(200))
-                #expect(try atBottom(#require(conversationScroll(in: hosting))), "Switching conversations reveals the selected Agent's latest message")
+                let expectedTitle = id == "orbie" ? "Orbie" : "Expert"
+                web = try await waitForConversation("document.querySelector('.author')?.textContent.includes('\(expectedTitle)') && document.getElementById('messages')?.scrollHeight > innerHeight", in: hosting)
+                #expect(try await atBottom(web), "Switching conversations reveals the selected Agent's latest message")
             }
             window.contentView = nil
             coordinator.orbie = nil
@@ -501,16 +552,27 @@ struct OrbiePanelRedesignTests {
         }
     }
 
-    private func conversationScroll(in view: NSView) -> NSScrollView? {
-        if let scroll = view as? NSScrollView, !(scroll is OrbiePanelComposer.ComposerScrollView) {
-            return scroll
+    private func conversationWebView(in view: NSView) -> WKWebView? {
+        if let web = view as? WKWebView {
+            return web
         }
-        return view.subviews.compactMap { conversationScroll(in: $0) }.first
+        return view.subviews.compactMap { conversationWebView(in: $0) }.first
     }
 
-    private func atBottom(_ scroll: NSScrollView) -> Bool {
-        let bottom = scroll.documentView?.bounds.maxY ?? 0
-        return scroll.documentVisibleRect.maxY >= bottom - 2
+    private func waitForConversation(_ condition: String, in view: NSView) async throws -> WKWebView {
+        let deadline = ContinuousClock.now + .seconds(10)
+        while ContinuousClock.now < deadline {
+            if let web = conversationWebView(in: view), (try? await web.evaluateJavaScript(condition)) as? Bool == true {
+                try await Task.sleep(for: .milliseconds(80))
+                return web
+            }
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        throw NSError(domain: "OrbieConversationTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "Conversation did not satisfy: \(condition)"])
+    }
+
+    private func atBottom(_ web: WKWebView) async throws -> Bool {
+        try await web.evaluateJavaScript("window.scrollY + innerHeight >= document.documentElement.scrollHeight - 28") as? Bool == true
     }
 
     @Test(arguments: ["identity", "bridges", "messages"])
