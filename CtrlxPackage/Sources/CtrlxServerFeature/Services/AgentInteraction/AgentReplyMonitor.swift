@@ -58,6 +58,12 @@ struct AgentActivitySnapshot: Sendable {
 }
 
 actor AgentReplyMonitor {
+    struct UnconfirmedSubmission: LocalizedError {
+        var errorDescription: String? {
+            "The native transcript could not confirm this workflow submission. Nothing was handed downstream."
+        }
+    }
+
     private struct Watch {
         var context: AgentReplyContext
         var revision = 0
@@ -118,6 +124,7 @@ actor AgentReplyMonitor {
     private let verificationTimeout: Duration
     private let synchronizeRecovery: (@Sendable (UUID) async throws -> Void)?
     private let synchronizeCompletion: @Sendable () async throws -> Void
+    private let prepareTranscript: (@Sendable (AgentReplyContext, any AgentWorkflowProviding, AgentWorkflowTranscriptFile) async throws -> Void)?
     private let verifyFinalTranscript: Bool
     private let matchesAnswer: @Sendable (PluginWorkflowEvent, String) -> Bool
     private let activityChanged: (@Sendable (AgentReplyContext, AgentActivitySnapshot) async throws -> AgentMessage?)?
@@ -134,6 +141,7 @@ actor AgentReplyMonitor {
         synchronizeRecovery: (@Sendable (UUID) async throws -> Void)? = nil,
         synchronizeCompletion: @escaping @Sendable () async throws -> Void = { },
         verifyFinalTranscript: Bool = false,
+        prepareTranscript: (@Sendable (AgentReplyContext, any AgentWorkflowProviding, AgentWorkflowTranscriptFile) async throws -> Void)? = nil,
         matchesAnswer: @escaping @Sendable (PluginWorkflowEvent, String) -> Bool = { _, _ in true },
         activityChanged: (@Sendable (AgentReplyContext, AgentActivitySnapshot) async throws -> AgentMessage?)? = nil,
         onFailure: @escaping @Sendable (String) -> Void
@@ -147,6 +155,7 @@ actor AgentReplyMonitor {
         self.synchronizeRecovery = synchronizeRecovery
         self.synchronizeCompletion = synchronizeCompletion
         self.verifyFinalTranscript = verifyFinalTranscript
+        self.prepareTranscript = prepareTranscript
         self.matchesAnswer = matchesAnswer
         self.activityChanged = activityChanged
         self.onFailure = onFailure
@@ -215,7 +224,7 @@ actor AgentReplyMonitor {
         let current: AgentWorkflowTranscriptFile?
         do {
             // Reopen to verify the current contents, including same-inode rewrites.
-            current = try openTranscript(readerContext, provider: provider)
+            current = try await openTranscript(readerContext, provider: provider)
         } catch let error as CocoaError where error.code == .fileNoSuchFile {
             if readers.isEmpty, recovery.drains.isEmpty {
                 throw error
@@ -297,7 +306,9 @@ actor AgentReplyMonitor {
             while transcript == nil {
                 try Task.checkCancellation()
                 do {
-                    transcript = try openTranscript(initial, provider: provider)
+                    transcript = try await openTranscript(initial, provider: provider)
+                } catch is UnconfirmedSubmission where clock.now < openDeadline {
+                    try await Task.sleep(for: .milliseconds(200))
                 } catch let error as CocoaError where error.code == .fileNoSuchFile && clock.now < openDeadline {
                     // Claude creates its first transcript after UserPromptSubmit.
                     try await Task.sleep(for: .milliseconds(200))
@@ -430,7 +441,7 @@ actor AgentReplyMonitor {
                             let final = if await file.hasCurrentReadRevision(at: path) {
                                 file
                             } else {
-                                try openTranscript(context, provider: provider)
+                                try await openTranscript(context, provider: provider)
                             }
                             if final !== file {
                                 await final.updateCandidate(submissionOnly ? "" : context.candidate.text)
@@ -488,7 +499,7 @@ actor AgentReplyMonitor {
                     if poll.reachedEnd {
                         if verifyFinalTranscript, !file.stillAtPath(context.candidate.transcriptPath) {
                             do {
-                                let replacement = try openTranscript(context, provider: provider)
+                                let replacement = try await openTranscript(context, provider: provider)
                                 file = replacement
                                 watches[id]?.transcript = replacement
                                 await replacement.updateCandidate(submissionOnly ? "" : context.candidate.text)
@@ -501,6 +512,16 @@ actor AgentReplyMonitor {
                     } else {
                         await Task.yield()
                     }
+                } catch is UnconfirmedSubmission {
+                    guard isCurrent(id, token: token, revision: watch.revision) else { continue }
+                    if deadline == nil {
+                        deadline = clock.now.advanced(by: verificationTimeout)
+                    }
+                    if let deadline, clock.now >= deadline {
+                        throw UnconfirmedSubmission()
+                    }
+                    await file.updateCandidate(submissionOnly ? "" : context.candidate.text)
+                    try await Task.sleep(for: .milliseconds(200))
                 } catch let error as AgentWorkflowInspectionUnavailable {
                     guard isCurrent(id, token: token, revision: watch.revision) else { continue }
                     if let inspectionDeadline, clock.now >= inspectionDeadline {
@@ -529,7 +550,7 @@ actor AgentReplyMonitor {
         }
     }
 
-    private func openTranscript(_ context: AgentReplyContext, provider: any AgentWorkflowProviding) throws -> AgentWorkflowTranscriptFile {
+    private func openTranscript(_ context: AgentReplyContext, provider: any AgentWorkflowProviding) async throws -> AgentWorkflowTranscriptFile {
         var parser = provider.workflowTranscript(
             conversationID: context.instance.conversationID,
             nativeTurnID: context.candidate.nativeTurnID,
@@ -539,7 +560,11 @@ actor AgentReplyMonitor {
         if activityChanged != nil {
             parser.captureActivity(aligningWith: context.savedActivity)
         }
-        return try AgentWorkflowTranscriptFile(path: context.candidate.transcriptPath, parser: parser)
+        let file = try AgentWorkflowTranscriptFile(path: context.candidate.transcriptPath, parser: parser)
+        if let prepareTranscript, !parser.startMarkers.isEmpty {
+            try await prepareTranscript(context, provider, file)
+        }
+        return file
     }
 
     private func isCurrent(_ id: UUID, token: UUID, revision: Int) -> Bool {

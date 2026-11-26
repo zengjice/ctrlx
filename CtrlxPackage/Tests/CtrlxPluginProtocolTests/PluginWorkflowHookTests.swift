@@ -48,6 +48,20 @@ struct PluginWorkflowHookTests {
         }
     }
 
+    @Test(arguments: ["", "[Image #1]\n\n", "[Image #3] [Image #5]\n\n"])
+    func claudeCollapsedPastesKeepExactWorkflowTextAndImageNumbers(images: String) throws {
+        let body = "Review the patch.\n[CtrlX workflow invocation: fixture]"
+        let wrapped = images + "<pasted_content id=\"8e79\">\n" + body + "\n</pasted_content id=\"8e79\">\n"
+        let expected = images.trimmingCharacters(in: .whitespacesAndNewlines) + body
+        let event = try #require(PluginWorkflowHook.event(payload: payload(["prompt_id": "native", "prompt": wrapped]), nativeTurnKey: "prompt_id"))
+        #expect(event.text == expected)
+        #expect(PluginWorkflowHook.submittedText(wrapped, nativeTurnKey: "turn_id") == wrapped)
+        let mismatched = wrapped.replacingOccurrences(of: "</pasted_content id=\"8e79\">", with: "</pasted_content id=\"wrong\">")
+        #expect(PluginWorkflowHook.submittedText(mismatched, nativeTurnKey: "prompt_id") == mismatched)
+        let ordinary = wrapped.replacingOccurrences(of: "[CtrlX workflow invocation: fixture]", with: "Quoted paste")
+        #expect(PluginWorkflowHook.submittedText(ordinary, nativeTurnKey: "prompt_id") == ordinary)
+    }
+
     @Test
     func stopRemainsCandidateWithPendingWork() throws {
         let event = try #require(PluginWorkflowHook.event(payload: payload([

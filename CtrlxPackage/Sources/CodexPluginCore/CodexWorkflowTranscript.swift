@@ -79,8 +79,42 @@ public struct CodexWorkflowTranscript: AgentWorkflowTranscriptParser {
             record["type"] as? String == "response_item",
             let payload = record["payload"] as? [String: Any], payload["type"] as? String == "message",
             payload["role"] as? String == "user", let content = payload["content"] as? [[String: Any]] else { return nil }
-        let text = content.compactMap { $0["type"] as? String == "input_text" ? $0["text"] as? String : nil }
-        return text.isEmpty ? nil : text.joined(separator: "\n")
+        var text: [String] = []
+        var imageNumbers: [String] = []
+        var imageCount = 0
+        var index = 0
+        while index < content.count {
+            let item = content[index]
+            if item["type"] as? String == "input_text", let value = item["text"] as? String {
+                if
+                    let image = value.wholeMatch(of: /<image name=\[Image #([1-9][0-9]*)\] path="[^"]+">/),
+                    index + 2 < content.count, content[index + 1]["type"] as? String == "input_image",
+                    content[index + 2]["type"] as? String == "input_text", content[index + 2]["text"] as? String == "</image>" {
+                    imageNumbers.append(String(image.1))
+                    imageCount += 1
+                    index += 3
+                    continue
+                }
+                text.append(value)
+            } else if item["type"] as? String == "input_image" {
+                imageCount += 1
+            }
+            index += 1
+        }
+        guard !text.isEmpty else { return nil }
+        let body = text.joined(separator: "\n")
+        if imageCount > 0 {
+            var remaining = body[...]
+            var labels: [String] = []
+            while let label = remaining.prefixMatch(of: /\[Image #([1-9][0-9]*)\]\s*/) {
+                labels.append(String(label.1))
+                remaining = remaining[label.range.upperBound...]
+            }
+            guard
+                labels.count == imageCount, Set(labels).count == labels.count,
+                imageNumbers.isEmpty || labels == imageNumbers else { return nil }
+        }
+        return body
     }
 
     private mutating func submission(in line: Data, includingContext: Bool) throws -> String? {

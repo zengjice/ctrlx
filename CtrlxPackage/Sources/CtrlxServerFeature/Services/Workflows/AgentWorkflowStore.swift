@@ -104,6 +104,13 @@ struct AgentWorkflowPendingReceipt: Codable, Equatable, Sendable {
     var continuations: [AgentWorkflowContinuationReceipt]?
     var continuationCompletions: [AgentWorkflowContinuationCompletion]?
     var selectedSubmission: AgentWorkflowContinuationReceipt?
+    var originalSubmissionStart: AgentWorkflowTranscriptFile.SubmissionBoundary?
+
+    func isOriginalSubmission(_ entry: AgentWorkflowContinuationReceipt, prompt: String) -> Bool {
+        entry.writer.conversationID == conversationID && entry.submittedAt == submittedHookStartedAt
+            && AgentReplyEvidence.turn(entry.submission, id: turn.nativeTurnID, path: turn.transcriptPath)
+            && AgentReplyEvidence.submission(entry.submission, prompt: prompt, acceptedTurnID: turn.nativeTurnID)
+    }
 
     mutating func mergeContinuations(_ entries: [AgentWorkflowContinuationReceipt], completions: [AgentWorkflowContinuationCompletion]) {
         var saved = continuations ?? []
@@ -425,13 +432,31 @@ actor AgentWorkflowStore {
         try commit(archive)
     }
 
+    func rememberDelivery(_ proof: AgentWorkflowTranscriptFile.VerifiedSubmission, invocationID: UUID) throws {
+        var archive = try load()
+        guard
+            var receipt = archive.pendingReceipts?[invocationID], receipt.turn == proof.turn,
+            let invocation = archive.runs.lazy.flatMap(\.invocations).first(where: { $0.id == invocationID }),
+            let input = proof.matchedInput, proof.nativeStart?.inputOffset != nil, proof.isCurrent,
+            let writer = archive.runs.first(where: { $0.invocations.contains(where: { $0.id == invocationID }) })?.instance(for: invocation),
+            input == invocation.submissionText(pluginID: writer.pluginID) else { return }
+        receipt.originalSubmissionStart = proof.nativeStart
+        if let selected = receipt.selectedSubmission, receipt.isOriginalSubmission(selected, prompt: input) {
+            receipt.selectedSubmission?.nativeStart = proof.nativeStart
+        }
+        if receipt != archive.pendingReceipts?[invocationID] {
+            archive.pendingReceipts?[invocationID] = receipt
+            try commit(archive)
+        }
+    }
+
     func rememberSubmission(_ proof: AgentWorkflowTranscriptFile.VerifiedSubmission, invocationID: UUID) throws {
         var archive = try load()
         guard
             let selected = archive.pendingReceipts?[invocationID]?.selectedSubmission,
             selected.nativeStart == nil,
-            AgentReplyEvidence.turn(selected.submission, id: proof.turn.nativeTurnID, path: proof.turn.transcriptPath),
-            proof.isCurrent else { return }
+            proof.isCurrent,
+            AgentReplyEvidence.turn(selected.submission, id: proof.turn.nativeTurnID, path: proof.turn.transcriptPath) else { return }
         archive.pendingReceipts?[invocationID]?.selectedSubmission?.nativeStart = proof.nativeStart
         try commit(archive)
     }

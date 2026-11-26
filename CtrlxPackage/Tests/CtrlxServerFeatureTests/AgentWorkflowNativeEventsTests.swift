@@ -79,6 +79,7 @@ private struct AppendingCodexTestTranscript: AgentWorkflowTranscriptParser {
     var parser: CodexWorkflowTranscript
     let watchedTurn: String
     let onWatchedTurn: @Sendable () throws -> Void
+    var onLocateTurn: (@Sendable () -> Void)? = nil
 
     var startMarkers: [String] {
         parser.startMarkers
@@ -89,7 +90,11 @@ private struct AppendingCodexTestTranscript: AgentWorkflowTranscriptParser {
     }
 
     func isTurnStart(_ line: Data) throws -> Bool {
-        try parser.isTurnStart(line)
+        let result = try parser.isTurnStart(line)
+        if result {
+            onLocateTurn?()
+        }
+        return result
     }
 
     mutating func submittedTurnID(in line: Data) throws -> String? {
@@ -98,6 +103,10 @@ private struct AppendingCodexTestTranscript: AgentWorkflowTranscriptParser {
             try onWatchedTurn()
         }
         return turn
+    }
+
+    func submittedInput(in line: Data) throws -> String? {
+        try parser.submittedInput(in: line)
     }
 
     mutating func updateCandidate(_ candidate: String) -> AgentWorkflowTranscriptOutcome? {
@@ -112,10 +121,12 @@ private struct AppendingCodexTestTranscript: AgentWorkflowTranscriptParser {
 private actor AppendingCodexTestProvider: AgentWorkflowProviding {
     nonisolated let watchedTurn: String
     nonisolated let onWatchedTurn: @Sendable () throws -> Void
+    nonisolated let onLocateTurn: (@Sendable () -> Void)?
 
-    init(watchedTurn: String, onWatchedTurn: @escaping @Sendable () throws -> Void) {
+    init(watchedTurn: String, onLocateTurn: (@Sendable () -> Void)? = nil, onWatchedTurn: @escaping @Sendable () throws -> Void) {
         self.watchedTurn = watchedTurn
         self.onWatchedTurn = onWatchedTurn
+        self.onLocateTurn = onLocateTurn
     }
 
     nonisolated var workflowCapabilities: AgentWorkflowCapabilities {
@@ -129,7 +140,8 @@ private actor AppendingCodexTestProvider: AgentWorkflowProviding {
     nonisolated func workflowTranscript(conversationID: String, nativeTurnID: String, prompt: String, candidate: String) -> any AgentWorkflowTranscriptParser {
         AppendingCodexTestTranscript(
             parser: CodexWorkflowTranscript(conversationID: conversationID, nativeTurnID: nativeTurnID),
-            watchedTurn: watchedTurn, onWatchedTurn: onWatchedTurn
+            watchedTurn: watchedTurn, onWatchedTurn: onWatchedTurn,
+            onLocateTurn: nativeTurnID == watchedTurn ? onLocateTurn : nil
         )
     }
 }
@@ -242,6 +254,8 @@ struct AgentWorkflowNativeEventsTests {
         let middle = f.event(.submitted, text: "Discuss the findings", turn: "middle")
         try f.writeCodexTurns("turn")
         _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        let originalStart = try #require(await f.store.snapshot().pendingReceipts?[f.invocation.id]?.originalSubmissionStart)
+        #expect(try await f.store.snapshot().pendingReceipts?[f.invocation.id]?.selectedSubmission?.nativeStart?.identifies(originalStart) == true)
         try f.writeCodexTurns("turn", "middle")
         _ = try await f.router.receive(middle, peer: f.peer)
         #expect(try await f.store.snapshot().runs[0].invocations[0].stepTurn?.id == "middle")
@@ -252,6 +266,7 @@ struct AgentWorkflowNativeEventsTests {
 
         let reopened = await AgentWorkflowStore(fileURL: f.store.fileURL, hostID: f.instance.hostID)
         let restored = try await reopened.snapshot().runs[0]
+        #expect(try await reopened.snapshot().pendingReceipts?[f.invocation.id]?.originalSubmissionStart?.identifies(originalStart) == true)
         try #require(restored.status == .paused && restored.invocations[0].stepTurn?.id == "current")
         let runner = AgentWorkflowRunner(
             store: reopened, transport: .init(inspect: { $0 }, prepare: { _, _ in }, write: { _, _ in
@@ -264,17 +279,18 @@ struct AgentWorkflowNativeEventsTests {
             try f.writeCodexTurns("turn", "middle", "current", expectedTurn)
         }
         let scans = LockIsolated(0)
-        let allowStableRead = LockIsolated(progressAppends < 2)
         let provider = AppendingCodexTestProvider(watchedTurn: expectedTurn) {
             let scan = scans.withValue { count in
                 count += 1
                 return count
             }
-            guard scan <= progressAppends || !allowStableRead.value else { return }
+            guard scan == 1 else { return }
             let file = try FileHandle(forWritingTo: f.transcript)
             defer { try? file.close() }
             _ = try file.seekToEnd()
-            try file.write(contentsOf: Data("{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\"}}\n".utf8))
+            for _ in 0..<progressAppends {
+                try file.write(contentsOf: Data("{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\"}}\n".utf8))
+            }
         }
         let router = AgentWorkflowEventRouter(store: reopened, runner: runner, inspect: { $0 }, provider: { _ in provider })
         let service = AgentWorkflowAgentService(
@@ -282,25 +298,11 @@ struct AgentWorkflowNativeEventsTests {
             provider: { _ in CodexPluginCore() }
         )
         _ = try await router.receive(receipt, peer: f.peer)
-        if progressAppends == 2 {
-            #expect(scans.value >= 2)
-            #expect(try await reopened.snapshot().runs[0] == restored)
-            await #expect(throws: AgentWorkflowError.self) { try await router.requireVerifiedSubmission(f.invocation.id) }
-            if newerReceipt {
-                let repeatReceipt = f.event(.submitted, text: "Finish the review", turn: "current")
-                _ = try await router.receive(repeatReceipt, peer: f.peer)
-            }
-            allowStableRead.setValue(true)
-            for _ in 0..<100 {
-                if (try? await router.requireVerifiedSubmission(f.invocation.id)) != nil {
-                    break
-                }
-                try await Task.sleep(for: .milliseconds(20))
-            }
+        try await router.requireVerifiedSubmission(f.invocation.id)
+        #expect(scans.value >= 1)
+        if progressAppends == 2, newerReceipt {
+            _ = try await router.receive(f.event(.submitted, text: "Finish the review", turn: "current"), peer: f.peer)
             try await router.requireVerifiedSubmission(f.invocation.id)
-            #expect(scans.value >= 3)
-        } else {
-            #expect(scans.value >= progressAppends + 1)
         }
         let verified = try await reopened.snapshot().runs[0]
         #expect(verified.invocations[0].stepTurn?.id == expectedTurn)
@@ -315,6 +317,48 @@ struct AgentWorkflowNativeEventsTests {
         await runner.shutdown()
     }
 
+    @Test(arguments: [(false, false), (false, true), (true, false), (true, true)], [false, true])
+    func continuationOrderChecksUseTheKnownPositionOnArrivalAndRetry(mode: (Bool, Bool), reusedID: Bool) async throws {
+        let (afterLoop, retry) = mode
+        let f = try await fixture(completion: .explicit, afterLoop: afterLoop)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        let original = try Data(contentsOf: f.transcript)
+        let headerEnd = try #require(original.firstIndex(of: 10)) + 1
+        var bytes = Data(original[..<headerEnd])
+        if reusedID {
+            bytes.append(Data("{\"type\":\"event_msg\",\"timestamp\":\"1970-01-01T00:00:01Z\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn\"}}\n".utf8))
+        }
+        bytes.append(Data("{\"history\":\"\(String(repeating: "x", count: 8 * 1_024 * 1_024))\"}\n".utf8))
+        let deliveryOffset = UInt64(bytes.count)
+        bytes.append(original[headerEnd...])
+        try bytes.write(to: f.transcript)
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 101))
+        let deliveryStart = try #require(await f.store.snapshot().pendingReceipts?[f.invocation.id]?.originalSubmissionStart)
+        #expect(deliveryStart.offset == deliveryOffset && deliveryStart.inputOffset != nil)
+        await f.router.shutdown()
+        try f.appendNativeTurn("next")
+        let locates = LockIsolated(0)
+        let available = LockIsolated(!retry)
+        let provider = AppendingCodexTestProvider(watchedTurn: "next", onLocateTurn: { locates.withValue { $0 += 1 } }, onWatchedTurn: { })
+        let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: {
+            guard available.value else { throw AgentWorkflowInspectionUnavailable() }
+            return $0
+        }, provider: { _ in provider })
+        _ = try await router.receive(f.event(.submitted, text: "Continue the review", turn: "next"), peer: f.hookPeer(startedAt: reusedID ? 105 : 103))
+        #expect(locates.value == 0)
+        let file = try FileHandle(forWritingTo: f.transcript)
+        try file.seekToEnd()
+        try file.write(contentsOf: Data("{\"progress\":0}\n".utf8))
+        try file.close()
+        available.setValue(true)
+        try await router.requireVerifiedSubmission(f.invocation.id)
+        #expect(locates.value == 0)
+        #expect(try await f.store.snapshot().runs[0].invocations[0].stepTurn?.id == "next")
+        await router.shutdown()
+        await f.runner.shutdown()
+    }
+
     @Test(arguments: ["restart", "restart-and-new", "new"])
     func changedAgentBindingCanReplaceAnInFlightPendingReceipt(change: String) async throws {
         let restarted = change != "new"
@@ -326,21 +370,12 @@ struct AgentWorkflowNativeEventsTests {
         _ = try await f.router.receive(original, peer: f.peer)
         try f.appendCodexAnswer("Original discussion")
         _ = try await f.router.receive(f.event(.stopCandidate, text: "Original discussion"), peer: f.peer)
-        try f.appendNativeTurn("pending")
         await f.router.shutdown()
 
         let oldInspection = AsyncStream<Void>.makeStream()
         defer { oldInspection.continuation.finish() }
         let inspectingOldWriter = LockIsolated(false)
         let oldInspectionEnded = LockIsolated(false)
-        let changingOldRecord = LockIsolated(true)
-        let unstable = AppendingCodexTestProvider(watchedTurn: "pending") {
-            guard changingOldRecord.value else { return }
-            let file = try FileHandle(forWritingTo: f.transcript)
-            defer { try? file.close() }
-            _ = try file.seekToEnd()
-            try file.write(contentsOf: Data("{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\"}}\n".utf8))
-        }
         let router = AgentWorkflowEventRouter(store: f.store, runner: f.runner, inspect: { instance in
             if instance.matchesBinding(f.instance) {
                 inspectingOldWriter.setValue(true)
@@ -351,8 +386,10 @@ struct AgentWorkflowNativeEventsTests {
                 throw AgentWorkflowInspectionUnavailable()
             }
             return instance
-        }, provider: { _ in unstable }, onFailure: { Issue.record(Comment(rawValue: $0)) })
-        _ = try await router.receive(f.event(.submitted, text: "Follow up before restart", turn: "pending"), peer: f.peer)
+        }, recheckConversation: { _, _, _ in .ready }, provider: { _ in CodexPluginCore() }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let initialReceipt = Task {
+            try await router.receive(f.event(.submitted, text: "Follow up before restart", turn: "pending"), peer: f.peer)
+        }
         for _ in 0..<100 {
             if inspectingOldWriter.value {
                 break
@@ -362,7 +399,7 @@ struct AgentWorkflowNativeEventsTests {
         try #require(inspectingOldWriter.value)
         #expect(!oldInspectionEnded.value)
 
-        changingOldRecord.setValue(false)
+        try f.appendNativeTurn("pending")
         try f.appendCodexAnswer("Old discussion", turn: "pending")
         _ = try await router.receive(f.event(.stopCandidate, text: "Old discussion", turn: "pending"), peer: f.peer)
 
@@ -388,6 +425,12 @@ struct AgentWorkflowNativeEventsTests {
             kind: .submitted, nativeTurnID: "resumed", transcriptPath: transcript.path, text: "Continue after restart"
         ))
         _ = try await router.receive(receipt, peer: peer)
+        for _ in 0..<100 {
+            if (try? await router.requireVerifiedSubmission(f.invocation.id)) != nil {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
         try await router.requireVerifiedSubmission(f.invocation.id)
         let verified = try await f.store.snapshot().runs[0]
         #expect(verified.invocations[0].nativeTurnID == "turn")
@@ -395,12 +438,10 @@ struct AgentWorkflowNativeEventsTests {
         #expect(verified.invocations[0].stepTurn?.id == "resumed")
         #expect(verified.invocations[0].stepTurn?.transcriptPath == transcript.path)
         #expect(verified.instance(for: verified.invocations[0])?.matchesBinding(live) == true)
-        for _ in 0..<100 {
-            if oldInspectionEnded.value {
-                break
-            }
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        #expect(!oldInspectionEnded.value)
+        oldInspection.continuation.finish()
+        _ = try await initialReceipt.value
+        #expect(try await f.store.snapshot().runs[0].invocations[0].stepTurn?.id == "resumed")
         #expect(oldInspectionEnded.value)
         let service = AgentWorkflowAgentService(
             store: f.store, inspect: { $0 }, synchronizeEvents: { try await router.requireVerifiedSubmission($0) },
@@ -423,7 +464,9 @@ struct AgentWorkflowNativeEventsTests {
         defer { try? FileManager.default.removeItem(at: f.directory) }
         _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
         await f.router.shutdown()
-        try f.writeCodexTurns("turn", "old-pending")
+        try f.writeNativeTurns("turn")
+        try f.appendCodexAnswer("Initial proposal", turn: "turn")
+        try f.appendNativeTurn("old-pending")
 
         let changingOldRecord = LockIsolated(true)
         let canInspectNewConversation = LockIsolated(!newReceiptPending)
@@ -1356,7 +1399,7 @@ struct AgentWorkflowNativeEventsTests {
             )
         }
 
-        func writeCodexTurns(_ ids: String..., conversationID: String? = nil, to destination: URL? = nil) throws {
+        func writeCodexTurns(_ ids: String..., conversationID: String? = nil, to destination: URL? = nil, inputs: [String: String] = [:]) throws {
             let path = destination ?? transcript
             let old = (try? Data(contentsOf: path))?.split(separator: 10).compactMap { line in
                 try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any]
@@ -1364,13 +1407,15 @@ struct AgentWorkflowNativeEventsTests {
             let sameConversation = (old.first?["payload"] as? [String: Any])?["id"] as? String == (conversationID ?? instance.conversationID)
             let starts = sameConversation ? old.filter { ($0["payload"] as? [String: Any])?["type"] as? String == "task_started" } : []
             var records: [[String: Any]] = [["type": "session_meta", "payload": ["id": conversationID ?? instance.conversationID]]]
-            records += ids.enumerated().map { index, id in
+            records += ids.enumerated().flatMap { index, id -> [[String: Any]] in
                 let previous = starts.indices.contains(index) && (starts[index]["payload"] as? [String: Any])?["turn_id"] as? String == id ? starts[index]["timestamp"] as? String : nil
-                return [
+                let start: [String: Any] = [
                     "type": "event_msg",
                     "timestamp": previous ?? Date().formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true)),
                     "payload": ["type": "task_started", "turn_id": id],
                 ]
+                let input = inputs[id] ?? (id == "turn" && index == ids.firstIndex(of: "turn") ? invocation.submissionText(pluginID: instance.pluginID) : nil)
+                return [start] + (input.map { [inputRecord($0)] } ?? [])
             }
             var bytes = Data()
             for record in records {
@@ -1388,26 +1433,48 @@ struct AgentWorkflowNativeEventsTests {
             }
         }
 
-        private func nativeTurn(_ id: String, index: Int) throws -> Data {
-            let record: [String: Any] = if instance.pluginID == "claude-code" {
+        private func nativeTurn(_ id: String, index: Int, input: String? = nil) throws -> Data {
+            var record: [String: Any] = if instance.pluginID == "claude-code" {
                 ["type": "user", "sessionId": instance.conversationID, "isSidechain": false, "uuid": UUID().uuidString, "promptId": id]
             } else {
                 ["type": "event_msg", "payload": ["type": "task_started", "turn_id": id]]
             }
+            if instance.pluginID == "claude-code", let input {
+                record["message"] = ["content": input]
+            }
             // Use the same logical timeline as hookPeer(startedAt:).
             let timed = record.merging(["timestamp": Date(timeIntervalSince1970: 100 + Double(index) * 2).formatted(.iso8601)]) { _, new in new }
-            return try JSONSerialization.data(withJSONObject: timed) + Data([10])
+            var data = try JSONSerialization.data(withJSONObject: timed) + Data([10])
+            if instance.pluginID == "codex", let input {
+                try data.append(JSONSerialization.data(withJSONObject: inputRecord(input)) + Data([10]))
+            }
+            return data
         }
 
-        func writeNativeTurns(_ ids: String...) throws {
+        func writeNativeTurns(_ ids: String..., includeDelivery: Bool = true) throws {
             var bytes = Data()
             if instance.pluginID == "codex" {
                 bytes = try JSONSerialization.data(withJSONObject: ["type": "session_meta", "payload": ["id": instance.conversationID]]) + Data([10])
             }
             for (index, id) in ids.enumerated() {
-                try bytes.append(nativeTurn(id, index: index))
+                try bytes.append(nativeTurn(id, index: index, input: includeDelivery && id == "turn" && index == ids.firstIndex(of: "turn") ? invocation.submissionText(pluginID: instance.pluginID) : nil))
             }
             try bytes.write(to: transcript)
+        }
+
+        private func inputRecord(_ text: String) -> [String: Any] {
+            ["type": "response_item", "payload": ["type": "message", "role": "user", "content": [["type": "input_text", "text": text]]]]
+        }
+
+        func appendDeliveryInput() throws {
+            try appendInput(invocation.submissionText(pluginID: instance.pluginID))
+        }
+
+        func appendInput(_ input: String) throws {
+            let file = try FileHandle(forWritingTo: transcript)
+            defer { try? file.close() }
+            try file.seekToEnd()
+            try file.write(contentsOf: JSONSerialization.data(withJSONObject: inputRecord(input)) + Data([10]))
         }
 
         func appendNativeTurn(_ id: String) throws {
@@ -2806,6 +2873,7 @@ struct AgentWorkflowNativeEventsTests {
                 "sessionId": session,
                 "isSidechain": false,
                 "timestamp": base.addingTimeInterval(seconds).formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true)),
+                "message": ["content": id == "turn" ? f.invocation.submissionText(pluginID: f.instance.pluginID) : "Other input"],
             ]) + Data([10])
         }
         try user("turn", session: f.instance.conversationID, at: 60).write(to: f.transcript)
@@ -3196,6 +3264,7 @@ struct AgentWorkflowNativeEventsTests {
         }
         let header = try #require(Data(contentsOf: f.transcript).split(separator: 10).first)
         try (Data(header) + Data([10]) + start("turn", time: 2_000)).write(to: f.transcript)
+        try f.appendDeliveryInput()
         _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
         let otherHeader = try #require(Data(contentsOf: other).split(separator: 10).first)
         let turn = repeated ? "B" : "new-B"
@@ -3380,6 +3449,289 @@ struct AgentWorkflowNativeEventsTests {
         await f.runner.shutdown()
     }
 
+    @Test(arguments: [(false, false), (false, true), (true, false), (true, true)], [false, true])
+    func anAbortedTaskWithTheSameIDCannotReplaceTheAcceptedPosition(mode: (Bool, Bool), receiptFirst: Bool) async throws {
+        let (restart, sameID) = mode
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let oldID = sameID ? "turn" : "previous"
+        try f.writeNativeTurns(oldID, includeDelivery: false)
+        try f.appendCodexAbort(oldID)
+        let acceptedOffset = try UInt64(Data(contentsOf: f.transcript).count)
+        if receiptFirst {
+            _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 103))
+            let receipt = try await f.store.snapshot().pendingReceipts?[f.invocation.id]
+            #expect(receipt?.selectedSubmission?.nativeStart == nil)
+            #expect(receipt?.originalSubmissionStart == nil)
+        }
+        try f.appendNativeTurn("turn")
+        try f.appendDeliveryInput()
+        if !receiptFirst {
+            _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 103))
+        }
+        let selected = try await f.store.snapshot().pendingReceipts?[f.invocation.id]?.selectedSubmission?.nativeStart
+        #expect(receiptFirst ? selected == nil : selected?.offset == acceptedOffset)
+        try f.appendCodexAnswer("Current proposal")
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "Current proposal"), peer: f.hookPeer(startedAt: 104))
+        if restart {
+            await f.router.shutdown()
+        }
+        let store = restart ? AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID) : f.store
+        if restart {
+            _ = try await store.reconcile([.init(f.instance)])
+        }
+        let runner = restart ? f.runner(in: store) : f.runner
+        let router = restart ? AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 }, provider: { _ in f.nativeProvider }) : f.router
+        if !receiptFirst {
+            #expect(try await store.snapshot().pendingReceipts?[f.invocation.id]?.selectedSubmission?.nativeStart?.offset == acceptedOffset)
+        }
+        try f.appendNativeTurn("next")
+        _ = try await router.receive(f.event(.submitted, text: "Implement the proposal", turn: "next"), peer: f.hookPeer(startedAt: 105))
+        try await router.requireVerifiedSubmission(f.invocation.id)
+        let call = try await store.snapshot().runs[0].invocations[0]
+        #expect(try await store.snapshot().pendingReceipts?[f.invocation.id]?.originalSubmissionStart?.offset == acceptedOffset)
+        #expect(call.status == .running && call.issue == nil)
+        #expect(call.stepTurn?.id == "next" && call.stepTurn?.stopped == false)
+        let service = AgentWorkflowAgentService(store: store, inspect: { $0 }, synchronizeEvents: { try await router.requireVerifiedSubmission($0) })
+        let request = JSONRPCRequest(id: "complete", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        #expect(await service.handle(request, peer: f.peer).ok)
+        await router.shutdown()
+        await runner.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func aMissingNativeInputHasAnActionableOpeningTimeout() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn", includeDelivery: false)
+        let context = try #require(await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer))
+        let monitor = AgentWorkflowCompletionMonitor(store: f.store, runner: f.runner, inspect: { $0 }, verificationTimeout: .zero, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        let changes = await f.store.changes()
+        var updates = changes.makeAsyncIterator()
+        await monitor.verify(context, provider: f.nativeProvider)
+        while try await f.store.snapshot().runs[0].status != .paused {
+            try #require(await updates.next() != nil)
+        }
+        let run = try await f.store.snapshot().runs[0]
+        #expect(run.issue?.contains("native transcript could not confirm") == true)
+        #expect(run.issue?.contains("UnconfirmedSubmission") == false)
+        #expect(run.invocations[0].result == nil)
+        await monitor.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func replyEndedWaitsForItsOwnInputBeforeReadingAReusedID() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn", includeDelivery: false)
+        try f.appendCodexAbort("turn")
+        let context = try #require(await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer))
+        let located = AsyncStream<Void>.makeStream()
+        defer { located.continuation.finish() }
+        let provider = AppendingCodexTestProvider(watchedTurn: "turn", onLocateTurn: { located.continuation.yield(()) }, onWatchedTurn: { })
+        let monitor = AgentWorkflowCompletionMonitor(store: f.store, runner: f.runner, inspect: { $0 }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        await monitor.verify(context, provider: provider)
+        var scans = located.stream.makeAsyncIterator()
+        try #require(await scans.next() != nil)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(try await f.store.snapshot().runs[0].invocations[0].status == .running)
+        try f.appendNativeTurn("turn")
+        try f.appendDeliveryInput()
+        try f.appendCodexAnswer("Actual result")
+        let changes = await f.store.changes()
+        var updates = changes.makeAsyncIterator()
+        let stop = try #require(await f.router.receive(f.event(.stopCandidate, text: "Actual result"), peer: f.peer))
+        await monitor.verify(stop, provider: provider)
+        while try await f.store.snapshot().runs[0].invocations[0].status != .succeeded {
+            try #require(await updates.next() != nil)
+        }
+        #expect(try await f.store.snapshot().runs[0].invocations[0].result?.text == "Actual result")
+        await monitor.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func nativeFailureRequiresTheDeliveryInputToStillMatch(restart: Bool, rewrite: Bool) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 101))
+        try #require(await f.store.snapshot().pendingReceipts?[f.invocation.id]?.originalSubmissionStart != nil)
+        if restart {
+            await f.router.shutdown()
+        }
+        if rewrite {
+            let rows = try Data(contentsOf: f.transcript).split(separator: 10).map { line -> Data in
+                var row = try #require(JSONSerialization.jsonObject(with: Data(line)) as? [String: Any])
+                if row["type"] as? String == "response_item", var payload = row["payload"] as? [String: Any] {
+                    let content = try #require(payload["content"] as? [[String: Any]])
+                    let text = try #require(content.first?["text"] as? String)
+                    payload["content"] = [["type": "input_text", "text": "X" + text.dropFirst()]]
+                    row["payload"] = payload
+                }
+                return try JSONSerialization.data(withJSONObject: row) + Data([10])
+            }
+            let handle = try FileHandle(forWritingTo: f.transcript)
+            try handle.truncate(atOffset: 0)
+            try handle.write(contentsOf: rows.reduce(into: Data()) { $0.append($1) })
+            try handle.close()
+        }
+        try f.appendCodexAbort("turn")
+        try f.appendNativeTurn("next")
+        let store = restart ? AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID) : f.store
+        let runner = restart ? f.runner(in: store) : f.runner
+        let router = restart ? AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 }, provider: { _ in f.nativeProvider }) : f.router
+        _ = try await router.receive(f.event(.submitted, text: "New task", turn: "next"), peer: f.hookPeer(startedAt: 103))
+        _ = try? await router.requireVerifiedSubmission(f.invocation.id)
+        let call = try await store.snapshot().runs[0].invocations[0]
+        #expect(rewrite ? call.status != .failed : call.status == .failed)
+        #expect(call.result == nil)
+        await router.shutdown()
+        await runner.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: [false, true], [false, true])
+    func anOriginalClaudeRejectionStillFailsWithoutAUserRecord(laterInput: Bool, wrapped: Bool) async throws {
+        let f = try await fixture(plugin: "claude-code")
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let input = f.invocation.submissionText(pluginID: f.instance.pluginID)
+        let nativeInput = wrapped ? "<pasted_content id=\"8e79\">\n" + input + "\n</pasted_content id=\"8e79\">\n" : input
+        let row: [String: Any] = [
+            "type": "system", "subtype": "informational", "sessionId": f.instance.conversationID,
+            "isSidechain": false, "uuid": "rejection", "timestamp": Date().formatted(.iso8601), "preventContinuation": true,
+            "content": "UserPromptSubmit operation blocked by hook:\n[fixture]: Rejected.\n\nOriginal prompt: " + nativeInput,
+            "promptSubmitEnding": ["ending": ["kind": "blocked_by_hook", "reason": "Rejected."], "promptKept": false],
+        ]
+        try (JSONSerialization.data(withJSONObject: row) + Data([10])).write(to: f.transcript)
+        if laterInput {
+            try f.appendNativeTurn("turn")
+        }
+        let context = try #require(await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, plugin: f.instance.pluginID), peer: f.peer))
+        let changes = await f.store.changes()
+        var updates = changes.makeAsyncIterator()
+        let monitor = AgentWorkflowCompletionMonitor(store: f.store, runner: f.runner, inspect: { $0 }, onFailure: { Issue.record(Comment(rawValue: $0)) })
+        await monitor.verify(context, provider: f.nativeProvider)
+        while try await f.store.snapshot().runs[0].invocations[0].status != .failed {
+            try #require(await updates.next() != nil)
+        }
+        #expect(try await f.store.snapshot().runs[0].invocations[0].issue == "Rejected.")
+        await monitor.shutdown()
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test(arguments: [false, true])
+    func aLegacySelectedDeliveryUsesItsRebuiltPosition(legacy: Bool) async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 101))
+        try f.appendCodexAnswer("Original proposal")
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "Original proposal"), peer: f.hookPeer(startedAt: 102))
+        await f.router.shutdown()
+        let handle = try FileHandle(forWritingTo: f.transcript)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: JSONSerialization.data(withJSONObject: ["type": "event_msg", "timestamp": "1970-01-01T00:05:00Z", "payload": ["type": "task_started", "turn_id": "turn"]]) + Data([10]))
+        try handle.close()
+        if legacy {
+            var archive = try await f.store.snapshot()
+            archive.schemaVersion = 9
+            archive.pendingReceipts = nil
+            try JSONEncoder().encode(archive).write(to: await f.store.fileURL, options: .atomic)
+        }
+        let store = AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID)
+        _ = try await store.reconcile([.init(f.instance)])
+        let path = f.directory.appendingPathComponent("other.jsonl")
+        try f.writeCodexTurns("B", conversationID: "other-session", to: path)
+        let rows = try Data(contentsOf: path).split(separator: 10).map { line -> Data in
+            var row = try #require(JSONSerialization.jsonObject(with: Data(line)) as? [String: Any])
+            row["timestamp"] = "1970-01-01T00:03:20Z"
+            return try JSONSerialization.data(withJSONObject: row) + Data([10])
+        }
+        try rows.reduce(into: Data()) { $0.append($1) }.write(to: path)
+        let runner = f.runner(in: store)
+        let router = AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 }, provider: { _ in f.nativeProvider })
+        let event = PluginEvent(pluginID: "codex", sessionID: "other-session", tmuxPane: f.instance.paneID, workflow: .init(kind: .submitted, nativeTurnID: "B", transcriptPath: path.path, text: "Continue elsewhere"))
+        _ = try await router.receive(event, peer: f.hookPeer(startedAt: 201))
+        try await router.requireVerifiedSubmission(f.invocation.id)
+        #expect(try await store.snapshot().runs[0].invocations[0].resultTurnID == "B")
+        await router.shutdown()
+        await runner.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test
+    func aContextOnlyDeliveryCanSelectTheNextSubmission() async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let header: [String: Any] = ["type": "session_meta", "payload": ["id": f.instance.conversationID]]
+        let context: [String: Any] = ["type": "turn_context", "payload": ["turn_id": "turn"]]
+        try (JSONSerialization.data(withJSONObject: header) + Data([10]) + JSONSerialization.data(withJSONObject: context) + Data([10])).write(to: f.transcript)
+        try f.appendDeliveryInput()
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.peer)
+        try f.appendCodexAnswer("Original proposal")
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "Original proposal"), peer: f.peer)
+        try f.appendNativeTurn("turn")
+        try f.appendNativeTurn("next")
+        _ = try await f.router.receive(f.event(.submitted, text: "Next task", turn: "next"), peer: f.peer)
+        try await f.router.requireVerifiedSubmission(f.invocation.id)
+        #expect(try await f.store.snapshot().runs[0].invocations[0].resultTurnID == "next")
+        await f.router.shutdown()
+        await f.runner.shutdown()
+    }
+
+    @Test
+    func aMissingSelectedPositionUsesTheSelectedReceiptTime() async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        try f.writeNativeTurns("turn")
+        _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 101))
+        func appendStart(_ id: String, at time: Int) throws {
+            let handle = try FileHandle(forWritingTo: f.transcript)
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            try handle.write(contentsOf: JSONSerialization.data(withJSONObject: ["type": "event_msg", "timestamp": Date(timeIntervalSince1970: Double(time)).formatted(.iso8601), "payload": ["type": "task_started", "turn_id": id]]) + Data([10]))
+        }
+        let selectedOffset = try UInt64(Data(contentsOf: f.transcript).count)
+        try appendStart("A", at: 1_000)
+        _ = try await f.router.receive(f.event(.submitted, text: "Selected input", turn: "A"), peer: f.hookPeer(startedAt: 1_001))
+        try await f.router.requireVerifiedSubmission(f.invocation.id)
+        try f.appendCodexAnswer("Selected proposal", turn: "A")
+        _ = try await f.router.receive(f.event(.stopCandidate, text: "Selected proposal", turn: "A"), peer: f.hookPeer(startedAt: 1_002))
+        await f.router.shutdown()
+        // This later reuse must not stand in for the selected receipt at 1001.
+        try appendStart("A", at: 3_000)
+        var archive = try await f.store.snapshot()
+        archive.pendingReceipts?[f.invocation.id]?.selectedSubmission?.nativeStart = nil
+        try JSONEncoder().encode(archive).write(to: await f.store.fileURL, options: .atomic)
+        let store = AgentWorkflowStore(fileURL: await f.store.fileURL, hostID: f.instance.hostID)
+        let path = f.directory.appendingPathComponent("other.jsonl")
+        try f.writeCodexTurns("B", conversationID: "other-session", to: path)
+        let rows = try Data(contentsOf: path).split(separator: 10).map { line -> Data in
+            var row = try #require(JSONSerialization.jsonObject(with: Data(line)) as? [String: Any])
+            row["timestamp"] = Date(timeIntervalSince1970: 2_000).formatted(.iso8601)
+            return try JSONSerialization.data(withJSONObject: row) + Data([10])
+        }
+        try rows.reduce(into: Data()) { $0.append($1) }.write(to: path)
+        let runner = f.runner(in: store)
+        let router = AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 }, provider: { _ in f.nativeProvider })
+        let event = PluginEvent(pluginID: "codex", sessionID: "other-session", tmuxPane: f.instance.paneID, workflow: .init(kind: .submitted, nativeTurnID: "B", transcriptPath: path.path, text: "Continue elsewhere"))
+        _ = try await router.receive(event, peer: f.hookPeer(startedAt: 2_001))
+        try await router.requireVerifiedSubmission(f.invocation.id)
+        let saved = try await store.snapshot()
+        #expect(saved.runs[0].invocations[0].resultTurnID == "B")
+        #expect(saved.pendingReceipts?[f.invocation.id]?.originalSubmissionStart?.offset != selectedOffset)
+        await router.shutdown()
+        await runner.shutdown()
+        await f.runner.shutdown()
+    }
+
     @Test(arguments: ["v9-old-hook", "restarted-writer"])
     func reusedIDReceiptUsesItsOwnNativeSegment(mode: String) async throws {
         let f = try await fixture(completion: .explicit)
@@ -3389,6 +3741,7 @@ struct AgentWorkflowNativeEventsTests {
         }
         let header = try JSONSerialization.data(withJSONObject: ["type": "session_meta", "payload": ["id": f.instance.conversationID]]) + Data([10])
         try (header + start("turn", 2_000)).write(to: f.transcript)
+        try f.appendDeliveryInput()
         _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 2_001))
         if mode == "v9-old-hook" {
             await f.router.shutdown()
@@ -3452,6 +3805,7 @@ struct AgentWorkflowNativeEventsTests {
         }
         let header = try JSONSerialization.data(withJSONObject: ["type": "session_meta", "payload": ["id": f.instance.conversationID]]) + Data([10])
         try (header + start("turn", at: 1_000)).write(to: f.transcript)
+        try f.appendDeliveryInput()
         _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text), peer: f.hookPeer(startedAt: 1_001))
         try f.appendCodexAnswer("First proposal")
         _ = try await f.router.receive(f.event(.stopCandidate, text: "First proposal"), peer: f.hookPeer(startedAt: 1_002))
@@ -3504,7 +3858,7 @@ struct AgentWorkflowNativeEventsTests {
             try file.seekToEnd()
             try file.write(contentsOf: JSONSerialization.data(withJSONObject: record) + Data([10]))
         }
-        try append(["type": "user", "uuid": "user", "promptId": "turn", "timestamp": "1970-01-01T00:16:40Z"])
+        try append(["type": "user", "uuid": "user", "promptId": "turn", "timestamp": "1970-01-01T00:16:40Z", "message": ["content": f.invocation.submissionText(pluginID: f.instance.pluginID)]])
         _ = try await f.router.receive(f.event(.submitted, text: f.invocation.delivery.input.text, plugin: "claude-code"), peer: f.hookPeer(startedAt: 1_001))
         try append([
             "type": "assistant", "uuid": "answer", "parentUuid": "user",
@@ -4529,7 +4883,7 @@ struct AgentWorkflowNativeEventsTests {
                 ]
             }
             var records: [[String: Any]] = [
-                ["type": "user", "promptId": "turn"],
+                ["type": "user", "promptId": "turn", "message": ["content": f.invocation.submissionText(pluginID: f.instance.pluginID)]],
                 rejection(at: "1970-01-01T00:02:30.000Z", prompt: blocked),
                 rejection(at: "1970-01-01T00:03:20.500Z", prompt: "An unrelated input\nOriginal prompt: " + blocked),
             ]
@@ -5088,7 +5442,7 @@ struct AgentWorkflowNativeEventsTests {
         #expect(ended.invocations[0].stepTurn?.id == "old-followup")
         let next = try await startAnotherRun(f)
         let task = try #require(next.invocations.first)
-        try f.writeCodexTurns("turn", "middle", "old-followup", "current")
+        try f.writeCodexTurns("turn", "middle", "old-followup", "current", inputs: ["current": task.submissionText(pluginID: f.instance.pluginID)])
         _ = try await f.router.receive(f.event(.submitted, text: task.delivery.input.text, turn: "current"), peer: f.peer)
         let replay = intermediate ? middle : old
         if unconfirmed {
@@ -5101,7 +5455,7 @@ struct AgentWorkflowNativeEventsTests {
         #expect(saved.invocations[0].stepTurn?.id == "current")
         _ = try await f.router.receive(f.event(.submitted, text: "New continuation", turn: "new-followup"), peer: f.peer)
         #expect(try await f.store.snapshot().runs.last?.invocations[0].stepTurn?.id == "current")
-        try f.writeCodexTurns("turn", "middle", "old-followup", "current", "new-followup")
+        try f.writeCodexTurns("turn", "middle", "old-followup", "current", "new-followup", inputs: ["current": task.submissionText(pluginID: f.instance.pluginID)])
         try await f.router.requireVerifiedSubmission(task.id)
         #expect(try await f.store.snapshot().runs.last?.invocations[0].stepTurn?.id == "new-followup")
         await f.router.shutdown()

@@ -14,6 +14,7 @@ actor AgentWorkflowCompletionMonitor {
         synchronizeIngress: @escaping @Sendable () async throws -> Void = { },
         onFailure: @escaping @Sendable (String) -> Void
     ) {
+        let readers = AgentWorkflowTranscriptReaders()
         self.monitor = AgentReplyMonitor(state: { context in
             let archive = try await store.snapshot()
             let submissionOnly = context.candidate.kind == .submitted || context.candidate.hasPendingWork
@@ -64,7 +65,19 @@ actor AgentWorkflowCompletionMonitor {
                     reason: reason
                 )
             }
-        }, inspect: inspect, verificationTimeout: verificationTimeout, synchronizeCompletion: synchronizeIngress, verifyFinalTranscript: true, matchesAnswer: { event, answer in
+        }, inspect: inspect, verificationTimeout: verificationTimeout, synchronizeCompletion: synchronizeIngress, verifyFinalTranscript: true, prepareTranscript: { context, provider, transcript in
+            let archive = try await store.snapshot()
+            guard let invocation = archive.runs.lazy.flatMap(\.invocations).first(where: { $0.id == context.id }) else { throw AgentReplyMonitor.UnconfirmedSubmission() }
+            let receipt = archive.pendingReceipts?[context.id]
+            let turn = PluginWorkflowTurn(nativeTurnID: context.candidate.nativeTurnID, transcriptPath: context.candidate.transcriptPath)
+            guard invocation.isOriginalDelivery(turn, receipt: receipt, pluginID: context.instance.pluginID) else { return }
+            guard
+                let proof = try await readers.delivery(for: invocation, turn: turn, instance: context.instance, receipt: receipt, provider: provider),
+                try await transcript.start(at: proof) else {
+                throw AgentReplyMonitor.UnconfirmedSubmission()
+            }
+            try await store.rememberDelivery(proof, invocationID: context.id)
+        }, matchesAnswer: { event, answer in
             event.kind != .stopCandidate || event.hasPendingWork || event.corroboratesAnswer(answer)
         }, onFailure: onFailure)
     }

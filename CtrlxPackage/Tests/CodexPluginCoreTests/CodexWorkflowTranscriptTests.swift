@@ -41,6 +41,29 @@ struct CodexWorkflowTranscriptTests {
         try JSONSerialization.data(withJSONObject: ["type": type, "payload": payload])
     }
 
+    @Test(arguments: [[1], [3, 5]], [false, true])
+    func imageSubmissionKeepsTheNumberedTaskBody(numbers: [Int], wrapped: Bool) throws {
+        var parser = CodexWorkflowTranscript(conversationID: "session", nativeTurnID: "turn")
+        _ = try parser.submittedTurnID(in: record("session_meta", ["id": "session"]))
+        var content: [[String: Any]] = []
+        for number in numbers {
+            if wrapped {
+                content.append(["type": "input_text", "text": "<image name=[Image #\(number)] path=\"/tmp/image-\(number).png\">"])
+            }
+            content.append(["type": "input_image", "image_url": "data:image/png;base64,fixture"])
+            if wrapped {
+                content.append(["type": "input_text", "text": "</image>"])
+            }
+        }
+        let body = numbers.map { "[Image #\($0)]" }.joined(separator: " ") + " Initial task:\nImplement the fixture\n[CtrlX workflow invocation: fixture]"
+        for (text, valid) in [(body, true), (body.replacingOccurrences(of: "[Image #\(numbers[0])]", with: "[Image #99]"), !wrapped), ("Initial task without image labels", false), ("[Image #1] " + body, false)] {
+            let message = try record("response_item", ["type": "message", "role": "user", "content": content + [["type": "input_text", "text": text]]])
+            #expect(try parser.submittedInput(in: message) == (valid ? text : nil))
+        }
+        let plain = "Keep literal <image> text and [Image #1] references"
+        #expect(try parser.submittedInput(in: record("response_item", ["type": "message", "role": "user", "content": [["type": "input_text", "text": plain]]])) == plain)
+    }
+
     @Test
     func requiresMatchingSessionAndNativeTurnCompletion() throws {
         var parser = CodexWorkflowTranscript(conversationID: "session", nativeTurnID: "turn")

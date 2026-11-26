@@ -145,6 +145,25 @@ struct AgentMessageRecoveryTests {
         Issue.record("Message did not save \(expected)")
     }
 
+    @Test(arguments: [false, true])
+    func claudeHookRejectionSettlesWithoutAUserRecordOrStop(wrapped: Bool) async throws {
+        let f = try await fixture("claude-code", accepted: false)
+        let input = wrapped ? "<pasted_content id=\"8e79\">\n" + f.message.prompt + "\n</pasted_content id=\"8e79\">\n" : f.message.prompt
+        let rejection: [String: Any] = [
+            "type": "system", "subtype": "informational", "sessionId": f.message.instance.conversationID,
+            "isSidechain": false, "uuid": "rejection", "timestamp": Date().formatted(.iso8601), "preventContinuation": true,
+            "content": "UserPromptSubmit operation blocked by hook:\n[fixture]: Rejected.\n\nOriginal prompt: " + input,
+            "promptSubmitEnding": ["ending": ["kind": "blocked_by_hook", "reason": "Rejected."], "promptKept": false],
+        ]
+        try (JSONSerialization.data(withJSONObject: rejection) + Data([10])).write(to: f.transcript)
+        try await f.support.interaction.receive(f.event(.submitted), peer: f.peer)
+        try await wait(.failed, f)
+        let saved = try #require(try await f.support.interaction.store.message(f.message.id))
+        #expect(saved.issue == "Rejected." && saved.answer == nil)
+        #expect(f.support.writes.count == 1)
+        try await f.support.cleanup()
+    }
+
     @Test(arguments: ["codex", "claude-code"])
     func submissionBeforePaneRestorationCompletesSavedMessage(plugin: String) async throws {
         let f = try await fixture(plugin, accepted: false)

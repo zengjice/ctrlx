@@ -40,6 +40,15 @@ struct ClaudeWorkflowTranscriptTests {
         ].merging(extra) { _, value in value })
     }
 
+    @Test
+    func collapsedImagePasteMatchesTheSameHookBody() throws {
+        let body = "Review the patch.\n[CtrlX workflow invocation: fixture]"
+        let wrapped = "[Image #1]\n\n<pasted_content id=\"8e79\">\n" + body + "\n</pasted_content id=\"8e79\">\n"
+        let parser = ClaudeWorkflowTranscript(conversationID: "session", nativeTurnID: "prompt", prompt: "[Image #1]" + body, candidate: "")
+        let user = try record("user", parent: nil, ["type": "user", "promptId": "prompt", "message": ["content": [["type": "text", "text": wrapped], ["type": "image", "source": ["type": "base64", "data": "fixture"]]]]])
+        #expect(try parser.submittedInput(in: user) == "[Image #1]" + body)
+    }
+
     private func started() throws -> ClaudeWorkflowTranscript {
         var parser = ClaudeWorkflowTranscript(conversationID: "session", nativeTurnID: "prompt", prompt: "Review", candidate: "Final answer")
         #expect(try parser.consume(record("user", parent: nil, ["type": "user", "promptId": "prompt", "message": ["content": "Review"]])) == nil)
@@ -59,12 +68,13 @@ struct ClaudeWorkflowTranscriptTests {
         ].merging(extra) { _, value in value })
     }
 
-    @Test(arguments: ["workflow invocation", "message"])
-    func rejectedSubmissionRequiresNativeMetadataAndTheCompleteInvocationInput(marker: String) throws {
+    @Test(arguments: ["workflow invocation", "message"], [false, true])
+    func rejectedSubmissionRequiresNativeMetadataAndTheCompleteInvocationInput(marker: String, wrapped: Bool) throws {
         let prompt = "$review-changes\nReview this task.\n[CtrlX \(marker): 6E81E042-A0E6-4C94-B718-41A79C17F1D8]"
+        let input = wrapped ? "<pasted_content id=\"8e79\">\n" + prompt + "\n</pasted_content id=\"8e79\">\n" : prompt
         let fields: [String: Any] = [
             "type": "system", "subtype": "informational", "preventContinuation": true,
-            "content": "UserPromptSubmit operation blocked by hook:\n[fixture]: Not allowed.\n\n\nOriginal prompt: " + prompt,
+            "content": "UserPromptSubmit operation blocked by hook:\n[fixture]: Not allowed.\n\n\nOriginal prompt: " + input,
             "promptSubmitEnding": ["ending": ["kind": "blocked_by_hook", "reason": "Not allowed."], "promptKept": false],
         ]
         for extra: [String: Any] in [
@@ -73,10 +83,14 @@ struct ClaudeWorkflowTranscriptTests {
             ["content": "UserPromptSubmit operation blocked by hook:\n[fixture]\nOriginal prompt: " + prompt + "\nChanged input"],
         ] {
             var parser = ClaudeWorkflowTranscript(conversationID: "session", nativeTurnID: "prompt", prompt: prompt, candidate: "")
-            #expect(try parser.consume(record("rejected", parent: "previous", fields.merging(extra) { _, value in value })) == nil)
+            let line = try record("rejected", parent: "previous", fields.merging(extra) { _, value in value })
+            #expect(try parser.isTurnStart(line) == false)
+            #expect(try parser.consume(line) == nil)
         }
         var parser = ClaudeWorkflowTranscript(conversationID: "session", nativeTurnID: "prompt", prompt: prompt, candidate: "")
-        #expect(try parser.consume(record("rejected", parent: "previous", fields)) == .failed("Not allowed."))
+        let rejection = try record("rejected", parent: "previous", fields)
+        #expect(try parser.isTurnStart(rejection))
+        #expect(try parser.consume(rejection) == .failed("Not allowed."))
         #expect(parser.recoveredCompletion == .failed("Not allowed."))
         _ = try parser.consume(record("user", parent: "previous", ["type": "user", "promptId": "prompt", "message": ["content": prompt]]))
         #expect(parser.recoveredCompletion == nil)

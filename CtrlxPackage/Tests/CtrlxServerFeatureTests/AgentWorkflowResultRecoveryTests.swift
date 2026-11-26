@@ -153,6 +153,10 @@ struct AgentWorkflowResultRecoveryTests {
         let run: AgentWorkflowRun
         let downstream: UUID
 
+        var input: String {
+            run.invocations.last?.submissionText(pluginID: instance.pluginID) ?? ""
+        }
+
         var recovery: AgentWorkflowResultRecovery {
             .init(store: store, inspect: { $0 }, provider: { plugin in
                 if plugin == "codex" {
@@ -248,13 +252,16 @@ struct AgentWorkflowResultRecoveryTests {
         return .init(root: root, transcript: transcript, store: restarted, instance: instance, run: restored, downstream: next.id)
     }
 
-    private func records(plugin: String, conversation: String = "conversation", turn: String = "turn", finished: Bool = true) throws -> Data {
+    private func records(plugin: String, input: String? = nil, conversation: String = "conversation", turn: String = "turn", finished: Bool = true) throws -> Data {
         var records: [[String: Any]]
         if plugin == "codex" {
             records = [
                 ["type": "session_meta", "payload": ["id": conversation]],
                 ["type": "event_msg", "payload": ["type": "task_started", "turn_id": turn]],
             ]
+            if let input {
+                records.append(["type": "response_item", "payload": ["type": "message", "role": "user", "content": [["type": "input_text", "text": input]]]])
+            }
             if finished {
                 records.append(["type": "event_msg", "payload": ["type": "task_complete", "turn_id": turn, "last_agent_message": "Three findings"]])
             }
@@ -268,6 +275,9 @@ struct AgentWorkflowResultRecoveryTests {
                     "type": "system", "subtype": "stop_hook_summary", "uuid": "stop", "parentUuid": "answer",
                     "hookErrors": [], "hookAdditionalContext": [], "preventedContinuation": false, "stopReason": "",
                 ])
+            }
+            if let input {
+                records[0]["message"] = ["content": input]
             }
             records = records.map { $0.merging(["sessionId": conversation, "isSidechain": false]) { _, value in value } }
         }
@@ -284,7 +294,7 @@ struct AgentWorkflowResultRecoveryTests {
         let f = try await fixture(plugin: plugin, explicit: explicit)
         defer { try? FileManager.default.removeItem(at: f.root) }
         #expect(f.run.status == .paused && f.run.invocations[0].status == .uncertain)
-        try records(plugin: plugin).write(to: f.transcript)
+        try records(plugin: plugin, input: f.input).write(to: f.transcript)
         let scheduled = LockIsolated<[UUID]>([])
         let service = AgentWorkflowService(
             store: f.store, scan: { _ in [.init(f.instance)] },
@@ -305,11 +315,41 @@ struct AgentWorkflowResultRecoveryTests {
         #expect(restored.run.invocations[0].status == .succeeded)
     }
 
+    @Test(arguments: [false, true], [false, true])
+    func recoveryWaitsForItsOwnDeliveryBeforeReadingAReusedTurn(aborted: Bool, accepted: Bool) async throws {
+        let f = try await fixture(plugin: "codex", accepted: false)
+        defer { try? FileManager.default.removeItem(at: f.root) }
+        try await f.recordReceipt(f.run.invocations[0])
+        if accepted {
+            try await f.store.update(runID: f.run.id) {
+                try $0.accept(invocationID: f.run.invocations[0].id, instance: f.instance, nativeTurnID: "turn", transcriptPath: f.transcript.path)
+            }
+        }
+        var old = try records(plugin: "codex", input: "Previous task")
+        if aborted {
+            old.append(Data("{\"type\":\"event_msg\",\"payload\":{\"type\":\"turn_aborted\",\"turn_id\":\"turn\"}}\n".utf8))
+        }
+        try old.write(to: f.transcript)
+        let restarted = AgentWorkflowStore(fileURL: f.root.appendingPathComponent("ledger.json"), hostID: f.run.definition.hostID)
+        _ = try await restarted.reconcile([.init(f.instance)])
+        let recovery = AgentWorkflowResultRecovery(store: restarted, inspect: { $0 }, provider: { _ in CodexPluginCore() })
+        let before = try #require(await restarted.snapshot().runs.first)
+        let waiting = try await recovery.recover(before)
+        #expect(waiting.invocations[0].status == .uncertain && waiting.invocations[0].result == nil)
+        let writer = try FileHandle(forWritingTo: f.transcript)
+        try writer.seekToEnd()
+        try writer.write(contentsOf: records(plugin: "codex", input: f.input))
+        try writer.close()
+        let recovered = try await recovery.recover(waiting)
+        #expect(recovered.invocations[0].status == .succeeded)
+        #expect(recovered.invocations[0].result?.text == "Three findings")
+    }
+
     @Test(arguments: ["codex", "claude-code"], ["conversation", "turn", "unfinished", "partial", "unaccepted", "proposal"])
     func incompleteOrUnrelatedEvidenceDoesNotRecover(plugin: String, change: String) async throws {
         let f = try await fixture(plugin: plugin, accepted: change != "unaccepted", explicit: change == "proposal", completeStep: false)
         defer { try? FileManager.default.removeItem(at: f.root) }
-        var bytes = try records(plugin: plugin, conversation: change == "conversation" ? "other" : "conversation", turn: change == "turn" ? "other" : "turn", finished: change != "unfinished")
+        var bytes = try records(plugin: plugin, input: f.input, conversation: change == "conversation" ? "other" : "conversation", turn: change == "turn" ? "other" : "turn", finished: change != "unfinished")
         if change == "partial" {
             bytes.removeLast()
         }
@@ -387,7 +427,7 @@ struct AgentWorkflowResultRecoveryTests {
         }
         let paused = try #require(await store.snapshot().runs.first)
         #expect(paused.status == .paused && paused.invocations[0].nativeTurnID == nil)
-        try records(plugin: "codex", conversation: conversation, turn: evidence == "wrong-turn" ? "different-turn" : "turn").write(to: f.transcript)
+        try records(plugin: "codex", input: f.input, conversation: conversation, turn: evidence == "wrong-turn" ? "different-turn" : "turn").write(to: f.transcript)
         let recovery = AgentWorkflowResultRecovery(store: store, inspect: { $0 }, provider: { _ in CodexPluginCore() })
         let scheduled = LockIsolated<[UUID]>([])
         let service = AgentWorkflowService(
@@ -423,7 +463,7 @@ struct AgentWorkflowResultRecoveryTests {
     func concurrentChangesDuringRecovery(change: String) async throws {
         let f = try await fixture(plugin: "codex")
         defer { try? FileManager.default.removeItem(at: f.root) }
-        try records(plugin: "codex").write(to: f.transcript)
+        try records(plugin: "codex", input: f.input).write(to: f.transcript)
         if change == "same-completion" {
             let invocation = try #require(f.run.invocations.first)
             let stop = try #require(f.event(.stopCandidate, text: "Three findings").workflow)
@@ -498,7 +538,7 @@ struct AgentWorkflowResultRecoveryTests {
         } else {
             store = f.store
         }
-        try records(plugin: "codex").write(to: f.transcript)
+        try records(plugin: "codex", input: f.input).write(to: f.transcript)
         let recovery = AgentWorkflowResultRecovery(store: store, inspect: { instance in
             let count = inspections.withValue { $0 += 1
                 return $0
@@ -543,7 +583,7 @@ struct AgentWorkflowResultRecoveryTests {
         defer { try? FileManager.default.removeItem(at: f.root) }
         let call = try #require(f.run.invocations.first)
         try await f.recordReceipt(call)
-        try records(plugin: "codex").write(to: f.transcript)
+        try records(plugin: "codex", input: f.input).write(to: f.transcript)
         let drains = LockIsolated(0)
         let recovery = AgentWorkflowResultRecovery(store: f.store, inspect: { $0 }, provider: { _ in CodexPluginCore() }, synchronizeIngress: {
             let count = drains.withValue { $0 += 1
@@ -565,7 +605,7 @@ struct AgentWorkflowResultRecoveryTests {
     func anUnchangedWaitStateDoesNotInvalidateRecovery() async throws {
         let f = try await fixture(plugin: "codex")
         defer { try? FileManager.default.removeItem(at: f.root) }
-        try records(plugin: "codex").write(to: f.transcript)
+        try records(plugin: "codex", input: f.input).write(to: f.transcript)
         let waiting = try await f.store.update(runID: f.run.id) {
             $0.waitForAgent(f.instance, reason: "Native identity temporarily unavailable")
         }
@@ -658,7 +698,7 @@ struct AgentWorkflowResultRecoveryTests {
         let sibling = try #require(f.run.invocations.first { $0.nativeTurnID == "parallel-turn" })
         let other = try #require(f.run.instance(for: sibling))
         try await f.recordReceipt(call)
-        try records(plugin: "codex").write(to: f.transcript)
+        try records(plugin: "codex", input: f.input).write(to: f.transcript)
         let recovery = AgentWorkflowResultRecovery(store: f.store, inspect: { instance in
             try await f.store.update(runID: f.run.id) {
                 try $0.fail(invocationID: sibling.id, instance: other, nativeTurnID: "parallel-turn", reason: "Failed after Continue")
@@ -736,7 +776,7 @@ struct AgentWorkflowResultRecoveryTests {
             )
         }
         let paused = try #require(await f.store.snapshot().runs.first)
-        try records(plugin: "codex").write(to: f.transcript)
+        try records(plugin: "codex", input: f.input).write(to: f.transcript)
         let inspections = LockIsolated(0)
         let recovery = AgentWorkflowResultRecovery(store: f.store, inspect: { instance in
             let count = inspections.withValue { $0 += 1
@@ -763,12 +803,13 @@ struct AgentWorkflowResultRecoveryTests {
         let invocation = try #require(f.run.invocations.first)
         try await f.recordReceipt(invocation)
         if plugin == "codex" {
-            var bytes = try records(plugin: plugin)
+            var bytes = try records(plugin: plugin, input: f.input)
             bytes.append(Data("{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"later\"}}\n".utf8))
             try bytes.write(to: f.transcript)
         } else {
             let rejection: [String: Any] = [
                 "type": "system", "subtype": "informational", "uuid": "rejection", "sessionId": f.instance.conversationID,
+                "timestamp": Date().formatted(.iso8601),
                 "isSidechain": false, "preventContinuation": true,
                 "content": "UserPromptSubmit operation blocked by hook:\n[fixture]: Rejected.\n\nOriginal prompt: " + invocation.delivery.input.text,
                 "promptSubmitEnding": ["ending": ["kind": "blocked_by_hook", "reason": "Rejected."]],
@@ -819,7 +860,7 @@ struct AgentWorkflowResultRecoveryTests {
             await monitor.verify($0, provider: CodexPluginCore())
         })
         let peer = try f.peer()
-        try records(plugin: "codex").write(to: f.transcript)
+        try records(plugin: "codex", input: f.input).write(to: f.transcript)
         if scenario == "unconfirmed-after-end" {
             try await router.receiveUnconfirmedSubmission(f.event(.submitted, text: invocation.delivery.input.text), peer: peer)
         } else if scenario != "stop-after-restart" {
@@ -847,7 +888,7 @@ struct AgentWorkflowResultRecoveryTests {
     func nativeFailureIsArchivedWithoutInventingAnAnswer() async throws {
         let f = try await fixture(plugin: "codex")
         defer { try? FileManager.default.removeItem(at: f.root) }
-        var bytes = try records(plugin: "codex", finished: false)
+        var bytes = try records(plugin: "codex", input: f.input, finished: false)
         bytes.append(Data("{\"type\":\"event_msg\",\"payload\":{\"type\":\"turn_aborted\",\"turn_id\":\"turn\"}}\n".utf8))
         try bytes.write(to: f.transcript)
         let run = try await f.recovery.recover(f.run)
@@ -860,7 +901,7 @@ struct AgentWorkflowResultRecoveryTests {
     func lostStopRecoveryUsesTheLastNativeOutcome(aborted: Bool) async throws {
         let f = try await fixture(plugin: "codex")
         defer { try? FileManager.default.removeItem(at: f.root) }
-        var bytes = try records(plugin: "codex")
+        var bytes = try records(plugin: "codex", input: f.input)
         let event: [String: String] = aborted ? ["type": "turn_aborted", "turn_id": "turn"] : [
             "type": "task_complete", "turn_id": "turn", "last_agent_message": "Updated answer",
         ]
@@ -876,7 +917,7 @@ struct AgentWorkflowResultRecoveryTests {
     func sameTurnFollowupNeedsItsOwnCompletion() async throws {
         let f = try await fixture(plugin: "codex", explicit: true)
         defer { try? FileManager.default.removeItem(at: f.root) }
-        var bytes = try records(plugin: "codex")
+        var bytes = try records(plugin: "codex", input: f.input)
         bytes.append(Data("{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn\"}}\n".utf8))
         try bytes.write(to: f.transcript)
         let pending = try await f.recovery.recover(f.run)
@@ -892,9 +933,9 @@ struct AgentWorkflowResultRecoveryTests {
         let f = try await fixture(plugin: "codex", accepted: false, restart: false)
         defer { try? FileManager.default.removeItem(at: f.root) }
         let invocation = try #require(f.run.invocations.first)
-        var bytes = try records(plugin: "codex", finished: false)
+        var bytes = try records(plugin: "codex", input: f.input, finished: false)
         bytes.append(Data("{\"type\":\"event_msg\",\"payload\":{\"type\":\"turn_aborted\",\"turn_id\":\"turn\"}}\n".utf8))
-        try bytes.append(records(plugin: "codex"))
+        try bytes.append(records(plugin: "codex", input: f.input))
         try bytes.write(to: f.transcript)
         let runner = AgentWorkflowRunner(store: f.store, transport: .init(
             inspect: { $0 }, prepare: { _, _ in }, write: { _, _ in Issue.record("A submission cannot hand off.") }
@@ -927,10 +968,10 @@ struct AgentWorkflowResultRecoveryTests {
     func replacedNativeFailureIsNotCommitted() async throws {
         let f = try await fixture(plugin: "codex")
         defer { try? FileManager.default.removeItem(at: f.root) }
-        var bytes = try records(plugin: "codex", finished: false)
+        var bytes = try records(plugin: "codex", input: f.input, finished: false)
         bytes.append(Data("{\"type\":\"event_msg\",\"payload\":{\"type\":\"turn_aborted\",\"turn_id\":\"turn\"}}\n".utf8))
         try bytes.write(to: f.transcript)
-        let replacement = try records(plugin: "codex")
+        let replacement = try records(plugin: "codex", input: f.input)
         let drains = LockIsolated(0)
         let recovery = AgentWorkflowResultRecovery(store: f.store, inspect: { $0 }, provider: { _ in CodexPluginCore() }, synchronizeIngress: {
             let pass = drains.withValue { $0 += 1
@@ -952,7 +993,7 @@ struct AgentWorkflowResultRecoveryTests {
         defer { try? FileManager.default.removeItem(at: f.root) }
         let invocation = try #require(f.run.invocations.first)
         let abort = Data("{\"type\":\"event_msg\",\"payload\":{\"type\":\"turn_aborted\",\"turn_id\":\"turn\"}}\n".utf8)
-        var initial = try records(plugin: "codex")
+        var initial = try records(plugin: "codex", input: f.input)
         if change == "native-abort" {
             initial.append(abort)
         }
@@ -1002,7 +1043,7 @@ struct AgentWorkflowResultRecoveryTests {
         let f = try await fixture(plugin: "codex", restart: false)
         defer { try? FileManager.default.removeItem(at: f.root) }
         try await f.store.update(runID: f.run.id) { $0.pause(reason: "Operator paused") }
-        var bytes = try records(plugin: "codex")
+        var bytes = try records(plugin: "codex", input: f.input)
         bytes.append(Data("{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\"".utf8))
         try bytes.write(to: f.transcript)
         let runner = AgentWorkflowRunner(store: f.store, transport: .init(
@@ -1046,7 +1087,7 @@ struct AgentWorkflowResultRecoveryTests {
     func abortAppendedDuringIngressDrainInvalidatesAnEarlierReply() async throws {
         let f = try await fixture(plugin: "codex")
         defer { try? FileManager.default.removeItem(at: f.root) }
-        try records(plugin: "codex").write(to: f.transcript)
+        try records(plugin: "codex", input: f.input).write(to: f.transcript)
         let drains = LockIsolated(0)
         let recovery = AgentWorkflowResultRecovery(store: f.store, inspect: { $0 }, provider: { _ in CodexPluginCore() }, synchronizeIngress: {
             let pass = drains.withValue { $0 += 1
@@ -1104,7 +1145,7 @@ struct AgentWorkflowResultRecoveryTests {
         let receipt = PluginWorkflowEvent(kind: .submitted, nativeTurnID: "turn", transcriptPath: f.transcript.path, text: invocation.delivery.input.text)
         let context = AgentWorkflowTurnContext(runID: f.run.id, invocation: invocation, instance: writer, candidate: receipt)
         #expect(try await f.store.recordPendingReceipt(context))
-        try records(plugin: "codex", conversation: recordedConversation).write(to: f.transcript)
+        try records(plugin: "codex", input: f.input, conversation: recordedConversation).write(to: f.transcript)
         let drains = LockIsolated(0)
         let recovery = AgentWorkflowResultRecovery(store: f.store, inspect: { $0 }, provider: { _ in CodexPluginCore() }, synchronizeIngress: {
             let pass = drains.withValue { $0 += 1
@@ -1144,7 +1185,7 @@ struct AgentWorkflowResultRecoveryTests {
             peer: peer
         ))
         let followupStart = Data("{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"followup\"}}\n".utf8)
-        try (records(plugin: "codex") + followupStart).write(to: f.transcript)
+        try (records(plugin: "codex", input: f.input) + followupStart).write(to: f.transcript)
         let writes = LockIsolated(0)
         let service = AgentWorkflowService(
             store: f.store, scan: { _ in [.init(f.instance)] }, schedule: { _ in },
@@ -1190,7 +1231,7 @@ struct AgentWorkflowResultRecoveryTests {
         try await router.receiveUnconfirmedSubmission(f.event(.submitted, text: invocation.delivery.input.text), peer: peer)
         let text = kind == .failed ? "Native failure" : "Updated final answer"
         #expect(try await router.bufferPendingCompletion(f.event(kind, text: text), peer: peer))
-        try records(plugin: "codex").write(to: f.transcript)
+        try records(plugin: "codex", input: f.input).write(to: f.transcript)
         let recovered = try await f.recovery.recover(f.run)
         if kind == .failed {
             #expect(recovered.invocations[0].status == .failed)
@@ -1223,7 +1264,7 @@ struct AgentWorkflowResultRecoveryTests {
         )
         let peer = try f.peer()
         try await router.receiveUnconfirmedSubmission(f.event(.submitted, text: invocation.delivery.input.text), peer: peer)
-        try records(plugin: "codex").write(to: f.transcript)
+        try records(plugin: "codex", input: f.input).write(to: f.transcript)
         if explicit {
             #expect(try await router.bufferPendingCompletion(f.event(.failed, text: "Native failure"), peer: peer))
         }
@@ -1259,7 +1300,7 @@ struct AgentWorkflowResultRecoveryTests {
         defer { try? FileManager.default.removeItem(at: f.root) }
         let invocation = try #require(f.run.invocations.first)
         try await f.recordReceipt(invocation)
-        try records(plugin: "codex").write(to: f.transcript)
+        try records(plugin: "codex", input: f.input).write(to: f.transcript)
         let reads = LockIsolated(0)
         let recovery = AgentWorkflowResultRecovery(store: f.store, inspect: { instance in
             let count = reads.withValue { $0 += 1
@@ -1283,7 +1324,7 @@ struct AgentWorkflowResultRecoveryTests {
         defer { try? FileManager.default.removeItem(at: f.root) }
         let invocation = try #require(f.run.invocations.first)
         try await f.recordReceipt(invocation)
-        try records(plugin: "codex").write(to: f.transcript)
+        try records(plugin: "codex", input: f.input).write(to: f.transcript)
         if savedStop {
             let stop = try #require(f.event(.stopCandidate, text: "Three findings").workflow)
             try await f.store.recordCompletionEvidence(.init(runID: f.run.id, invocation: invocation, instance: f.instance, candidate: stop))
@@ -1308,7 +1349,7 @@ struct AgentWorkflowResultRecoveryTests {
         }
         let fileURL = await f.store.fileURL
         let saved = try JSONDecoder().decode(AgentWorkflowArchive.self, from: Data(contentsOf: fileURL))
-        #expect(try saved.pendingReceipts?[invocation.id]?.stopBoundary?.size == UInt64(records(plugin: "codex").count))
+        #expect(try saved.pendingReceipts?[invocation.id]?.stopBoundary?.size == UInt64(records(plugin: "codex", input: f.input).count))
         let handle = try FileHandle(forWritingTo: f.transcript)
         defer { try? handle.close() }
         try handle.seekToEnd()
@@ -1368,7 +1409,7 @@ struct AgentWorkflowResultRecoveryTests {
         let restored = try #require(await f.store.snapshot().runs.first)
         #expect(restored.invocations[0].status == .running)
         #expect(restored.invocations[0].stepTurn?.completionRequested == true)
-        try records(plugin: "codex").write(to: f.transcript)
+        try records(plugin: "codex", input: f.input).write(to: f.transcript)
         let recovered = try await f.recovery.recover(restored)
         #expect(recovered.invocations[0].result?.text == "Three findings")
     }
@@ -1400,7 +1441,7 @@ struct AgentWorkflowResultRecoveryTests {
             inspect: { $0 }, prepare: { _, _ in }, write: { _, _ in Issue.record("A failed turn cannot hand off.") }
         ), onFailure: { Issue.record(Comment(rawValue: $0)) })
         let router = AgentWorkflowEventRouter(store: store, runner: runner, inspect: { $0 })
-        try records(plugin: "codex", turn: turn).write(to: f.transcript)
+        try records(plugin: "codex", input: f.input, turn: turn).write(to: f.transcript)
         _ = try await router.receive(f.event(.submitted, text: prompt, turn: turn), peer: peer)
         let accepted = try #require(await store.snapshot().runs.first)
         #expect(accepted.invocations[0].status == .running)
@@ -1435,7 +1476,7 @@ struct AgentWorkflowResultRecoveryTests {
         let pending = try await f.store.snapshot()
         #expect(pending.runs[0].invocations[0].status == .running)
         #expect(pending.pendingFailure(for: call)?.text == "Original failure")
-        let bytes = try records(plugin: plugin, finished: false) + records(plugin: plugin, turn: "later")
+        let bytes = try records(plugin: plugin, input: f.input, finished: false) + records(plugin: plugin, input: f.input, turn: "later")
         try bytes.write(to: f.transcript)
         available.setValue(true)
         _ = try await router.receive(f.event(.submitted, text: "New question", turn: "later"), peer: f.peer())
@@ -1523,7 +1564,7 @@ struct AgentWorkflowResultRecoveryTests {
         if ended {
             try await f.store.update(runID: f.run.id) { $0.end() }
         }
-        try records(plugin: "codex").write(to: f.transcript)
+        try records(plugin: "codex", input: f.input).write(to: f.transcript)
         let store = await AgentWorkflowStore(fileURL: f.store.fileURL, hostID: f.instance.hostID)
         _ = try await store.reconcile([.init(f.instance)])
         let runner = AgentWorkflowRunner(store: store, transport: .init(
@@ -1572,7 +1613,7 @@ struct AgentWorkflowResultRecoveryTests {
             ))
             _ = try await router.receive(followup, peer: peer)
         }
-        var transcript = try records(plugin: "codex")
+        var transcript = try records(plugin: "codex", input: f.input)
         if queuedContinuation {
             transcript.append(Data("{\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"followup\"}}\n".utf8))
         }
@@ -1606,7 +1647,7 @@ struct AgentWorkflowResultRecoveryTests {
     func idlePauseMakesAcceptedTurnEligibleForRecovery() async throws {
         let f = try await fixture(plugin: "codex", restart: false)
         defer { try? FileManager.default.removeItem(at: f.root) }
-        try records(plugin: "codex").write(to: f.transcript)
+        try records(plugin: "codex", input: f.input).write(to: f.transcript)
         let service = AgentWorkflowService(
             store: f.store, scan: { _ in [.init(f.instance)] }, schedule: { _ in },
             recoverResults: { try await f.recovery.recover($0) }
@@ -1639,7 +1680,7 @@ struct AgentWorkflowResultRecoveryTests {
         })
         let peer = try f.peer()
         try await router.receiveUnconfirmedSubmission(f.event(.submitted, text: invocation.delivery.input.text), peer: peer)
-        try records(plugin: "codex").write(to: f.transcript)
+        try records(plugin: "codex", input: f.input).write(to: f.transcript)
         _ = try await router.receive(f.event(.stopCandidate, text: "Three findings"), peer: peer)
         for _ in 0..<100 {
             if try await f.store.snapshot().runs[0].invocations.last?.status == .succeeded {

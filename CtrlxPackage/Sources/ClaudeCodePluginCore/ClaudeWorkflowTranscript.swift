@@ -72,8 +72,7 @@ public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
             record["sessionId"] as? String == conversationID,
             record["isSidechain"] as? Bool == false else { return false }
         return submission(in: record) == nativeTurnID
-            || (record["type"] as? String == "system"
-                && (record["content"] as? String)?.hasSuffix("\nOriginal prompt: " + prompt) == true)
+            || rejectionReason(in: record) != nil
     }
 
     public func submittedTurnID(in line: Data) throws -> String? {
@@ -85,10 +84,10 @@ public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
         guard let record = try JSONSerialization.jsonObject(with: line) as? [String: Any], submission(in: record) != nil else { return nil }
         let content = (record["message"] as? [String: Any])?["content"]
         if let text = content as? String {
-            return text
+            return PluginWorkflowHook.submittedText(text, nativeTurnKey: "prompt_id")
         }
         let text = (content as? [[String: Any]])?.compactMap { $0["type"] as? String == "text" ? $0["text"] as? String : nil } ?? []
-        return text.isEmpty ? nil : text.joined(separator: "\n")
+        return text.isEmpty ? nil : PluginWorkflowHook.submittedText(text.joined(separator: "\n"), nativeTurnKey: "prompt_id")
     }
 
     private func submission(in record: [String: Any]) -> String? {
@@ -134,7 +133,7 @@ public struct ClaudeWorkflowTranscript: AgentWorkflowTranscriptParser {
             let content = record["content"] as? String,
             content.hasPrefix(Self.rejectionPrefix + "\n"),
             let original = content.range(of: "\nOriginal prompt: "),
-            content[original.upperBound...] == prompt else { return nil }
+            PluginWorkflowHook.submittedText(String(content[original.upperBound...]), nativeTurnKey: "prompt_id") == prompt else { return nil }
         return ending["reason"] as? String ?? "The native Claude submission was rejected by a hook."
     }
 

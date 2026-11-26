@@ -95,6 +95,7 @@ actor AgentWorkflowEventRouter {
         var retry: Task<Void, Never>?
     }
 
+    private let submissionReaders = AgentWorkflowTranscriptReaders()
     private var stopped = false
     private var pending: [UUID: PendingSubmission] = [:]
     private let verificationTimeout: Duration
@@ -131,6 +132,7 @@ actor AgentWorkflowEventRouter {
         stopped = true
         let tasks = pending.values.compactMap(\.retry)
         pending.removeAll()
+        await submissionReaders.removeAll()
         for task in tasks {
             task.cancel()
         }
@@ -277,19 +279,21 @@ actor AgentWorkflowEventRouter {
 
     private func isSupersededSubmission(
         _ turn: PluginWorkflowTurn, prompt: String, instance: AgentWorkflowInstance, requiringReceipt: Bool = false,
-        submissionRejectionWindow: Range<Date>? = nil
+        submissionRejectionWindow: Range<Date>? = nil, invocationID: UUID? = nil,
+        hookStartedAt: Date? = nil, nativeStart: AgentWorkflowTranscriptFile.SubmissionBoundary? = nil
     ) async throws -> Bool? {
         guard let provider = await provider(instance.pluginID) else { return nil }
         for attempt in 0..<2 {
             try Task.checkCancellation()
-            let parser = provider.workflowTranscript(
-                conversationID: instance.conversationID, nativeTurnID: turn.nativeTurnID, prompt: prompt, candidate: ""
-            )
             do {
-                let transcript = try AgentWorkflowTranscriptFile(
-                    path: turn.transcriptPath, parser: parser, submissionRejectionWindow: submissionRejectionWindow
+                let transcript = try await submissionReader(
+                    turn, instance: instance, prompt: prompt, provider: provider,
+                    rejectionWindow: submissionRejectionWindow, invocationID: invocationID
                 )
-                if let superseded = try await transcript.hasNewerSubmission(than: turn, requiringReceipt: requiringReceipt) {
+                if
+                    let superseded = try await transcript.file.hasNewerSubmission(
+                        than: turn, requiringReceipt: requiringReceipt, hookStartedAt: hookStartedAt, nativeStart: nativeStart
+                    ) {
                     return superseded
                 }
             } catch let error as CocoaError where error.code == .fileNoSuchFile && attempt == 0 && !requiringReceipt {
@@ -304,11 +308,20 @@ actor AgentWorkflowEventRouter {
 
     private func observeSubmission(
         _ event: PluginWorkflowEvent, instance: AgentWorkflowInstance,
+        hookStartedAt: Date? = nil,
         pendingRevision: (id: UUID, generation: UUID, revision: Int)? = nil
     ) async throws -> AgentWorkflowStore.SubmissionDisposition {
-        try await store.observeSubmission(event, instance: instance) { turn, requiresNativeReceipt in
+        let archive = try await store.snapshot()
+        let invocationID = pendingRevision?.id ?? archive.runs.lazy.filter { !$0.status.isTerminal }.compactMap { run in
+            run.invocations.last {
+                $0.round == run.round && [.writing, .awaitingAcceptance, .uncertain, .running].contains($0.status)
+                    && run.instance(for: $0)?.agentID == instance.agentID && run.instance(for: $0)?.pluginID == instance.pluginID
+            }?.id
+        }.first
+        return try await store.observeSubmission(event, instance: instance) { turn, requiresNativeReceipt in
             let superseded = try await self.isSupersededSubmission(
-                turn, prompt: event.text, instance: instance, requiringReceipt: requiresNativeReceipt
+                turn, prompt: event.text, instance: instance, requiringReceipt: requiresNativeReceipt,
+                invocationID: invocationID, hookStartedAt: hookStartedAt
             )
             if let pendingRevision, await !self.matchesPendingRevision(pendingRevision) {
                 return nil
@@ -799,7 +812,7 @@ actor AgentWorkflowEventRouter {
                 [.writing, .awaitingAcceptance, .uncertain, .running, .succeeded].contains(invocation.status),
                 invocation.nativeTurnID == nil || invocation.nativeTurnID == native.nativeTurnID,
                 pending[invocation.id] == nil else { return nil }
-            let disposition = try await observeSubmission(native, instance: instance)
+            let disposition = try await observeSubmission(native, instance: instance, hookStartedAt: peer.workflowHookStart(for: instance))
             guard disposition != .superseded, !stopped else { return nil }
             let bindsConversation = !writer.matchesBinding(instance) && !writer.matchesConversation(instance)
             if bindsConversation, try !AgentWorkflowExecution(validating: run).canBindFirstConversation(instance, invocationID: invocation.id) {
@@ -839,14 +852,14 @@ actor AgentWorkflowEventRouter {
                 try await appendContinuation(.init(event: event, peer: peer, native: native, requiresOrderCheck: true), to: id)
                 return nil
             }
-            let disposition = try await observeSubmission(native, instance: observed)
+            let disposition = try await observeSubmission(native, instance: observed, hookStartedAt: peer.workflowHookStart(for: observed))
             guard disposition != .superseded, !stopped, pending[id] != nil else { return nil }
             try await appendContinuation(.init(
                 event: event, peer: peer, native: native, requiresOrderCheck: disposition == .deferred || repeatsRecordedTurn
             ), to: id)
             return nil
         }
-        let disposition = try await observeSubmission(native, instance: observed)
+        let disposition = try await observeSubmission(native, instance: observed, hookStartedAt: peer.workflowHookStart(for: observed))
         guard disposition != .superseded, !stopped else { return nil }
         let requiresOrderCheck = disposition == .deferred
 
@@ -1008,7 +1021,7 @@ actor AgentWorkflowEventRouter {
                 useInitialReceipt = candidate.invocation.nativeTurnID == nil
             } else {
                 let order = try await observeSubmission(
-                    candidate.candidate, instance: live, pendingRevision: (id, generation, current.revision)
+                    candidate.candidate, instance: live, hookStartedAt: candidate.hookStartedAt, pendingRevision: (id, generation, current.revision)
                 )
                 guard pending[id]?.generation == generation else { return nil }
                 guard order != .deferred else {
@@ -1033,12 +1046,7 @@ actor AgentWorkflowEventRouter {
         if useInitialReceipt, let provider = await provider(live.pluginID) {
             do {
                 let turn = PluginWorkflowTurn(nativeTurnID: candidate.candidate.nativeTurnID, transcriptPath: candidate.candidate.transcriptPath)
-                let file = try AgentWorkflowTranscriptFile(path: turn.transcriptPath, parser: provider.workflowTranscript(
-                    conversationID: live.conversationID, nativeTurnID: turn.nativeTurnID, prompt: candidate.candidate.text, candidate: ""
-                ))
-                if let proof = try await file.verifySubmittedTurn(turn, hookStartedAt: candidate.hookStartedAt) {
-                    try await store.rememberSubmission(proof, invocationID: id)
-                }
+                _ = try await submissionReader(turn, instance: live, prompt: candidate.candidate.text, provider: provider, invocationID: id)
             } catch let error as CocoaError where error.code == .fileNoSuchFile {
                 // The authenticated receipt can precede its native record.
                 try Task.checkCancellation()
@@ -1265,20 +1273,32 @@ actor AgentWorkflowEventRouter {
                 waiting = waiting || (requiresTerminal && entry.isRetired != true)
                 continue
             }
-            let file: AgentWorkflowTranscriptFile
+            let reading: (file: AgentWorkflowTranscriptFile, delivery: AgentWorkflowTranscriptFile.VerifiedSubmission?)
             do {
-                file = try AgentWorkflowTranscriptFile(path: entry.submission.transcriptPath, parser: provider.workflowTranscript(
-                    conversationID: entry.writer.conversationID, nativeTurnID: entry.submission.nativeTurnID,
-                    prompt: entry.submission.text, candidate: entry.completion?.text ?? ""
-                ))
+                reading = try await submissionReader(
+                    .init(nativeTurnID: entry.submission.nativeTurnID, transcriptPath: entry.submission.transcriptPath),
+                    instance: entry.writer, prompt: entry.submission.text, provider: provider, invocationID: id
+                )
             } catch let error as CocoaError where error.code == .fileNoSuchFile {
                 waiting = waiting || (requiresTerminal && entry.isRetired != true)
                 continue
             }
             let turn = PluginWorkflowTurn(nativeTurnID: entry.submission.nativeTurnID, transcriptPath: entry.submission.transcriptPath)
+            let originalEntry = receipt.isOriginalSubmission(entry, prompt: call.submissionText(pluginID: entry.writer.pluginID))
+            let delivery = reading.delivery
+            if originalEntry, delivery?.isCurrent != true {
+                waiting = true
+                continue
+            }
+            let source = if originalEntry, delivery?.isRejection == true {
+                delivery
+            } else {
+                try await reading.file.verifySubmittedTurn(turn, hookStartedAt: entry.submittedAt, nativeStart: originalEntry ? delivery?.nativeStart : entry.nativeStart)
+            }
             guard
-                let source = try await file.verifySubmittedTurn(turn, hookStartedAt: entry.submittedAt, nativeStart: entry.nativeStart),
-                let sourceStart = source.nativeStart else {
+                let source,
+                let sourceStart = source.nativeStart,
+                !originalEntry || delivery.map({ source.hasSameRevision(as: $0) }) == true else {
                 waiting = waiting || (requiresTerminal && entry.isRetired != true)
                 continue
             }
@@ -1452,19 +1472,31 @@ actor AgentWorkflowEventRouter {
             return true
         }
         guard let provider = await provider(instance.pluginID) else { return nil }
-        let file = try AgentWorkflowTranscriptFile(path: turn.transcriptPath, parser: provider.workflowTranscript(
-            conversationID: instance.conversationID, nativeTurnID: turn.nativeTurnID, prompt: entry.submission.text, candidate: ""
-        ))
-        guard let candidate = try await file.verifySubmittedTurn(turn, hookStartedAt: entry.submittedAt, nativeStart: entry.nativeStart) else { return nil }
+        let file = try await submissionReader(turn, instance: instance, prompt: entry.submission.text, provider: provider, invocationID: invocation.id)
+        guard let candidate = try await file.file.verifySubmittedTurn(turn, hookStartedAt: entry.submittedAt, nativeStart: entry.nativeStart) else { return nil }
         let conversation = afterSelected ? invocation.instance?.conversationID ?? receipt.conversationID : receipt.conversationID
-        let originalFile = try AgentWorkflowTranscriptFile(path: anchor.transcriptPath, parser: provider.workflowTranscript(
-            conversationID: conversation, nativeTurnID: anchor.nativeTurnID,
-            prompt: invocation.submissionText(pluginID: instance.pluginID), candidate: ""
-        ))
+        var originalWriter = instance
+        originalWriter.conversationID = conversation
+        let originalFile = try await submissionReader(
+            anchor, instance: originalWriter, prompt: invocation.submissionText(pluginID: instance.pluginID),
+            provider: provider, invocationID: invocation.id
+        )
+        let input = invocation.submissionText(pluginID: instance.pluginID)
+        let selectedIsDelivery = receipt.selectedSubmission.map { receipt.isOriginalSubmission($0, prompt: input) } ?? ((invocation.stepTurn?.prompt ?? input) == input)
+        let usesDelivery = anchor == receipt.turn && (!afterSelected || selectedIsDelivery)
+        if usesDelivery, originalFile.delivery?.isCurrent != true {
+            return nil
+        }
         guard
-            let original = try await originalFile.verifySubmittedTurn(
-                anchor, firstOccurrence: !afterSelected, nativeStart: afterSelected ? receipt.selectedSubmission?.nativeStart : nil
-            ), candidate.isCurrent, original.isCurrent else { return nil }
+            let original = try await originalFile.file.verifySubmittedTurn(
+                anchor, firstOccurrence: !usesDelivery && !afterSelected && receipt.submittedHookStartedAt == nil,
+                hookStartedAt: afterSelected ? receipt.selectedSubmission?.submittedAt : receipt.submittedHookStartedAt,
+                nativeStart: usesDelivery ? originalFile.delivery?.nativeStart : receipt.selectedSubmission?.nativeStart
+            ), candidate.isCurrent, original.isCurrent,
+            !usesDelivery || originalFile.delivery.map({ original.hasSameRevision(as: $0) && $0.isCurrent }) == true else { return nil }
+        if afterSelected {
+            try await store.rememberSubmission(original, invocationID: invocation.id)
+        }
         if anchor.transcriptPath == turn.transcriptPath {
             guard let candidateStart = candidate.nativeStart, let originalStart = original.nativeStart else { return nil }
             return candidateStart.identity == originalStart.identity && candidateStart.offset > originalStart.offset
@@ -1503,7 +1535,8 @@ actor AgentWorkflowEventRouter {
             // submission's interval before the next hook for the same input.
             let older = try await isSupersededSubmission(
                 turn, prompt: receipt.native.text, instance: writer, requiringReceipt: true,
-                submissionRejectionWindow: receipt.rejectionWindow(among: owned, writer: writer)
+                submissionRejectionWindow: receipt.rejectionWindow(among: owned, writer: writer), invocationID: revision.id,
+                hookStartedAt: receipt.startedAt(for: writer), nativeStart: receipt.saved?.nativeStart
             )
             guard matchesPendingRevision(revision) else { return (nil, false) }
             if let older {
@@ -1560,7 +1593,7 @@ actor AgentWorkflowEventRouter {
             }
             let turn = PluginWorkflowTurn(nativeTurnID: receipt.native.nativeTurnID, transcriptPath: receipt.native.transcriptPath)
             let proof = try await verifyCurrentSubmission(
-                turn, prompt: receipt.native.text, instance: verified, hookStartedAt: receipt.startedAt(for: verified)
+                turn, prompt: receipt.native.text, instance: verified, hookStartedAt: receipt.startedAt(for: verified), invocationID: revision.id
             )
             guard matchesPendingRevision(revision) else { return (nil, false) }
             guard let proof else {
@@ -1584,18 +1617,52 @@ actor AgentWorkflowEventRouter {
     }
 
     private func verifyCurrentSubmission(
-        _ turn: PluginWorkflowTurn, prompt: String, instance: AgentWorkflowInstance, hookStartedAt: Date? = nil
+        _ turn: PluginWorkflowTurn, prompt: String, instance: AgentWorkflowInstance, hookStartedAt: Date? = nil, invocationID: UUID? = nil
     ) async throws -> AgentWorkflowTranscriptFile.VerifiedSubmission? {
         guard let provider = await provider(instance.pluginID) else { return nil }
         do {
-            let file = try AgentWorkflowTranscriptFile(path: turn.transcriptPath, parser: provider.workflowTranscript(
-                conversationID: instance.conversationID, nativeTurnID: turn.nativeTurnID, prompt: prompt, candidate: ""
-            ))
-            return try await file.verifyCurrentSubmission(turn, hookStartedAt: hookStartedAt)
+            let file = try await submissionReader(turn, instance: instance, prompt: prompt, provider: provider, invocationID: invocationID)
+            return try await file.file.verifyCurrentSubmission(turn, hookStartedAt: hookStartedAt)
         } catch {
             try Task.checkCancellation()
             return nil
         }
+    }
+
+    private func submissionReader(
+        _ turn: PluginWorkflowTurn, instance: AgentWorkflowInstance, prompt: String,
+        provider: any AgentWorkflowProviding, rejectionWindow: Range<Date>? = nil, invocationID: UUID? = nil
+    ) async throws -> (file: AgentWorkflowTranscriptFile, delivery: AgentWorkflowTranscriptFile.VerifiedSubmission?) {
+        let archive = try await store.snapshot()
+        var anchor: AgentWorkflowTranscriptFile.SubmissionAnchor?
+        var delivery: AgentWorkflowTranscriptFile.VerifiedSubmission?
+        if
+            let invocationID, let receipt = archive.pendingReceipts?[invocationID], receipt.turn.transcriptPath == turn.transcriptPath,
+            let invocation = archive.runs.lazy.flatMap(\.invocations).first(where: { $0.id == invocationID }) {
+            let input = invocation.submissionText(pluginID: instance.pluginID)
+            var originalWriter = instance
+            originalWriter.conversationID = receipt.conversationID
+            let known = receipt.originalSubmissionStart.flatMap {
+                $0.inputOffset == nil || $0.inputEnd == nil ? nil : AgentWorkflowTranscriptFile.SubmissionAnchor(
+                    turnID: receipt.turn.nativeTurnID, boundary: $0, hookStartedAt: receipt.submittedHookStartedAt
+                )
+            }
+            do {
+                let original = try await submissionReaders.reader(
+                    turn: receipt.turn, instance: originalWriter, prompt: input, provider: provider, anchor: known, forDelivery: true
+                )
+                if let proof = try await original.verifyDelivery(receipt.turn, input: input) {
+                    delivery = proof
+                    try await store.rememberDelivery(proof, invocationID: invocationID)
+                    if let start = proof.nativeStart {
+                        anchor = .init(turnID: receipt.turn.nativeTurnID, boundary: start, hookStartedAt: receipt.submittedHookStartedAt)
+                    }
+                }
+            } catch let error as CocoaError where error.code == .fileNoSuchFile {
+                try Task.checkCancellation()
+            }
+        }
+        return try (await submissionReaders.reader(turn: turn, instance: instance, prompt: prompt, provider: provider, rejectionWindow: rejectionWindow, anchor: anchor), delivery)
     }
 
     private func scheduleSubmissionRetry(_ id: UUID) {

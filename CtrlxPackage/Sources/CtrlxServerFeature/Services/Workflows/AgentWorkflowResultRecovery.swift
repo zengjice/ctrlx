@@ -8,6 +8,7 @@ struct AgentWorkflowResultRecovery: Sendable {
     let inspect: @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance
     let provider: @Sendable (String) async -> (any AgentWorkflowProviding)?
     var synchronizeIngress: @Sendable () async throws -> Void = { }
+    let readers = AgentWorkflowTranscriptReaders()
     var transcriptPath: @Sendable (AgentWorkflowInstance) async throws -> String? = { _ in nil }
 
     func recover(_ original: AgentWorkflowRun) async throws -> AgentWorkflowRun {
@@ -89,7 +90,7 @@ struct AgentWorkflowResultRecovery: Sendable {
             }
             guard
                 let (outcome, nativeEnd) = try await nativeOutcome(
-                    for: invocation, turn: turn, instance: live, completion: completion, discovered: discovered
+                    for: invocation, turn: turn, instance: live, receipt: receipt, completion: completion, discovered: discovered
                 ) else { continue }
             try await synchronizeIngress()
             let verified = try await inspect(live)
@@ -119,7 +120,7 @@ struct AgentWorkflowResultRecovery: Sendable {
 
     private func nativeOutcome(
         for invocation: AgentWorkflowInvocation, turn: PluginWorkflowTurn, instance: AgentWorkflowInstance,
-        completion: PluginWorkflowEvent?, discovered: AgentWorkflowTranscriptFile.VerifiedSubmission? = nil
+        receipt: AgentWorkflowPendingReceipt?, completion: PluginWorkflowEvent?, discovered: AgentWorkflowTranscriptFile.VerifiedSubmission? = nil
     ) async throws -> (AgentWorkflowTranscriptOutcome, AgentWorkflowTranscriptFile.VerifiedRecoveryEnd?)? {
         if let completion, completion.kind == .failed {
             return (.failed(completion.text), nil)
@@ -129,9 +130,19 @@ struct AgentWorkflowResultRecovery: Sendable {
         let prompt = invocation.stepTurn?.prompt ?? invocation.submissionText(pluginID: instance.pluginID)
         let file: AgentWorkflowTranscriptFile
         do {
-            file = try AgentWorkflowTranscriptFile(path: turn.transcriptPath, parser: provider.workflowTranscript(
-                conversationID: instance.conversationID, nativeTurnID: turn.nativeTurnID, prompt: prompt, candidate: candidate ?? ""
-            ))
+            let parser = provider.workflowTranscript(conversationID: instance.conversationID, nativeTurnID: turn.nativeTurnID, prompt: prompt, candidate: candidate ?? "")
+            let proof: AgentWorkflowTranscriptFile.VerifiedSubmission?
+            if discovered == nil, !parser.startMarkers.isEmpty, invocation.isOriginalDelivery(turn, receipt: receipt, pluginID: instance.pluginID) {
+                guard let delivery = try await readers.delivery(for: invocation, turn: turn, instance: instance, receipt: receipt, provider: provider) else { return nil }
+                proof = delivery
+            } else {
+                proof = nil
+            }
+            file = try AgentWorkflowTranscriptFile(path: turn.transcriptPath, parser: parser)
+            if let proof {
+                guard try await file.start(at: proof) else { return nil }
+                try await store.rememberDelivery(proof, invocationID: invocation.id)
+            }
         } catch let error as CocoaError where error.code == .fileNoSuchFile {
             return nil
         }
