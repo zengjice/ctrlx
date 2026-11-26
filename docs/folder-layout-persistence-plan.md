@@ -12,6 +12,37 @@ private tabs while retaining live Host models, selection and placement. Host
 Files identities are excluded from private snapshots and never recreated from
 disk. iOS uses the same separation when its session context first becomes known.
 
+On Mac, Host-advertised session members take priority over locally visible
+windows; older Hosts fall back to the Viewer's known session catalog. Detaching
+a terminal or temporarily routing it through another tmux session preserves its
+layout position. Explicitly closing or moving the last left-side resource tab publishes a
+shared collapse only when all session terminals belong to that native window.
+Removing the selected right-side resource records the terminal it reveals on
+Host and Viewer, including a transfer to another native window. Removing an
+unselected tab preserves any hidden shared selection. The source window repairs
+its selection and publishes any resulting collapse using the latest Host
+layout, before the general presentation refresh. Viewer submissions order
+right-side terminals by session only after an explicit membership edit,
+including a move out and back before confirmation; attaching a Viewer or
+changing tmux indices preserves the Host's existing order.
+Order confirmation is independent of placement confirmation, so correcting
+the order cannot replay a cancelled move over a later Host update.
+Host-browser catalog updates confirm explicit Viewer closes before automatic
+selection repair, using the same shared-layout update as private-page closes.
+The close resolves terminal placement from the latest Host layout before choosing
+a fallback or collapsing, preserving unrelated private tabs' positions. It submits
+against the original session even after navigation.
+Passive browser, simulator and Files catalog removals project the main scene's
+latest terminal placement before repairing selection, without granting a user-close
+Fit. Detached windows keep their own splits. Native resource transfers let the
+source scene choose the fallback instead of publishing the move operation's
+provisional selection.
+Catalog preparation projects newly received layouts; visibility-only changes stay
+with scene reconciliation so it can restore a returning left terminal. Legacy
+Files reuse repairs the source scene through the same callback as drag transfers.
+Ordinary terminal selection and returning a terminal to its existing side
+preserve the shared right-side order.
+
 Historical status (2026-06-19): **Implemented + E2E-proven** on branch
 `feat/folder-layout-persistence`; flush-on-quit and file-tree expansion still
 pending at that checkpoint.

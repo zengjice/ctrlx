@@ -351,6 +351,25 @@ struct WorkspaceRecoveryPresentation: Codable, Equatable, Sendable {
     var remoteReference: ViewerWorkspaceReference?
     var fileSources: [UUID: ViewerWorkspaceReference]?
     var modelShortcuts: [UUID: AgentModelPreferences.Snapshot]?
+    var privateTabFolders: [UUID: Set<String>]?
+    var sharedTerminalLayout: WorkspaceRecoveryTerminalLayout?
+}
+
+struct WorkspaceRecoveryTerminalLayout: Codable, Equatable, Sendable {
+    var leftWindowID: UUID
+    var rightWindowIDs: [UUID]
+    var selectedRightWindowID: UUID?
+    var splitRatio: Double
+    /// A saved right terminal temporarily shown on the left during partial recovery.
+    var deferredRightWindowID: UUID? = nil
+
+    mutating func clearRestoredDeferredRightWindow(in session: WorkspaceRecoverySession, shared: SharedTerminalLayout) {
+        if
+            let deferredRightWindowID, let window = session.windows.first(where: { $0.id == deferredRightWindowID }),
+            shared.rightWindowIds.contains(window.runtimeID) {
+            self.deferredRightWindowID = nil
+        }
+    }
 }
 
 struct WorkspaceRecoveryDraft: Codable, Equatable, Sendable, Identifiable {

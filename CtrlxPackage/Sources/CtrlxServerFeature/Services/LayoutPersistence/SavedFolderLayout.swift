@@ -33,6 +33,10 @@
         var selectedLeft: SavedTabRef?
         /// Active tab in the right pane.
         var selectedRight: SavedTabRef?
+        /// Shared terminal selection while the Host is showing a private tab on the right.
+        var selectedRightTerminalIndex: Int?
+        /// Terminal shown on the Host's right beside a private resource.
+        var localRightTerminalIndex: Int?
         /// Left-pane width fraction, clamped to `SplitLayout.minRatio…maxRatio`.
         var splitRatio: CGFloat
 
@@ -51,6 +55,8 @@
             rightSide: [SavedTabRef] = [],
             selectedLeft: SavedTabRef? = nil,
             selectedRight: SavedTabRef? = nil,
+            selectedRightTerminalIndex: Int? = nil,
+            localRightTerminalIndex: Int? = nil,
             splitRatio: CGFloat = 0.5,
             fileTree: SavedFileTree? = nil
         ) {
@@ -62,6 +68,8 @@
             self.rightSide = rightSide
             self.selectedLeft = selectedLeft
             self.selectedRight = selectedRight
+            self.selectedRightTerminalIndex = selectedRightTerminalIndex
+            self.localRightTerminalIndex = localRightTerminalIndex
             self.splitRatio = splitRatio
             self.fileTree = fileTree
         }
@@ -70,6 +78,13 @@
         /// writing empty records and to short-circuit seeding.
         var isEmpty: Bool {
             fileTabs.isEmpty && browserTabs.isEmpty && tabOrder.isEmpty && rightSide.isEmpty && (linkedTabOrder?.isEmpty ?? true)
+        }
+
+        func isSameWorkbench(as other: Self) -> Bool {
+            guard Set(rightSide) == Set(other.rightSide) else { return false }
+            var layout = self
+            layout.rightSide = other.rightSide
+            return layout == other
         }
     }
 
@@ -121,8 +136,12 @@
         case browser(id: UUID)
 
         var isWindow: Bool {
-            if case .window = self { return true }
-            return false
+            windowIndex != nil
+        }
+
+        var windowIndex: Int? {
+            guard case let .window(index) = self else { return nil }
+            return index
         }
     }
 #endif

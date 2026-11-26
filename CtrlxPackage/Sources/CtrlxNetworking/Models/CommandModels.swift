@@ -586,19 +586,23 @@ public struct SetSharedTerminalLayout: CommandSpec, Equatable {
     public let rightWindowIds: [String]
     public let selectedRightWindowId: String?
     public let splitRatio: Double
+    /// Explicit removals also apply to terminals hidden from this Viewer's tab strip.
+    public let removedRightWindowIds: [String]?
 
     public init(
         sessionName: String,
         leftWindowId: String,
         rightWindowIds: [String] = [],
         selectedRightWindowId: String? = nil,
-        splitRatio: Double = 0.5
+        splitRatio: Double = 0.5,
+        removedRightWindowIds: [String]? = nil
     ) {
         self.sessionName = sessionName
         self.leftWindowId = leftWindowId
         self.rightWindowIds = rightWindowIds
         self.selectedRightWindowId = selectedRightWindowId
         self.splitRatio = splitRatio
+        self.removedRightWindowIds = removedRightWindowIds
     }
 
     public var commandType: CommandType {

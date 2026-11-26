@@ -37,8 +37,8 @@ enum TmuxError: Error, LocalizedError {
 /// state — keeping the mutation point in `refreshPanes` to a single switch so
 /// `panes` is never written to an intermediate `[]` value mid-refresh.
 private enum RefreshOutcome {
-    /// list-panes succeeded with parseable output. Use these panes verbatim.
-    case assign([PaneInfo])
+    /// list-panes succeeded with parseable output.
+    case assign([PaneInfo], layoutPanes: [PaneInfo])
     /// Tmux server confirmed to have no panes/sessions. Clear stored state.
     case empty(reason: String)
     /// Couldn't confidently determine state. Preserve current panes.
@@ -531,6 +531,9 @@ final public class TmuxService {
         }
     }
 
+    /// Window links retain one route per session, while pane state uses one route per physical pane.
+    @ObservationIgnored private(set) var layoutPanes: [PaneInfo] = []
+
     @ObservationIgnored private var cachedWindows: [LocalTmuxWindow]?
     @ObservationIgnored private var cachedSessions: [LocalTmuxSession]?
 
@@ -710,6 +713,7 @@ final public class TmuxService {
             isRefreshing = true
         }
         let oldPanes = panes
+        let oldLayoutPanes = layoutPanes
         let questionIDsAtRefreshStart = codexQuestionIDs
 
         defer {
@@ -720,7 +724,7 @@ final public class TmuxService {
             }
 
             // Notify if panes changed (compare sets to ignore order)
-            if Set(panes) != Set(oldPanes), let handler = onPanesChanged {
+            if Set(panes) != Set(oldPanes) || layoutPanes != oldLayoutPanes, let handler = onPanesChanged {
                 Task {
                     await handler()
                 }
@@ -737,6 +741,7 @@ final public class TmuxService {
                     "oldPaneCount": "\(oldPanes.count)",
                 ])
             }
+            layoutPanes = []
             publishPanesIfChanged([], questionIDsAtRefreshStart: questionIDsAtRefreshStart)
             return panes
         }
@@ -748,9 +753,12 @@ final public class TmuxService {
         }
 
         switch await queryRefreshOutcome(attachedSessions: attachedSessions) {
-        case let .assign(newPanes):
+        case let .assign(newPanes, routes):
             if lastError != nil {
                 lastError = nil
+            }
+            if Set(layoutPanes) != Set(routes) {
+                layoutPanes = routes
             }
             publishPanesIfChanged(newPanes, questionIDsAtRefreshStart: questionIDsAtRefreshStart)
             // When the override is active, type `export VISUAL=…` into any new
@@ -769,6 +777,7 @@ final public class TmuxService {
                     "oldPaneCount": "\(oldPanes.count)",
                 ])
             }
+            layoutPanes = []
             publishPanesIfChanged([], questionIDsAtRefreshStart: questionIDsAtRefreshStart)
         case let .keep(reason, err):
             if !oldPanes.isEmpty {
@@ -898,7 +907,7 @@ final public class TmuxService {
         }
 
         if !deduped.isEmpty {
-            return .assign(deduped)
+            return .assign(deduped, layoutPanes: parsed)
         }
 
         // list-panes returned success with empty/unparseable stdout. Confirm

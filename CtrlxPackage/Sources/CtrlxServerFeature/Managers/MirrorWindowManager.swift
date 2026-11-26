@@ -26,6 +26,22 @@ final public class MirrorWindowManager {
     /// Canonical terminal-window arrangements published to every Viewer.
     /// Layout revisions are assigned here on the Host; the Relay is stateless.
     public private(set) var sharedTerminalLayouts: [String: SharedTerminalLayout] = [:]
+    private(set) var sharedLayoutsAwaitingFolder: Set<String> = []
+    private(set) var sharedTerminalLayoutFolders: [String: String] = [:]
+    @ObservationIgnored private var layoutWindowsBySession: [String: [LocalTmuxWindow]] = [:]
+    @ObservationIgnored private var viewerTerminalLayoutEdits: [String: [String: ViewerTerminalLayoutEdit]] = [:]
+    @ObservationIgnored private var viewerLayoutsAwaitingFolder: [String: ViewerTerminalLayoutEdit] = [:]
+
+    struct ViewerTerminalLayoutEdit: Equatable, Sendable {
+        let layout: SharedTerminalLayout
+        let previousLeftWindowID: String?
+        let indices: [String: [Int]]
+        let identity: WorkspacePaneIdentity?
+
+        func applying(to saved: SavedFolderLayout) -> SavedFolderLayout {
+            LayoutSnapshotMapper.applyingSharedTerminalLayout(layout, previousLeftWindowID: previousLeftWindowID, indices: indices, to: saved)
+        }
+    }
 
     /// One cold-start persistence read per live session. Until that read
     /// finishes, the session is deliberately absent from
@@ -219,10 +235,41 @@ final public class MirrorWindowManager {
         if changed {
             paneStates = updatedStates
         }
-        let liveWindowIdsBySession = Dictionary(grouping: TmuxWindow.groupPanes(Array(updatedStates.values)), by: \.sessionName)
-            .mapValues { $0.map(\.stableId) }
+        let routes = panes == tmuxService.panes ? tmuxService.layoutPanes : panes
+        let previousWindows = layoutWindowsBySession
+        let windowsBySession = Dictionary(grouping: LocalTmuxWindow.groupPanes(routes), by: \.sessionName)
+        layoutWindowsBySession = windowsBySession
+        let liveWindowIdsBySession = windowsBySession.mapValues { $0.map(\.stableId) }
+        var replacedSessions = Set(windowsBySession.compactMap { name, windows -> String? in
+            guard let previous = previousWindows[name] else { return nil }
+            let oldPanes = previous.lazy.flatMap(\.panes)
+            let newPanes = windows.lazy.flatMap(\.panes)
+            if
+                let oldServer = oldPanes.compactMap(\.tmuxServerID).first,
+                let newServer = newPanes.compactMap(\.tmuxServerID).first,
+                oldServer != newServer {
+                return name
+            }
+            guard
+                let oldIdentity = oldPanes.compactMap(\.workspaceIdentity).first,
+                let newIdentity = newPanes.compactMap(\.workspaceIdentity).first else { return nil }
+            return oldIdentity.isSameSession(as: newIdentity) ? nil : name
+        })
+        // Legacy pane metadata has no session UUID. A pending edit with no surviving
+        // window cannot be attributed to a same-named session safely.
+        for (name, edit) in viewerLayoutsAwaitingFolder {
+            let identity = windowsBySession[name]?.lazy.flatMap(\.panes).compactMap(\.workspaceIdentity).first
+            guard identity == nil || edit.identity == nil else { continue }
+            if let live = liveWindowIdsBySession[name], Set(edit.indices.keys).isDisjoint(with: live) {
+                replacedSessions.insert(name)
+            }
+        }
+        for name in replacedSessions {
+            sharedLayoutsAwaitingFolder.remove(name)
+            sharedTerminalLayoutInitializationTasks.removeValue(forKey: name)?.cancel()
+        }
         var reconciledLayouts: [String: SharedTerminalLayout] = [:]
-        for (sessionName, layout) in sharedTerminalLayouts {
+        for (sessionName, layout) in sharedTerminalLayouts where !replacedSessions.contains(sessionName) {
             guard
                 let liveWindowIds = liveWindowIdsBySession[sessionName],
                 let leftWindowId = liveWindowIds.contains(layout.leftWindowId) ? layout.leftWindowId
@@ -256,6 +303,19 @@ final public class MirrorWindowManager {
             sharedTerminalLayouts = reconciledLayouts
             changed = true
         }
+        viewerTerminalLayoutEdits = viewerTerminalLayoutEdits.filter { reconciledLayouts[$0.key] != nil }
+        viewerLayoutsAwaitingFolder = viewerLayoutsAwaitingFolder.filter { reconciledLayouts[$0.key] != nil }
+        sharedTerminalLayoutFolders = sharedTerminalLayoutFolders.filter { reconciledLayouts[$0.key] != nil }
+        for (sessionName, pending) in viewerLayoutsAwaitingFolder {
+            guard
+                let windows = windowsBySession[sessionName], let folder = layoutFolder(in: windows),
+                let layout = reconciledLayouts[sessionName] else { continue }
+            viewerLayoutsAwaitingFolder[sessionName] = nil
+            sharedTerminalLayoutFolders[sessionName] = folder
+            let edit = viewerTerminalEdit(layout, previousLeftWindowID: pending.previousLeftWindowID, windows: windows)
+            viewerTerminalLayoutEdits[sessionName, default: [:]][folder] = edit
+            Task { await persistViewerTerminalLayout(edit, sessionName: sessionName, folder: folder) }
+        }
         // Pruning can lower the pending count — e.g. `tmux kill-session` on a
         // pinned-Waiting terminal-only session, which has no SessionEnd hook of
         // its own — and the iOS badge is push-driven, so the host must emit the
@@ -263,6 +323,9 @@ final public class MirrorWindowManager {
         // treatment via `sessionEnded`).
         if !stalePaneIds.isEmpty || layoutChanged {
             Task { await onPaneStatesPruned?() }
+        }
+        if !sharedLayoutsAwaitingFolder.isEmpty || !replacedSessions.isEmpty {
+            initializeSharedTerminalLayoutsIfNeeded()
         }
         return changed
     }
@@ -287,6 +350,7 @@ final public class MirrorWindowManager {
             return false
         }
 
+        sharedLayoutsAwaitingFolder.remove(sessionName)
         let ratio = min(max(splitRatio, 0.15), 0.85)
         if
             let current = sharedTerminalLayouts[sessionName],
@@ -297,6 +361,7 @@ final public class MirrorWindowManager {
             return false
         }
 
+        sharedTerminalLayoutFolders[sessionName] = layoutFolder(forSession: sessionName)
         let currentRevision = sharedTerminalLayouts[sessionName]?.revision ?? 0
         let revision = currentRevision == UInt64.max ? currentRevision : currentRevision + 1
         sharedTerminalLayouts[sessionName] = SharedTerminalLayout(
@@ -307,6 +372,63 @@ final public class MirrorWindowManager {
             revision: revision
         )
         return true
+    }
+
+    /// Viewer edits can arrive before the Host has opened this session's workbench.
+    func setViewerTerminalLayout(_ request: SetSharedTerminalLayout) async -> Bool {
+        let sessionName = request.sessionName
+        let previous = sharedTerminalLayouts[sessionName]
+        let windows = layoutWindows(forSession: sessionName)
+        let visible = Set(paneStates.values.lazy.filter { $0.sessionName == sessionName }.map(\.stableWindowId))
+        let live = Set(windows.map(\.stableId))
+        let removed = Set(request.removedRightWindowIds ?? [])
+        var right = request.rightWindowIds
+        // A physical pane published through another session is absent from this Viewer's tab strip.
+        for (index, id) in (previous?.rightWindowIds ?? []).enumerated()
+            where live.contains(id) && !visible.contains(id) && !removed.contains(id) && id != request.leftWindowId && !right.contains(id) {
+            right.insert(id, at: min(index, right.count))
+        }
+        let selected = request.selectedRightWindowId
+            ?? previous?.selectedRightWindowId.flatMap { right.contains($0) ? $0 : nil } ?? right.first
+        guard
+            setSharedTerminalLayout(
+                sessionName: request.sessionName,
+                leftWindowId: request.leftWindowId,
+                rightWindowIds: right,
+                selectedRightWindowId: selected,
+                splitRatio: request.splitRatio
+            ), let layout = sharedTerminalLayouts[sessionName] else { return false }
+        let edit = viewerTerminalEdit(layout, previousLeftWindowID: previous?.leftWindowId, windows: windows)
+        guard let folder = sharedTerminalLayoutFolders[sessionName] else {
+            viewerLayoutsAwaitingFolder[sessionName] = edit
+            return true
+        }
+        viewerLayoutsAwaitingFolder[sessionName] = nil
+        viewerTerminalLayoutEdits[sessionName, default: [:]][folder] = edit
+        await persistViewerTerminalLayout(edit, sessionName: sessionName, folder: folder)
+        return true
+    }
+
+    private func viewerTerminalEdit(_ layout: SharedTerminalLayout, previousLeftWindowID: String?, windows: [LocalTmuxWindow]) -> ViewerTerminalLayoutEdit {
+        ViewerTerminalLayoutEdit(
+            layout: layout, previousLeftWindowID: previousLeftWindowID,
+            indices: Dictionary(grouping: windows, by: \.stableId).mapValues { $0.map(\.windowIndex) },
+            identity: windows.lazy.flatMap(\.panes).compactMap(\.workspaceIdentity).first
+        )
+    }
+
+    private func persistViewerTerminalLayout(_ edit: ViewerTerminalLayoutEdit, sessionName: String, folder: String) async {
+        guard viewerTerminalLayoutEdits[sessionName]?[folder] == edit else { return }
+        let key = SavedFolderRecord.Key(host: SavedFolderRecord.localHost, folder: folder)
+        await layoutStore.updateLayout(key) { saved in
+            let updated = edit.applying(to: saved ?? .init())
+            return saved?.isSameWorkbench(as: updated) == true ? nil : updated
+        }
+    }
+
+    func viewerTerminalLayout(after revision: UInt64?, sessionName: String, folder: String) -> ViewerTerminalLayoutEdit? {
+        guard let edit = viewerTerminalLayoutEdits[sessionName]?[folder], edit.layout.revision > (revision ?? 0) else { return nil }
+        return edit
     }
 
     /// Establishes an explicit authoritative terminal layout for every live
@@ -320,13 +442,10 @@ final public class MirrorWindowManager {
 
     public func initializeSharedTerminalLayoutsIfNeeded() {
         guard !defersWorkspaceLayoutInitialization else { return }
-        let windowsBySession = Dictionary(
-            grouping: TmuxWindow.groupPanes(
-                paneStates.values.filter { !$0.sessionName.isEmpty }
-            ),
-            by: \.sessionName
-        )
+        let windowsBySession = layoutWindowsBySession
         let liveSessionNames = Set(windowsBySession.keys)
+        sharedLayoutsAwaitingFolder.formIntersection(liveSessionNames)
+        sharedTerminalLayoutFolders = sharedTerminalLayoutFolders.filter { liveSessionNames.contains($0.key) }
 
         let staleTaskSessionNames = sharedTerminalLayoutInitializationTasks.keys.filter {
             !liveSessionNames.contains($0)
@@ -337,11 +456,12 @@ final public class MirrorWindowManager {
 
         for (sessionName, windows) in windowsBySession {
             guard
-                sharedTerminalLayouts[sessionName] == nil,
+                sharedTerminalLayouts[sessionName] == nil || sharedLayoutsAwaitingFolder.contains(sessionName),
                 sharedTerminalLayoutInitializationTasks[sessionName] == nil
             else { continue }
 
             guard let folder = layoutFolder(in: windows) else {
+                guard sharedTerminalLayouts[sessionName] == nil else { continue }
                 // tmux normally supplies a current path. If it temporarily
                 // cannot, there is no persistence key to read, but the Host can
                 // still remove ambiguity by publishing an explicit unsplit
@@ -359,6 +479,7 @@ final public class MirrorWindowManager {
                         selectedRightWindowId: request.selectedRightWindowId,
                         splitRatio: request.splitRatio
                     ) {
+                    sharedLayoutsAwaitingFolder.insert(sessionName)
                     Task { await onSharedTerminalLayoutInitialized?() }
                 }
                 continue
@@ -373,38 +494,59 @@ final public class MirrorWindowManager {
                 // Re-resolve from the current pane snapshot after the await. A
                 // session can disappear, be renamed, or gain/lose windows while
                 // the layout store is loading.
-                let currentWindows = TmuxWindow.groupPanes(
-                    paneStates.values.filter { $0.sessionName == sessionName }
-                )
-                defer { sharedTerminalLayoutInitializationTasks.removeValue(forKey: sessionName) }
+                let currentWindows = layoutWindows(forSession: sessionName)
+                sharedTerminalLayoutInitializationTasks.removeValue(forKey: sessionName)
                 guard
                     !currentWindows.isEmpty,
-                    sharedTerminalLayouts[sessionName] == nil,
-                    layoutFolder(in: currentWindows) == folder
+                    sharedTerminalLayouts[sessionName] == nil || sharedLayoutsAwaitingFolder.contains(sessionName)
                 else { return }
+                guard layoutFolder(in: currentWindows) == folder else {
+                    initializeSharedTerminalLayoutsIfNeeded()
+                    return
+                }
 
                 let request = LayoutSnapshotMapper.sharedTerminalLayoutRequest(
                     from: savedLayout,
                     sessionName: sessionName,
                     windows: terminalWindows(from: currentWindows)
                 )
-                guard
-                    let request,
-                    setSharedTerminalLayout(
-                        sessionName: request.sessionName,
-                        leftWindowId: request.leftWindowId,
-                        rightWindowIds: request.rightWindowIds,
-                        selectedRightWindowId: request.selectedRightWindowId,
-                        splitRatio: request.splitRatio
-                    )
-                else { return }
-
-                await onSharedTerminalLayoutInitialized?()
+                guard let request else { return }
+                let changed = setSharedTerminalLayout(
+                    sessionName: request.sessionName,
+                    leftWindowId: request.leftWindowId,
+                    rightWindowIds: request.rightWindowIds,
+                    selectedRightWindowId: request.selectedRightWindowId,
+                    splitRatio: request.splitRatio
+                )
+                sharedTerminalLayoutFolders[sessionName] = folder
+                if changed {
+                    await onSharedTerminalLayoutInitialized?()
+                }
             }
         }
     }
 
-    private func terminalWindows(from windows: [TmuxWindow]) -> [LayoutSnapshotMapper.TerminalWindow] {
+    func layoutWindows(forSession sessionName: String) -> [LocalTmuxWindow] {
+        layoutWindowsBySession[sessionName] ?? []
+    }
+
+    func sharedTerminalLayoutsForViewers() -> [String: SharedTerminalLayout] {
+        Dictionary(uniqueKeysWithValues: sharedTerminalLayouts.map { session, layout in
+            var seen: Set<String> = []
+            let members = layoutWindows(forSession: session).map(\.stableId).filter { seen.insert($0).inserted }
+            return (session, SharedTerminalLayout(
+                leftWindowId: layout.leftWindowId, rightWindowIds: layout.rightWindowIds,
+                selectedRightWindowId: layout.selectedRightWindowId, splitRatio: layout.splitRatio,
+                revision: layout.revision, sessionWindowIds: members
+            ))
+        })
+    }
+
+    func layoutFolder(forSession sessionName: String) -> String? {
+        layoutFolder(in: layoutWindows(forSession: sessionName))
+    }
+
+    private func terminalWindows(from windows: [LocalTmuxWindow]) -> [LayoutSnapshotMapper.TerminalWindow] {
         windows.map {
             LayoutSnapshotMapper.TerminalWindow(
                 index: $0.windowIndex,
@@ -414,13 +556,13 @@ final public class MirrorWindowManager {
         }
     }
 
-    private func layoutFolder(in windows: [TmuxWindow]) -> String? {
+    private func layoutFolder(in windows: [LocalTmuxWindow]) -> String? {
         guard
             let active = windows.first(where: \.isWindowActive) ?? windows.first,
             let pane = active.activePane
         else { return nil }
         return LayoutFolderKey.canonicalize(
-            pane.agentSession?.detectedProjectPath ?? pane.currentPath
+            paneStates[pane.paneId]?.agentSession?.detectedProjectPath ?? pane.currentPath
         )
     }
 

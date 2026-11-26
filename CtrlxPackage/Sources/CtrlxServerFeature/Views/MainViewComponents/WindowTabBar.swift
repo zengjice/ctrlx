@@ -48,6 +48,7 @@ struct WindowTabBar: View {
     /// the right side becomes empty). The host dispatches on the payload's
     /// case to update the matching state.
     let onToggleSplit: (TabDragPayload) -> Void
+    let onMoveTab: (TabDragPayload) -> Void
     let onShowInFileExplorer: (String) -> Void
     let onAcceptOpenSuggestion: (MarkdownOpenSuggestion) -> Void
     /// Rearranges the tmux windows in the session to match the supplied id
@@ -116,24 +117,13 @@ struct WindowTabBar: View {
 
     /// Keep source labels for children whose terminal is in another workbench.
     private var groupPanes: [PaneState] {
-        let ids = PaneLinkedTabs.ordered(session.windows.map(\.stableId), stored: sessionTabs.tabOrder.compactMap(\.windowId))
-        let visible = ids.flatMap { id in session.windows.first { $0.stableId == id }?.panes ?? [] }
-            .compactMap { windowManager.paneStates[$0.paneId] }
-        let seen = Set(visible.map(\.paneId))
-        return visible + windowManager.paneStates.values.filter { $0.sessionName == session.sessionName && !seen.contains($0.paneId) }
-            .sorted { ($0.windowIndex, $0.paneIndex) < ($1.windowIndex, $1.paneIndex) }
+        sessionTabs.localTabPanes(sessionName: session.sessionName, windows: session.windows, paneStates: windowManager.paneStates)
     }
 
     private var effectiveTabOrder: [TabDragPayload] {
-        // Session-wide tabs precede the pane-linked groups.
-        let order = TabDragPayload.reconciledOrder(
-            windowIds: session.windows.map(\.stableId),
-            fileTabIds: openFileTabs.map(\.id),
-            browserTabIds: openBrowserTabs.map(\.id),
-            storedOrder: sessionTabs.tabOrder,
-            includeFileExplorer: false
+        sessionTabs.localPresentedTabOrder(
+            windows: session.windows, panes: groupPanes, layout: workbenchContext?.sharedTabLayout?.snapshot
         )
-        return sessionTabs.presentedTabOrder(order, panes: groupPanes, layout: workbenchContext?.sharedTabLayout?.snapshot)
     }
 
     /// Effective order restricted to entries visible on the left section in
@@ -639,7 +629,7 @@ struct WindowTabBar: View {
         let section = sectionOf(target)
         let applyPlacement: @MainActor () -> Void = {
             sessionTabs.recordTabDrop(source, at: placement)
-            adjustSplitSideIfNeeded(source: source, to: section)
+            finishTabPlacement(source: source, in: section)
         }
         if workbenchContext?.sharedTabLayout?.drop(source, at: placement, order: effectiveTabOrder, onSuccess: applyPlacement) == true {
             return true
@@ -665,7 +655,7 @@ struct WindowTabBar: View {
 
         // If the drop crosses the split, also flip the source tab's side
         // membership so it shows up in the pane the user dropped it into.
-        adjustSplitSideIfNeeded(source: source, to: section)
+        finishTabPlacement(source: source, in: section)
 
         // Sync the per-kind subsequences out to the rest of the app so
         // anything still iterating the old arrays (keyboard nav, tmux's
@@ -681,7 +671,7 @@ struct WindowTabBar: View {
         if
             workbenchContext?.sharedTabLayout?.drop(source, at: placement, order: effectiveTabOrder, onSuccess: {
                 sessionTabs.recordTabDrop(source, at: placement)
-                adjustSplitSideIfNeeded(source: source, to: section)
+                finishTabPlacement(source: source, in: section)
             }) == true {
             return true
         }
@@ -692,7 +682,9 @@ struct WindowTabBar: View {
         guard !windowOrderChanged || !sessionTabs.isWindowReorderPending else { return false }
         sessionTabs.recordVisibleTabOrder(order)
         sessionTabs.updateLocalGroup(for: source, at: placement)
-        adjustSplitSideIfNeeded(source: source, to: section)
+        if order != previousOrder || isOnRight(source) != (section == .right) {
+            finishTabPlacement(source: source, in: section)
+        }
         syncSubsequences(from: order, rollbackOrder: previousOrder)
         return true
     }
@@ -707,14 +699,17 @@ struct WindowTabBar: View {
         return isSplit ? .left : .single
     }
 
-    /// Flips the source's split-side membership when it crossed sections
-    /// during the drag. Reuses the host's `onToggleSplit` callback so all
-    /// the side-effect bookkeeping (selection updates, right-pane
-    /// reconciliation, fileBrowserActiveWindowIds) runs through the same
-    /// code path as the split-toggle button on each tab.
-    private func adjustSplitSideIfNeeded(source: TabDragPayload, to section: TabSection) {
-        if isOnRight(source) != (section == .right) {
+    private func finishTabPlacement(source: TabDragPayload, in section: TabSection) {
+        let changesSide = isOnRight(source) != (section == .right)
+        if changesSide {
             onToggleSplit(source)
+        }
+        switch source {
+        case .browser,
+             .file where !changesSide:
+            onMoveTab(source)
+        default:
+            break
         }
     }
 

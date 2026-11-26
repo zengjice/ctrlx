@@ -3,6 +3,20 @@ import CtrlxNetworking
 import Foundation
 import Observation
 
+struct PendingFolderLayout: Sendable {
+    var snapshot: SavedFolderLayout
+    var needsSavedLayout: Bool
+    var waitsForDetachedTabs = false
+    var browserEdits: [UUID: LayoutSnapshotMapper.BrowserEdit] = [:]
+    var privateTabOrder: SavedFolderLayout?
+    var appliedTerminalRevision: UInt64?
+    var detachedRightTerminals: (ids: [String], selected: String?) = ([], nil)
+    var updatesTerminalPlacement = false
+    var updatesTabOrder = false
+    var terminalSelectionSides: Set<Bool> = []
+    var splitRatio: CGFloat?
+}
+
 /// Per-native-window presentation state; the terminal and browser services remain shared.
 @MainActor @Observable
 final class WorkbenchTabStore {
@@ -24,13 +38,17 @@ final class WorkbenchTabStore {
     @ObservationIgnored private(set) var userSelectionRevision = 0
     @ObservationIgnored private var remoteTabSelectionRevisions: [RemoteSessionTabsKey: Int] = [:]
     var restoredLocalSessions: Set<String> = []
+    var seededFolders: [String: String] = [:]
+    @ObservationIgnored var pendingFolderLayouts: [String: [String: PendingFolderLayout]] = [:]
+    @ObservationIgnored var closedEditorPaths: [String: [String: Set<String>]] = [:]
     var recoveryFileTrees: [String: SavedFileTree] = [:]
     var recoveryGitPaths: [String: String] = [:]
     var recoveryGitStates: [String: WorkspaceGitState] = [:]
     var pendingGitRecoverySessions: Set<String> = []
-    var restoredRecoveryWindowIDs: Set<UUID> = []
+    var restoredRecoveryWindowIDs: [UUID: Set<UUID>] = [:]
     var restoredRecoveryFileIDs: Set<UUID> = []
     @ObservationIgnored var capturePresentation: (() -> Void)?
+    @ObservationIgnored var onResourceTransferred: ((String?, String, Bool) -> Void)?
 
     /// Automatic fallbacks and Host snapshots must not cancel a pending restore.
     func userDidSelectSession() {
@@ -56,10 +74,12 @@ final class WorkbenchTabStore {
         return request
     }
 
-    func userDidSelectTab(hostID: String?, session: String) {
+    func userDidSelectTab(hostID: String?, session: String, onRight: Bool? = nil) {
         userDidSelectSession()
         if let hostID {
             remoteTabSelectionRevisions[.init(hostId: hostID, sessionName: session), default: 0] += 1
+        } else if let tabs = local[session] {
+            tabs.recordTabSelection(onRight: onRight)
         }
     }
 
@@ -135,6 +155,9 @@ final class WorkbenchTabStore {
             guard let tabs = local.removeValue(forKey: oldName) else { return }
             tabs.remapWindowIDs(windowIDs)
             local[newName] = tabs
+            if restoredLocalSessions.remove(oldName) != nil {
+                restoredLocalSessions.insert(newName)
+            }
             recoveryGitStates[newName] = recoveryGitStates.removeValue(forKey: oldName)
             recoveryGitPaths[newName] = recoveryGitPaths.removeValue(forKey: oldName)
             if pendingGitRecoverySessions.remove(oldName) != nil {
@@ -247,6 +270,38 @@ final class DetachedTerminalWorkspace {
 }
 
 enum WorkspaceTerminalSelection {
+    /// Edit session-wide placement before projecting it into the native windows.
+    static func splitRequest(
+        _ request: SetSharedTerminalLayout, windowID: String, onRight: Bool, select: Bool,
+        windowIDs: [String], activeWindowID: String?, keepLocalSplit: Bool = false
+    ) -> SetSharedTerminalLayout {
+        var right = Set(request.rightWindowIds).intersection(windowIDs)
+        if onRight {
+            right.insert(windowID)
+        } else {
+            right.remove(windowID)
+        }
+        let preferredLeft = !onRight && select ? windowID : request.leftWindowId
+        if windowIDs.allSatisfy(right.contains) {
+            guard !keepLocalSplit else { return request }
+            right.removeAll()
+        }
+        guard
+            let left = leftWindowID(
+                current: preferredLeft, orderedIDs: windowIDs, activeID: activeWindowID,
+                rightSide: right, owns: { _ in true }
+            ) else { return request }
+
+        let orderedRight = right == Set(request.rightWindowIds)
+            ? request.rightWindowIds : windowIDs.filter { right.remove($0) != nil }
+        let selected = onRight && select ? windowID : request.selectedRightWindowId
+        return SetSharedTerminalLayout(
+            sessionName: request.sessionName, leftWindowId: left, rightWindowIds: orderedRight,
+            selectedRightWindowId: selected.flatMap { orderedRight.contains($0) ? $0 : nil } ?? orderedRight.first,
+            splitRatio: request.splitRatio
+        )
+    }
+
     struct Window: Equatable {
         let hostID: String
         let id: String
@@ -284,6 +339,72 @@ enum WorkspaceTerminalSelection {
 }
 
 extension SessionFileTabsState {
+    func remoteRightWindowIDs(in layout: SharedTerminalLayout, sessionWindowIDs: [String]) -> [String] {
+        let members = layout.sessionWindowIds ?? sessionWindowIDs
+        var right = layout.rightWindowIds.filter { remoteTerminalPlacements[$0] != false }
+        for id in members
+            where remoteTerminalPlacements[id] == true && !right.contains(id) {
+            right.append(id)
+        }
+        guard pendingRemoteTerminalOrder != nil || remoteTerminalPlacements.contains(where: { id, onRight in onRight || layout.rightWindowIds.contains(id) }) else { return right }
+        // Fallback selection must not depend on how moves were batched into requests.
+        return Self.orderedRightWindowIDs(right, by: pendingRemoteTerminalOrder ?? members)
+    }
+
+    static func orderedRightWindowIDs(_ ids: [String], by order: [String]) -> [String] {
+        ids.sorted {
+            let lhs = order.firstIndex(of: $0) ?? order.count
+            let rhs = order.firstIndex(of: $1) ?? order.count
+            return lhs == rhs ? $0 < $1 : lhs < rhs
+        }
+    }
+
+    func hasRemoteSplitAlternative(to id: String, sessionWindowIDs: [String]) -> Bool {
+        guard let layout = appliedSharedTerminalLayout else { return sessionWindowIDs.contains { $0 != id } }
+        let right = Set(remoteRightWindowIDs(in: layout, sessionWindowIDs: sessionWindowIDs))
+        let members = layout.sessionWindowIds ?? sessionWindowIDs
+        return members.contains { $0 != id && !right.contains($0) }
+            || (layout.leftWindowId != id && !right.contains(layout.leftWindowId))
+    }
+
+    func remoteTerminalLayoutRequest(
+        sessionName: String, sessionWindowIDs: [String], visibleWindowIDs: [String],
+        selectedLeftWindowID: String?, shared: SharedTerminalLayout
+    ) -> SetSharedTerminalLayout? {
+        guard appliedSharedTerminalLayout == shared else { return nil }
+        let visible = Set(visibleWindowIDs)
+        let right = remoteRightWindowIDs(in: shared, sessionWindowIDs: sessionWindowIDs)
+        let members = shared.sessionWindowIds ?? sessionWindowIDs
+        let explicitLeft = explicitRemoteLeftTerminalID.flatMap { members.contains($0) ? $0 : nil }
+        var left = shared.leftWindowId
+        if visible.contains(left) {
+            left = explicitLeft ?? selectedLeftWindowID ?? left
+        }
+        if right.contains(left) {
+            guard
+                let candidate = explicitLeft.flatMap({ right.contains($0) ? nil : $0 })
+                ?? members.first(where: { !right.contains($0) }) else { return nil }
+            left = candidate
+        }
+        let localRight = rightSideWindowIds
+        let removed = remoteTerminalPlacements.filter { !$0.value }.keys.sorted()
+        let displayedRatio = visible.isDisjoint(with: localRight) ? shared.splitRatio : Double(splitRatio)
+        let ratio = pendingRemoteSplitRatio.map { Double($0) } ?? displayedRatio
+        let previousSelection = shared.selectedRightWindowId.flatMap { right.contains($0) ? $0 : nil }
+        let selected = if let explicit = explicitRemoteRightTerminalID, right.contains(explicit) {
+            explicit
+        } else if let previousSelection, !visible.contains(previousSelection) {
+            previousSelection
+        } else {
+            selectedRight?.windowId.flatMap { right.contains($0) ? $0 : nil } ?? previousSelection ?? right.first
+        }
+        return SetSharedTerminalLayout(
+            sessionName: sessionName, leftWindowId: left, rightWindowIds: right, selectedRightWindowId: selected,
+            splitRatio: ratio,
+            removedRightWindowIds: removed.isEmpty ? nil : removed
+        )
+    }
+
     func selectedDirectoryPath(onRight: Bool = false) -> String? {
         let id: UUID
         if onRight {
@@ -355,6 +476,7 @@ extension SessionFileTabsState {
             destination.remoteSimulatorTabs[id] = remoteSimulatorTabs.removeValue(forKey: id)
         default: return false
         }
+        destination.tabFolders[tab] = tabFolders.removeValue(forKey: tab)
         tabOrder.removeAll { $0 == tab }
         manualTabGroups.removeValue(forKey: tab)
         rightSide.remove(tab)

@@ -382,19 +382,23 @@ public struct SharedTerminalLayout: Codable, Sendable, Equatable {
     public let selectedRightWindowId: String?
     public let splitRatio: Double
     public let revision: UInt64
+    /// Session membership, including links whose panes are routed through another session.
+    public let sessionWindowIds: [String]?
 
     public init(
         leftWindowId: String,
         rightWindowIds: [String] = [],
         selectedRightWindowId: String? = nil,
         splitRatio: Double = 0.5,
-        revision: UInt64
+        revision: UInt64,
+        sessionWindowIds: [String]? = nil
     ) {
         self.leftWindowId = leftWindowId
         self.rightWindowIds = rightWindowIds
         self.selectedRightWindowId = selectedRightWindowId
         self.splitRatio = splitRatio
         self.revision = revision
+        self.sessionWindowIds = sessionWindowIds
     }
 }
 

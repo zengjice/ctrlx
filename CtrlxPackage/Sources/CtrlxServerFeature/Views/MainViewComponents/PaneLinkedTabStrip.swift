@@ -16,14 +16,40 @@ extension SessionFileTabsState {
         return source.flatMap { $0.isEmpty ? nil : $0 }
     }
 
-    func groupedTabOrder(_ order: [TabDragPayload], paneOrder: [String]) -> [TabDragPayload] {
-        SessionTabEntry.grouped(order, paneOrder: paneOrder) { groupID(for: $0)?.paneID.map(SessionTabGroup.pane) }
+    func localTabPanes(sessionName: String, windows: [LocalTmuxWindow], paneStates: [String: PaneState]) -> [PaneState] {
+        let ids = PaneLinkedTabs.ordered(windows.map(\.stableId), stored: tabOrder.compactMap(\.windowId))
+        let visible = ids.flatMap { id in windows.first { $0.stableId == id }?.panes ?? [] }
+            .compactMap { paneStates[$0.paneId] }
+        let seen = Set(visible.map(\.paneId))
+        return visible + paneStates.values.filter { $0.sessionName == sessionName && !seen.contains($0.paneId) }
+            .sorted { ($0.windowIndex, $0.paneIndex) < ($1.windowIndex, $1.paneIndex) }
+    }
+
+    func localPresentedTabOrder(windows: [LocalTmuxWindow], panes: [PaneState], layout: SharedWorkbenchTabLayout.Snapshot?) -> [TabDragPayload] {
+        let order = TabDragPayload.reconciledOrder(
+            windowIds: windows.map(\.stableId),
+            fileTabIds: openFileTabs.map(\.id),
+            browserTabIds: openBrowserTabs.map(\.id),
+            storedOrder: tabOrder,
+            includeFileExplorer: false
+        )
+        return presentedTabOrder(order, panes: panes, layout: layout)
+    }
+
+    func groupedTabOrder(_ order: [TabDragPayload], paneOrder: [String], sourcePane: ((TabDragPayload) -> String?)? = nil) -> [TabDragPayload] {
+        let pane = sourcePane ?? { self.groupID(for: $0)?.paneID }
+        return SessionTabEntry.grouped(order, paneOrder: paneOrder) { pane($0).map(SessionTabGroup.pane) }
             .flatMap(\.tabs)
     }
 
     func presentedTabOrder(_ order: [TabDragPayload], panes: [PaneState], layout: SharedWorkbenchTabLayout.Snapshot?) -> [TabDragPayload] {
-        let merged = layout?.order(order, sourcePane: { groupID(for: $0)?.paneID }) ?? order
-        return groupedTabOrder(merged, paneOrder: Self.paneOrder(for: merged, panes: panes))
+        let sharedGroups = layout?.groups ?? [:]
+        func sourcePane(_ tab: TabDragPayload) -> String? {
+            guard manualTabGroups[tab] == nil, sharedGroups[tab] == nil else { return nil }
+            return sourcePaneID(for: tab)
+        }
+        let merged = layout?.order(order, sourcePane: sourcePane) ?? order
+        return groupedTabOrder(merged, paneOrder: Self.paneOrder(for: merged, panes: panes), sourcePane: sourcePane)
     }
 
     static func paneOrder(for order: [TabDragPayload], panes: [PaneState]) -> [String] {
@@ -115,13 +141,18 @@ extension SessionFileTabsState {
         }
     }
 
-    func recordVisibleTabOrder(_ order: [TabDragPayload]) {
+    func tabOrderKeepingHiddenLinks(_ order: [TabDragPayload]) -> [TabDragPayload] {
         // A partial catalog must not erase saved slots before those tabs arrive.
         var merged = order
         let visible = Set(order)
         for (index, tab) in tabOrder.enumerated() where tab.isLinkedContent && !visible.contains(tab) {
             merged.insert(tab, at: min(index, merged.count))
         }
+        return merged
+    }
+
+    func recordVisibleTabOrder(_ order: [TabDragPayload]) {
+        let merged = tabOrderKeepingHiddenLinks(order)
         if tabOrder != merged {
             tabOrder = merged
         }

@@ -41,7 +41,7 @@ extension AppCoordinator {
             },
             present: { [weak self] snapshot, live in
                 guard let self else { throw CancellationError() }
-                await presentWorkspace(snapshot, live: live)
+                await presentWorkspace(&snapshot, live: live)
             },
             resumeAgents: { snapshot, result, intent, save in
                 try await agents.recover(snapshot, result: result, intent: intent, save: save)
@@ -97,8 +97,11 @@ extension AppCoordinator {
         let presentationSessions = WorkspaceRecoveryPresentationMapper.includingResources(resourceSessions.sessions, in: live.sessions)
         snapshot.resourceSessions = resourceSessions.sessions
         snapshot.independentFileTabs = hostFileTabs.tabs.filter { $0.resourceSessionID != nil }
-        let captured = WorkspaceRecoveryPresentationMapper.captureLocal(windows: detachedWindows, sessions: presentationSessions, mainID: detachedWindows.mainSceneID, modelPreferences: agentModelPreferences, serverID: live.serverID)
-        snapshot.scenes = WorkspaceRecoveryPresentationMapper.preservingUnavailable(captured: captured, source: source, live: live)
+        let captured = WorkspaceRecoveryPresentationMapper.captureLocal(
+            windows: detachedWindows, sessions: presentationSessions, mainID: detachedWindows.mainSceneID,
+            sharedLayouts: windowManager.sharedTerminalLayouts, modelPreferences: agentModelPreferences, serverID: live.serverID
+        )
+        snapshot.scenes = WorkspaceRecoveryPresentationMapper.preservingUnavailable(captured: captured, source: source, live: live, windows: detachedWindows)
         snapshot.fileTabs = WorkspaceRecoveryPresentationMapper.captureFiles(hostFileTabs.tabs, sessions: live.sessions)
         if source.recovery != nil {
             let livePanes = Set(live.sessions.flatMap(\.windows).flatMap(\.panes).map(\.id))
@@ -242,7 +245,7 @@ extension AppCoordinator {
         remoteEditorContentStore.editedContents = remoteEditorContentStore.editedContents.filter { hostIDs.contains($0.key.hostID) }
     }
 
-    private func presentWorkspace(_ snapshot: WorkspaceRecoverySnapshot, live: WorkspaceTmuxState) async {
+    private func presentWorkspace(_ snapshot: inout WorkspaceRecoverySnapshot, live: WorkspaceTmuxState) async {
         settings.pendingRecoverySessionNames = snapshot.recovery == nil ? [] : Set(snapshot.sessions.filter { saved in !live.sessions.contains { $0.id == saved.id } }.map(\.name))
         if !workspaceRecoveryReady {
             settings.setLocalSessionOrder(snapshot.sessionOrder.compactMap { id in
@@ -257,24 +260,31 @@ extension AppCoordinator {
         refreshResourceSessions()
         hostFileTabs.restore(snapshot.fileTabs, sessions: live.sessions, serverID: live.serverID)
         hostFileTabs.migrateRestoredHumanTabs(snapshot.fileTabs, sessions: resourceSessions.sessions)
-        let alreadyPresented = detachedWindows.mainTabs.restoredRecoveryWindowIDs
-        WorkspaceRecoveryPresentationMapper.restoreLocal(snapshot.scenes, live: .init(serverID: live.serverID, sessions: WorkspaceRecoveryPresentationMapper.includingResources(resourceSessions.sessions, in: live.sessions)), windows: detachedWindows, files: hostFileTabs.tabs, modelPreferences: agentModelPreferences)
+        let stores = [detachedWindows.mainTabs] + detachedWindows.workspaces.values.map(\.tabs)
+        var alreadyPresented: [UUID: Set<UUID>] = [:]
+        for store in stores {
+            alreadyPresented.merge(store.restoredRecoveryWindowIDs) { $0.union($1) }
+        }
+        let presentationSessions = WorkspaceRecoveryPresentationMapper.includingResources(resourceSessions.sessions, in: live.sessions)
+        WorkspaceRecoveryPresentationMapper.restoreLocal(
+            snapshot.scenes, live: .init(serverID: live.serverID, sessions: presentationSessions), savedSessions: snapshot.sessions,
+            windows: detachedWindows, files: hostFileTabs.tabs, modelPreferences: agentModelPreferences
+        )
         viewerWorkspaceRecovery.restore(snapshot.viewerScenes, windows: detachedWindows)
+        let main = snapshot.scenes.firstIndex(where: \.isMain)
+        let savedPresentations = main.map { snapshot.scenes[$0].sessions } ?? []
         for session in live.sessions {
-            guard
-                let tabs = detachedWindows.mainTabs.local[session.name],
-                windowManager.sharedTerminalLayouts[session.name] == nil || session.windows.contains(where: { !alreadyPresented.contains($0.id) }) else { continue }
-            // The mapper has already resolved UUIDs to live IDs. Sharing this
-            // applied state also preserves edits made before a partial retry.
-            let layout = LayoutSnapshotMapper.snapshot(from: tabs, fileBrowser: nil, includeHostFiles: true) { runtime in
-                session.windows.first { $0.runtimeID == runtime }?.index
-            }
-            let resolved = session.windows.map {
-                LayoutSnapshotMapper.TerminalWindow(index: $0.index, stableId: $0.runtimeID, isActive: session.selectedWindowID == $0.id)
-            }
+            let previousWindows = alreadyPresented[session.id] ?? []
+            let savedIndex = savedPresentations.firstIndex { $0.sessionID == session.id }
             let selection = detachedWindows.mainTabs.restoredSelection ?? detachedWindows.mainTabs.recoverySelection
             let preferred = selection?.sessionName == session.name ? selection?.windowID : nil
-            if let request = LayoutSnapshotMapper.sharedTerminalLayoutRequest(from: layout, sessionName: session.name, windows: resolved, preferredLeftWindowId: preferred) {
+            if
+                let tabs = detachedWindows.mainTabs.local[session.name],
+                windowManager.sharedTerminalLayouts[session.name] == nil || session.windows.contains(where: { !previousWindows.contains($0.id) }),
+                let request = WorkspaceRecoveryPresentationMapper.restoredSharedTerminalRequest(
+                    from: savedIndex.map { savedPresentations[$0] }, session: session, tabs: tabs,
+                    current: windowManager.sharedTerminalLayouts[session.name], previouslyPresented: previousWindows, preferredLeft: preferred
+                ) {
                 windowManager.setSharedTerminalLayout(
                     sessionName: request.sessionName,
                     leftWindowId: request.leftWindowId,
@@ -282,6 +292,9 @@ extension AppCoordinator {
                     selectedRightWindowId: request.selectedRightWindowId,
                     splitRatio: request.splitRatio
                 )
+            }
+            if let main, let savedIndex, let shared = windowManager.sharedTerminalLayouts[session.name] {
+                snapshot.scenes[main].sessions[savedIndex].sharedTerminalLayout?.clearRestoredDeferredRightWindow(in: session, shared: shared)
             }
         }
     }

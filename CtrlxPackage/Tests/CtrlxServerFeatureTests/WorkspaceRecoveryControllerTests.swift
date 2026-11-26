@@ -1,3 +1,4 @@
+import CtrlxNetworking
 import Foundation
 import Testing
 @testable import CtrlxServerFeature
@@ -79,7 +80,7 @@ struct WorkspaceRecoveryControllerTests {
     private func controller(
         _ backend: Backend, boot: String, mode: WorkspaceRecoveryMode = .layoutAndAgents,
         captureExtras: @escaping (WorkspaceRecoverySnapshot) async throws -> WorkspaceRecoverySnapshot = { $0 },
-        present: @escaping (WorkspaceRecoverySnapshot, WorkspaceTmuxState) async throws -> Void = { _, _ in },
+        present: @escaping (inout WorkspaceRecoverySnapshot, WorkspaceTmuxState) async throws -> Void = { _, _ in },
         resumeAgents: @escaping WorkspaceAgentRecoveryHandler = { source, _, _, _ in (source, []) },
         resolveHostID: @escaping @Sendable (UUID?) async throws -> UUID = { $0 ?? UUID() }
     ) -> WorkspaceRecoveryController {
@@ -88,6 +89,59 @@ struct WorkspaceRecoveryControllerTests {
             system: .init(bootID: { boot }, directoryExists: { _ in true }, pathExists: { _ in true }), mode: { mode },
             captureExtras: captureExtras, present: present, resumeAgents: resumeAgents, resolveHostID: resolveHostID
         )
+    }
+
+    @Test("A restored deferred slot cannot undo a user move before the next checkpoint")
+    func checkpointConsumesRestoredDeferredSlot() async throws {
+        var original = WorkspaceRecoveryStoreTests.snapshot()
+        var session = original.sessions[0]
+        for index in 1...3 {
+            let pane = WorkspaceRecoveryPane(id: UUID(), runtimeID: "%\(index + 1)", directory: "/tmp")
+            session.windows.append(.init(
+                id: UUID(), runtimeID: "@\(index + 1)", index: index, name: "terminal", selectedPaneID: pane.id,
+                layout: .pane(pane.id, width: 120, height: 40), panes: [pane]
+            ))
+        }
+        let owner = DetachedTerminalWindows()
+        var shared = SharedTerminalLayout(leftWindowId: "@3", rightWindowIds: ["@1", "@2"], selectedRightWindowId: "@2", revision: 1)
+        original.sessions = [session]
+        original.scenes = WorkspaceRecoveryPresentationMapper.captureLocal(
+            windows: owner, sessions: [session], mainID: owner.mainSceneID, sharedLayouts: [session.name: shared]
+        )
+        original.scenes[0].sessions[0].sharedTerminalLayout?.deferredRightWindowID = session.windows[0].id
+        original.recovery = .init(bootID: original.bootID, pendingAgentPaneIDs: [])
+
+        var partial = session
+        let missing = partial.windows.removeLast()
+        let live = WorkspaceTmuxState(serverID: "new-server", sessions: [partial])
+        let backend = Backend(store: .inMemory(original))
+        backend.restoreResult = .init(state: live, failures: [.init(id: missing.id, name: missing.name, reason: "waiting")], createdPaneIDs: [])
+        let recovery = controller(backend, boot: "new-boot", captureExtras: { source in
+            var checkpoint = source
+            let captured = WorkspaceRecoveryPresentationMapper.captureLocal(
+                windows: owner, sessions: live.sessions, mainID: owner.mainSceneID, sharedLayouts: [session.name: shared]
+            )
+            checkpoint.scenes = WorkspaceRecoveryPresentationMapper.preservingUnavailable(captured: captured, source: source, live: live, windows: owner)
+            return checkpoint
+        }, present: { snapshot, live in
+            let session = try #require(live.sessions.first)
+            let request = try #require(WorkspaceRecoveryPresentationMapper.restoredSharedTerminalRequest(
+                from: snapshot.scenes[0].sessions[0], session: session, tabs: SessionFileTabsState(),
+                current: nil, previouslyPresented: [], preferredLeft: nil
+            ))
+            #expect(request.rightWindowIds == ["@1", "@2"])
+            shared = .init(leftWindowId: request.leftWindowId, rightWindowIds: request.rightWindowIds, selectedRightWindowId: request.selectedRightWindowId, revision: 1)
+            snapshot.scenes[0].sessions[0].sharedTerminalLayout?.clearRestoredDeferredRightWindow(in: session, shared: shared)
+        })
+        await recovery.start(periodic: false)
+        #expect(recovery.phase == .needsRecovery)
+        #expect(try await backend.store.load()?.scenes[0].sessions[0].sharedTerminalLayout?.deferredRightWindowID == nil)
+
+        shared = .init(leftWindowId: "@3", rightWindowIds: ["@2"], selectedRightWindowId: "@2", revision: 2)
+        await recovery.checkpoint()
+        let saved = try #require(try await backend.store.load()?.scenes[0].sessions[0].sharedTerminalLayout)
+        #expect(saved.rightWindowIDs == [session.windows[1].id])
+        #expect(saved.deferredRightWindowID == nil)
     }
 
     @Test("A reboot checkpoints recovery intent then completes against the new server")
