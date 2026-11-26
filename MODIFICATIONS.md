@@ -7,6 +7,29 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.182 — Grouped tab reordering and reliable Workflow state
+
+- Reorder linked Tab groups as complete units on Mac and iOS, including shared
+  layouts and restored private workspaces, while keeping the Host's persisted Tab
+  order synchronized. See [services](docs/services-reference.md).
+- Persist Workflow notifications and expose the current run state after navigation
+  or restart. Validate native submission boundaries against the complete Agent
+  transcript before completing a Workflow, so unrelated sidechain activity or
+  missing final evidence cannot advance a run. See
+  [multi-agent design](docs/multi-agent-design.md).
+- Keep iOS terminal text selection from triggering the Back navigation gesture
+  when the drag begins inside the terminal. See
+  [iOS viewport and scrolling](docs/swiftterm-ios-scrolling.md).
+- Recognize repository file paths containing equals signs in terminal links.
+- Merge the `bugfix` branch into `main`.
+- Validation: targeted cross-platform regression suites passed in serial mode.
+  SwiftFormat passed for all 80 changed Swift files; CtrlX brand-boundary,
+  technical-boundary and Git diff checks passed.
+- This release builds macOS only. The iOS behavior changes passed focused tests;
+  a physical-iPhone acceptance pass was not rerun for this version. The final
+  artifact is produced by the formal Developer ID signed and notarized release
+  workflow.
+
 ## 3.0.181 — Stable workspace restoration and terminal selection
 
 - Recover missing Workflow submission receipts from verified native transcript
