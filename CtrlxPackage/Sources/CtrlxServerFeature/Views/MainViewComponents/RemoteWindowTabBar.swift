@@ -147,6 +147,7 @@ struct RemoteWindowTabBar: View {
         }
         .onChange(of: workbenchContext?.sharedTabLayout?.snapshot, initial: true) { _, snapshot in
             sessionTabs?.sharedManualTabGroups = snapshot?.groups ?? [:]
+            sessionTabs?.sharedOrdersTabGroups = snapshot?.layout.ordersGroups == true
         }
         // Persist the reconciled order so newly-appended windows / browsers
         // and pruned entries survive view rebuilds and session switches. The
@@ -210,7 +211,7 @@ struct RemoteWindowTabBar: View {
             paneOrder: SessionFileTabsState.paneOrder(for: effectiveTabOrder, panes: groupPanes), selection: rightSide ? selectedRight : leftSelection,
             rightSide: rightSide, title: tabTitle, onDrop: handleDrop,
             onEndDrop: { handleEndDrop(payloads: $0, section: section, placement: $1) },
-            onUngroup: ungroup, trailingDropID: "remote-tab-trailing-drop-\(section.rawValue)"
+            onUngroup: ungroup, onGroupMoved: { _ in }, trailingDropID: "remote-tab-trailing-drop-\(section.rawValue)"
         ) {
             tabView(for: $0)
         } accessory: { EmptyView() }
@@ -396,6 +397,7 @@ struct RemoteWindowTabBar: View {
     private func handleDrop(payloads: [TabDragPayload], placement: WorkbenchTabDropPlacement) -> Bool {
         let targets = placement.targets
         guard let source = payloads.first, let target = targets.first, !targets.contains(source), effectiveTabOrder.contains(source), effectiveTabOrder.contains(target) else { return false }
+        sessionTabs?.beginTabOrderEdit()
         let section = sectionOf(target)
         let applyPlacement: @MainActor () -> Void = {
             sessionTabs?.recordTabDrop(source, at: placement)
@@ -431,6 +433,7 @@ struct RemoteWindowTabBar: View {
 
     private func handleEndDrop(payloads: [TabDragPayload], section: TabSection, placement: WorkbenchTabDropPlacement) -> Bool {
         guard let source = payloads.first, effectiveTabOrder.contains(source) else { return false }
+        sessionTabs?.beginTabOrderEdit()
         if
             workbenchContext?.sharedTabLayout?.drop(source, at: placement, order: effectiveTabOrder, onSuccess: {
                 sessionTabs?.recordTabDrop(source, at: placement)

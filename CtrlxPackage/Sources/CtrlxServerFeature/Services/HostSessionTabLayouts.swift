@@ -19,23 +19,41 @@ final class HostSessionTabLayouts {
     }
 
     func snapshot(sessionID: UUID, catalog: [SessionTabID]) -> SessionTabLayout {
-        guard let layout = layouts[sessionID] else { return .init() }
+        guard let layout = layouts[sessionID] else { return SessionTabLayout().reconciled(with: catalog) }
         return Self.withLiveWindows(layout, catalog: catalog)
     }
 
     func apply(
-        _ request: EditSessionTabLayout, catalog: [SessionTabID],
+        _ request: EditSessionTabLayout, catalog: [SessionTabID], sourcePanes: [SessionTabID: String] = [:], paneOrder: [String] = [],
         confirm: (SessionTabLayout) async throws -> [SessionTabID]?
     ) async throws {
         guard editsInFlight.insert(request.sessionID).inserted else {
             throw FileBrowserError.message("The session's tab layout is already being updated. Try again shortly.")
         }
         defer { editsInFlight.remove(request.sessionID) }
-        let stored = layouts[request.sessionID] ?? SessionTabLayout(
-            order: Self.fillSlots(in: catalog, with: request.initialOrder ?? [])
-        )
+        let stored: SessionTabLayout
+        if let existing = layouts[request.sessionID] {
+            stored = existing
+        } else if case .moveGroup = request.edit {
+            // Group initialization merges rows, not individual visible member slots.
+            stored = SessionTabLayout(order: catalog)
+        } else {
+            stored = SessionTabLayout(order: Self.fillSlots(in: catalog, with: request.initialOrder ?? []))
+        }
         var layout = Self.withLiveWindows(stored, catalog: catalog)
-        guard layout.apply(request.edit, catalog: catalog) else {
+        if case let .moveGroup(moving, _, _, _) = request.edit, layout.ordersGroups != true, let initialOrder = request.initialOrder {
+            guard request.initialOrderRevision == layout.revision else {
+                throw FileBrowserError.message("The tab order changed while this group was being dragged. Refresh the tabs and try again.")
+            }
+            layout = layout.initializingGroupOrder(from: initialOrder, windowOrder: catalog.filter {
+                if case .window = $0 {
+                    true
+                } else {
+                    false
+                }
+            }, moving: moving, sourcePanes: sourcePanes, paneOrder: paneOrder)
+        }
+        guard layout.apply(request.edit, catalog: catalog, sourcePanes: sourcePanes) else {
             throw FileBrowserError.message("One of these tabs is no longer part of the session.")
         }
         let confirmedWindows = try await confirm(layout)
@@ -81,7 +99,7 @@ final class HostSessionTabLayouts {
             order.append(tab)
         }
         order.append(contentsOf: remaining)
-        return SessionTabLayout(order: order, groups: layout.groups, revision: layout.revision)
+        return SessionTabLayout(order: order, groups: layout.groups, revision: layout.revision, ordersGroups: layout.ordersGroups)
     }
 
     private static func withLiveWindows(_ layout: SessionTabLayout, catalog: [SessionTabID]) -> SessionTabLayout {
@@ -95,7 +113,7 @@ final class HostSessionTabLayouts {
         }
         return SessionTabLayout(
             order: fillSlots(in: current.order, with: windows),
-            groups: current.groups, revision: current.revision
+            groups: current.groups, revision: current.revision, ordersGroups: current.ordersGroups
         )
     }
 

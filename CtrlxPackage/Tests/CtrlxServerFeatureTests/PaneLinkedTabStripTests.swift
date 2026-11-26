@@ -6,6 +6,123 @@ import Testing
 
 @MainActor
 struct PaneLinkedTabStripTests {
+    @Test("Dissolving two members does not confuse equal retained slots with an unchanged source group")
+    func dissolvedGroupsWithEqualIndex() {
+        let tabs = SessionFileTabsState(), b = TabDragPayload.window("@1"), group = UUID()
+        func file(_ path: String, pane: String) -> FileBrowserTab {
+            FileBrowserTab(hostTab: .init(sessionName: "work", sourcePaneID: pane, initialDirectory: path))
+        }
+        let x = file("/x", pane: "%1"), y = file("/y", pane: "%2"), s = file("/s", pane: "%1"), t = file("/t", pane: "%2")
+        let xp = TabDragPayload.file(x.id), yp = TabDragPayload.file(y.id), sp = TabDragPayload.file(s.id), tp = TabDragPayload.file(t.id)
+        let ids: [TabDragPayload: SessionTabID] = [b: .window(UUID()), xp: .file(x.id), yp: .file(y.id), sp: .file(s.id), tp: .file(t.id)]
+        tabs.tabOrder = [xp, yp, b, sp, tp]
+        tabs.directoryTabs = [x.id: x, y.id: y, s.id: s, t.id: t]
+        tabs.sharedOrdersTabGroups = true
+        tabs.sharedManualTabGroups = [xp: group, yp: group]
+        var layout = SessionTabLayout(order: tabs.tabOrder.compactMap { ids[$0] }, groups: [.file(x.id): group, .file(y.id): group], revision: 3, ordersGroups: true)
+        let shared = SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: layout)) { edit, _, _, _, done in
+            let applied = layout.apply(edit, catalog: layout.order)
+            #expect(applied)
+            tabs.recordTabDrop(xp, at: .before(b))
+            done()
+        }
+        let hover = WorkbenchTabHover(tab: xp, placement: .before(b), sourcePaneID: "%1", sharedTabID: .file(x.id))
+        let line = TabStripInsertion.resolve(hover, order: tabs.tabOrder, tabs: tabs, paneOrder: ["%1", "%2"], shared: shared, sessionOrder: tabs.tabOrder)
+        let accepted = shared.drop(xp, at: .before(b), order: tabs.tabOrder)
+        #expect(accepted)
+        let updated = SharedWorkbenchTabLayout.Snapshot(ids: ids, layout: layout)
+        tabs.sharedManualTabGroups = updated.groups
+        let rows = tabs.tabStripEntries(tabs.presentedTabOrder(tabs.tabOrder, panes: [], layout: updated))
+        #expect(rows.map(\.tabs) == [[yp, tp], [xp, sp], [b]])
+        #expect(line == .init(row: .tab(b), side: .before))
+    }
+
+    @Test("A returning member marks the new position of an existing source group")
+    func returningMemberMovesExistingSourceGroup() throws {
+        let tabs = SessionFileTabsState(), a = TabDragPayload.window("@1"), b = TabDragPayload.window("@2"), c = TabDragPayload.window("@3")
+        let s = FileBrowserTab(hostTab: .init(sessionName: "work", sourcePaneID: "%1", initialDirectory: "/s")), x = FileBrowserTab(hostTab: .init(sessionName: "work", sourcePaneID: "%1", initialDirectory: "/x"))
+        let sp = TabDragPayload.file(s.id), xp = TabDragPayload.file(x.id), y = TabDragPayload.file(UUID()), z = TabDragPayload.file(UUID()), group = UUID()
+        let ids: [TabDragPayload: SessionTabID] = [a: .window(UUID()), b: .window(UUID()), c: .window(UUID()), sp: .file(s.id), xp: .file(x.id), y: .file(UUID()), z: .file(UUID())]
+        tabs.tabOrder = [a, b, c, sp, xp, y, z]
+        tabs.directoryTabs = [s.id: s, x.id: x]
+        var layout = try SessionTabLayout(order: tabs.tabOrder.compactMap { ids[$0] }, groups: [#require(ids[xp]): group, #require(ids[y]): group, #require(ids[z]): group], revision: 2, ordersGroups: true)
+        tabs.sharedManualTabGroups = [xp: group, y: group, z: group]
+        tabs.sharedOrdersTabGroups = true
+        let shared = SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: layout)) { edit, _, _, _, done in
+            let applied = layout.apply(edit, catalog: layout.order)
+            #expect(applied)
+            tabs.recordTabDrop(xp, at: .before(b))
+            done()
+        }
+        let hover = WorkbenchTabHover(tab: xp, placement: .before(b), sourcePaneID: "%1", sharedTabID: .file(x.id))
+        let line = TabStripInsertion.resolve(hover, order: tabs.tabOrder, tabs: tabs, paneOrder: ["%1"], shared: shared, sessionOrder: tabs.tabOrder)
+        let accepted = shared.drop(xp, at: .before(b), order: tabs.tabOrder)
+        #expect(accepted)
+        let updated = SharedWorkbenchTabLayout.Snapshot(ids: ids, layout: layout)
+        tabs.sharedManualTabGroups = updated.groups
+        let rows = tabs.tabStripEntries(tabs.presentedTabOrder(tabs.tabOrder, panes: [], layout: updated))
+        #expect(rows.map(\.id) == [.tab(a), .group(.pane("%1")), .tab(b), .tab(c), .group(.manual(group))])
+        #expect(line == .init(row: .tab(a), side: .after))
+    }
+
+    @Test("A restored source group uses the complete interleaved strip for its insertion line")
+    func restoredSourceGroupBetweenTerminals() throws {
+        let tabs = SessionFileTabsState(), a = TabDragPayload.window("@1"), b = TabDragPayload.window("@2"), c = TabDragPayload.window("@3")
+        let s = FileBrowserTab(hostTab: .init(sessionName: "work", sourcePaneID: "%1", initialDirectory: "/s")), x = FileBrowserTab(hostTab: .init(sessionName: "work", sourcePaneID: "%2", initialDirectory: "/x"))
+        let sp = TabDragPayload.file(s.id), xp = TabDragPayload.file(x.id), y = TabDragPayload.file(UUID()), z = TabDragPayload.file(UUID()), group = UUID()
+        let ids: [TabDragPayload: SessionTabID] = [a: .window(UUID()), b: .window(UUID()), c: .window(UUID()), sp: .file(s.id), xp: .file(x.id), y: .file(UUID()), z: .file(UUID())]
+        tabs.tabOrder = [a, sp, b, c, xp, y, z]
+        tabs.directoryTabs = [s.id: s, x.id: x]
+        var layout = try SessionTabLayout(order: tabs.tabOrder.compactMap { ids[$0] }, groups: [#require(ids[xp]): group, #require(ids[y]): group, #require(ids[z]): group], revision: 2, ordersGroups: true)
+        tabs.sharedManualTabGroups = [xp: group, y: group, z: group]
+        tabs.sharedOrdersTabGroups = true
+        let shared = SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: layout)) { edit, _, _, _, done in
+            let applied = layout.apply(edit, catalog: layout.order)
+            #expect(applied)
+            tabs.recordTabDrop(xp, at: .before(c))
+            done()
+        }
+        let hover = WorkbenchTabHover(tab: xp, placement: .before(c), sourcePaneID: "%2", sharedTabID: .file(x.id))
+        let line = TabStripInsertion.resolve(hover, order: tabs.tabOrder, tabs: tabs, paneOrder: ["%1", "%2"], shared: shared, sessionOrder: tabs.tabOrder)
+        let accepted = shared.drop(xp, at: .before(c), order: tabs.tabOrder)
+        #expect(accepted)
+        let updated = SharedWorkbenchTabLayout.Snapshot(ids: ids, layout: layout)
+        tabs.sharedManualTabGroups = updated.groups
+        let rows = tabs.tabStripEntries(tabs.presentedTabOrder(tabs.tabOrder, panes: [], layout: updated))
+        #expect(rows.map(\.id) == [.tab(a), .group(.pane("%1")), .tab(b), .group(.pane("%2")), .tab(c), .group(.manual(group))])
+        #expect(line == .init(row: .tab(b), side: .after))
+    }
+
+    @Test("Group ordering moves automatic groups before standalone tabs and previews the same slot")
+    func movesAutomaticGroup() throws {
+        let tabs = SessionFileTabsState()
+        let a = TabDragPayload.window("@1"), b = TabDragPayload.window("@2")
+        let file = FileBrowserTab(path: "/file", sourcePaneID: "%1")
+        let x = TabDragPayload.file(file.id)
+        tabs.directoryTabs[file.id] = file
+        let order = [a, b, x]
+        let hover = WorkbenchTabHover(tab: x, placement: .before(a), sourcePaneID: "%1", group: [x])
+        #expect(TabStripInsertion.resolve(hover, order: order, tabs: tabs, paneOrder: ["%1"]) == .init(row: .tab(a), side: .before))
+        let entries = try #require(SessionTabEntry.movingGroup([x], before: a, in: tabs.tabStripEntries(order)))
+        tabs.ordersTabGroups = true
+        #expect(tabs.tabStripEntries(entries.flatMap(\.tabs)).map(\.id) == [.group(.pane("%1")), .tab(a), .tab(b)])
+        let saved = LayoutSnapshotMapper.snapshot(from: tabs, fileBrowser: nil, tabOrder: entries.flatMap(\.tabs)) { id in id == "@1" ? 1 : 2 }
+        #expect(saved.ordersTabGroups == true)
+    }
+
+    @Test("Group drags preserve membership and cannot move between native workspaces")
+    func groupDragScope() {
+        let a = TabDragPayload.window("@1"), b = TabDragPayload.window("@2")
+        let context = WorkbenchTabContext(workspaceID: nil, hostID: "host", sessionName: "work", onRejected: { }, receive: { _, _, _ in false })
+        var drag = context.drag(a)
+        drag.group = [a, b]
+        #expect(context.hover(drag, at: .end([a, b, .git]))?.group == [a, b])
+        #expect(context.hover(drag, at: .group([.git])) == nil)
+        #expect(context.hover(drag, at: .before(.git, within: [.git])) == nil)
+        let other = WorkbenchTabContext(workspaceID: UUID(), hostID: "host", sessionName: "work", onRejected: { }, receive: { _, _, _ in false })
+        #expect(other.hover(drag, at: .end([.git])) == nil)
+    }
+
     @Test("Ungrouping or adding a terminal keeps automatic groups behind numbered terminal slots")
     func sharedOrderKeepsAutomaticGroupsBehindTerminals() {
         let tabs = SessionFileTabsState()

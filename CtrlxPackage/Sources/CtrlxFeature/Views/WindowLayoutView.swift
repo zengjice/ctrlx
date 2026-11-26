@@ -219,7 +219,7 @@
             if let layout = layouts[id], layout.revision > 0 {
                 return layout
             }
-            return .init(order: linkedTabs.initialSharedOrder(topLevelOrder: fileWorkspace.topLevelTabOrder))
+            return .init(order: linkedTabs.initialSharedOrder(topLevelOrder: fileWorkspace.topLevelTabOrder), supportsGroupReordering: layouts[id]?.supportsGroupReordering)
         }
 
         private var windowSelectionCandidates: [WindowSelectionCandidate] {
@@ -287,7 +287,8 @@
                 browsers: sessionBrowsers,
                 simulators: sessionSimulators,
                 windows: sessionWindows,
-                storedOrder: fileWorkspace.linkedTabOrder
+                storedOrder: fileWorkspace.linkedTabOrder,
+                ordersGroups: fileWorkspace.ordersTabGroups
             )
         }
 
@@ -859,6 +860,8 @@
                         },
                         onReorderWindows: reorderWindows,
                         topLevelTabOrder: fileWorkspace.topLevelTabOrder,
+                        ordersTabGroups: fileWorkspace.ordersTabGroups,
+                        onReorderGroups: { fileWorkspace.recordGroupOrder($0, replacing: $1) },
                         onReorderTopLevel: { fileWorkspace.topLevelTabOrder = $0
                             fileWorkspace.save()
                         },
@@ -963,7 +966,13 @@
             guard let id = sharedTabSessionID, let layout = sharedTabLayout else {
                 throw FileBrowserError.message("The Host's tab layout is unavailable.")
             }
-            let request = EditSessionTabLayout(sessionID: id, edit: edit, initialOrder: layout.revision == 0 ? layout.order : nil)
+            let initialOrder: [SessionTabID]?
+            if case .moveGroup = edit, layout.ordersGroups != true {
+                initialOrder = linkedTabs.sharedEntries(layout, topLevelOrder: fileWorkspace.topLevelTabOrder).flatMap(\.tabs).filter(linkedTabs.isShareable)
+            } else {
+                initialOrder = layout.revision == 0 ? layout.order : nil
+            }
+            let request = EditSessionTabLayout(sessionID: id, edit: edit, initialOrder: initialOrder, initialOrderRevision: initialOrder.map { _ in layout.revision })
             let response = try await relayClient.sendCommand(request, paneId: "").get()
             guard response.success else { throw FileBrowserError.message(response.error ?? "Could not update the tab layout.") }
         }

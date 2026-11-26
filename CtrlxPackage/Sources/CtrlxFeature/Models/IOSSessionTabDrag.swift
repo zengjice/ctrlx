@@ -15,6 +15,7 @@ struct IOSSessionTabDrag: Codable, Sendable, Transferable {
     let hostID: String
     let sessionID: UUID
     let tab: SessionTabID
+    var group: [SessionTabID]? = nil
     private let originToken: UUID
 
     static var transferRepresentation: some TransferRepresentation {
@@ -22,10 +23,22 @@ struct IOSSessionTabDrag: Codable, Sendable, Transferable {
     }
 
     @MainActor
-    static func begin(hostID: String, sessionID: UUID, tab: SessionTabID) -> Self {
-        let drag = Self(id: UUID(), hostID: hostID, sessionID: sessionID, tab: tab, originToken: processToken)
+    static func begin(hostID: String, sessionID: UUID, tab: SessionTabID, group: [SessionTabID]? = nil) -> Self {
+        let drag = Self(id: UUID(), hostID: hostID, sessionID: sessionID, tab: tab, group: group, originToken: processToken)
         active = drag
         return drag
+    }
+
+    @MainActor
+    static func provider(hostID: String, sessionID: UUID, tab: SessionTabID, group: [SessionTabID]? = nil) -> NSItemProvider {
+        let drag = begin(hostID: hostID, sessionID: sessionID, tab: tab, group: group)
+        let provider = NSItemProvider()
+        provider.registerDataRepresentation(forTypeIdentifier: contentType.identifier, visibility: .ownProcess) { completion in
+            do { try completion(JSONEncoder().encode(drag), nil) }
+            catch { completion(nil, error) }
+            return nil
+        }
+        return provider
     }
 
     fileprivate var originatedHere: Bool {
@@ -48,6 +61,7 @@ struct IOSSessionTabDrop {
     enum Action: Equatable, Sendable {
         case moveTopLevel([IOSTopLevelTabID])
         case moveLinked([PaneLinkedTabID])
+        case moveGroup(SessionTabLayout.Edit?, [IOSTopLevelTabID])
         case shared(SessionTabLayout.Edit)
 
         var groupsTabs: Bool {
@@ -90,6 +104,9 @@ struct IOSSessionTabDrop {
 
     func plan(_ drag: IOSSessionTabDrag, position: CGFloat, height: CGFloat) -> Result<Action?, Rejection> {
         guard drag.belongs(to: hostID, sessionID: sessionID) else { return .failure(.differentSession) }
+        if let group = drag.group {
+            return planGroup(group, position: position, height: height)
+        }
         let source = drag.tab
         let targets: [SessionTabID]
         let members: [SessionTabID]?
@@ -140,6 +157,45 @@ struct IOSSessionTabDrop {
             return .failure(.cannotReorder)
         }
         return .success(.shared(edit))
+    }
+
+    private func planGroup(_ members: [SessionTabID], position: CGFloat, height: CGFloat) -> Result<Action?, Rejection> {
+        let entries = tabs.sharedEntries(layout, topLevelOrder: topLevelOrder)
+        let target: SessionTabID?
+        let side = InsertionSide(position: position, length: height)
+        switch destination {
+        case let .row(tab, nil): target = tab
+        case let .group(group): target = group.first
+        case .end: target = nil
+        case .row: return .failure(.cannotReorder)
+        }
+        if let target, members.contains(target) {
+            return .success(nil)
+        }
+        guard target.map({ target in entries.contains { $0.tabs.contains(target) } }) ?? true else { return .failure(.cannotReorder) }
+        let anchor: SessionTabID?
+        if let target, let index = entries.firstIndex(where: { $0.tabs.contains(target) }) {
+            anchor = side == .before ? entries[index].tabs.first : entries.dropFirst(index + 1).first?.tabs.first
+        } else {
+            anchor = nil
+        }
+        if anchor.map(members.contains) == true {
+            return .success(nil)
+        }
+        guard let reordered = SessionTabEntry.movingGroup(members, before: anchor, in: entries) else { return .failure(.cannotReorder) }
+        guard reordered.map(\.id) != entries.map(\.id) else { return .success(nil) }
+        let shared = members.filter(tabs.isShareable)
+        let order = tabs.topLevelOrder(for: reordered.flatMap(\.tabs), stored: topLevelOrder)
+        if shared.isEmpty {
+            return .success(.moveGroup(nil, order))
+        }
+        guard isConnected, layout.supportsGroupReordering == true else { return .failure(.groupUnavailable) }
+        // A private row is a local anchor, never part of the Host's tab catalog.
+        let nextShared = anchor.flatMap { anchor in
+            reordered.drop { !$0.tabs.contains(anchor) }.flatMap(\.tabs).first(where: tabs.isShareable)
+        }
+        let origin = entries.first { Set($0.tabs) == Set(members) }
+        return .success(.moveGroup(.moveGroup(shared, before: nextShared, groupID: shared.lazy.compactMap { layout.groups[$0] }.first, sourcePaneID: origin?.sourcePaneID), order))
     }
 
     private func contains(_ tab: SessionTabID) -> Bool {

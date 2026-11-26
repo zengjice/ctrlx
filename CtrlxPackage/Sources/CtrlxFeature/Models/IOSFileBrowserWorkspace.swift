@@ -38,6 +38,7 @@ final class IOSFileBrowserWorkspace {
 
     var linkedTabOrder: [PaneLinkedTabID] = []
     var topLevelTabOrder: [IOSTopLevelTabID] = []
+    var ordersTabGroups = false
     // A temporarily incomplete Host catalog does not end a return route.
     var resourceReturnPanes: [PaneLinkedTabID: WorkspacePaneIdentity] = [:]
     var didRestoreLinkedTabOrder = false
@@ -134,6 +135,13 @@ final class IOSFileBrowserWorkspace {
     func recordLinkedTabOrder(_ ids: [PaneLinkedTabID]) {
         guard linkedTabOrder != ids else { return }
         linkedTabOrder = ids
+        save()
+    }
+
+    func recordGroupOrder(_ order: [IOSTopLevelTabID], replacing previous: [IOSTopLevelTabID]? = nil) {
+        ordersTabGroups = true
+        guard previous == nil || topLevelTabOrder == previous else { return }
+        topLevelTabOrder = order
         save()
     }
 

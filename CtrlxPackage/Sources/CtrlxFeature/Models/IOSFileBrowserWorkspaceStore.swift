@@ -228,6 +228,7 @@ final class IOSFileBrowserWorkspaceStore {
         record.name = key.sessionName
         record.linkedTabOrder = workspace.linkedTabOrder
         record.topLevelTabOrder = workspace.topLevelTabOrder
+        record.ordersTabGroups = workspace.ordersTabGroups ? true : nil
         let snapshots = workspace.tabs.compactMap { tab -> IOSWorkspaceRecoveryFile? in
             guard let snapshot = tab.snapshot else { return nil }
             let source = tab.hostTab?.resourceSessionID != nil ? nil : (tab.sourcePaneID.flatMap { catalog.reference(paneID: $0) }
@@ -260,6 +261,7 @@ final class IOSFileBrowserWorkspaceStore {
         if !workspace.didRestoreLinkedTabOrder {
             workspace.linkedTabOrder = saved.linkedTabOrder ?? saved.files.map { .file($0.snapshot.id) }
             workspace.topLevelTabOrder = saved.topLevelTabOrder ?? []
+            workspace.ordersTabGroups = saved.ordersTabGroups == true
             workspace.didRestoreLinkedTabOrder = true
         }
         for file in saved.files {

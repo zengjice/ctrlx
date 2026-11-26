@@ -130,6 +130,49 @@ Mac and iOS use a Host-owned order and group membership for each session's
 terminal, Files, Browser, and Simulator tabs. Drag onto a tab or group to combine
 them, or drop at the leading edge of a tab to reorder. Click or tap a group to
 show its tabs vertically. Drops on expanded members reorder within that group.
+Drag a group header to move the group as a unit, including automatic source-pane
+groups. Mac uses a vertical insertion line and iOS uses a horizontal line at the
+destination; dropping a group does not merge it or change its members' ownership.
+Group drags stay within the current Mac tab strip. Single tabs keep their existing
+grouping and detached-window gestures. Shared group ordering requires an updated
+Host; groups made entirely of private tabs keep their ordering on that client.
+The first shared group move checks the revision of its initial visible order.
+Manual group moves also validate the group's identity and exact current members.
+Automatic groups validate the Host's current source-pane members, excluding private
+tabs and manually grouped resources. Initialization preserves live tmux window order
+and the visible rows of untouched manual and source groups, including hidden members;
+source-group targets resolve to their first member in the complete session,
+including members in other windows.
+The initial baseline includes source groups wholly owned by other workbenches, in
+their original pane order. Hidden top-level rows retain their positions relative
+to stable, unmoved neighbors; a partially visible manual group cannot seed a row
+position from its later members. Both edges of a visible gap use the first shared
+row after that gap within the same section, skipping private Files. Section-end
+drops retain anchors outside that section.
+Both fresh and saved legacy layouts locate hidden top-level tabs before the
+source-group suffix, using displayed row order rather than resource catalog positions.
+Only an unseeded catalog fills visible member slots from the sender's initial order,
+preserving Browser/Files order without shifting unrelated rows. Saved Host top-level
+positions and member order remain authoritative even when client-local groups split
+the shared row. Visible source groups retain their pre-drag order, including when a
+source terminal has been detached. Mac initial-order metadata excludes client-local
+group members so their fragments cannot reposition an untouched shared group.
+Private anchors and split boundaries are resolved in the complete session order;
+moving an iOS private group preserves the relative order of shared rows.
+Mac group anchors include tabs in other native windows. A split manual group moves
+its full shared membership without changing ownership; client-local groups stay local.
+Delayed group confirmations respect later explicit sorting; a passive Host broadcast
+does not cancel a private anchor. Unseeded Host snapshots include the live catalog
+without saving it. Automatic group moves include members in other splits or native
+windows; local group moves do not submit terminal or browser ordering callbacks.
+iOS and Mac map restored groups through the complete projected row order, comparing
+relative row order rather than numeric slots. Insertion anchors must stay on the
+same side of unchanged rows. Explicit visible drop boundaries take priority over
+unrelated hidden rows.
+iOS uses the same first-group initialization as the Host, preserving untouched rows while
+the moved group's terminals stay together. Its preview uses the current session's
+window order rather than saved private-tab positions. Terminal edits read tmux's current order
+and reject a commit if it changed after planning.
 The first shared edit merges the initiating device's visible order into the full
 session. Terminal order follows the current tmux window indices. A Mac workbench
 reorder keeps the index slots of its visible terminals and their placement

@@ -36,9 +36,9 @@ extension SessionFileTabsState {
         return presentedTabOrder(order, panes: panes, layout: layout)
     }
 
-    func groupedTabOrder(_ order: [TabDragPayload], paneOrder: [String], sourcePane: ((TabDragPayload) -> String?)? = nil) -> [TabDragPayload] {
+    func groupedTabOrder(_ order: [TabDragPayload], paneOrder: [String], sourcePane: ((TabDragPayload) -> String?)? = nil, preserveGroupPositions: Bool = false) -> [TabDragPayload] {
         let pane = sourcePane ?? { self.groupID(for: $0)?.paneID }
-        return SessionTabEntry.grouped(order, paneOrder: paneOrder) { pane($0).map(SessionTabGroup.pane) }
+        return SessionTabEntry.grouped(order, paneOrder: paneOrder, preserveGroupPositions: preserveGroupPositions || ordersTabGroups || sharedOrdersTabGroups) { pane($0).map(SessionTabGroup.pane) }
             .flatMap(\.tabs)
     }
 
@@ -48,8 +48,8 @@ extension SessionFileTabsState {
             guard manualTabGroups[tab] == nil, sharedGroups[tab] == nil else { return nil }
             return sourcePaneID(for: tab)
         }
-        let merged = layout?.order(order, sourcePane: sourcePane) ?? order
-        return groupedTabOrder(merged, paneOrder: Self.paneOrder(for: merged, panes: panes), sourcePane: sourcePane)
+        let merged = layout?.order(order, localGroups: manualTabGroups, sourcePane: sourcePane) ?? order
+        return groupedTabOrder(merged, paneOrder: Self.paneOrder(for: merged, panes: panes), sourcePane: sourcePane, preserveGroupPositions: layout?.layout.ordersGroups == true)
     }
 
     static func paneOrder(for order: [TabDragPayload], panes: [PaneState]) -> [String] {
@@ -66,7 +66,7 @@ extension SessionFileTabsState {
     }
 
     func tabStripEntries(_ order: [TabDragPayload]) -> [SessionTabEntry<TabDragPayload>] {
-        SessionTabEntry.grouped(order, groupID: groupID(for:))
+        SessionTabEntry.grouped(order, preserveGroupPositions: ordersTabGroups || sharedOrdersTabGroups, groupID: groupID(for:))
     }
 
     func panesAfterDrop(
@@ -158,6 +158,48 @@ extension SessionFileTabsState {
         }
     }
 
+    @discardableResult
+    func beginTabOrderEdit() -> UInt64 {
+        tabOrderEditRevision += 1
+        return tabOrderEditRevision
+    }
+
+    func moveGroup(
+        _ members: [TabDragPayload], at placement: WorkbenchTabDropPlacement, visible order: [TabDragPayload],
+        sessionOrder: [TabDragPayload], shared: SharedWorkbenchTabLayout?, onGroupMoved: @escaping ([TabDragPayload]) -> Void = { _ in }
+    ) -> Bool {
+        let entries = tabStripEntries(order)
+        let tabs = self
+        guard let reordered = placement.movingGroup(members, in: entries) else { return false }
+        let moved = reordered.flatMap(\.tabs)
+        let visible = Set(order)
+        var replacement = moved.makeIterator()
+        let proposed = sessionOrder.map { visible.contains($0) ? replacement.next() ?? $0 : $0 }
+        let revision = tabs.beginTabOrderEdit()
+        let sourcePane = entries.first { Set($0.tabs) == Set(members) }?.sourcePaneID
+        let boundary = placement.groupTarget(in: entries)
+        let following = boundary.map { target in Array(moved.drop { $0 != target }) } ?? []
+        if
+            shared?.moveGroup(members, order: proposed, initialOrder: sessionOrder, localGroups: tabs.manualTabGroups, sourcePaneID: sourcePane, before: following, onSuccess: {
+                tabs.recordGroupOrder(proposed, ifUnchangedSince: revision)
+                onGroupMoved(members)
+            }) == true {
+            return true
+        }
+        tabs.ordersTabGroups = true
+        tabs.recordVisibleTabOrder(proposed)
+        onGroupMoved(members)
+        return true
+    }
+
+    func recordGroupOrder(_ order: [TabDragPayload], ifUnchangedSince revision: UInt64) {
+        ordersTabGroups = true
+        guard tabOrderEditRevision == revision else { return }
+        let retained = Set(tabOrder).intersection(order)
+        var replacements = order.filter(retained.contains).makeIterator()
+        recordVisibleTabOrder(tabOrder.map { retained.contains($0) ? replacements.next() ?? $0 : $0 })
+    }
+
     func restoreLinkedTabOrder(_ saved: [PaneLinkedTabID]?) {
         guard let saved else { return }
         let children = saved.map { id -> TabDragPayload in
@@ -229,6 +271,7 @@ struct PaneLinkedTabStrip<Content: View, Accessory: View>: View {
     let onDrop: ([TabDragPayload], WorkbenchTabDropPlacement) -> Bool
     let onEndDrop: ([TabDragPayload], WorkbenchTabDropPlacement) -> Bool
     let onUngroup: (TabDragPayload) -> Void
+    let onGroupMoved: ([TabDragPayload]) -> Void
     let trailingDropID: String
     @ViewBuilder let content: (TabDragPayload) -> Content
     @ViewBuilder let accessory: () -> Accessory
@@ -284,7 +327,7 @@ struct PaneLinkedTabStrip<Content: View, Accessory: View>: View {
                         .padding(.leading, 4)
                 }
             }
-            .workbenchDropDestination(rightSide: rightSide, placement: { _ in placement }, action: onEndDrop) { hover in
+            .workbenchDropDestination(rightSide: rightSide, placement: { _ in placement }, action: onEndDrop, groupAction: moveGroup) { hover in
                 if let hover {
                     hoveredInsertion = hover
                 } else if case .end = hoveredInsertion?.placement {
@@ -301,7 +344,8 @@ struct PaneLinkedTabStrip<Content: View, Accessory: View>: View {
             rightSide: rightSide,
             axis: members == nil ? .horizontal : .vertical,
             placement: { position, length in
-                let side = members == nil ? InsertionSide.tabEdge(position: position, length: length) : InsertionSide(position: position, length: length)
+                let draggingGroup = WorkbenchTabDrag.active?.context?.group != nil
+                let side = members == nil && !draggingGroup ? InsertionSide.tabEdge(position: position, length: length) : InsertionSide(position: position, length: length)
                 switch side {
                 case .before: return .before(tab, within: members)
                 case .after: return .after(tab, within: members)
@@ -309,8 +353,13 @@ struct PaneLinkedTabStrip<Content: View, Accessory: View>: View {
                 }
             },
             onDrop: onDrop,
+            onGroupDrop: moveGroup,
             onInsertionHover: members == nil ? { updateInsertion($0, at: tab) } : nil
         ))
+    }
+
+    private func moveGroup(_ members: [TabDragPayload], at placement: WorkbenchTabDropPlacement) -> Bool {
+        tabs?.moveGroup(members, at: placement, visible: order, sessionOrder: sessionOrder, shared: workbenchContext?.sharedTabLayout, onGroupMoved: onGroupMoved) ?? false
     }
 
     private func updateInsertion(_ hover: WorkbenchTabHover?, at tab: TabDragPayload) {
@@ -364,7 +413,17 @@ struct PaneLinkedTabStrip<Content: View, Accessory: View>: View {
                 Button("Ungroup Tabs") { onUngroup(first) }
             }
         }
-        .modifier(TabGroupDropTarget(rightSide: rightSide, axis: .horizontal, placement: { _, _ in .group(members) }, onDrop: onDrop))
+        .workbenchGroupDraggable(first, members: members, label: name)
+        .modifier(TabGroupDropTarget(rightSide: rightSide, axis: .horizontal, placement: { position, length in
+            guard WorkbenchTabDrag.active?.context?.group != nil else { return .group(members) }
+            return InsertionSide(position: position, length: length) == .before ? .before(first) : .after(members.last ?? first)
+        }, onDrop: onDrop, onGroupDrop: moveGroup, onInsertionHover: { hover in
+            if let hover {
+                hoveredInsertion = hover
+            } else if hoveredInsertion?.placement.targets.contains(where: members.contains) == true {
+                hoveredInsertion = nil
+            }
+        }))
         .popover(isPresented: Binding(get: { expandedGroup == id }, set: {
             if !$0, expandedGroup == id {
                 expandedGroup = nil
@@ -404,12 +463,29 @@ struct TabStripInsertion: Equatable {
             return nil
         }
         let entries = tabs?.tabStripEntries(order) ?? order.map(SessionTabEntry<TabDragPayload>.tab)
+        if let group = hover.group {
+            guard
+                let reordered = hover.placement.movingGroup(group, in: entries),
+                let index = reordered.firstIndex(where: { Set($0.tabs) == Set(group) }) else { return nil }
+            if let next = reordered.dropFirst(index + 1).first {
+                return .init(row: next.id, side: .before)
+            }
+            return reordered.prefix(index).last.map { .init(row: $0.id, side: .after) }
+        }
         let proposed = hover.placement.placing(hover.tab, in: order)
         let leavesSharedGroup = shared?.leavesGroupOnDrop(
             hover.tab, at: hover.placement, order: sessionOrder ?? order, incomingID: hover.sharedTabID
         ) == true
         let panes = tabs?.panesAfterDrop(proposed, hover: hover, shared: shared?.snapshot, leavesSharedGroup: leavesSharedGroup) ?? [:]
         if let pane = panes[hover.tab] {
+            if tabs?.ordersTabGroups == true || tabs?.sharedOrdersTabGroups == true || shared?.snapshot.layout.ordersGroups == true {
+                let projected = SessionTabEntry.grouped(proposed, preserveGroupPositions: true) { tab in
+                    panes[tab].map(SessionTabGroup.pane) ?? tabs?.groupID(for: tab)
+                }
+                if SessionTabEntry.positionChanged(of: .group(.pane(pane)), from: entries, to: projected) {
+                    return SessionTabEntry.insertionAnchor(for: hover.tab, from: entries, to: projected).map { .init(row: $0.row, side: $0.side) }
+                }
+            }
             return paneInsertion(pane, entries: entries, proposed: proposed, panes: panes, paneOrder: paneOrder)
         }
 
@@ -474,6 +550,7 @@ private struct TabGroupDropTarget: ViewModifier {
     let axis: Axis
     let placement: (CGFloat, CGFloat) -> WorkbenchTabDropPlacement
     let onDrop: ([TabDragPayload], WorkbenchTabDropPlacement) -> Bool
+    var onGroupDrop: (([TabDragPayload], WorkbenchTabDropPlacement) -> Bool)? = nil
     var onInsertionHover: ((WorkbenchTabHover?) -> Void)? = nil
     @State private var length: CGFloat = 0
     @State private var hoveredPlacement: WorkbenchTabDropPlacement?
@@ -499,9 +576,7 @@ private struct TabGroupDropTarget: ViewModifier {
             }
             .workbenchDropDestination(rightSide: rightSide, placement: { point in
                 placement(axis == .horizontal ? point.x : point.y, length)
-            }) { payloads, destination in
-                onDrop(payloads, destination)
-            } onHover: { hover in
+            }, action: onDrop, groupAction: onGroupDrop) { hover in
                 let placement = hover?.placement
                 if hoveredPlacement != placement {
                     hoveredPlacement = placement

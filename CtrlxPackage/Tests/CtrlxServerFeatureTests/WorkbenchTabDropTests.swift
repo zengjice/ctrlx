@@ -1,5 +1,6 @@
 import CtrlxCommon
 import CtrlxNetworking
+import Dependencies
 import Foundation
 import Testing
 @testable import CtrlxServerFeature
@@ -7,6 +8,435 @@ import Testing
 @Suite
 @MainActor
 struct WorkbenchTabDropTests {
+    @Test("Both edges next to private Files resolve to the following shared row", arguments: [false, true])
+    func privateBoundaryUsesNextSharedRow(afterEdge: Bool) {
+        let tabs = SessionFileTabsState(), group = UUID()
+        let w = TabDragPayload.window("@1"), wID = SessionTabID.window(UUID())
+        let privateFile = FileBrowserTab(path: "/private"), p = TabDragPayload.file(privateFile.id)
+        let x = FileBrowserTab(hostTab: .init(sessionName: "work", sourcePaneID: "%1", initialDirectory: "/x")), yID = SessionTabID.file(UUID())
+        let xp = TabDragPayload.file(x.id), xID = SessionTabID.file(x.id), r = TabDragPayload.file(UUID()), n = TabDragPayload.file(UUID())
+        let rID = SessionTabID.file(UUID()), nID = SessionTabID.file(UUID()), hidden = SessionTabID.file(UUID())
+        let catalog = [wID, rID, hidden, nID, xID, yID], panes = [xID: "%1", yID: "%1"]
+        let ids = [w: wID, r: rID, n: nID, xp: xID]
+        var layout = SessionTabLayout(order: catalog, groups: [hidden: group, nID: group], revision: 3, ordersGroups: true)
+        tabs.tabOrder = [w, p, r, n, xp]
+        tabs.directoryTabs = [privateFile.id: privateFile, x.id: x]
+        tabs.sharedOrdersTabGroups = true
+        let snapshot = SharedWorkbenchTabLayout.Snapshot(ids: ids, layout: layout, sourcePanes: panes)
+        tabs.sharedManualTabGroups = snapshot.groups
+        let before = tabs.presentedTabOrder(tabs.tabOrder, panes: [], layout: snapshot)
+        var sent = false
+        let shared = SharedWorkbenchTabLayout(snapshot: snapshot) { edit, _, _, _, done in
+            sent = true
+            #expect(edit == .moveGroup([xID, yID], before: rID, sourcePaneID: "%1"))
+            let applied = layout.apply(edit, catalog: catalog, sourcePanes: panes)
+            #expect(applied)
+            done()
+        }
+        let accepted = tabs.moveGroup([xp], at: afterEdge ? .after(w) : .before(p), visible: before, sessionOrder: before, shared: shared)
+        #expect(accepted && sent)
+        let updated = SharedWorkbenchTabLayout.Snapshot(ids: ids, layout: layout, sourcePanes: panes)
+        #expect(tabs.presentedTabOrder(tabs.tabOrder, panes: [], layout: updated) == [w, xp, p, r, n])
+        #expect(layout.order == [wID, xID, yID, rID, hidden, nID])
+    }
+
+    @Test("A private tail boundary cannot resolve into the other split")
+    func privateTailRetainsSectionAnchor() {
+        let tabs = SessionFileTabsState(), group = UUID(), a = TabDragPayload.window("@1"), z = TabDragPayload.browser(UUID())
+        let file = FileBrowserTab(path: "/private"), p = TabDragPayload.file(file.id), x = TabDragPayload.file(UUID()), y = TabDragPayload.file(UUID())
+        let aID = SessionTabID.window(UUID()), zID = SessionTabID.browser(UUID()), hidden = SessionTabID.browser(UUID()), xID = SessionTabID.file(UUID()), yID = SessionTabID.file(UUID())
+        let ids = [a: aID, z: zID, x: xID, y: yID]
+        let layout = SessionTabLayout(order: [xID, yID, aID, hidden, zID], groups: [xID: group, yID: group], revision: 3, ordersGroups: true)
+        tabs.tabOrder = [x, y, a, p, z]
+        tabs.directoryTabs[file.id] = file
+        tabs.sharedManualTabGroups = [x: group, y: group]
+        tabs.sharedOrdersTabGroups = true
+        var sent = false
+        let shared = SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: layout)) { edit, _, _, _, _ in
+            sent = true
+            #expect(edit == .moveGroup([xID, yID], before: hidden, groupID: group))
+        }
+        let accepted = tabs.moveGroup([x, y], at: .before(p), visible: [x, y, a, p], sessionOrder: tabs.tabOrder, shared: shared)
+        #expect(accepted && sent)
+    }
+
+    @Test("A section-end group move does not skip a detached row before the next visible section", arguments: [false, true])
+    func groupEndKeepsIntermediateDetachedAnchor(afterEdge: Bool) {
+        let a = TabDragPayload.window("@1"), z = TabDragPayload.browser(UUID())
+        let x = TabDragPayload.file(UUID()), y = TabDragPayload.file(UUID()), group = UUID()
+        let aID = SessionTabID.window(UUID()), zID = SessionTabID.browser(UUID()), hidden = SessionTabID.browser(UUID())
+        let xID = SessionTabID.file(UUID()), yID = SessionTabID.file(UUID())
+        let ids = [a: aID, z: zID, x: xID, y: yID]
+        let layout = SessionTabLayout(order: [xID, yID, aID, hidden, zID], groups: [xID: group, yID: group], revision: 3, ordersGroups: true)
+        var sent = false
+        let shared = SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: layout)) { edit, _, _, _, _ in
+            sent = true
+            #expect(edit == .moveGroup([xID, yID], before: hidden, groupID: group))
+        }
+        let tabs = SessionFileTabsState()
+        tabs.tabOrder = [x, y, a, z]
+        tabs.sharedManualTabGroups = [x: group, y: group]
+        tabs.sharedOrdersTabGroups = true
+        let left = [x, y, a]
+        let accepted = tabs.moveGroup([x, y], at: afterEdge ? .after(a) : .end(left), visible: left, sessionOrder: tabs.tabOrder, shared: shared)
+        #expect(accepted && sent)
+    }
+
+    @Test("Both edges of a visible slot take priority over a detached manual-group member", arguments: [false, true])
+    func groupMoveRespectsVisibleBoundary(afterEdge: Bool) {
+        let tabs = SessionFileTabsState(), group = UUID()
+        let x = FileBrowserTab(hostTab: .init(sessionName: "work", sourcePaneID: "%1", initialDirectory: "/x")), y = FileBrowserTab(hostTab: .init(sessionName: "work", sourcePaneID: "%1", initialDirectory: "/y"))
+        let w = TabDragPayload.window("@1"), wID = SessionTabID.window(UUID())
+        let r = TabDragPayload.file(UUID()), n = TabDragPayload.file(UUID()), xp = TabDragPayload.file(x.id)
+        let rID = SessionTabID.file(UUID()), mID = SessionTabID.file(UUID()), nID = SessionTabID.file(UUID()), xID = SessionTabID.file(x.id), yID = SessionTabID.file(y.id)
+        let catalog = [wID, rID, mID, nID, xID, yID], panes = [xID: "%1", yID: "%1"]
+        let ids = [w: wID, r: rID, n: nID, xp: xID]
+        var layout = SessionTabLayout(order: catalog, groups: [mID: group, nID: group], revision: 3, ordersGroups: true)
+        tabs.tabOrder = [w, r, n, xp]
+        tabs.directoryTabs = [x.id: x]
+        tabs.sharedOrdersTabGroups = true
+        let snapshot = SharedWorkbenchTabLayout.Snapshot(ids: ids, layout: layout, sourcePanes: panes)
+        tabs.sharedManualTabGroups = snapshot.groups
+        let before = tabs.presentedTabOrder(tabs.tabOrder, panes: [], layout: snapshot)
+        var sent = false
+        let shared = SharedWorkbenchTabLayout(snapshot: snapshot) { edit, _, _, _, done in
+            sent = true
+            #expect(edit == .moveGroup([xID, yID], before: rID, sourcePaneID: "%1"))
+            let applied = layout.apply(edit, catalog: catalog, sourcePanes: panes)
+            #expect(applied)
+            done()
+        }
+        let accepted = tabs.moveGroup([xp], at: afterEdge ? .after(w) : .before(r), visible: before, sessionOrder: before, shared: shared)
+        #expect(accepted && sent)
+        #expect(layout.order == [wID, xID, yID, rID, mID, nID])
+        let rows = SessionTabEntry.grouped(layout.order, preserveGroupPositions: true) { tab in
+            layout.groups[tab].map(SessionTabGroup.manual) ?? panes[tab].map(SessionTabGroup.pane)
+        }
+        #expect(rows.map(\.tabs) == [[wID], [xID, yID], [rID], [mID, nID]])
+    }
+
+    @Test("A Host broadcast cannot cancel a group's private anchor", arguments: [false, true])
+    func passiveRefreshBeforeGroupConfirmation(broadcastFirst: Bool) throws {
+        let a = TabDragPayload.window("@1"), b = TabDragPayload.window("@2"), x = TabDragPayload.file(UUID()), y = TabDragPayload.file(UUID()), p = TabDragPayload.file(UUID()), group = UUID()
+        let ids: [TabDragPayload: SessionTabID] = [a: .window(UUID()), b: .window(UUID()), x: .file(UUID()), y: .file(UUID())]
+        let catalog = [a, b, x, y].compactMap { ids[$0] }
+        var layout = try SessionTabLayout(order: catalog, groups: [#require(ids[x]): group, #require(ids[y]): group], revision: 2, ordersGroups: true)
+        let tabs = SessionFileTabsState()
+        tabs.tabOrder = [a, p, b, x, y]
+        tabs.sharedManualTabGroups = [x: group, y: group]
+        tabs.sharedOrdersTabGroups = true
+        var confirm: (@MainActor () -> Void)?
+        let shared = SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: layout)) { edit, _, _, _, done in
+            let applied = layout.apply(edit, catalog: catalog)
+            #expect(applied)
+            confirm = done
+        }
+        let accepted = tabs.moveGroup([x, y], at: .before(p), visible: tabs.tabOrder, sessionOrder: tabs.tabOrder, shared: shared)
+        #expect(accepted)
+        let updated = SharedWorkbenchTabLayout.Snapshot(ids: ids, layout: layout)
+        if broadcastFirst {
+            tabs.recordVisibleTabOrder(tabs.presentedTabOrder(tabs.tabOrder, panes: [], layout: updated))
+        }
+        confirm?()
+        #expect(tabs.presentedTabOrder(tabs.tabOrder, panes: [], layout: updated) == [a, x, y, p, b])
+    }
+
+    @Test("Automatic groups include members in another split or native window", arguments: [false, true])
+    func completeAutomaticGroup(hidden: Bool) {
+        let tabs = SessionFileTabsState(), a = TabDragPayload.window("@1")
+        let x = FileBrowserTab(hostTab: .init(sessionName: "work", sourcePaneID: "%1", initialDirectory: "/x")), y = FileBrowserTab(hostTab: .init(sessionName: "work", sourcePaneID: "%1", initialDirectory: "/y"))
+        let xp = TabDragPayload.file(x.id), yp = TabDragPayload.file(y.id), aID = SessionTabID.window(UUID()), xID = SessionTabID.file(x.id), yID = SessionTabID.file(y.id)
+        let ids: [TabDragPayload: SessionTabID] = hidden ? [a: aID, xp: xID] : [a: aID, xp: xID, yp: yID]
+        let panes = [xID: "%1", yID: "%1"]
+        var layout = SessionTabLayout(order: [aID, xID, yID], revision: 2, ordersGroups: true)
+        tabs.directoryTabs = hidden ? [x.id: x] : [x.id: x, y.id: y]
+        tabs.tabOrder = hidden ? [a, xp] : [a, xp, yp]
+        tabs.rightSide = hidden ? [] : [yp]
+        tabs.sharedOrdersTabGroups = true
+        var sends = 0
+        let shared = SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: layout, sourcePanes: panes)) { edit, _, _, _, done in
+            sends += 1
+            #expect(edit == .moveGroup([xID, yID], before: aID, sourcePaneID: "%1"))
+            let applied = layout.apply(edit, catalog: layout.order, sourcePanes: panes)
+            #expect(applied)
+            done()
+        }
+        let accepted = tabs.moveGroup([xp], at: .before(a), visible: [a, xp], sessionOrder: tabs.tabOrder, shared: shared)
+        #expect(accepted && sends == 1 && layout.order == [xID, yID, aID])
+        #expect(tabs.rightSide == (hidden ? [] : [yp]))
+        #expect((tabs.directoryTabs[y.id] == nil) == hidden)
+    }
+
+    @Test("A local group containing a terminal cannot submit a Host reorder", arguments: [false, true])
+    func localGroupDoesNotReorderHost(ordersGroups: Bool) {
+        let tabs = SessionFileTabsState(), a = TabDragPayload.window("@1"), b = TabDragPayload.window("@2")
+        let file = FileBrowserTab(path: "/private"), p = TabDragPayload.file(file.id)
+        tabs.directoryTabs[file.id] = file
+        tabs.tabOrder = [a, b, p]
+        let merged = tabs.mergeTab(p, into: [b], visible: tabs.tabOrder)
+        #expect(merged)
+        tabs.recordTabDrop(p, at: .group([b]))
+        let ids: [TabDragPayload: SessionTabID] = [a: .window(UUID()), b: .window(UUID())]
+        let layout = SessionTabLayout(order: [a, b].compactMap { ids[$0] }, revision: 2, ordersGroups: ordersGroups ? true : nil)
+        let shared = SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: layout)) { _, _, _, _, _ in Issue.record("Sent a local group to the Host") }
+        let accepted = tabs.moveGroup([b, p], at: .before(a), visible: tabs.tabOrder, sessionOrder: tabs.tabOrder, shared: shared)
+        #expect(accepted)
+        #expect(tabs.presentedTabOrder(tabs.tabOrder, panes: [], layout: shared.snapshot) == [b, p, a])
+        #expect(!tabs.isWindowReorderPending)
+        #expect(shared.snapshot.layout == layout)
+    }
+
+    @Test("A target source group spanning native windows is one insertion slot", arguments: [false, true], [false, true])
+    func targetSourceGroupAcrossWindows(hiddenFirst: Bool, moveAfter: Bool) async throws {
+        try await withDependencies { $0[PreferencesService.self] = .inMemory() } operation: {
+            let session = UUID(), group = UUID()
+            let m = TabDragPayload.file(UUID()), n = TabDragPayload.file(UUID()), x = TabDragPayload.file(UUID())
+            let mID = SessionTabID.file(UUID()), nID = SessionTabID.file(UUID()), xID = SessionTabID.file(UUID()), hidden = SessionTabID.file(UUID())
+            let ids = [m: mID, n: nID, x: xID], panes = [xID: "%1", hidden: "%1"]
+            let target = hiddenFirst ? [hidden, xID] : [xID, hidden]
+            let catalog = moveAfter ? [mID, nID] + target : target + [mID, nID]
+            let layout = SessionTabLayout(order: catalog, groups: [mID: group, nID: group], revision: 3, ordersGroups: true)
+            @Dependency(PreferencesService.self) var preferences
+            try preferences.setData(JSONEncoder().encode([session: layout]), "sessionTabLayouts")
+            var request: EditSessionTabLayout?
+            let shared = SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: layout, sourcePanes: panes)) { edit, initial, visible, _, _ in
+                request = .init(sessionID: session, edit: edit, initialOrder: initial, visibleWindows: visible, initialOrderRevision: layout.revision)
+            }
+            let accepted = shared.moveGroup([m, n], order: moveAfter ? [x, m, n] : [m, n, x], initialOrder: moveAfter ? [m, n, x] : [x, m, n], onSuccess: { })
+            #expect(accepted)
+            let store = HostSessionTabLayouts()
+            try await store.apply(#require(request), catalog: catalog, sourcePanes: panes) { _ in nil }
+            let saved = HostSessionTabLayouts().snapshot(sessionID: session, catalog: catalog)
+            #expect(saved.order == (moveAfter ? target + [mID, nID] : [mID, nID] + target))
+        }
+    }
+
+    @Test("The first group move preserves detached rows in their displayed order without an initial write")
+    func unseededGroupRetainsHiddenAnchor() async throws {
+        try await withDependencies { $0[PreferencesService.self] = .inMemory() } operation: {
+            let session = UUID(), tabs = SessionFileTabsState(), a = TabDragPayload.window("@1")
+            let x = FileBrowserTab(hostTab: .init(sessionName: "work", sourcePaneID: "%1", initialDirectory: "/x")), z = FileBrowserTab(hostTab: .init(sessionName: "work", sourcePaneID: "%2", initialDirectory: "/z"))
+            let xp = TabDragPayload.file(x.id), zp = TabDragPayload.file(z.id), aID = SessionTabID.window(UUID()), xID = SessionTabID.file(x.id), zID = SessionTabID.file(z.id), hidden = SessionTabID.browser(UUID())
+            let ids = [a: aID, xp: xID, zp: zID], panes = [xID: "%1", zID: "%2"], catalog = [aID, xID, zID, hidden]
+            let store = HostSessionTabLayouts(), snapshot = store.snapshot(sessionID: session, catalog: catalog)
+            #expect(snapshot.revision == 0 && snapshot.order == catalog)
+            @Dependency(PreferencesService.self) var preferences
+            #expect(preferences.data("sessionTabLayouts") == nil)
+            tabs.directoryTabs = [x.id: x, z.id: z]
+            tabs.tabOrder = [a, xp, zp]
+            let hiddenTab = TabDragPayload.browser(UUID())
+            var allIDs = ids
+            allIDs[hiddenTab] = hidden
+            let allBefore = tabs.presentedTabOrder([a, xp, zp, hiddenTab], panes: [], layout: .init(ids: allIDs, layout: snapshot, sourcePanes: panes))
+            #expect(allBefore == [a, hiddenTab, xp, zp])
+            var request: EditSessionTabLayout?
+            let shared = SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: snapshot, sourcePanes: panes)) { edit, initial, visible, _, _ in
+                request = .init(sessionID: session, edit: edit, initialOrder: initial, visibleWindows: visible, initialOrderRevision: snapshot.revision)
+            }
+            let accepted = tabs.moveGroup([xp], at: .end(tabs.tabOrder), visible: tabs.tabOrder, sessionOrder: tabs.tabOrder, shared: shared)
+            #expect(accepted)
+            try await store.apply(#require(request), catalog: catalog, sourcePanes: panes) { _ in nil }
+            #expect(HostSessionTabLayouts().snapshot(sessionID: session, catalog: catalog).order == [aID, hidden, zID, xID])
+        }
+    }
+
+    @Test("Group moves keep a trailing detached tab as their shared anchor", arguments: [false, true])
+    func groupEndKeepsDetachedAnchor(initialized: Bool) {
+        let a = TabDragPayload.window("@1"), x = TabDragPayload.file(UUID()), y = TabDragPayload.file(UUID())
+        let aID = SessionTabID.window(UUID()), hidden = SessionTabID.browser(UUID()), xID = SessionTabID.file(UUID()), yID = SessionTabID.file(UUID()), group = UUID()
+        let ids = [a: aID, x: xID, y: yID], catalog = [xID, yID, aID, hidden]
+        var layout = SessionTabLayout(order: catalog, groups: [xID: group, yID: group], revision: 2, ordersGroups: initialized ? true : nil)
+        let shared = SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: layout)) { edit, initial, _, _, done in
+            #expect(edit == .moveGroup([xID, yID], before: hidden, groupID: group))
+            if let initial {
+                layout = layout.initializingGroupOrder(from: initial)
+            }
+            let applied = layout.apply(edit, catalog: catalog)
+            #expect(applied)
+            done()
+        }
+        let accepted = shared.moveGroup([x, y], order: [a, x, y], initialOrder: [x, y, a], onSuccess: { })
+        #expect(accepted && layout.order == [aID, xID, yID, hidden])
+    }
+
+    @Test("A split group submits its complete shared membership while a local group stays local", arguments: [false, true])
+    func partialAndLocalGroups(local: Bool) {
+        let a = TabDragPayload.window("@1"), x = TabDragPayload.file(UUID()), y = TabDragPayload.file(UUID()), z = TabDragPayload.file(UUID()), group = UUID()
+        let aID = SessionTabID.window(UUID()), xID = SessionTabID.file(UUID()), yID = SessionTabID.file(UUID()), zID = SessionTabID.file(UUID())
+        let ids = [a: aID, x: xID, y: yID, z: zID]
+        var layout = SessionTabLayout(order: [xID, yID, zID, aID], groups: [xID: group, yID: group, zID: group], revision: 2, ordersGroups: true)
+        var sent = false
+        let shared = SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: layout)) { edit, _, _, _, done in
+            sent = true
+            #expect(edit == .moveGroup([xID, yID, zID], before: nil, groupID: group))
+            let applied = layout.apply(edit, catalog: layout.order)
+            #expect(applied)
+            done()
+        }
+        let tabs = SessionFileTabsState()
+        tabs.sharedManualTabGroups = ids.compactMapValues { layout.groups[$0] }
+        tabs.sharedOrdersTabGroups = true
+        tabs.tabOrder = local ? [a, .git, x, y, z] : [x, y, z, a]
+        if local {
+            tabs.manualTabGroups = [.git: UUID()]
+            tabs.manualTabGroups[x] = tabs.manualTabGroups[.git]
+        }
+        let members: [TabDragPayload] = local ? [.git, x] : [x, y]
+        let before = tabs.tabOrder
+        let proposed: [TabDragPayload] = local ? [.git, x, a, y, z] : [a, x, z, y]
+        let accepted = shared.moveGroup(members, order: proposed, initialOrder: before, localGroups: tabs.manualTabGroups, onSuccess: { })
+        #expect(accepted == !local && sent == !local)
+        if local {
+            tabs.ordersTabGroups = true
+            tabs.recordVisibleTabOrder(proposed)
+            #expect(tabs.presentedTabOrder(tabs.tabOrder, panes: [], layout: shared.snapshot).prefix(2) == [.git, x])
+        } else {
+            #expect(layout.order == [aID, xID, yID, zID])
+        }
+    }
+
+    @Test("A group confirmation cannot overwrite a later private reorder", arguments: [false, true])
+    func groupConfirmationPreservesLaterOrder(laterEdit: Bool) {
+        let tabs = SessionFileTabsState(), a = TabDragPayload.window("@1"), x = TabDragPayload.file(UUID()), y = TabDragPayload.file(UUID()), p = TabDragPayload.browser(UUID())
+        let before: [TabDragPayload] = [a, x, y, .git, p], proposed: [TabDragPayload] = [x, y, a, .git, p]
+        tabs.tabOrder = before
+        let revision = tabs.beginTabOrderEdit()
+        if laterEdit {
+            tabs.beginTabOrderEdit()
+            tabs.recordVisibleTabOrder([.git, p, a, x, y])
+        }
+        tabs.recordGroupOrder(proposed, ifUnchangedSince: revision)
+        #expect(tabs.tabOrder == (laterEdit ? [.git, p, a, x, y] : proposed))
+    }
+
+    @Test("Group moves resolve private anchors and mixed source members from the complete order", arguments: [false, true])
+    func sharedGroupUsesFullOrder(mixedSource: Bool) {
+        let tabs = SessionFileTabsState()
+        let a = TabDragPayload.window("@1"), peer = TabDragPayload.browser(UUID())
+        let sharedFile = FileBrowserTab(hostTab: .init(sessionName: "work", sourcePaneID: "%1", initialDirectory: "/shared"))
+        let privateFile = FileBrowserTab(path: "/private", sourcePaneID: "%1")
+        let x = TabDragPayload.file(sharedFile.id), y = TabDragPayload.file(UUID()), p = TabDragPayload.file(privateFile.id)
+        tabs.directoryTabs[sharedFile.id] = sharedFile
+        tabs.directoryTabs[privateFile.id] = privateFile
+        let aID = SessionTabID.window(UUID()), peerID = SessionTabID.browser(UUID())
+        let xID = SessionTabID.file(sharedFile.id), yID = SessionTabID.file(UUID()), group = UUID()
+        let ids = [a: aID, peer: peerID, x: xID, y: yID]
+        let catalog = mixedSource ? [aID, xID] : [xID, yID, peerID]
+        let members = mixedSource ? [x, p] : [x, y]
+        let proposed: [TabDragPayload] = mixedSource ? [x, p, a] : [peer, x, y, .git]
+        var layout = SessionTabLayout(order: catalog, groups: mixedSource ? [:] : [xID: group, yID: group], revision: 2, ordersGroups: true)
+        var sends = 0
+        let shared = SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: layout)) { edit, _, _, _, confirm in
+            sends += 1
+            #expect(edit == .moveGroup(mixedSource ? [xID] : [xID, yID], before: mixedSource ? aID : nil, groupID: mixedSource ? nil : group, sourcePaneID: mixedSource ? "%1" : nil))
+            let moved = layout.apply(edit, catalog: catalog, sourcePanes: mixedSource ? [xID: "%1"] : [:])
+            #expect(moved)
+            confirm()
+        }
+        let before: [TabDragPayload] = mixedSource ? [a, x, p] : [x, y, peer, .git]
+        let accepted = shared.moveGroup(members, order: proposed, initialOrder: before, sourcePaneID: mixedSource ? "%1" : nil) {
+            tabs.ordersTabGroups = true
+            tabs.recordVisibleTabOrder(proposed)
+        }
+        #expect(accepted && sends == 1)
+        let displayed = tabs.presentedTabOrder(tabs.tabOrder, panes: [], layout: .init(ids: ids, layout: layout))
+        #expect(displayed == proposed)
+        #expect(tabs.directoryTabs[privateFile.id] === privateFile && privateFile.hostTab == nil)
+    }
+
+    @Test("A section-end group drop preserves other sections in both ordering modes", arguments: [false, true], [false, true].flatMap { ordered in [false, true].map { (ordered, $0) } })
+    func groupEndIsScopedToSection(alreadyLast: Bool, mode: (Bool, Bool)) async throws {
+        let (alreadyOrdered, rightBeforePeer) = mode
+        let a = TabDragPayload.window("@1"), right = TabDragPayload.browser(UUID())
+        let x = TabDragPayload.file(UUID()), y = TabDragPayload.file(UUID()), group = UUID()
+        let left: [SessionTabEntry<TabDragPayload>] = alreadyLast ? [.tab(a), .group(.manual(group), [x, y])] : [.group(.manual(group), [x, y]), .tab(a)]
+        let section = left.flatMap(\.tabs)
+        let full = rightBeforePeer ? (alreadyLast ? [right, a, x, y] : [x, y, right, a]) : section + [right]
+        let placement = WorkbenchTabDropPlacement.end(section)
+        if alreadyLast {
+            #expect(placement.movingGroup([x, y], in: left) == nil)
+            return
+        }
+        let moved = try #require(placement.movingGroup([x, y], in: left)).flatMap(\.tabs)
+        var replacement = moved.makeIterator()
+        let proposed = full.map { section.contains($0) ? replacement.next() ?? $0 : $0 }
+        let aID = SessionTabID.window(UUID()), rightID = SessionTabID.browser(UUID())
+        let xID = SessionTabID.file(UUID()), yID = SessionTabID.file(UUID())
+        let ids = [a: aID, right: rightID, x: xID, y: yID]
+        let catalog = full.compactMap { ids[$0] }
+        let layout = SessionTabLayout(order: catalog, groups: [xID: group, yID: group], revision: 2, ordersGroups: alreadyOrdered ? true : nil)
+        let session = UUID()
+        try await withDependencies { $0[PreferencesService.self] = .inMemory() } operation: {
+            @Dependency(PreferencesService.self) var preferences
+            try preferences.setData(JSONEncoder().encode([session: layout]), "sessionTabLayouts")
+            let store = HostSessionTabLayouts()
+            var request: EditSessionTabLayout?
+            let shared = SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: layout)) { edit, initial, visible, _, _ in
+                #expect(edit == .moveGroup([xID, yID], before: rightBeforePeer ? nil : rightID, groupID: group))
+                #expect(initial == (alreadyOrdered ? nil : catalog))
+                request = .init(sessionID: session, edit: edit, initialOrder: initial, visibleWindows: visible, initialOrderRevision: initial.map { _ in layout.revision })
+            }
+            let accepted = shared.moveGroup([x, y], order: proposed, initialOrder: full, onSuccess: { })
+            #expect(accepted)
+            let submitted = try #require(request)
+            try await store.apply(submitted, catalog: catalog) { _ in nil }
+            let saved = HostSessionTabLayouts().snapshot(sessionID: session, catalog: catalog)
+            #expect(saved.order == (rightBeforePeer ? [rightID, aID, xID, yID] : [aID, xID, yID, rightID]))
+            #expect(saved.groups == layout.groups)
+        }
+    }
+
+    @Test("A local group containing Git keeps its requested position after shared ordering refreshes")
+    func privateGroupOrderSurvivesSharedRefresh() {
+        let a = TabDragPayload.window("@1"), x = TabDragPayload.browser(UUID()), y = TabDragPayload.browser(UUID())
+        let aID = SessionTabID.window(UUID()), xID = SessionTabID.browser(UUID()), yID = SessionTabID.browser(UUID())
+        let tabs = SessionFileTabsState()
+        let group = UUID()
+        tabs.manualTabGroups = [.git: group, x: group]
+        tabs.ordersTabGroups = true
+        let layout = SharedWorkbenchTabLayout.Snapshot(ids: [a: aID, x: xID, y: yID], layout: .init(order: [aID, xID, yID], revision: 1, ordersGroups: true))
+        let order = tabs.presentedTabOrder([x, .git, a, y], panes: [], layout: layout)
+        #expect(order == [x, .git, a, y])
+        #expect(tabs.tabStripEntries(order).map(\.id) == [.group(.manual(group)), .tab(a), .tab(y)])
+    }
+
+    @Test("A whole-group edit waits for Host confirmation and keeps private source members together")
+    func sharedGroupMove() {
+        let a = TabDragPayload.window("@1"), x = TabDragPayload.file(UUID()), p = TabDragPayload.file(UUID()), y = TabDragPayload.file(UUID())
+        let aID = SessionTabID.window(UUID()), xID = SessionTabID.file(UUID()), yID = SessionTabID.file(UUID())
+        let ids = [a: aID, x: xID, y: yID]
+        let catalog = [aID, xID, yID]
+        var layout = SessionTabLayout(order: catalog, revision: 2)
+        var confirm: (@MainActor () -> Void)?
+        var completed = false
+        let shared = SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: layout)) { edit, initial, windows, affected, completion in
+            #expect(edit == .moveGroup([yID], before: aID))
+            #expect(initial == [aID, xID, yID])
+            #expect(windows == nil && affected.isEmpty)
+            let moved = layout.apply(edit, catalog: catalog)
+            #expect(moved)
+            confirm = completion
+        }
+        let accepted = shared.moveGroup([y], order: [y, a, p, x], initialOrder: [a, p, x, y]) { completed = true }
+        #expect(accepted && !completed)
+        confirm?()
+        #expect(completed)
+        let snapshot = SharedWorkbenchTabLayout.Snapshot(ids: ids, layout: layout)
+        let displayed = snapshot.order([a, p, x, y]) { tab in [p, x].contains(tab) ? "%1" : (tab == y ? "%2" : nil) }
+        #expect(displayed == [y, a, p, x])
+        #expect(layout.groups.isEmpty)
+    }
+
+    @Test("Old Hosts do not receive group edits")
+    func oldHostCannotReceiveGroupMove() {
+        let tab = TabDragPayload.file(UUID()), id = SessionTabID.file(UUID())
+        let shared = SharedWorkbenchTabLayout(snapshot: .init(ids: [tab: id], layout: .init(order: [id], supportsGroupReordering: nil))) { _, _, _, _, _ in
+            Issue.record("Sent a group edit to an older Host")
+        }
+        let accepted = shared.moveGroup([tab], order: [tab], initialOrder: [tab], onSuccess: { })
+        #expect(!accepted)
+    }
+
     @Test
     func sharedDropKeepsLaneAnchorAndSeedsFromTheVisibleOrder() {
         let a = TabDragPayload.window("@1"), b = TabDragPayload.window("@2")

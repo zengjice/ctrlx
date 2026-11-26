@@ -296,18 +296,37 @@ public struct MainView: View {
         let layouts: [UUID: SessionTabLayout]
         let windows: [(String, WorkspacePaneIdentity)]
         let resources: [ResourceSession]
+        let sourcePanes: [SessionTabID: String]
+        let paneOrder: [String]
         if let hostID {
             guard let store = coordinator.remoteSessionStore, let shared = store.sessionTabLayoutsByHost[hostID] else { return nil }
             layouts = shared
             resources = store.resourceSessionsByHost[hostID] ?? []
-            windows = remoteSessionWindows(hostId: hostID, sessionName: session).compactMap { window in
+            let client = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient
+            sourcePanes = Dictionary(
+                (client?.fileTabs ?? []).compactMap { tab in tab.sourcePaneID.map { (SessionTabID.file(tab.id), $0) } }
+                    + (client?.browserTabs ?? []).compactMap { tab in tab.sourcePaneID.map { (SessionTabID.browser(tab.id), $0) } }
+                    + (client?.simulatorTabs ?? []).compactMap { tab in tab.sourcePaneID.map { (SessionTabID.browser(tab.id), $0) } },
+                uniquingKeysWith: { first, _ in first }
+            )
+            let sessionWindows = remoteSessionWindows(hostId: hostID, sessionName: session)
+            paneOrder = sessionWindows.flatMap(\.panes).map(\.paneId)
+            windows = sessionWindows.compactMap { window in
                 window.panes.first?.workspaceIdentity.map { (window.stableId, $0) }
             }
             tabs = remoteSessionTabsStates[remoteTabsKey(hostId: hostID, sessionName: session)]
         } else {
             layouts = localSnapshot?.layouts ?? coordinator.sharedSessionTabLayouts
             resources = coordinator.resourceSessions.sessions
-            windows = (localSnapshot?.windows ?? self.windows(forSession: session)).compactMap { window in
+            sourcePanes = Dictionary(
+                coordinator.hostFileTabs.tabs.compactMap { tab in tab.sourcePaneID.map { (SessionTabID.file(tab.id), $0) } }
+                    + coordinator.agentBrowser.sharedBrowserTabs.compactMap { tab in tab.sourcePaneID.map { (SessionTabID.browser(tab.id), $0) } }
+                    + coordinator.agentSimulator.sharedSimulatorTabs.compactMap { tab in tab.sourcePaneID.map { (SessionTabID.browser(tab.id), $0) } },
+                uniquingKeysWith: { first, _ in first }
+            )
+            let sessionWindows = localSnapshot?.windows ?? self.windows(forSession: session)
+            paneOrder = sessionWindows.flatMap(\.panes).map(\.paneId)
+            windows = sessionWindows.compactMap { window in
                 window.panes.first?.workspaceIdentity.map { (window.stableId, $0) }
             }
             tabs = sessionFileTabsStates[session]
@@ -326,11 +345,11 @@ public struct MainView: View {
         if let incoming, let id = coordinator.detachedWindows.sharedResourceTabID(for: incoming) {
             ids[incoming.tab] = id
         }
-        return SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: layouts[sessionID] ?? .init())) { edit, initialOrder, visibleWindows, affected, onSuccess in
+        return SharedWorkbenchTabLayout(snapshot: .init(ids: ids, layout: layouts[sessionID] ?? .init(supportsGroupReordering: hostID == nil ? true : nil), sourcePanes: sourcePanes, paneOrder: paneOrder)) { edit, initialOrder, visibleWindows, affected, onSuccess in
             let localGroups = tabs?.manualTabGroups.filter { affected.contains($0.key) } ?? [:]
             Task {
                 do {
-                    let request = EditSessionTabLayout(sessionID: sessionID, edit: edit, initialOrder: initialOrder, visibleWindows: visibleWindows)
+                    let request = EditSessionTabLayout(sessionID: sessionID, edit: edit, initialOrder: initialOrder, visibleWindows: visibleWindows, initialOrderRevision: initialOrder.map { _ in layouts[sessionID]?.revision ?? 0 })
                     if let hostID {
                         guard let connection = coordinator.viewerConnectionManager?.connection(for: hostID) else {
                             throw FileBrowserError.message("The Host is disconnected.")

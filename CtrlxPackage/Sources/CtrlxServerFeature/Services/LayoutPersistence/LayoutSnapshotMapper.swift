@@ -153,6 +153,7 @@
                 browserTabs: browserTabs,
                 tabOrder: order.compactMap(ref),
                 linkedTabOrder: order.compactMap(\.linkedID),
+                ordersTabGroups: tabs.ordersTabGroups ? true : nil,
                 rightSide: tabs.rightSide.union(hiddenRightWindowIDs.map(TabDragPayload.window))
                     .union(tabs.locallySplitTerminalID.map { [TabDragPayload.window($0)] } ?? []).compactMap(ref),
                 selectedLeft: selectedLeft,
@@ -365,6 +366,9 @@
         }
 
         private static func applyTabOrder(from draft: SavedFolderLayout, remappedRefs: [SavedTabRef: SavedTabRef], to result: inout SavedFolderLayout) {
+            if draft.ordersTabGroups == true {
+                result.ordersTabGroups = true
+            }
             result.tabOrder = applyingOrder(draft.tabOrder.map { remappedRefs[$0] ?? $0 }, to: result.tabOrder)
             if
                 let order = draft.linkedTabOrder?.map({ id in
@@ -446,6 +450,7 @@
                 browserTabs: layout.browserTabs,
                 tabOrder: layout.tabOrder.compactMap(validBrowserRef),
                 linkedTabOrder: layout.linkedTabOrder,
+                ordersTabGroups: layout.ordersTabGroups,
                 rightSide: rightSide,
                 selectedLeft: selectedLeft,
                 selectedRight: selectedRight,
@@ -620,6 +625,7 @@
                 tabs.splitRatio = liveSplitRatio
             }
 
+            tabs.ordersTabGroups = layout.ordersTabGroups == true
             tabs.restoreLinkedTabOrder(layout.linkedTabOrder?.map { id in
                 if case let .file(fileID) = id, let reused = reusedFileIDs[fileID] {
                     return .file(reused)

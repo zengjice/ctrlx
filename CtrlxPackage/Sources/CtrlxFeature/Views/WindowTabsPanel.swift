@@ -21,6 +21,8 @@
         let onChoose: (WindowTabAction) -> Void
         let onReorderWindows: ([String]) async throws -> Void
         var topLevelTabOrder: [IOSTopLevelTabID] = []
+        var ordersTabGroups = false
+        var onReorderGroups: ([IOSTopLevelTabID], [IOSTopLevelTabID]?) -> Void = { _, _ in }
         var onReorderTopLevel: ([IOSTopLevelTabID]) -> Void = { _ in }
         let linkedTabOrder: [PaneLinkedTabID]
         let onReorderLinkedTabs: ([PaneLinkedTabID]) -> Void
@@ -39,7 +41,7 @@
         }
 
         private var linkedTabs: IOSPaneLinkedTabs {
-            IOSPaneLinkedTabs(files: files, browsers: browsers, simulators: simulators, windows: orderedWindows, storedOrder: linkedTabOrder)
+            IOSPaneLinkedTabs(files: files, browsers: browsers, simulators: simulators, windows: orderedWindows, storedOrder: linkedTabOrder, ordersGroups: ordersTabGroups)
         }
 
         var body: some View {
@@ -199,6 +201,13 @@
                                 let key = group.paneID.flatMap { linkedTabs.colorKey(for: $0) } ?? String(describing: group)
                                 let attention = AgentAttention(panes: tabs.compactMap { windows[$0] }.flatMap(\.panes))
                                 groupLabel(title, count: tabs.count, colorKey: key, attention: attention)
+                                    .onDrag {
+                                        guard
+                                            let sessionID = sharedSessionID,
+                                            tabs.allSatisfy(linkedTabs.isPrivateFile) || (isConnected && layout.supportsGroupReordering == true) else { return NSItemProvider() }
+                                        return IOSSessionTabDrag.provider(hostID: hostID, sessionID: sessionID, tab: first, group: tabs)
+                                    }
+                                    .accessibilityHint("Drag to reorder this tab group.")
                                     .frame(minHeight: 44).contentShape(.rect)
                                     .tabSeparator()
                                     .tabInsertionLine(dropInsertion?.line, at: entry.id)
@@ -237,7 +246,7 @@
                 .tabInsertionLine(dropInsertion?.line, at: .tab(tab))
             Group {
                 if let sessionID = sharedSessionID, linkedTabs.isPrivateFile(tab) || (isConnected && linkedTabs.isShareable(tab)) {
-                    row.draggable(IOSSessionTabDrag.begin(hostID: hostID, sessionID: sessionID, tab: tab))
+                    row.onDrag { IOSSessionTabDrag.provider(hostID: hostID, sessionID: sessionID, tab: tab) }
                 } else {
                     row
                 }
@@ -305,6 +314,12 @@
                 switch action {
                 case let .moveTopLevel(order): onReorderTopLevel(order)
                 case let .moveLinked(order): onReorderLinkedTabs(order)
+                case let .moveGroup(change, order):
+                    if let change {
+                        edit(change) { onReorderGroups(order, topLevelTabOrder) }
+                    } else {
+                        onReorderGroups(order, nil)
+                    }
                 case let .shared(change): edit(change)
                 }
             } onFailure: {
@@ -320,20 +335,45 @@
             var projectedOrder = topLevelTabOrder
             switch action {
             case let .shared(edit):
-                guard projectedLayout.apply(edit, catalog: model.initialSharedOrder(topLevelOrder: projectedOrder)) else { return nil }
+                guard let projected = model.projecting(edit, in: layout, topLevelOrder: projectedOrder) else { return nil }
+                projectedLayout = projected
             case let .moveTopLevel(order):
                 projectedOrder = order
             case let .moveLinked(order):
                 model.storedOrder = order
+            case let .moveGroup(change, order):
+                if let change {
+                    guard let projected = model.projecting(change, in: layout, topLevelOrder: projectedOrder) else { return nil }
+                    projectedLayout = projected
+                }
+                projectedOrder = order
+                model.ordersGroups = true
             }
             let reordered = model.sharedEntries(projectedLayout, topLevelOrder: projectedOrder)
-            return IOSPaneLinkedTabs.insertionLine(for: source, from: entries, to: reordered, expandedGroup: expandedGroup)
+            let movesGroup = switch action {
+            case .shared(.moveGroup),
+                 .moveGroup: true
+            default: false
+            }
+            if movesGroup, let slot = reordered.firstIndex(where: { $0.tabs.contains(source) }) {
+                if let next = reordered.dropFirst(slot + 1).first {
+                    return .before(next.id)
+                }
+                guard let previous = reordered.prefix(slot).last else { return nil }
+                if case let .group(id, members) = previous, id == expandedGroup, let last = members.last {
+                    return .after(.tab(last))
+                }
+                return .after(previous.id)
+            }
+            return IOSPaneLinkedTabs.insertionLine(for: source, from: entries, to: reordered, expandedGroup: expandedGroup, preserveGroupPositions: layout.ordersGroups == true || model.ordersGroups)
         }
 
-        private func edit(_ change: SessionTabLayout.Edit) {
+        private func edit(_ change: SessionTabLayout.Edit, onSuccess: @escaping () -> Void = { }) {
             Task {
-                do { try await onEditSharedTabs?(change) }
-                catch { reorderError = error.localizedDescription }
+                do {
+                    try await onEditSharedTabs?(change)
+                    onSuccess()
+                } catch { reorderError = error.localizedDescription }
             }
         }
 

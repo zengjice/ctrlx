@@ -8,6 +8,137 @@ import Testing
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1)))
 struct IOSSessionTabDragTests {
+    @Test("A shared group confirmation preserves a later private group drop", arguments: [false, true])
+    func groupConfirmationPreservesPrivateDrop(laterEdit: Bool) async throws {
+        let fixture = Fixture(destination: .groupHeader)
+        let privateFile = FileBrowserTab(path: "/private", sourcePaneID: "%private")
+        let privateID = SessionTabID.file(privateFile.id)
+        let model = IOSPaneLinkedTabs(files: [privateFile], browsers: [], simulators: [], windows: fixture.drop.tabs.windows, storedOrder: [], ordersGroups: true)
+        let workspace = IOSFileBrowserWorkspace()
+        let before = model.topLevelOrder(for: fixture.drop.layout.order + [privateID], stored: [])
+        workspace.topLevelTabOrder = before
+        let members = Array(fixture.drop.layout.order.dropFirst())
+        let drop = IOSSessionTabDrop(hostID: "host", sessionID: fixture.sessionID, tabs: model, layout: fixture.drop.layout, topLevelOrder: before, isConnected: true, destination: .row(fixture.source, members: nil))
+        let provider = IOSSessionTabDrag.provider(hostID: "host", sessionID: fixture.sessionID, tab: members[0], group: members)
+        let result = try await perform(drop, provider: provider, position: 4)
+        guard case let .success(.moveGroup(change?, order)) = result else { Issue.record("Expected a shared group move")
+            return
+        }
+        var expected = order
+        if laterEdit {
+            let local = IOSSessionTabDrag.provider(hostID: "host", sessionID: fixture.sessionID, tab: privateID, group: [privateID])
+            let localResult = try await perform(drop, provider: local, position: 4)
+            guard case let .success(.moveGroup(nil, localOrder)) = localResult else { Issue.record("Expected a private group move")
+                return
+            }
+            workspace.recordGroupOrder(localOrder)
+            expected = localOrder
+        }
+        let confirmed = try #require(model.projecting(change, in: fixture.drop.layout, topLevelOrder: before))
+        workspace.recordGroupOrder(order, replacing: before)
+        #expect(workspace.topLevelTabOrder == expected)
+        let rows = model.sharedEntries(confirmed, topLevelOrder: workspace.topLevelTabOrder)
+        #expect(rows.first?.tabs == (laterEdit ? [privateID] : members))
+    }
+
+    @Test("Moving a private group does not change shared row order", arguments: [false, true])
+    func privateGroupPreservesSharedRows(alreadyOrdered: Bool) async throws {
+        let session = UUID()
+        let automatic = FileBrowserTab(hostTab: .init(sessionName: "work", sourcePaneID: "%0", initialDirectory: "/auto"))
+        let independent = FileBrowserTab(hostTab: .init(sessionName: "work", initialDirectory: "/independent"))
+        let file = FileBrowserTab(path: "/private", sourcePaneID: "%1")
+        var model = IOSPaneLinkedTabs(files: [automatic, independent, file], browsers: [], simulators: [], windows: [], storedOrder: [])
+        let privateID = SessionTabID.file(file.id)
+        let layout = SessionTabLayout(order: [.file(automatic.id), .file(independent.id)], revision: 2, ordersGroups: alreadyOrdered ? true : nil)
+        let before = model.sharedEntries(layout)
+        let first = try #require(before.first)
+        let destination: IOSSessionTabDrop.Destination = try first.sourcePaneID == nil ? .row(#require(first.tabs.first), members: nil) : .group(first.tabs)
+        let drop = IOSSessionTabDrop(hostID: "host", sessionID: session, tabs: model, layout: layout, topLevelOrder: [], isConnected: false, destination: destination)
+        let provider = IOSSessionTabDrag.provider(hostID: "host", sessionID: session, tab: privateID, group: [privateID])
+        IOSSessionTabDrag.active = nil
+        let result = try await perform(drop, provider: provider, position: 4)
+        guard case let .success(.moveGroup(nil, order)) = result else { Issue.record("Expected a local group move")
+            return
+        }
+        model.ordersGroups = true
+        let after = model.sharedEntries(layout, topLevelOrder: order)
+        #expect(after.first?.tabs == [privateID])
+        #expect(after.flatMap(\.tabs).filter(model.isShareable) == before.flatMap(\.tabs).filter(model.isShareable))
+    }
+
+    @Test("Group drags deliver one atomic move even without hover state", arguments: [false, true])
+    func movesWholeGroup(toEnd: Bool) async throws {
+        let fixture = Fixture(destination: .groupHeader)
+        let members = Array(fixture.drop.layout.order.dropFirst())
+        var layout = fixture.drop.layout
+        if toEnd {
+            let moved = layout.apply(.moveGroup(members, before: fixture.source), catalog: layout.order)
+            #expect(moved)
+        }
+        let drop = IOSSessionTabDrop(
+            hostID: "host", sessionID: fixture.sessionID, tabs: fixture.drop.tabs, layout: layout, topLevelOrder: [],
+            isConnected: true, destination: toEnd ? .end : .row(fixture.source, members: nil)
+        )
+        let provider = IOSSessionTabDrag.provider(hostID: "host", sessionID: fixture.sessionID, tab: fixture.target, group: members)
+        IOSSessionTabDrag.active = nil
+        let result = try await perform(drop, provider: provider, position: 4)
+        let edit = SessionTabLayout.Edit.moveGroup(members, before: toEnd ? nil : fixture.source, groupID: fixture.drop.layout.groups[members[0]])
+        guard case let .success(.moveGroup(actual, localOrder)) = result else {
+            Issue.record("Expected a group move")
+            return
+        }
+        #expect(actual == edit)
+        let applied = layout.apply(edit, catalog: fixture.drop.layout.order)
+        #expect(applied)
+        #expect(layout.groups == fixture.drop.layout.groups)
+        let entries = fixture.drop.tabs.sharedEntries(layout, topLevelOrder: localOrder)
+        #expect(entries.map(\.tabs) == (toEnd ? [[fixture.source], members] : [members, [fixture.source]]))
+    }
+
+    @Test("A private Files source group moves locally without entering the Host catalog")
+    func movesPrivateGroup() {
+        let fixture = Fixture()
+        let file = FileBrowserTab(path: "/private", sourcePaneID: "%0")
+        var tabs = IOSPaneLinkedTabs(files: [file], browsers: [], simulators: [], windows: fixture.drop.tabs.windows, storedOrder: [])
+        let members = [SessionTabID.file(file.id)]
+        let drop = IOSSessionTabDrop(hostID: "host", sessionID: fixture.sessionID, tabs: tabs, layout: fixture.drop.layout, topLevelOrder: [], isConnected: false, destination: .row(fixture.source, members: nil))
+        let drag = IOSSessionTabDrag.begin(hostID: "host", sessionID: fixture.sessionID, tab: members[0], group: members)
+        defer { IOSSessionTabDrag.active = nil }
+        guard case let .success(.moveGroup(nil, order)) = drop.plan(drag, position: 4, height: 44) else {
+            Issue.record("Expected private group order")
+            return
+        }
+        tabs.ordersGroups = true
+        #expect(tabs.sharedEntries(fixture.drop.layout, topLevelOrder: order).first?.tabs == members)
+        #expect(fixture.drop.layout.order.allSatisfy { !members.contains($0) })
+    }
+
+    @Test("Shared groups retain their slot beside private Files rows", arguments: [false, true])
+    func groupMoveAroundPrivateRow(before: Bool) {
+        let fixture = Fixture(destination: .groupHeader)
+        let file = FileBrowserTab(path: "/private")
+        var model = IOSPaneLinkedTabs(files: [file], browsers: [], simulators: [], windows: fixture.drop.tabs.windows, storedOrder: [])
+        let members = Array(fixture.drop.layout.order.dropFirst())
+        guard case let .window(windowID) = fixture.source else { return }
+        let stored: [IOSTopLevelTabID] = [.window(windowID), .resource(.file(file.id))]
+        let drop = IOSSessionTabDrop(hostID: "host", sessionID: fixture.sessionID, tabs: model, layout: fixture.drop.layout, topLevelOrder: stored, isConnected: true, destination: .row(.file(file.id), members: nil))
+        let drag = IOSSessionTabDrag.begin(hostID: "host", sessionID: fixture.sessionID, tab: members[0], group: members)
+        defer { IOSSessionTabDrag.active = nil }
+        let result = drop.plan(drag, position: before ? 4 : 40, height: 44)
+        if !before {
+            #expect(result == .success(nil))
+            return
+        }
+        guard case let .success(.moveGroup(edit?, order)) = result else { Issue.record("Expected a group move")
+            return
+        }
+        var layout = fixture.drop.layout
+        let applied = layout.apply(edit, catalog: fixture.drop.layout.order)
+        #expect(applied)
+        model.ordersGroups = true
+        #expect(model.sharedEntries(layout, topLevelOrder: order).map(\.tabs) == [[fixture.source], members, [.file(file.id)]])
+    }
+
     @Test("A tab drop commits the expected edit with missing or replaced hover state", arguments: [false, true], [false, true])
     func commitsActualDrop(group: Bool, replacedHover: Bool) async throws {
         let fixture = Fixture()

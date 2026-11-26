@@ -41,6 +41,7 @@ struct IOSWorkspaceRecoverySession: Codable, Equatable, Sendable {
     var files: [IOSWorkspaceRecoveryFile] = []
     var linkedTabOrder: [PaneLinkedTabID]?
     var topLevelTabOrder: [IOSTopLevelTabID]?
+    var ordersTabGroups: Bool?
 }
 
 struct IOSWorkspaceRecoveryFile: Codable, Equatable, Sendable {
