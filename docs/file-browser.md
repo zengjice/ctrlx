@@ -471,6 +471,8 @@ trailing or interior slashes) remain invalid. Use `<repo:.>`, not `<repo:./>`, f
 Spaces and reserved punctuation use UTF-8 percent encoding; literal percent signs
 must be `%25`. Chinese may remain literal or be encoded. Decoding happens once:
 a filename containing literal `%27` must not become an apostrophe on the Host.
+Literal `=` in path components such as `level_one=gui_generation` is accepted;
+percent-encoded `%3D` resolves to the same filename character.
 Complete markers survive soft/hard visual wraps, including a wrap inside the
 prefix or percent escape. In Codex's borderless tables, separated horizontal
 rules define column bounds: wrapped marker fragments are joined only within

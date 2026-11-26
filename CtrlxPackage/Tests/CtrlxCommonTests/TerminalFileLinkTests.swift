@@ -7,12 +7,13 @@ import Testing
 @MainActor
 struct TerminalFileLinkTests {
     private let context = RepositoryFileContext(pluginID: "codex", sessionID: "session", projectDirectory: "/Host/project/nested")
+    private nonisolated static let partitionedDirectory = "outputs/trace-export-prod-2026--profile-set/by_route/level_one=gui_generation/level_two=not_applicable/level_three=not_applicable"
 
     private func row(_ text: String, number: Int = 0, wrapped: Bool = false) -> TerminalFileLinkDetector.Row {
         .init(number: number, cells: text.enumerated().map { .init($0.element, column: $0.offset) }, wrapped: wrapped)
     }
 
-    private final class Delegate: TerminalDelegate {
+    final private class Delegate: TerminalDelegate {
         func send(source: Terminal, data: ArraySlice<UInt8>) { }
     }
 
@@ -117,6 +118,8 @@ struct TerminalFileLinkTests {
         ("<repo:outputs/final_films%2F>", "outputs/final_films"),
         ("<repo:输出/最终%20成片/>", "输出/最终 成片"),
         ("<repo:outputs/literal%252F/>", "outputs/literal%2F"),
+        ("<repo:\(TerminalFileLinkTests.partitionedDirectory)/>", TerminalFileLinkTests.partitionedDirectory),
+        ("<repo:\(TerminalFileLinkTests.partitionedDirectory.replacingOccurrences(of: "=", with: "%3D"))/>", TerminalFileLinkTests.partitionedDirectory),
     ])
     func directoryMarkers(marker: String, path: String) async throws {
         #expect(RepositoryFileLink.path(marker) == path)
@@ -138,12 +141,34 @@ struct TerminalFileLinkTests {
         #expect(requests == [.repositoryInfo(path: path, context: context)])
     }
 
+    @Test("Partitioned directory markers and OSC 8 targets share clickable snapshot spans", arguments: [false, true])
+    func partitionedDirectorySnapshot(hyperlink: Bool) throws {
+        let path = Self.partitionedDirectory
+        let marker = "<repo:\(path)/>"
+        let delegate = Delegate()
+        let terminal = Terminal(delegate: delegate, options: .init(cols: 40, rows: 8))
+        let output = hyperlink ? "\u{1b}]8;;repo:\(path)/\u{1b}\\Open directory\u{1b}]8;;\u{1b}\\" : marker
+        terminal.feed(text: "\(output)\r\n$ ")
+        var snapshot = TerminalFileLinkSnapshot()
+        let links = snapshot.links(terminal: terminal, cellPayload: { _, _ in nil })
+        let link = try #require(links.first)
+        #expect(links.map(\.path) == [path])
+        #expect(link.spans.count == (hyperlink ? 1 : (marker.count + 39) / 40))
+        for span in link.spans {
+            for column in span.columns {
+                #expect(snapshot.links(terminal: terminal, cellPayload: { _, _ in nil }).first { $0.contains(column: column, row: span.row) } == link)
+            }
+        }
+        withExtendedLifetime(delegate) { }
+    }
+
     @Test("Truncated, malformed and escaping markers fail closed", arguments: [
         "<repo:output/file.pdf", "<repo:>", "<repo:/tmp/file>", "<repo:../file>",
         "<repo:folder/../file>", "<repo:./file>", "<repo:folder//file>", "<repo:~/file>",
         "<repo:%2Ftmp/file>", "<repo:%2e%2e/file>", "<repo:%00file>", "<repo:%0Afile>",
         "<repo:bad%GGfile>", "<repo:bad%file>", "<repo:bad%FFfile>", "<repo:bad file>",
         "<repo:bad?query>", "<repo:bad#fragment>",
+        "<repo:bad?query=value>", "<repo:bad#fragment=value>", "<repo:level_one=x/../file>",
         "<repo:/>", "<repo://>", "<repo:./>", "<repo:../>", "<repo:~/>", "<repo:/tmp/folder/>",
         "<repo:folder//>", "<repo:folder///>", "<repo:folder//child/>", "<repo:folder/../>", "<repo:folder/./>",
         "<repo:folder/%2F>", "<repo:folder/%2e%2e/>", "<repo:%2Ftmp/folder/>", "<repo:folder/",
@@ -159,6 +184,8 @@ struct TerminalFileLinkTests {
         ("<repo:输出/最终%20成片%2F>", "输出/最终 成片"),
         ("(repo:输出/第%203%20集.mp4)", "输出/第 3 集.mp4"),
         ("(repo:outputs/final_films/)", "outputs/final_films"),
+        ("<repo:\(TerminalFileLinkTests.partitionedDirectory)/>", TerminalFileLinkTests.partitionedDirectory),
+        ("(repo:\(TerminalFileLinkTests.partitionedDirectory)/)", TerminalFileLinkTests.partitionedDirectory),
     ])
     func everyWrapBoundary(soft: Bool, reference: (String, String)) throws {
         let (marker, path) = reference
@@ -172,8 +199,10 @@ struct TerminalFileLinkTests {
             let link = try #require(links.first)
             #expect(links.count == 1)
             #expect(link.path == path)
-            #expect(link.spans == [.init(row: 0, columns: 1..<(split + 1)),
-                                   .init(row: 1, columns: 2..<(2 + second.count))])
+            #expect(link.spans == [
+                .init(row: 0, columns: 1..<(split + 1)),
+                .init(row: 1, columns: 2..<(2 + second.count)),
+            ])
         }
     }
 
@@ -250,7 +279,7 @@ struct TerminalFileLinkTests {
     @Test("Invalid decoded paths fail before I/O", arguments: [
         "", "/tmp/file", "../file", "~/file", "dir/../file", "bad\0file", "bad\nfile", "bad\tfile", "bad\u{1b}file",
         "outputs/final_films/", "dir//file",
-        String(repeating: "中", count: 1400),
+        String(repeating: "中", count: 1_400),
     ])
     func invalidDecodedPaths(path: String) async {
         let source = FileBrowserSource(id: "host", paneID: "%1") { _ in
@@ -262,7 +291,8 @@ struct TerminalFileLinkTests {
         }
     }
 
-    @Test func offlineAndUnsupportedHostDoNotSendRequests() async {
+    @Test
+    func offlineAndUnsupportedHostDoNotSendRequests() async {
         let source = FileBrowserSource(id: "remote", paneID: "%1", unavailableReason: "Update Host") { _ in
             Issue.record("Unsupported Host must not receive requests")
             throw FileBrowserError.message("Unexpected")
@@ -272,7 +302,8 @@ struct TerminalFileLinkTests {
         }
     }
 
-    @Test func missingFileAndCancelledResolutionDoNotProduceDestinations() async {
+    @Test
+    func missingFileAndCancelledResolutionDoNotProduceDestinations() async {
         var requests: [FileBrowserOperation] = []
         let missing = FileBrowserSource(id: "host", paneID: "%1") { operation in
             requests.append(operation)

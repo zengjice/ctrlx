@@ -19,7 +19,7 @@ public enum RepositoryFileLink {
             !encoded.isEmpty, encoded.unicodeScalars.allSatisfy({
                 !CharacterSet.whitespacesAndNewlines.contains($0)
                     && !CharacterSet.controlCharacters.contains($0)
-                    && (!$0.isASCII || "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~/%".unicodeScalars.contains($0))
+                    && (!$0.isASCII || "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~/=%".unicodeScalars.contains($0))
             }), var path = String(encoded).removingPercentEncoding else { return nil }
         // Accept directory spelling at the marker boundary; keep decoded Host paths canonical.
         if path.hasSuffix("/") {
