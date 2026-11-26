@@ -964,12 +964,32 @@ Called on:
 
 ### Text Selection Across the Outer Viewport
 
-SwiftTerm owns its selection gesture and only auto-scrolls when the drag leaves the
-`TerminalView` bounds. CtrlX's `TerminalView` bounds cover the complete host-sized
-terminal, while the iPhone shows only a smaller rectangle through the outer scroll view.
-Reaching the phone edge therefore does not leave the terminal bounds, so SwiftTerm never
-scrolls and the selection cannot extend into content outside the outer viewport. The same
-ownership mismatch affects horizontal selection.
+The pinned SwiftTerm fork distinguishes selection-handle drags from ordinary pans and
+auto-scrolls near the vertically clipped viewport edges. CtrlX installs itself as the
+delegate of lazily added pans that have no delegate, so SwiftTerm's handle hit test is
+actually consulted. A drag away from the handles scrolls while retaining the selection;
+a handle drag extends it with the existing magnifier and edge scrolling.
+
+During local selection, CtrlX also enables the inner history pan and releases the outer
+viewport's mouse-mode vertical lock. That lock is decided at drag start and retained
+through deceleration, so output clearing the selection cannot move the viewport back to
+the drag's starting Y. Repeated mouse-mode reports disable only the native mouse pan
+installed by SwiftTerm, preserving the existing selection handles.
+
+Selection and retained history both keep wheel input local. Copying or clearing a
+selection in history leaves local scrolling enabled until the inner terminal returns to
+its live tail. This uses the visible content offset and native bottom geometry, rather
+than `yDisp` alone: accessibility paging can change the former without updating the latter.
+The resting tail is the live screen's first-row offset capped by UIKit's maximum offset;
+bottom insets must not require scrolling past the position reached by SwiftTerm itself.
+Forward accessibility paging uses native terminal scrolling for its last page, so an inset
+combined with a partial-row viewport reaches the same tail; earlier pages keep native paging.
+Offset and layout changes also refresh local scroll availability. A subsequent gesture
+at the live tail can then send remote wheel input again. Horizontal
+overflow remains owned by the outer viewport; selection does not enable Window switching.
+Switching from local scrolling back to remote wheel input calls native tail scrolling once
+to clear both SwiftTerm history-freeze flags. Touch and momentum returns then follow newly
+appended output; remaining in history never forces a jump to the live screen.
 
 Resizing is not an appropriate copy workaround:
 
@@ -980,8 +1000,8 @@ Resizing is not an appropriate copy workaround:
 - Multiple viewers would compete for the shared window size and require fragile restoration
   when a viewer disconnects.
 
-The first-stage copy solution therefore keeps the terminal dimensions unchanged and creates
-a static text snapshot from the local SwiftTerm buffer only when requested. A native read-only
+The separate copy view keeps the terminal dimensions unchanged and creates a static text
+snapshot from the local SwiftTerm buffer only when requested. A native read-only
 text view owns selection in that snapshot, so iOS provides normal cross-screen selection,
 copy, and Select All without a relay request. The live terminal remains the source of truth;
 closing and reopening the copy view refreshes the snapshot.
@@ -1001,9 +1021,8 @@ the copied buffer unambiguous. The sheet receives an
 immutable value: new terminal output continues normally but cannot move or invalidate the
 user's current selection.
 
-A later enhancement may teach the SwiftTerm fork about the outer visible rectangle and make
-selection-handle drags scroll the outer view. That is a direct-manipulation improvement, not a
-reason to change tmux sizing.
+The snapshot copy page remains useful when live output would change the selected text.
+Neither direct selection scrolling nor the snapshot changes tmux sizing.
 
 ### SwiftTerm Limitations
 

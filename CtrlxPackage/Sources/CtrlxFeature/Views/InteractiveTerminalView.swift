@@ -459,8 +459,34 @@ enum TerminalCursorTapNavigation {
 
         override func layoutSubviews() {
             super.layoutSubviews()
+            updateLocalScrolling()
             updateURLUnderlines()
             scheduleQuestionCheck()
+        }
+
+        override var contentOffset: CGPoint {
+            didSet { updateLocalScrolling() }
+        }
+
+        override func accessibilityScroll(_ direction: UIAccessibilityScrollDirection) -> Bool {
+            switch direction {
+            case .down,
+                 .right,
+                 .next:
+                let pageHeight = max(bounds.height, cellSize.height)
+                let lastPage = max(0, contentSize.height - bounds.height)
+                if canScroll, contentOffset.y + pageHeight >= lastPage {
+                    // Native paging ignores insets; finish at the terminal's actual live tail.
+                    let previous = contentOffset
+                    scroll(toPosition: 1)
+                    guard contentOffset != previous else { return false }
+                    UIAccessibility.post(notification: .pageScrolled, argument: nil)
+                    return true
+                }
+            default:
+                break
+            }
+            return super.accessibilityScroll(direction)
         }
 
         /// Returns the cached cell size, recalculating only on first access or after invalidation.
@@ -666,6 +692,29 @@ enum TerminalCursorTapNavigation {
             getTerminal().mouseMode != .off
         }
 
+        var usesRemoteMouseScrolling: Bool {
+            guard isMouseModeActive, !selectionActive else { return false }
+            guard canScroll else { return true }
+            // Accessibility paging can move the pixels without updating yDisp.
+            // SwiftTerm aligns the live screen's first row, capped by UIKit's maximum.
+            let liveOffset = max(0, contentSize.height - getOptimalFrameSize().height)
+            let maximumOffset = max(0, contentSize.height - bounds.height + adjustedContentInset.bottom)
+            let bottom = min(liveOffset, maximumOffset)
+            return contentOffset.y >= bottom - max(1, cellSize.height / 2)
+        }
+
+        private func updateLocalScrolling() {
+            guard didFinishInit else { return }
+            let enabled = !usesRemoteMouseScrolling
+            if isScrollEnabled != enabled {
+                isScrollEnabled = enabled
+                if !enabled {
+                    // Disabling the pan does not clear SwiftTerm's history-freeze state.
+                    scroll(toPosition: 1)
+                }
+            }
+        }
+
         /// Adds a single-finger pan gesture that synthesizes SGR scroll wheel
         /// events when mouse mode is active. The gesture's delegate gates
         /// `shouldBegin` on `isMouseModeActive` so normal scrolling is preserved
@@ -685,6 +734,15 @@ enum TerminalCursorTapNavigation {
             panGestureRecognizer.require(toFail: pan)
             addGestureRecognizer(pan)
             mouseModePanGesture = pan
+        }
+
+        override func addGestureRecognizer(_ gestureRecognizer: UIGestureRecognizer) {
+            super.addGestureRecognizer(gestureRecognizer)
+            // SwiftTerm adds its selection pan lazily without a delegate.
+            // Route it through the inherited handle hit test so other drags scroll.
+            if gestureRecognizer is UIPanGestureRecognizer, gestureRecognizer.delegate == nil {
+                gestureRecognizer.delegate = self
+            }
         }
 
         /// Called by the container view to register the outer scroll view's pan
@@ -772,7 +830,7 @@ enum TerminalCursorTapNavigation {
                 return false
             }
             if gestureRecognizer === mouseModePanGesture {
-                guard isMouseModeActive, !selectionActive, let mouseModePanGesture else { return false }
+                guard usesRemoteMouseScrolling, let mouseModePanGesture else { return false }
                 // Only consume vertical pans as wheel events — horizontal pans
                 // need to reach the outer scroll view for native horizontal
                 // scrolling of wide terminal content. Tie / no-movement defaults
@@ -792,39 +850,14 @@ enum TerminalCursorTapNavigation {
             return super.gestureRecognizerShouldBegin(gestureRecognizer)
         }
 
-        /// Overrides SwiftTerm's mouse-mode handler to neutralize the pan gestures
-        /// it adds when mouse mode activates (`panMouseGesture`, eventually
-        /// `panSelectionGesture`).
-        ///
-        /// Two adjustments per added pan:
-        /// 1. `require(toFail: mouseModePanGesture)` so SwiftTerm's
-        ///    `sharedMouseEvent` handler doesn't fire alongside our scroll-wheel
-        ///    sequences (would double up events on every drag).
-        /// 2. `pan.delegate = self` so our `gestureRecognizerShouldBegin` is
-        ///    consulted — letting us decline horizontal pans, which the remote
-        ///    terminal can't act on, so they fall through to the outer scroll
-        ///    view for native horizontal scrolling of wide terminal content.
+        /// CtrlX owns remote wheel input. Disable only the mouse pan installed
+        /// by SwiftTerm, preserving selection and other existing gestures.
         @MainActor
         override func mouseModeChanged(source: Terminal) {
+            let existing = Set(gestureRecognizers ?? [])
             super.mouseModeChanged(source: source)
-            let active = source.mouseMode != .off
-            // Disable inner UIScrollView's gesture pan in mouse mode — its
-            // contentSize matches bounds horizontally so it can't scroll
-            // horizontally, but the recognizer still claims horizontal touches
-            // and blocks the outer scroll view from receiving them.
-            isScrollEnabled = !active
-            // Disable any pan gestures SwiftTerm added via super's
-            // `enableMousePanGesture()` so they can't intercept any direction —
-            // our `mouseModePanGesture` already produces SGR scroll-wheel events
-            // for vertical pans, and horizontal pans should reach the outer
-            // scroll view for native scrolling of wide terminal content.
-            for gesture in gestureRecognizers ?? [] {
-                guard
-                    let pan = gesture as? UIPanGestureRecognizer,
-                    pan !== mouseModePanGesture,
-                    pan !== panGestureRecognizer
-                else { continue }
-                pan.isEnabled = !active
+            for case let pan as UIPanGestureRecognizer in gestureRecognizers ?? [] where !existing.contains(pan) {
+                pan.isEnabled = false
             }
             // Re-run underline rendering immediately: enabling mouse mode
             // hides them, disabling it brings them back. Calling directly
@@ -838,7 +871,15 @@ enum TerminalCursorTapNavigation {
             // No underlines exist yet at that point — nothing to clear.
             guard didFinishInit else { return }
             cancelMouseScroll()
+            updateLocalScrolling()
             updateURLUnderlines()
+        }
+
+        override func selectionChanged(source: Terminal) {
+            super.selectionChanged(source: source)
+            guard didFinishInit else { return }
+            cancelMouseScroll()
+            updateLocalScrolling()
         }
 
         @objc
@@ -861,7 +902,7 @@ enum TerminalCursorTapNavigation {
                 let location = isCodexFullscreenScroll ? mouseScrollLocation : gesture.location(in: self)
                 emitMouseModeScrollEvents(deltaY: Double(translation.y), at: location)
                 if gesture.state == .ended {
-                    if inputEnabled, window != nil, isMouseModeActive, isCodexFullscreenScroll, !selectionActive {
+                    if inputEnabled, window != nil, usesRemoteMouseScrolling, isCodexFullscreenScroll {
                         mouseScrollAnimator.start(velocity: Double(gesture.velocity(in: self).y))
                     } else {
                         cancelMouseScroll()
@@ -887,7 +928,7 @@ enum TerminalCursorTapNavigation {
         private func emitMouseModeScrollEvents(deltaY: Double, at location: CGPoint) {
             guard
                 deltaY != 0, window != nil, !inputFocusUpdates.isInvalidated,
-                isMouseModeActive, !selectionActive else { return }
+                usesRemoteMouseScrolling else { return }
             let terminal = getTerminal()
             let cols = terminal.cols
             let rows = terminal.rows
@@ -1385,6 +1426,7 @@ enum TerminalCursorTapNavigation {
         }
 
         func scrolled(source: TerminalView, position: Double) {
+            updateLocalScrolling()
             // SwiftTerm also calls this after synchronized output, even when
             // nothing scrolled. Only an actual viewport change invalidates it.
             if let displayRow = cursorNavigation.displayRow, getTerminal().buffer.yDisp != displayRow {

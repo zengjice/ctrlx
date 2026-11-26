@@ -1928,13 +1928,8 @@
                 }
             }
 
-            /// Y offset captured at the start of a user drag. Used to lock
-            /// vertical scrolling while mouse mode is active — vertical pans
-            /// belong to `mouseModePanGesture` (wheel events), so the outer
-            /// scroll view should only scroll horizontally during mouse mode.
-            /// Diagonal drags would otherwise scroll both axes once the outer
-            /// scroll view picks them up (`isDirectionalLockEnabled` doesn't
-            /// engage for diagonal starts per Apple's documented behavior).
+            /// Remote mouse scrolling locks Y for this drag and its momentum.
+            /// Local selection/history keeps ownership even if output clears it.
             private var dragInitialOffsetY: CGFloat?
 
             private lazy var feedCoalescer = TerminalFeedCoalescer(
@@ -2034,7 +2029,7 @@
 
             func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
                 terminalView?.cancelQuestionCheck()
-                dragInitialOffsetY = scrollView.contentOffset.y
+                dragInitialOffsetY = terminalView?.usesRemoteMouseScrolling == true ? scrollView.contentOffset.y : nil
                 (scrollView as? BottomAnchoredTerminalScrollView)?.userWillBeginScrolling()
             }
 
@@ -2042,7 +2037,6 @@
                 guard
                     scrollView.isDragging || scrollView.isDecelerating,
                     let initialY = dragInitialOffsetY,
-                    terminalView?.isMouseModeActive == true,
                     scrollView.contentOffset.y != initialY
                 else { return }
                 scrollView.contentOffset.y = initialY

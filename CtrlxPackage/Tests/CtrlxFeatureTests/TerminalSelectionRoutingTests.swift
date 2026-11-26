@@ -11,6 +11,148 @@
     @MainActor
     @Suite("Terminal input-row selection routing", .serialized)
     struct TerminalSelectionRoutingTests {
+        @Test("Only handle drags capture a selected terminal; other drags retain local scrolling", arguments: [2, 3], [false, true])
+        func selectionPanUsesItsInstalledDelegate(tapCount: Int, mouseMode: Bool) async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            feed(view, "hello world\r\n> input")
+            if mouseMode {
+                feed(view, "\u{1b}[?1000h\u{1b}[?1006h")
+                #expect(!view.isScrollEnabled)
+            }
+            var raw = Data()
+            var keys: [TmuxKey] = []
+            view.onRawInput = { raw.append($0) }
+            view.onInput = { keys += $0 }
+            tap(view, count: tapCount, column: 1, row: 0)
+            let pan = try #require(view.panSelectionGesture)
+            #expect(pan.delegate === view)
+            #expect(view.isScrollEnabled)
+            // An idle recognizer reports the origin, next to the start handle.
+            #expect(pan.delegate?.gestureRecognizerShouldBegin?(pan) == true)
+            view.setSelectionRange(start: .init(col: 20, row: 4), end: .init(col: 25, row: 4))
+            #expect(pan.delegate?.gestureRecognizerShouldBegin?(pan) == false)
+            #expect(view.selectionActive)
+            #expect(view.selection.start == .init(col: 20, row: 4) && view.selection.end == .init(col: 25, row: 4))
+            view.selectNone()
+            #expect(view.isScrollEnabled == !mouseMode)
+            #expect(raw.isEmpty && keys.isEmpty)
+        }
+
+        @Test("Repeated mouse mode changes preserve the installed selection handles", arguments: [2, 3])
+        func selectionHandlesSurviveMouseModeChanges(tapCount: Int) async throws {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            feed(view, "hello world\r\n> input\u{1b}[?1000h")
+            tap(view, count: tapCount, column: 1, row: 0)
+            let selectionPan = try #require(view.panSelectionGesture)
+            let text = view.getSelection()
+            for mode in ["1000h", "1000h", "1002h", "1003h", "1000l", "1000h"] {
+                feed(view, "\u{1b}[?\(mode)")
+                #expect(view.getSelection() == text && view.selectionActive)
+                #expect(view.panSelectionGesture === selectionPan && selectionPan.isEnabled)
+                #expect(selectionPan.delegate?.gestureRecognizerShouldBegin?(selectionPan) == true)
+                #expect(view.isScrollEnabled)
+                if let mousePan = view.panMouseGesture {
+                    #expect(!mousePan.isEnabled)
+                }
+            }
+        }
+
+        @Test("An explicitly assigned pan delegate is preserved")
+        func preservesPanDelegate() async {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            let pan = UIPanGestureRecognizer()
+            let delegate = TerminalPanDelegate()
+            pan.delegate = delegate
+            view.addGestureRecognizer(pan)
+            #expect(pan.delegate === delegate)
+        }
+
+        final private class TerminalPanDelegate: NSObject, UIGestureRecognizerDelegate { }
+
+        @Test("Mouse mode locks the outer vertical drag only while no text is selected")
+        func selectionReleasesOuterMouseScrollLock() async {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            feed(view, "selected text\u{1b}[?1000h")
+            let coordinator = TerminalStreamContainerView.Coordinator()
+            coordinator.terminalView = view
+            let scroll = DraggingTerminalScrollView(frame: window.bounds)
+            scroll.contentSize = CGSize(width: scroll.bounds.width, height: scroll.bounds.height + 500)
+            for selected in [false, true, false] {
+                if selected {
+                    view.setSelectionRange(start: .init(col: 0, row: 0), end: .init(col: 8, row: 0))
+                } else {
+                    view.selectNone()
+                }
+                scroll.contentOffset.y = 80
+                coordinator.scrollViewWillBeginDragging(scroll)
+                scroll.contentOffset.y = 140
+                coordinator.scrollViewDidScroll(scroll)
+                #expect(scroll.contentOffset.y == (selected ? 140 : 80))
+            }
+        }
+
+        @Test("Outer drag ownership survives selection changes through deceleration", arguments: [false, true], [false, true])
+        func outerDragKeepsItsInitialScrollLock(startsSelected: Bool, decelerates: Bool) async {
+            let (window, view) = await makeView()
+            defer { close(window, view) }
+            feed(view, "header\r\nselected text\u{1b}[?1000h")
+            if startsSelected {
+                view.setSelectionRange(start: .init(col: 0, row: 1), end: .init(col: 8, row: 1))
+            }
+            let coordinator = TerminalStreamContainerView.Coordinator()
+            coordinator.terminalView = view
+            let scroll = DraggingTerminalScrollView(frame: window.bounds)
+            scroll.contentSize = CGSize(width: scroll.bounds.width, height: scroll.bounds.height + 500)
+            scroll.contentOffset.y = 80
+            coordinator.scrollViewWillBeginDragging(scroll)
+            scroll.contentOffset.y = 140
+            coordinator.scrollViewDidScroll(scroll)
+            #expect(scroll.contentOffset.y == (startsSelected ? 140 : 80))
+            if decelerates {
+                coordinator.scrollViewDidEndDragging(scroll, willDecelerate: true)
+                scroll.testDragging = false
+                scroll.testDecelerating = true
+            }
+            if startsSelected {
+                // A region below the first screen row scrolls in place, without adding history.
+                feed(view, "\u{1b}[2;3r\u{1b}[3;1H\r\n")
+                #expect(!view.selectionActive)
+            } else {
+                view.setSelectionRange(start: .init(col: 0, row: 1), end: .init(col: 8, row: 1))
+            }
+            scroll.contentOffset.y = 160
+            coordinator.scrollViewDidScroll(scroll)
+            #expect(scroll.contentOffset.y == (startsSelected ? 160 : 80))
+            if decelerates {
+                coordinator.scrollViewDidEndDecelerating(scroll)
+            } else {
+                coordinator.scrollViewDidEndDragging(scroll, willDecelerate: false)
+            }
+            scroll.testDragging = true
+            scroll.testDecelerating = false
+            let nextStart = scroll.contentOffset.y
+            coordinator.scrollViewWillBeginDragging(scroll)
+            scroll.contentOffset.y = 200
+            coordinator.scrollViewDidScroll(scroll)
+            #expect(scroll.contentOffset.y == (startsSelected ? nextStart : 200))
+        }
+
+        final private class DraggingTerminalScrollView: UIScrollView {
+            var testDragging = true
+            var testDecelerating = false
+            override var isDragging: Bool {
+                testDragging
+            }
+
+            override var isDecelerating: Bool {
+                testDecelerating
+            }
+        }
+
         @Test("Plain terminal content toggles the keyboard with custom prompts and drafts")
         func plainTerminalKeyboard() async throws {
             let (window, view) = await makeView()
