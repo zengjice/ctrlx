@@ -7,6 +7,31 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.0.181 — Stable workspace restoration and terminal selection
+
+- Recover missing Workflow submission receipts from verified native transcript
+  segments without resending tasks or replacing run history. Add explicit
+  authorization renewal on Mac and iOS behind workflow protocol v10. See
+  [multi-agent design](docs/multi-agent-design.md).
+- Stabilize iOS terminal selection while mouse-mode reporting and native
+  scrolling are active. Preserve the outer scroll owner through selection drags,
+  keep history scrolling local, and resume live-tail following only after the
+  viewport reaches the tail. See
+  [iOS viewport and scrolling](docs/swiftterm-ios-scrolling.md).
+- Apply queued terminal moves after workspace restoration and preserve
+  folder-specific private tabs when shared layouts change. Keep terminal
+  membership, selection and split widths consistent across Host/Viewer replies,
+  resource transfers, partial recovery and detached windows. See
+  [workspace persistence](docs/folder-layout-persistence-plan.md).
+- Validation: the targeted cross-platform regression suites passed in serial
+  mode. A single parallel Workflow editor UI assertion was transient; it passed
+  when isolated and on the serial rerun. SwiftFormat, CtrlX brand and technical
+  boundary checks passed for all 56 changed Swift files, and diff checks passed.
+- This release builds macOS only. The iOS behavior changes passed focused tests;
+  a physical-iPhone acceptance pass was not rerun for this release. The final
+  artifact is produced by the formal Developer ID signed and notarized release
+  workflow.
+
 ## 3.0.180 — Reliable Workflow recovery and Agent visibility
 
 - Preserve Workflow submission receipts, terminal evidence and native submission
