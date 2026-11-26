@@ -59,6 +59,16 @@ struct AgentWorkflowNavigationTests {
         }
     }
 
+    @Test
+    func workflowNotificationSelectsExactHostAndRunWithoutAnAgentLookup() {
+        let target = AgentWorkflowNotificationTarget(hostID: UUID(), runID: UUID(), eventID: UUID())
+        let navigation = AgentWorkflowNavigation()
+        navigation.path = [.host("other")]
+        navigation.open(target, route: "office")
+        #expect(navigation.isPresented)
+        #expect(navigation.path == [.host("office"), .run(route: "office", hostID: target.hostID, id: target.runID)])
+    }
+
     @Test(arguments: ["rejected", "missing", "timeout", "accepted"])
     func startDistinguishesHostRefusalFromUnconfirmedOutcome(outcome: String) async throws {
         let fixture = Fixture(), navigation = AgentWorkflowNavigation()

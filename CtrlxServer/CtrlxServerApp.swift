@@ -21,6 +21,7 @@ struct TmuxPaneMirrorApp: App {
     @State private var showingLaunchAtLoginPrompt = false
     @NSApplicationDelegateAdaptor private var shutdownDelegate: AppShutdownDelegate
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
 
     init() {
         let isE2E = CommandLine.arguments.contains("--e2e-test")
@@ -609,6 +610,7 @@ struct TmuxPaneMirrorApp: App {
                 // content — it's guaranteed to run even if no window is
                 // ever shown (issue #392, Task 14).
                 coordinator.openSettingsAction = { openSettings() }
+                coordinator.openWorkflowsAction = { openWindow(id: "workflows") }
             }
             .task(id: showingTmuxInstallGuide) {
                 guard !showingTmuxInstallGuide else { return }

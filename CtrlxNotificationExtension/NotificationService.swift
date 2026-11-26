@@ -126,6 +126,12 @@ class NotificationService: UNNotificationServiceExtension {
             // Add context to userInfo for deep linking and analytics
             content.userInfo["eventType"] = notificationContent.eventType
             content.userInfo["decrypted"] = true
+            if let workflow = notificationContent.workflow {
+                for (key, value) in workflow.userInfo {
+                    content.userInfo[key] = value
+                }
+                content.threadIdentifier = "workflow-\(workflow.runID)"
+            }
             if let agentID = notificationContent.agentID {
                 for (key, value) in agentID.notificationUserInfo {
                     content.userInfo[key] = value

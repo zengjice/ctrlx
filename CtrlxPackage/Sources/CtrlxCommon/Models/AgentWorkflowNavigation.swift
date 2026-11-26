@@ -27,6 +27,12 @@ final public class AgentWorkflowNavigation {
 
     public init() { }
 
+    public func open(_ target: AgentWorkflowNotificationTarget, route: String) {
+        lookupID = nil
+        path = [.host(route), .run(route: route, hostID: target.hostID, id: target.runID)]
+        isPresented = true
+    }
+
     public func remember(_ instance: AgentWorkflowInstance, route: String) {
         guard let destination = path.last, destination.route == route else { return }
         returnTargets[instance.target] = destination

@@ -110,6 +110,7 @@ public struct AgentNotificationMessage: Codable, Sendable, Equatable {
     public let timestamp: Date
     public let isQuestion: Bool?
     public let eventType: String?
+    public let workflow: AgentWorkflowNotificationTarget?
 
     /// Action-button context when the notification accompanies an open
     /// permission / question form (issue #710), mirroring
@@ -126,7 +127,8 @@ public struct AgentNotificationMessage: Codable, Sendable, Equatable {
         action: NotificationActionContext? = nil,
         isQuestion: Bool? = nil,
         agentID: AgentID? = nil,
-        eventType: String? = nil
+        eventType: String? = nil,
+        workflow: AgentWorkflowNotificationTarget? = nil
     ) {
         self.pairId = pairId
         self.sessionId = sessionId
@@ -138,6 +140,7 @@ public struct AgentNotificationMessage: Codable, Sendable, Equatable {
         self.action = action
         self.isQuestion = isQuestion
         self.eventType = eventType
+        self.workflow = workflow
     }
 
     public func withPairId(_ pairId: String) -> AgentNotificationMessage {
@@ -151,7 +154,8 @@ public struct AgentNotificationMessage: Codable, Sendable, Equatable {
             action: action,
             isQuestion: isQuestion,
             agentID: agentID,
-            eventType: eventType
+            eventType: eventType,
+            workflow: workflow
         )
     }
 
@@ -166,6 +170,7 @@ public struct AgentNotificationMessage: Codable, Sendable, Equatable {
         case action
         case isQuestion
         case eventType
+        case workflow
     }
 
     public init(from decoder: Decoder) throws {
@@ -179,6 +184,7 @@ public struct AgentNotificationMessage: Codable, Sendable, Equatable {
         self.timestamp = try container.decode(Date.self, forKey: .timestamp)
         self.isQuestion = try container.decodeIfPresent(Bool.self, forKey: .isQuestion)
         self.eventType = try container.decodeIfPresent(String.self, forKey: .eventType)
+        self.workflow = try container.decodeIfPresent(AgentWorkflowNotificationTarget.self, forKey: .workflow)
         // Lenient like `NotificationContent.action`: an undecodable context
         // from a newer host degrades to a plain notification rather than
         // dropping the whole message.

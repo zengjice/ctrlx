@@ -292,7 +292,8 @@ struct AgentWorkflowRequestTests {
         let resumed = try #require(await f.service.handle(.init(.resume(run.summary.id, expectedRevision: current.summary.revision, roundLimit: nil), expectedHostID: f.hostID)).run)
         #expect(resumed.summary.status == .running)
         _ = try await f.service.handle(.init(.end(run.summary.id, expectedRevision: resumed.summary.revision), expectedHostID: f.hostID))
-        #expect(try await f.service.handle(.init(.terminal(pane))).run == nil)
+        let ended = try #require(await f.service.handle(.init(.terminal(pane))).run)
+        #expect(ended.summary.id == run.summary.id && ended.summary.status == .ended)
     }
 
     @Test(arguments: [false, true])
@@ -302,7 +303,7 @@ struct AgentWorkflowRequestTests {
         let original = f.instances[0]
         let oldRun = try await start(f)
         _ = try await f.store.reconcile([])
-        #expect(try await f.service.handle(.init(.terminal(original.workspacePane))).run == nil)
+        #expect(try await f.service.handle(.init(.terminal(original.workspacePane))).run?.summary.id == oldRun.summary.id)
 
         var observation = AgentWorkflowObservation(original)
         if !reusesPID {
@@ -332,7 +333,8 @@ struct AgentWorkflowRequestTests {
         let resumed = try #require(await service.handle(.init(.resume(manual.summary.id, expectedRevision: manual.summary.revision, roundLimit: nil), expectedHostID: f.hostID)).run)
         #expect(resumed.summary.id == newRun.id && resumed.summary.status == .running)
         _ = try await service.handle(.init(.end(newRun.id, expectedRevision: resumed.summary.revision), expectedHostID: f.hostID))
-        #expect(try await service.handle(.init(.terminal(original.workspacePane))).run == nil)
+        let ended = try #require(await service.handle(.init(.terminal(original.workspacePane))).run)
+        #expect(ended.summary.id == newRun.id && ended.summary.status == .ended)
         #expect(try await f.store.snapshot().runs.first { $0.id == oldRun.summary.id } == oldState)
     }
 

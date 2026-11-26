@@ -23,6 +23,24 @@ struct NotificationNavigationWaitingTests {
             service.handleNotificationTap(userInfo: ["eventType": NotificationDelivery.workflowCompletionEventType, "pairId": "pair"])
             #expect(service.pendingDeepLink == nil)
         }
+
+        @Test(arguments: [NotificationDelivery.workflowCompletionEventType, NotificationDelivery.workflowAttentionEventType])
+        func workflowTapSelectsRunAndCancelsOlderRoutes(type: String) {
+            let service = PushNotificationService()
+            service.pendingDashboard = true
+            let target = AgentWorkflowNotificationTarget(hostID: UUID(), runID: UUID(), eventID: UUID())
+            var userInfo: [AnyHashable: Any] = ["eventType": type, "pairId": "office"]
+            for (key, value) in target.userInfo {
+                userInfo[key] = value
+            }
+            service.handleNotificationTap(userInfo: userInfo)
+            #expect(service.pendingWorkflow?.target == target)
+            #expect(service.pendingWorkflow?.pairID == "office")
+            #expect(!service.pendingDashboard && service.pendingDeepLink == nil)
+            service.handleNotificationTap(userInfo: ["eventType": "cli.notify", "pairId": "home"])
+            #expect(service.pendingWorkflow == nil)
+            #expect(service.pendingDeepLink?.hostId == "home")
+        }
     #endif
 
     private func catalog(_ id: AgentID, paneID: String = "%1") throws -> ViewerWorkspaceCatalog {

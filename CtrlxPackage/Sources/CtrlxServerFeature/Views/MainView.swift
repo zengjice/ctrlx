@@ -2859,8 +2859,11 @@ public struct MainView: View {
                 let activePane = window.activePane
 
                 if let activePane, let pane = windowManager.paneStates[activePane.paneId], pane.agentSession != nil, let identity = pane.workspaceIdentity {
-                    AgentWorkflowControlButton(endpoint: coordinator.localWorkflowEndpoint(), pane: identity)
-                        .id("local:\(identity.paneID)")
+                    AgentWorkflowControlButton(endpoint: coordinator.localWorkflowEndpoint(), pane: identity) { target in
+                        coordinator.workflowNavigation.open(target, route: "local")
+                        openWindow(id: "workflows")
+                    }
+                    .id("local:\(identity.paneID)")
                 }
 
                 // Yolo mode toggle (only for windows with active Claude sessions)
@@ -2899,8 +2902,11 @@ public struct MainView: View {
                 if
                     let pane = remoteWindow.activePane, pane.agentSession != nil, let identity = pane.workspaceIdentity,
                     let host = settings.pairedHosts.first(where: { $0.id == remote.hostId }) {
-                    AgentWorkflowControlButton(endpoint: .remote(host, manager: coordinator.viewerConnectionManager), pane: identity)
-                        .id("\(remote.hostId):\(identity.paneID)")
+                    AgentWorkflowControlButton(endpoint: .remote(host, manager: coordinator.viewerConnectionManager), pane: identity) { target in
+                        coordinator.workflowNavigation.open(target, route: host.id)
+                        openWindow(id: "workflows")
+                    }
+                    .id("\(remote.hostId):\(identity.paneID)")
                 }
                 // Yolo mode toggle for remote windows with active Claude sessions
                 let claudePaneId = remoteWindow.panes.first(where: { $0.agentSession != nil })?.paneId

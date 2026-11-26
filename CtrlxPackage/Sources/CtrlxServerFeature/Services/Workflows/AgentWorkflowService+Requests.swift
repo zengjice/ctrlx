@@ -23,11 +23,10 @@ extension AgentWorkflowService {
             }
             response.modelSnapshot = try await models(instance, refresh)
         case let .terminal(pane):
-            if
-                let instance = archive.instances.first(where: { $0.workspacePane.isSamePane(as: pane) }),
-                let run = archive.runs.first(where: { run in
-                    !run.status.isTerminal && run.instances.contains { $0.agentID == instance.agentID }
-                }) {
+            let matches = archive.runs.reversed().filter { run in
+                run.instances.contains { $0.workspacePane.isSamePane(as: pane) }
+            }
+            if let run = matches.first(where: { !$0.status.isTerminal }) ?? matches.first {
                 response.run = try AgentWorkflowRunState(run, currentInstances: archive.instances)
             }
         case let .catalog(offset):
@@ -99,6 +98,9 @@ extension AgentWorkflowService {
         }
         guard try JSONEncoder().encode(response).count <= AgentWorkflowWire.maximumEncodedBytes else {
             throw AgentWorkflowError("The workflow response is too large. Read its input or result separately.")
+        }
+        if let runID = response.run?.summary.id {
+            response.run?.notification = try await snapshot().notifications?[runID]
         }
         return response
     }

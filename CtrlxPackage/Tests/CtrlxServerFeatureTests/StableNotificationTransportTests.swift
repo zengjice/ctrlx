@@ -58,7 +58,7 @@ struct StableNotificationTransportTests {
             }
             func checkPush(using encryption: E2EEService, actionable: Bool) async throws {
                 let count = await relay.pushes.count
-                await host.sendCustomPushNotification(title: "Question", body: "Allow?", paneId: "%1", action: action, isQuestion: true, agentID: id)
+                #expect(await host.sendCustomPushNotification(title: "Question", body: "Allow?", paneId: "%1", action: action, isQuestion: true, agentID: id))
                 try await waitUntil { await relay.pushes.count == count + 1 }
                 let payload = try #require(await relay.pushes.last)
                 let content = try await encryption.decrypt(payload.encryptedContent, as: NotificationContent.self)
@@ -68,8 +68,21 @@ struct StableNotificationTransportTests {
             }
 
             try await connect()
+            let node = AgentWorkflowNode(name: "Summary", content: .init(text: "Done"))
+            let run = AgentWorkflowRun(definition: .init(name: "Review", hostID: UUID(), nodes: [node], edges: [], entryNodeID: node.id), instances: [], createdAt: Date(), authorizationExpiresAt: Date().addingTimeInterval(60))
+            let notification = AgentWorkflowNotification(run: run, hostID: run.definition.hostID, kind: .completed)
+            #expect(await !host.sendWorkflowLiveNotification(notification))
+            let pushesBeforeWorkflow = await relay.pushes.count
+            #expect(await host.sendCustomPushNotification(title: notification.title, body: notification.body, paneId: nil, eventType: notification.eventType, workflow: notification.target, includeLiveNotification: false))
+            try await waitUntil { await relay.pushes.count == pushesBeforeWorkflow + 1 }
+            let workflowPayload = try #require(await relay.pushes.last)
+            let workflowContent = try await viewerEncryption.decrypt(workflowPayload.encryptedContent, as: NotificationContent.self)
+            #expect(workflowContent.workflow == notification.target && workflowContent.agentID == nil)
             try await checkPush(using: viewerEncryption, actionable: false) // not yet advertised
             try await hello(true, using: viewerEncryption)
+            let framesBeforeWorkflow = await relay.encryptedFrames
+            #expect(await host.sendWorkflowLiveNotification(notification))
+            try await waitUntil { await relay.encryptedFrames > framesBeforeWorkflow }
             try await offline()
             try await checkPush(using: viewerEncryption, actionable: true)
             await host.disconnect() // Relay connection cleanup also preserves capability.

@@ -183,7 +183,7 @@ extension PluginWorkflowEvent {
 }
 
 struct AgentWorkflowArchive: Codable, Equatable, Sendable {
-    static let currentSchemaVersion = 11
+    static let currentSchemaVersion = 12
     var schemaVersion = Self.currentSchemaVersion
     let hostID: UUID
     var definitions: [AgentWorkflowDefinition] = []
@@ -194,6 +194,7 @@ struct AgentWorkflowArchive: Codable, Equatable, Sendable {
     var retainedRunIDs: [UUID]?
     var pendingReceipts: [UUID: AgentWorkflowPendingReceipt]?
     var earlyCompletions: [UUID: [AgentWorkflowContinuationCompletion]]?
+    var notifications: [UUID: AgentWorkflowNotification]?
 
     var instancesForNames: [AgentWorkflowInstance] {
         // Current locations win; history supplies names only for absent Agents.
@@ -248,6 +249,7 @@ actor AgentWorkflowStore {
     let fileURL: URL
     private let hostID: UUID
     private let onCompleted: @Sendable (AgentWorkflowRun) -> Void
+    private let onNotificationPending: @Sendable () -> Void
     private var archive: AgentWorkflowArchive?
     private var observers: [UUID: AsyncStream<Void>.Continuation] = [:]
     private var writeAuthorizations: [UUID: AgentWorkflowWriteAuthorization] = [:]
@@ -259,10 +261,11 @@ actor AgentWorkflowStore {
     var attachmentExpiry: Task<Void, Never>?
     var attachmentUploadsClosed = false
 
-    init(fileURL: URL, hostID: UUID, onCompleted: @escaping @Sendable (AgentWorkflowRun) -> Void = { _ in }) {
+    init(fileURL: URL, hostID: UUID, onNotificationPending: @escaping @Sendable () -> Void = { }, onCompleted: @escaping @Sendable (AgentWorkflowRun) -> Void = { _ in }) {
         self.fileURL = fileURL
         self.hostID = hostID
         self.onCompleted = onCompleted
+        self.onNotificationPending = onNotificationPending
     }
 
     func snapshot() throws -> AgentWorkflowArchive {
@@ -1230,6 +1233,33 @@ actor AgentWorkflowStore {
     func commit(_ updated: AgentWorkflowArchive) throws {
         var updated = updated
         updated.schemaVersion = AgentWorkflowArchive.currentSchemaVersion
+        var addedNotification = false
+        if let previous = archive {
+            for run in updated.runs {
+                guard let old = previous.runs.first(where: { $0.id == run.id }) else { continue }
+                let kind: AgentWorkflowNotification.Kind?
+                if run.status == .completed, old.status != .completed {
+                    kind = .completed
+                } else if
+                    run.status == .paused, old.status != .paused || run.issue != old.issue,
+                    (run.controlRevision ?? 0) == (old.controlRevision ?? 0) {
+                    kind = .attention
+                } else {
+                    kind = nil
+                }
+                if let kind {
+                    if updated.notifications == nil {
+                        updated.notifications = [:]
+                    }
+                    let notification = AgentWorkflowNotification(run: run, hostID: updated.hostID, kind: kind)
+                    updated.notifications?[run.id] = notification
+                    addedNotification = true
+                }
+            }
+        }
+        updated.notifications = updated.notifications?.filter { id, event in
+            updated.runs.contains { $0.id == id && (event.kind == .completed || $0.status == .paused) }
+        }
         if let receipts = updated.pendingReceipts {
             let waiting = Set(updated.runs.flatMap { run in
                 run.invocations.filter {
@@ -1255,6 +1285,9 @@ actor AgentWorkflowStore {
         )
         try data.write(to: fileURL, options: .atomic)
         archive = updated
+        if addedNotification {
+            onNotificationPending()
+        }
         let activeInstances = Set(updated.instances.map(\.id))
         let activeRuns = Set(updated.runs.filter { !$0.status.isTerminal }.map(\.id))
         submittedTurns = submittedTurns.filter { activeInstances.contains($0.key) && activeRuns.contains($0.value.runID) }

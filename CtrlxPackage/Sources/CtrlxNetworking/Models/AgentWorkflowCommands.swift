@@ -212,6 +212,7 @@ public struct AgentWorkflowRunState: Codable, Equatable, Sendable {
     public let finishRequest: AgentWorkflowFinishRequest?
     public let loopExitRequest: AgentWorkflowFinishRequest?
     public let hasExitedLoop: Bool?
+    public var notification: AgentWorkflowNotification?
 
     public init(_ run: AgentWorkflowRun, currentInstances: [AgentWorkflowInstance]) {
         self.summary = .init(run)

@@ -12,6 +12,7 @@ public struct AgentNotificationPresentation: Equatable, Sendable {
     public let body: String
     public let agentID: AgentID?
     public let eventType: String?
+    public let workflow: AgentWorkflowNotificationTarget?
 
     public init(
         title: String,
@@ -19,10 +20,12 @@ public struct AgentNotificationPresentation: Equatable, Sendable {
         body: String,
         paneState: PaneState?,
         agentID: AgentID? = nil,
-        eventType: String? = nil
+        eventType: String? = nil,
+        workflow: AgentWorkflowNotificationTarget? = nil
     ) {
         self.agentID = agentID
         self.eventType = eventType
+        self.workflow = workflow
         guard let paneState else {
             self.title = title
             self.subtitle = subtitle

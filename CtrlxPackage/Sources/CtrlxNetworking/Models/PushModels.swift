@@ -32,6 +32,7 @@ public struct NotificationContent: Codable, Sendable, Equatable {
     /// The tmux pane ID for deep linking to the specific session
     public let paneId: String?
     public let agentID: AgentID?
+    public let workflow: AgentWorkflowNotificationTarget?
 
     /// When the event occurred
     public let timestamp: Date
@@ -52,6 +53,7 @@ public struct NotificationContent: Codable, Sendable, Equatable {
         pairId: String,
         paneId: String? = nil,
         agentID: AgentID? = nil,
+        workflow: AgentWorkflowNotificationTarget? = nil,
         timestamp: Date = Date(),
         action: NotificationActionContext? = nil
     ) {
@@ -62,6 +64,7 @@ public struct NotificationContent: Codable, Sendable, Equatable {
         self.pairId = pairId
         self.paneId = paneId
         self.agentID = agentID
+        self.workflow = workflow
         self.timestamp = timestamp
         self.action = action
     }
@@ -77,6 +80,7 @@ public struct NotificationContent: Codable, Sendable, Equatable {
             pairId: pairId,
             paneId: target == nil ? nil : paneId,
             agentID: target,
+            workflow: workflow,
             timestamp: timestamp,
             action: target != nil && action?.agent?.agentID == target ? action : nil
         )
@@ -90,6 +94,7 @@ public struct NotificationContent: Codable, Sendable, Equatable {
         case pairId
         case paneId
         case agentID
+        case workflow
         case timestamp
         case action
     }
@@ -103,6 +108,7 @@ public struct NotificationContent: Codable, Sendable, Equatable {
         self.pairId = try container.decode(String.self, forKey: .pairId)
         self.paneId = try container.decodeIfPresent(String.self, forKey: .paneId)
         self.agentID = try container.decodeIfPresent(AgentID.self, forKey: .agentID)
+        self.workflow = try container.decodeIfPresent(AgentWorkflowNotificationTarget.self, forKey: .workflow)
         self.timestamp = try container.decode(Date.self, forKey: .timestamp)
         // Lenient on purpose (cross-host version skew): a future host may add
         // a `Form` case this build can't decode. A strict decode here would

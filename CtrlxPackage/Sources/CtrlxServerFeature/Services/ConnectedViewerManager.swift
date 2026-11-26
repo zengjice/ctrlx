@@ -293,7 +293,7 @@ final public class ConnectedViewerManager {
         await withTaskGroup(of: Void.self) { group in
             for connection in connections.values where connection.state.isConnected {
                 group.addTask {
-                    await connection.sendCustomPushNotification(
+                    _ = await connection.sendCustomPushNotification(
                         title: title,
                         subtitle: subtitle,
                         body: body,
@@ -305,6 +305,26 @@ final public class ConnectedViewerManager {
                     )
                 }
             }
+        }
+    }
+
+    func sendWorkflowNotification(_ event: AgentWorkflowNotification, destination: String) async throws {
+        let components = destination.split(separator: ":", maxSplits: 1).map(String.init)
+        guard components.count == 2, let connection = connections[components[1]], connection.state.isConnected else {
+            throw AgentWorkflowError("Waiting for the Host's Relay connection to this Viewer.")
+        }
+        let submitted: Bool
+        if components[0] == "live" {
+            guard connection.isViewerConnected else { throw AgentWorkflowError("Waiting for the Viewer's live connection. iOS alerts use the separate APNs channel.") }
+            submitted = await connection.sendWorkflowLiveNotification(event)
+        } else {
+            submitted = await connection.sendCustomPushNotification(
+                title: event.title, body: event.body, paneId: nil,
+                eventType: event.eventType, workflow: event.target, includeLiveNotification: false
+            )
+        }
+        guard submitted else {
+            throw AgentWorkflowError("Notification could not be submitted. Waiting for the encrypted Relay connection.")
         }
     }
 

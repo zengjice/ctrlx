@@ -4,26 +4,31 @@ import Foundation
 public enum NotificationDelivery {
     public static let workflowCompletionEventType = "workflow.completed"
 
+    public static let workflowAttentionEventType = "workflow.attention"
+
+    public static func isWorkflow(userInfo: [AnyHashable: Any]) -> Bool {
+        let type = userInfo["eventType"] as? String
+        return type == workflowCompletionEventType || type == workflowAttentionEventType
+    }
+
     public static func isWorkflowCompletion(userInfo: [AnyHashable: Any]) -> Bool {
         userInfo["eventType"] as? String == workflowCompletionEventType
     }
 
-    /// Remote questions alert even while the app is open. Ordinary remote
-    /// activity remains visible in the session UI. Local notifications are
-    /// explicit follow-up questions, reply failures or on-device alerts.
+    /// Workflow transitions and open questions/approvals alert in foreground.
+    /// Ordinary remote Agent completion remains in the session UI.
     public static func shouldPresentInForeground(isRemote: Bool, userInfo: [AnyHashable: Any]) -> Bool {
-        if !isRemote || userInfo["eventType"] as? String == "agent.question" {
+        if !isRemote || isWorkflow(userInfo: userInfo) || userInfo["eventType"] as? String == "agent.question" {
             return true
         }
         // Older Hosts identify structured questions only through their action context.
         guard
             let json = userInfo[NotificationUserInfoKey.actionContext] as? String,
-            let action = try? JSONDecoder().decode(NotificationActionContext.self, from: Data(json.utf8))
+            let _ = try? JSONDecoder().decode(NotificationActionContext.self, from: Data(json.utf8))
         else { return false }
-        if case .askUserQuestion = action.form {
-            return true
-        }
-        return false
+        // Every validated open form requires a human decision now, including
+        // permission and plan approval. Ordinary completion remains quiet.
+        return true
     }
 
     public static func matchesAgent(userInfo: [AnyHashable: Any], pairId: String, agentID: AgentID) -> Bool {

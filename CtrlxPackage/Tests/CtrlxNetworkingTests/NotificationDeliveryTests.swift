@@ -33,13 +33,13 @@ struct NotificationDeliveryTests {
         #expect(try NotificationDelivery.shouldPresentInForeground(isRemote: true, userInfo: userInfo(for: decoded)))
     }
 
-    @Test("Permission actions and malformed contexts do not turn activity into questions")
+    @Test("Permission requests alert while malformed contexts remain quiet")
     func nonQuestionActions() throws {
         let content = NotificationContent(
             title: "Permission", body: "Allow tool?", eventType: "cli.notify", pairId: "office",
             action: .init(sessionId: "%7", pluginId: "codex", requestId: "request", form: .permission(.init(alwaysSuggestionID: nil)))
         )
-        #expect(try !NotificationDelivery.shouldPresentInForeground(isRemote: true, userInfo: userInfo(for: content)))
+        #expect(try NotificationDelivery.shouldPresentInForeground(isRemote: true, userInfo: userInfo(for: content)))
         let malformedContextIsVisible = NotificationDelivery.shouldPresentInForeground(isRemote: true, userInfo: [
             "eventType": "cli.notify", NotificationUserInfoKey.actionContext: "invalid JSON",
         ])
@@ -65,6 +65,20 @@ struct NotificationDeliveryTests {
         let legacy = Data(#"{"pairId":"office","title":"Finished","body":"Agent reply","timestamp":0}"#.utf8)
         #expect(try JSONDecoder().decode(AgentNotificationMessage.self, from: legacy).eventType == nil)
         #expect(!NotificationDelivery.isWorkflowCompletion(userInfo: ["pairId": "office", "eventType": "cli.notify"]))
+    }
+
+    @Test(arguments: [NotificationDelivery.workflowCompletionEventType, NotificationDelivery.workflowAttentionEventType])
+    func workflowRoutesSurviveOldPeerNegotiationAndAlertInForeground(type: String) throws {
+        let target = AgentWorkflowNotificationTarget(hostID: UUID(), runID: UUID(), eventID: UUID())
+        let content = NotificationContent(title: "Workflow", body: "Review", eventType: type, pairId: "office", workflow: target)
+        let decoded = try JSONDecoder().decode(NotificationContent.self, from: JSONEncoder().encode(content.forPeer(supportsStableAgentNotifications: false)))
+        #expect(decoded.workflow == target && decoded.agentID == nil)
+        #expect(AgentWorkflowNotificationTarget(userInfo: target.userInfo) == target)
+        #expect(NotificationDelivery.shouldPresentInForeground(isRemote: true, userInfo: ["eventType": type]))
+        let live = AgentNotificationMessage(pairId: "office", sessionId: nil, title: content.title, body: content.body, timestamp: content.timestamp, eventType: type, workflow: target)
+        let remote = try JSONDecoder().decode(AgentNotificationMessage.self, from: JSONEncoder().encode(live)).withPairId("authenticated-route")
+        #expect(remote.workflow == target && remote.pairId == "authenticated-route")
+        #expect(AgentWorkflowNotificationTarget(userInfo: ["workflowRunID": UUID().uuidString]) == nil)
     }
 
     @Test("Local question follow-ups and delivery failures remain visible")

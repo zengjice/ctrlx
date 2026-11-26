@@ -22,6 +22,7 @@
             _ notification: AgentNotificationPresentation,
             _ hostId: String?
         ) -> Void
+        public var submitWorkflowNotification: @Sendable (_ notification: AgentNotificationPresentation) async throws -> Void
     }
 
     // MARK: - E2E Test Support
@@ -30,26 +31,27 @@
         /// Factory for E2E tests — appends notifications to a log file instead of
         /// displaying desktop notifications, allowing test assertions on the file.
         static func e2eTest(logPath: String) -> TerminalNotificationService {
-            TerminalNotificationService(
-                showNotification: { paneId, notification, hostId in
-                    let title = notification.title
-                    let body = [notification.subtitle, notification.body].compactMap { $0 }.joined(separator: "\n")
-                    // Append the originating host only for viewer notifications
-                    // (hostId set) so scenarios can assert on them; local terminal
-                    // notifications keep the original three-field format.
-                    let origin = hostId.map { "|\($0)" } ?? ""
-                    let entry = "\(paneId)|\(title)|\(body)\(origin)\n"
-                    let data = Data(entry.utf8)
+            let append: @Sendable (String, AgentNotificationPresentation, String?) -> Void = { paneId, notification, hostId in
+                let title = notification.title
+                let body = [notification.subtitle, notification.body].compactMap { $0 }.joined(separator: "\n")
+                // Append the originating host only for viewer notifications
+                // (hostId set) so scenarios can assert on them; local terminal
+                // notifications keep the original three-field format.
+                let origin = hostId.map { "|\($0)" } ?? ""
+                let entry = "\(paneId)|\(title)|\(body)\(origin)\n"
+                let data = Data(entry.utf8)
 
-                    if let handle = FileHandle(forWritingAtPath: logPath) {
-                        defer { handle.closeFile() }
-                        handle.seekToEndOfFile()
-                        handle.write(data)
-                    } else {
-                        FileManager.default.createFile(atPath: logPath, contents: data)
-                    }
+                if let handle = FileHandle(forWritingAtPath: logPath) {
+                    defer { handle.closeFile() }
+                    handle.seekToEndOfFile()
+                    handle.write(data)
+                } else {
+                    FileManager.default.createFile(atPath: logPath, contents: data)
                 }
-            )
+            }
+            return TerminalNotificationService(showNotification: append, submitWorkflowNotification: { notification in
+                append("system", notification, nil)
+            })
         }
     }
 
@@ -75,6 +77,9 @@
             if let agentID = notification.agentID {
                 userInfo.merge(agentID.notificationUserInfo) { _, current in current }
             }
+            if let workflow = notification.workflow {
+                userInfo.merge(workflow.userInfo) { _, current in current }
+            }
             content.userInfo = userInfo
             return content
         }
@@ -84,7 +89,7 @@
 
     extension TerminalNotificationService: DependencyKey {
         public static var previewValue: TerminalNotificationService {
-            TerminalNotificationService(showNotification: { _, _, _ in })
+            TerminalNotificationService(showNotification: { _, _, _ in }, submitWorkflowNotification: { _ in })
         }
 
         public static var liveValue: TerminalNotificationService {
@@ -92,11 +97,19 @@
             return TerminalNotificationService(
                 showNotification: { paneId, notification, hostId in
                     Task {
-                        await handler.show(paneId: paneId, notification: notification, hostId: hostId)
+                        do { try await handler.show(paneId: paneId, notification: notification, hostId: hostId) }
+                        catch { handlerLog(error) }
                     }
+                },
+                submitWorkflowNotification: { notification in
+                    try await handler.show(paneId: "system", notification: notification, hostId: nil)
                 }
             )
         }
+    }
+
+    private func handlerLog(_ error: Error) {
+        Logger(label: "com.jicezeng.ctrlx.terminalnotification").warning("Notification submission failed: \(error)")
     }
 
     // MARK: - Live Implementation
@@ -112,32 +125,25 @@
             paneId: String,
             notification: AgentNotificationPresentation,
             hostId: String?
-        ) async {
+        ) async throws {
             await ensurePermission()
-            guard isAuthorized else { return }
+            guard isAuthorized else { throw AgentWorkflowError("Notifications are disabled for CtrlX in macOS System Settings.") }
 
             let content = TerminalNotificationService.content(paneId: paneId, notification: notification, hostId: hostId)
 
             let request = UNNotificationRequest(
-                identifier: UUID().uuidString,
+                identifier: notification.workflow?.eventID.uuidString ?? UUID().uuidString,
                 content: content,
                 trigger: nil
             )
 
-            do {
-                try await UNUserNotificationCenter.current().add(request)
-                logger.debug("Delivered terminal notification", metadata: [
-                    "paneId": "\(paneId)",
-                    "title": "\(notification.title)",
-                ])
-            } catch {
-                logger.warning("Failed to deliver notification: \(error)")
-            }
+            try await UNUserNotificationCenter.current().add(request)
+            logger.debug("Submitted terminal notification", metadata: [
+                "paneId": "\(paneId)", "title": "\(notification.title)",
+            ])
         }
 
         private func ensurePermission() async {
-            guard !isAuthorized else { return }
-
             let center = UNUserNotificationCenter.current()
 
             // Install delegate so notifications display even when the app is in the foreground.
@@ -196,6 +202,8 @@
         /// Handler called on the main actor when a notification is tapped.
         /// `hostId` is non-nil when the notification came from a remote host
         /// (viewer mode), so the tap reveals that host's remote session.
+        @MainActor var onWorkflowTapped: ((_ target: AgentWorkflowNotificationTarget, _ hostId: String?) -> Void)?
+
         @MainActor var onTapped: ((_ agentID: AgentID?, _ hostId: String?) -> Void)?
 
         /// Handler called on the main actor when a trial-expiry alert
@@ -234,8 +242,19 @@
                 return
             }
 
+            if NotificationDelivery.isWorkflow(userInfo: userInfo), let target = AgentWorkflowNotificationTarget(userInfo: userInfo) {
+                let hostId = userInfo["hostId"] as? String
+                await MainActor.run {
+                    let handler = onWorkflowTapped
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(300))
+                        handler?(target, hostId)
+                    }
+                }
+                return
+            }
             guard
-                !NotificationDelivery.isWorkflowCompletion(userInfo: userInfo),
+                !NotificationDelivery.isWorkflow(userInfo: userInfo),
                 userInfo["paneId"] != nil || userInfo["hostId"] != nil else { return }
             let agentID = AgentID(notificationUserInfo: userInfo)
             let hostId = userInfo["hostId"] as? String

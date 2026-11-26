@@ -7,6 +7,7 @@ struct AgentWorkflowRunView: View {
     let hostID: UUID
     let runID: UUID
     let openAgent: (AgentWorkflowInstance) -> Void
+    @AppStorage private var viewedCompletion: Bool
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
     @State private var state: AgentWorkflowRunState?
@@ -17,6 +18,14 @@ struct AgentWorkflowRunView: View {
     @State private var confirmingDelete = false
     @State private var renewingAuthorization = false
     @State private var roundLimit = 1
+
+    init(endpoint: AgentWorkflowEndpoint, hostID: UUID, runID: UUID, openAgent: @escaping (AgentWorkflowInstance) -> Void) {
+        self.endpoint = endpoint
+        self.hostID = hostID
+        self.runID = runID
+        self.openAgent = openAgent
+        self._viewedCompletion = AppStorage(wrappedValue: false, "workflow-viewed-\(hostID)-\(runID)")
+    }
 
     var body: some View {
         List {
@@ -38,6 +47,9 @@ struct AgentWorkflowRunView: View {
                     if !endpoint.isConnected {
                         Text("Host offline · showing the last received state").foregroundStyle(.secondary)
                     }
+                }
+                if let notification = state.notification {
+                    WorkflowNotificationStatus(notification: notification)
                 }
                 Section("Steps · current round") {
                     ForEach(state.nodes) { node in
@@ -153,7 +165,7 @@ struct AgentWorkflowRunView: View {
                 change(.renewAndResume(runID, expectedRevision: state.summary.revision, roundLimit: roundLimit, authorizationExpiresAt: expiresAt))
             })
         }
-        .task(id: scenePhase) {
+        .task(id: "\(endpoint.id):\(hostID):\(runID):\(scenePhase):\(endpoint.isConnected)") {
             guard scenePhase == .active else { return }
             while !Task.isCancelled {
                 await refresh()
@@ -213,6 +225,9 @@ struct AgentWorkflowRunView: View {
             try Task.checkCancellation()
             guard !changing, updated.summary.revision >= (state?.summary.revision ?? 0) else { return }
             state = updated
+            if updated.summary.status == .completed {
+                viewedCompletion = true
+            }
             history = invocations
             roundLimit = max(roundLimit, updated.summary.roundLimit)
             error = nil
@@ -347,5 +362,40 @@ extension AgentWorkflowInvocationStatus {
         case .uncertain: "Needs verification"
         case .cancelled: "Cancelled"
         }
+    }
+}
+
+@MainActor
+private struct WorkflowNotificationStatus: View {
+    let notification: AgentWorkflowNotification
+
+    var body: some View {
+        Section {
+            Text(notification.title)
+            if notification.deliveries == nil {
+                Text("Pending · will retry").foregroundStyle(.secondary)
+            }
+            ForEach(notification.deliveries ?? [], id: \.destination) { delivery in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(notificationDestination(delivery.destination))
+                    Text(delivery.submittedAt == nil ? "Pending · will retry" : "Submitted")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if let issue = delivery.error {
+                        Text(issue).font(.caption).foregroundStyle(.orange)
+                    }
+                }
+            }
+        } header: { Text("Notifications") } footer: {
+            Text("Submitted confirms the local notification request or the Host's Relay socket send. Device permissions, Focus and APNs can still affect display. Pending requests retry while the Host is running.")
+        }
+    }
+
+    private func notificationDestination(_ destination: String) -> String {
+        if destination == "local" {
+            return "Host Mac"
+        }
+        let parts = destination.split(separator: ":", maxSplits: 1)
+        let channel = parts.first == "live" ? "Mac Viewer" : "APNs"
+        return "\(channel) · \(parts.last?.prefix(8) ?? "")"
     }
 }

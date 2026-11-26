@@ -12,6 +12,7 @@ actor AgentWorkflowService {
     private let resumeStep: @Sendable (AgentWorkflowInvocation, AgentWorkflowInstance) async throws -> Void
     private let recoverResults: @Sendable (AgentWorkflowRun) async throws -> AgentWorkflowRun
     private let now: @Sendable () -> Date
+    private let flushNotifications: @Sendable () async throws -> Void
     private let onFailure: @Sendable (String) -> Void
     let models: @Sendable (AgentWorkflowInstance, Bool) async throws -> AgentModelSnapshot
     private var refreshing: Task<[AgentWorkflowInstance], Error>?
@@ -29,6 +30,7 @@ actor AgentWorkflowService {
         recoverResults: @escaping @Sendable (AgentWorkflowRun) async throws -> AgentWorkflowRun = { $0 },
         models: @escaping @Sendable (AgentWorkflowInstance, Bool) async throws -> AgentModelSnapshot = { _, _ in throw AgentWorkflowError("This Agent does not support model selection.") },
         now: @escaping @Sendable () -> Date = { Date() },
+        flushNotifications: @escaping @Sendable () async throws -> Void = { },
         onFailure: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.store = store
@@ -41,6 +43,7 @@ actor AgentWorkflowService {
         self.models = models
         self.now = now
         self.onFailure = onFailure
+        self.flushNotifications = flushNotifications
     }
 
     /// Host-owned even with no Viewer connected. No process scan is needed when
@@ -61,6 +64,7 @@ actor AgentWorkflowService {
     }
 
     func checkActiveRuns(completionGrace: TimeInterval = 60) async throws {
+        try await flushNotifications()
         let timestamp = now()
         // Paused runs still need current instance state so operators can open
         // a recovered terminal and answer Questions without resuming handoffs.

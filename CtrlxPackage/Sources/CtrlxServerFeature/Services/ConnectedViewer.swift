@@ -399,6 +399,7 @@ final public class ConnectedViewer: Identifiable {
     /// viewer. Used by `notification.create --push` so CLI-triggered alerts
     /// follow the same APNs path as Claude hook events. `action` carries the
     /// open-form context that makes the iOS notification actionable (#710).
+    @discardableResult
     public func sendCustomPushNotification(
         title: String,
         subtitle: String? = nil,
@@ -407,16 +408,18 @@ final public class ConnectedViewer: Identifiable {
         action: NotificationActionContext? = nil,
         isQuestion: Bool? = nil,
         agentID: AgentID? = nil,
-        eventType: String? = nil
-    ) async {
+        eventType: String? = nil,
+        workflow: AgentWorkflowNotificationTarget? = nil,
+        includeLiveNotification: Bool = true
+    ) async -> Bool {
         guard state.isConnected else {
             logger.debug("Not connected to \(viewerName), cannot send custom push")
-            return
+            return false
         }
 
         guard await e2eeService.isSessionEstablished else {
             logger.error("E2EE session not established, cannot send custom push")
-            return
+            return false
         }
 
         let content = NotificationContent(
@@ -427,6 +430,7 @@ final public class ConnectedViewer: Identifiable {
             pairId: id,
             paneId: paneId,
             agentID: agentID,
+            workflow: workflow,
             timestamp: Date(),
             action: action
         ).forPeer(supportsStableAgentNotifications: supportsStableAgentNotifications)
@@ -439,25 +443,30 @@ final public class ConnectedViewer: Identifiable {
                 badge: badge,
                 silent: false
             )
-            await send(.encryptedPush(payload))
+            guard await send(.encryptedPush(payload)) else { return false }
             // Log the (pre-formatted, agent-blind) notification title so E2E
             // scenarios can tell individual Agent notifications apart.
             pushNotificationLog.logPushSent(content.title, content.paneId)
             // Mac Viewers receive desktop alerts over the live socket.
             // iOS does not display this message; its alerts arrive via APNs.
-            await sendAgentNotification(content, isQuestion: isQuestion)
+            if includeLiveNotification {
+                _ = await sendAgentNotification(content, isQuestion: isQuestion)
+            }
+            return true
         } catch {
             logger.error("Failed to encrypt custom push notification: \(error)")
+            return false
         }
     }
 
     /// Deliver a pre-baked desktop notification over the encrypted live
     /// WebSocket for Mac Viewers, alongside the independent iOS APNs delivery.
+    @discardableResult
     private func sendAgentNotification(
         _ content: NotificationContent,
         isQuestion: Bool?
-    ) async {
-        guard state.isConnected else { return }
+    ) async -> Bool {
+        guard state.isConnected, isViewerConnected else { return false }
         let message = WebSocketMessage.agentNotification(
             AgentNotificationMessage(
                 pairId: id,
@@ -469,10 +478,20 @@ final public class ConnectedViewer: Identifiable {
                 action: content.action,
                 isQuestion: isQuestion,
                 agentID: content.agentID,
-                eventType: content.eventType
+                eventType: content.eventType,
+                workflow: content.workflow
             )
         )
-        await sendEncrypted(message)
+        return await withCheckedContinuation { continuation in
+            _ = enqueueEncrypted(message, onSent: { continuation.resume(returning: $0) })
+        }
+    }
+
+    func sendWorkflowLiveNotification(_ event: AgentWorkflowNotification) async -> Bool {
+        await sendAgentNotification(.init(
+            title: event.title, body: event.body, eventType: event.eventType,
+            pairId: id, workflow: event.target
+        ).forPeer(supportsStableAgentNotifications: supportsStableAgentNotifications), isQuestion: nil)
     }
 
     /// Send a badge-only APNs push — no banner, sound, background wake or
@@ -1177,7 +1196,7 @@ final public class ConnectedViewer: Identifiable {
         await enqueueEncrypted(message).value
     }
 
-    private func enqueueEncrypted(_ message: WebSocketMessage) -> Task<Void, Never> {
+    private func enqueueEncrypted(_ message: WebSocketMessage, onSent: @escaping @Sendable (Bool) -> Void = { _ in }) -> Task<Void, Never> {
         let generation = connectionGeneration.current
         let sendId = UUID()
         pendingSendEnqueuedAt[sendId] = ContinuousClock.now
@@ -1190,9 +1209,13 @@ final public class ConnectedViewer: Identifiable {
                 !Task.isCancelled,
                 let self,
                 self.connectionGeneration.isCurrent(generation)
-            else { return }
+            else {
+                onSent(false)
+                return
+            }
 
-            await self.performEncryptedSend(message, generation: generation)
+            let sent = await self.performEncryptedSend(message, generation: generation)
+            onSent(sent)
             guard self.connectionGeneration.isCurrent(generation) else { return }
             self.pendingSendEnqueuedAt.removeValue(forKey: sendId)
             self.recordSendQueue()
@@ -1201,13 +1224,13 @@ final public class ConnectedViewer: Identifiable {
         return task
     }
 
-    private func performEncryptedSend(_ message: WebSocketMessage, generation: UInt64) async {
-        guard connectionGeneration.isCurrent(generation), !Task.isCancelled else { return }
+    private func performEncryptedSend(_ message: WebSocketMessage, generation: UInt64) async -> Bool {
+        guard connectionGeneration.isCurrent(generation), !Task.isCancelled else { return false }
         guard await e2eeService.isSessionEstablished else {
             logger.error("E2EE session not established, refusing to send sensitive message")
-            return
+            return false
         }
-        guard connectionGeneration.isCurrent(generation), !Task.isCancelled else { return }
+        guard connectionGeneration.isCurrent(generation), !Task.isCancelled else { return false }
 
         do {
             let encryptionStart = ContinuousClock.now
@@ -1215,10 +1238,11 @@ final public class ConnectedViewer: Identifiable {
                 TerminalTransportMetrics.shared.recordDuration(.encryption, since: encryptionStart)
             }
             let encryptedMessage = try await message.encrypt(using: e2eeService)
-            guard connectionGeneration.isCurrent(generation), !Task.isCancelled else { return }
-            await send(encryptedMessage, generation: generation)
+            guard connectionGeneration.isCurrent(generation), !Task.isCancelled else { return false }
+            return await send(encryptedMessage, generation: generation)
         } catch {
             logger.error("Failed to encrypt message: \(error)")
+            return false
         }
     }
 

@@ -351,15 +351,18 @@
                 SessionListView(
                     navigationPath: $sessionsNavigationPath,
                     onOpenSettings: {
+                        pushService.pendingWorkflow = nil
                         _ = pushService.consumePendingDeepLink()
                         showingSettings = true
                     },
                     onOpenDashboard: {
+                        pushService.pendingWorkflow = nil
                         _ = pushService.consumePendingDeepLink()
                         showingDashboard = true
                     },
                     onOpenAttention: openAttention,
                     onOpenWorkflows: {
+                        pushService.pendingWorkflow = nil
                         _ = pushService.consumePendingDeepLink()
                         workflowNavigation.isPresented = true
                     }
@@ -390,6 +393,7 @@
                 if pushService.pendingDashboard {
                     openDashboardNotification()
                 }
+                openWorkflowNotification()
             }) {
                 NavigationStack {
                     SettingsView(onDone: { showingSettings = false })
@@ -406,6 +410,7 @@
                     sessionsNavigationPath = NavigationPath()
                     sessionsNavigationPath.append(destination)
                 }
+                openWorkflowNotification()
             }) {
                 IOSDashboardView { host, session in
                     dashboardDestination = SessionNavigation(sessionName: session, hostId: host)
@@ -416,6 +421,7 @@
                 if pushService.pendingDashboard {
                     openDashboardNotification()
                 }
+                openWorkflowNotification()
             }) {
                 IOSPendingAttentionView(open: openAttentionItem)
                     .presentationDetents([.medium, .large])
@@ -429,10 +435,12 @@
                 if pushService.pendingDashboard {
                     openDashboardNotification()
                 }
+                openWorkflowNotification()
             }) {
                 IOSWorkflowsView(openSession: { workflowDestination = $0 }, navigation: workflowNavigation)
                     .presentationDetents([.large])
             }
+            .task(id: pushService.pendingWorkflow) { openWorkflowNotification() }
             .onChange(of: pushService.pendingDashboard) { _, pending in
                 if pending {
                     openDashboardNotification()
@@ -457,6 +465,31 @@
             .environment(\.agentWorkflowNavigation, workflowNavigation)
         }
 
+        private func openWorkflowNotification() {
+            guard let pending = pushService.pendingWorkflow else { return }
+            _ = pushService.consumePendingDeepLink()
+            workflowDestination = nil
+            dashboardDestination = nil
+            if showingSettings {
+                showingSettings = false
+                return
+            }
+            if showingDashboard {
+                showingDashboard = false
+                return
+            }
+            if showingAttention {
+                showingAttention = false
+                return
+            }
+            pushService.pendingWorkflow = nil
+            guard settings.pairedHosts.contains(where: { $0.id == pending.pairID }) else {
+                notificationNavigationIssue = "This notification's Host is no longer paired."
+                return
+            }
+            workflowNavigation.open(pending.target, route: pending.pairID)
+        }
+
         private func openDashboardNotification() {
             _ = pushService.consumePendingDeepLink()
             if showingAttention {
@@ -476,6 +509,7 @@
         }
 
         private func openAttention() {
+            pushService.pendingWorkflow = nil
             _ = pushService.consumePendingDeepLink()
             let items = IOSPendingAttention.items(
                 hosts: settings.pairedHosts, paneStates: sessionStore.paneStates, catalogs: sessionStore.workspaceCatalogsByHost

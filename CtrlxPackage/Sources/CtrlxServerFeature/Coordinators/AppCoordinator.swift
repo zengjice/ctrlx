@@ -52,6 +52,7 @@
         /// environment action only exists inside a View, so this is captured
         /// once from a view that's guaranteed to run at launch and stored here.
         public var openSettingsAction: (() -> Void)?
+        public var openWorkflowsAction: (() -> Void)?
 
         /// Tmux interaction service
         public let tmuxService: TmuxService
@@ -162,6 +163,7 @@
         @ObservationIgnored var agentRuntimeCatalog: AgentRuntimeCatalog?
         @ObservationIgnored var agentRoleRecovery: AgentRoleRecovery?
         @ObservationIgnored var agentMessages: AgentMessageService?
+        @ObservationIgnored var agentWorkflowNotifications: AgentWorkflowNotificationDelivery?
         @ObservationIgnored var agentWorkflowStore: AgentWorkflowStore?
 
         var agentWorkflowService: AgentWorkflowService?
@@ -329,7 +331,7 @@
         private var isServiceSetupComplete = false
 
         @ObservationIgnored
-        @Dependency(TerminalNotificationService.self) private var terminalNotificationService
+        @Dependency(TerminalNotificationService.self) var terminalNotificationService
 
         /// Task for observing system wake notifications.
         @ObservationIgnored private var wakeObserverTask: Task<Void, Never>?
@@ -1991,13 +1993,6 @@
                 agentID: agentID
             )
             await deliverNotification(presentation, paneID: paneId, action: action, isQuestion: isQuestion)
-        }
-
-        func notifyWorkflowCompleted(_ run: AgentWorkflowRun) async {
-            await deliverNotification(.init(
-                title: "Workflow completed", body: run.definition.name, paneState: nil,
-                eventType: NotificationDelivery.workflowCompletionEventType
-            ), paneID: nil)
         }
 
         private func deliverNotification(
@@ -4346,6 +4341,18 @@
                 }
             }
 
+            ForegroundNotificationDelegate.shared.onWorkflowTapped = { [weak self] target, pairID in
+                guard let self else { return }
+                if let pairID, !settings.pairedHosts.contains(where: { $0.id == pairID }) {
+                    showUnavailableNotificationTarget(hostID: pairID)
+                    return
+                }
+                workflowNavigation.open(target, route: pairID ?? "local")
+                NSApp.setActivationPolicy(.regular)
+                openWorkflowsAction?()
+                MenuBarExtraView.bringAppToFront()
+            }
+
             // Trial-expiry alerts open the shared Relay authorization settings.
             ForegroundNotificationDelegate.shared.onLicenseAlertTapped = { [weak self] in
                 guard let self else { return }
@@ -4995,7 +5002,8 @@
                         body: notification.body,
                         paneState: paneState,
                         agentID: notification.agentID,
-                        eventType: notification.eventType
+                        eventType: notification.eventType,
+                        workflow: notification.workflow
                     )
                     self.terminalNotificationService.showNotification(
                         notification.sessionId ?? "system",

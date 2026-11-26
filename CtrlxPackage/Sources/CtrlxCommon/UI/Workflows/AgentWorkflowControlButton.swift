@@ -6,21 +6,35 @@ import SwiftUI
 public struct AgentWorkflowControlButton: View {
     let endpoint: AgentWorkflowEndpoint
     let pane: WorkspacePaneIdentity
+    private let openRun: ((AgentWorkflowNotificationTarget) -> Void)?
+    @Environment(\.agentWorkflowNavigation) private var navigation
     @Environment(\.scenePhase) private var scenePhase
     @State private var run: AgentWorkflowRunState?
     @State private var hostID: UUID?
+    @State private var loadedKey: String?
     @State private var changing = false
     @State private var unavailableReason: String?
     @State private var error: String?
     @State private var authorizationRun: AgentWorkflowRunState?
 
-    public init(endpoint: AgentWorkflowEndpoint, pane: WorkspacePaneIdentity) {
+    public init(endpoint: AgentWorkflowEndpoint, pane: WorkspacePaneIdentity, openRun: ((AgentWorkflowNotificationTarget) -> Void)? = nil) {
         self.endpoint = endpoint
         self.pane = pane
+        self.openRun = openRun
     }
 
     public var body: some View {
         Group {
+            if let run, let hostID {
+                WorkflowTerminalStatus(run: run, hostID: hostID, offline: !endpoint.isConnected) {
+                    let target = AgentWorkflowNotificationTarget(hostID: hostID, runID: run.summary.id, eventID: run.notification?.id ?? run.summary.id)
+                    if let openRun {
+                        openRun(target)
+                    } else {
+                        navigation?.open(target, route: endpoint.id)
+                    }
+                }
+            }
             if let run, !run.summary.status.isTerminal {
                 let paused = run.summary.status == .paused
                 let title = paused ? "Continue workflow" : "Pause workflow"
@@ -35,8 +49,12 @@ public struct AgentWorkflowControlButton: View {
             }
         }
         .task(id: "\(endpoint.id):\(pane.serverID):\(pane.paneID):\(scenePhase):\(endpoint.isConnected)") {
-            run = nil
-            hostID = nil
+            let key = "\(endpoint.id):\(pane.serverID):\(pane.paneID)"
+            if loadedKey != key {
+                run = nil
+                hostID = nil
+                loadedKey = key
+            }
             guard scenePhase == .active, endpoint.isSupported, endpoint.isConnected else { return }
             while !Task.isCancelled {
                 if !changing {
@@ -117,5 +135,65 @@ extension AgentWorkflowEndpoint {
             ? .pause(state.summary.id, expectedRevision: state.summary.revision)
             : .resume(state.summary.id, expectedRevision: state.summary.revision, roundLimit: nil)
         return try await request(operation, hostID: hostID).run
+    }
+}
+
+@MainActor
+private struct WorkflowTerminalStatus: View {
+    let run: AgentWorkflowRunState
+    let offline: Bool
+    let open: () -> Void
+    @AppStorage private var viewedCompletion: Bool
+
+    init(run: AgentWorkflowRunState, hostID: UUID, offline: Bool, open: @escaping () -> Void) {
+        self.run = run
+        self.offline = offline
+        self.open = open
+        self._viewedCompletion = AppStorage(wrappedValue: false, "workflow-viewed-\(hostID)-\(run.summary.id)")
+    }
+
+    private var symbol: Symbols {
+        switch run.summary.status {
+        case .completed: .checkmarkCircleFill
+        case .ended: .stopCircleFill
+        case .paused: .pause
+        case .running,
+             .finishing: .flowchart
+        }
+    }
+
+    var body: some View {
+        Button(action: open) {
+            Label {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(offline ? "Workflow · Offline" : "Workflow · \(run.progressTitle)")
+                        .font(.caption.weight(.medium))
+                    Text("\(run.summary.name) · \(run.progressDetail)")
+                        .font(.caption2).lineLimit(1)
+                }
+                .frame(maxWidth: 240, alignment: .leading)
+            } icon: { symbol.image }
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(run.summary.status == .completed && !viewedCompletion ? Color.green : Color.secondary)
+        .help("\(run.summary.name) · \(run.progressDetail)")
+        .accessibilityLabel("\(run.summary.name) · \(run.progressDetail)")
+        .accessibilityIdentifier("workflow-terminal-status")
+    }
+}
+
+public extension AgentWorkflowRunState {
+    var progressTitle: String {
+        if
+            !summary.status.isTerminal, summary.status != .paused,
+            nodes.contains(where: { [.uncertain, .awaitingAcceptance].contains($0.invocation?.status) }) {
+            return "Verifying"
+        }
+        return summary.status.title
+    }
+
+    var progressDetail: String {
+        let steps = nodes.filter { $0.invocation?.status == .running || $0.invocation?.status == .uncertain || $0.invocation?.status == .awaitingAcceptance }.map(\.name)
+        return ([progressTitle, "Round \(summary.round)/\(summary.roundLimit)"] + steps).joined(separator: " · ")
     }
 }

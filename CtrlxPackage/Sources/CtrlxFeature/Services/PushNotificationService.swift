@@ -81,6 +81,12 @@
         /// Deep link info from a tapped notification.
         public var pendingDeepLink: DeepLinkInfo?
         public var pendingDashboard = false
+        public var pendingWorkflow: WorkflowDeepLink?
+
+        public struct WorkflowDeepLink: Equatable {
+            public let target: AgentWorkflowNotificationTarget
+            public let pairID: String
+        }
 
         /// Information needed to deep link to a specific session
         public struct DeepLinkInfo: Equatable {
@@ -185,14 +191,24 @@
 
         func handleNotificationTap(userInfo: [AnyHashable: Any]) {
             if userInfo[DashboardNotificationClient.userInfoKey] as? Bool == true {
+                pendingWorkflow = nil
+                pendingDeepLink = nil
                 pendingDashboard = true
                 return
             }
 
-            if NotificationDelivery.isWorkflowCompletion(userInfo: userInfo) {
+            if NotificationDelivery.isWorkflow(userInfo: userInfo) {
                 pendingDeepLink = nil
+                pendingDashboard = false
+                pendingWorkflow = nil
+                if
+                    let pairID = userInfo["pairId"] as? String,
+                    let target = AgentWorkflowNotificationTarget(userInfo: userInfo) {
+                    pendingWorkflow = .init(target: target, pairID: pairID)
+                }
                 return
             }
+            pendingWorkflow = nil
             guard let hostId = userInfo["pairId"] as? String else { return }
             pendingDeepLink = DeepLinkInfo(paneId: userInfo["paneId"] as? String ?? "", agentID: AgentID(notificationUserInfo: userInfo), hostId: hostId)
         }

@@ -34,12 +34,11 @@ extension AppCoordinator {
             let gate = AgentWorkflowInputGate()
             try await setupAgentInteraction(hostID: hostID, paths: paths, gate: gate)
             let store = AgentWorkflowStore(
-                fileURL: paths.stateRoot.appendingPathComponent("Workflows/ledger.json"), hostID: hostID
-            ) { [weak self] run in
-                Task { @MainActor [weak self] in
-                    await self?.notifyWorkflowCompleted(run)
+                fileURL: paths.stateRoot.appendingPathComponent("Workflows/ledger.json"), hostID: hostID,
+                onNotificationPending: { [weak self] in
+                    Task { @MainActor [weak self] in await self?.flushWorkflowNotifications() }
                 }
-            }
+            )
             let original = try await store.snapshot()
             try await agentRuntimeCatalog?.seedBridges(original.bridgeEvidence ?? [])
             if let messages = agentMessages {
@@ -47,6 +46,13 @@ extension AppCoordinator {
             }
             try await store.recoverAttachmentStorage()
             agentWorkflowStore = store
+            let notifications = AgentWorkflowNotificationDelivery(store: store, destinations: { [weak self] in
+                await self?.workflowNotificationDestinations() ?? []
+            }, send: { [weak self] event, destination in
+                guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
+                try await submitWorkflowNotification(event, destination: destination)
+            })
+            agentWorkflowNotifications = notifications
             agentWorkflowAgentService = AgentWorkflowAgentService(store: store, inspect: { [weak self] instance in
                 guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
                 return try await inspectWorkflowInstance(instance, verifyNativeWriter: true)
@@ -126,7 +132,7 @@ extension AppCoordinator {
                 let snapshot = try await handleAgentModels(.init(workspacePane: instance.workspacePane, refresh: refresh), paneID: instance.paneID)
                 guard snapshot.runtimeID == instance.processRuntimeID else { throw AgentWorkflowError("The Agent restarted. Refresh the Agent list.") }
                 return snapshot
-            }, onFailure: { workflowLogger.error("\($0)") })
+            }, flushNotifications: { try await notifications.flush() }, onFailure: { workflowLogger.error("\($0)") })
             await agentWorkflowService?.startMonitoring()
             agentWorkflowEvents = AgentWorkflowEventRouter(store: store, runner: runner, catalog: agentRuntimeCatalog, inspect: { [weak self] instance in
                 guard let self else { throw AgentWorkflowError("The Host is shutting down.") }
@@ -185,6 +191,7 @@ extension AppCoordinator {
         agentWorkflowService = nil
         agentWorkflowAgentService = nil
         agentWorkflowStore = nil
+        agentWorkflowNotifications = nil
         tmuxService.workflowInputGate = nil
         controlClientManager.workflowInputGate = nil
     }
@@ -364,5 +371,28 @@ extension AppCoordinator {
             live.readiness = .unavailable
         }
         return live
+    }
+}
+
+extension AppCoordinator {
+    func flushWorkflowNotifications() async {
+        do { try await agentWorkflowNotifications?.flush() }
+        catch { workflowLogger.error("Workflow notification bookkeeping failed: \(error)") }
+    }
+
+    func workflowNotificationDestinations() -> [String] {
+        ["local"] + settings.pairedViewers.flatMap { ["push:\($0.id)", "live:\($0.id)"] }
+    }
+
+    func submitWorkflowNotification(_ event: AgentWorkflowNotification, destination: String) async throws {
+        if destination == "local" {
+            try await terminalNotificationService.submitWorkflowNotification(.init(
+                title: event.title, body: event.body, paneState: nil,
+                eventType: event.eventType, workflow: event.target
+            ))
+        } else {
+            guard let manager = connectedViewerManager else { throw AgentWorkflowError("The Relay connection is not ready.") }
+            try await manager.sendWorkflowNotification(event, destination: destination)
+        }
     }
 }

@@ -49,6 +49,16 @@ struct TerminalNotificationContentTests {
     }
 
     @Test
+    func workflowNotificationCarriesRunIdentityWithoutAnAgentTarget() {
+        let target = AgentWorkflowNotificationTarget(hostID: UUID(), runID: UUID(), eventID: UUID())
+        let presentation = AgentNotificationPresentation(title: "Workflow completed", body: "Review", paneState: nil, eventType: NotificationDelivery.workflowCompletionEventType, workflow: target)
+        let content = TerminalNotificationService.content(paneId: "system", notification: presentation, hostId: "office")
+        #expect(AgentWorkflowNotificationTarget(userInfo: content.userInfo) == target)
+        #expect(content.userInfo["hostId"] as? String == "office")
+        #expect(AgentID(notificationUserInfo: content.userInfo) == nil)
+    }
+
+    @Test
     func acceptanceLogRetainsEventStatusAndHostRouting() throws {
         let log = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-notification-\(UUID()).log")
         defer { try? FileManager.default.removeItem(at: log) }

@@ -1785,10 +1785,38 @@ completed** alert after recording successful completion. Turn completion alerts
 for workflow-owned input are quiet by default, including tool-only turns with
 no reply text. Questions, approvals, failures, and independent Agent turns
 still use their normal alerts. The preference is copied into each new run
-when it starts. Tapping a Workflow completion alert opens the app without an
-Agent destination and cancels any pending Agent navigation on iOS. Ordinary
-alerts without a stable Agent destination still show the session list and
-the navigation message.
+when it starts. Completion means the entire run, including any steps after
+loop approval. Automatic blocking pauses (receipt timeout, failure, round limit,
+expired authorization) create one **Workflow needs attention** alert per new
+blocking issue. A new error in a still-running task also alerts while the run is
+already paused; repeated checks of the same issue stay quiet. Manual Pause and
+End are silent; End is not successful completion.
+Both Workflow alerts and actionable questions/approvals can display in foreground
+iOS. Question attention keeps the question-mark icon; other Agent attention keeps
+the bell. Neither icon claims that a Workflow has completed.
+
+The Host atomically saves the latest notification intent with each run transition
+(schema 12); migration does not notify for historical completions. Submission
+results are recorded separately from run revisions. The Host retries unsuccessful
+destinations with bounded backoff, including after reconnect and restart. Mac
+Viewer live alerts and iOS APNs submissions are tracked independently; an offline
+Viewer does not make a live send successful just because the Host has a Relay
+connection. Already submitted destinations are skipped. macOS uses a stable event ID for the local
+notification request. A crash between an external send and its bookkeeping can
+still repeat an alert; this is not an exactly-once delivery guarantee. The run's
+**Notifications** section distinguishes pending/errors from submitted. A submitted
+Relay socket frame is not an APNs receipt or proof the user saw a banner. Existing
+Relay/APNs limitations below still apply; device permission and Focus also matter.
+
+New alerts carry the encrypted Host/run/event identity through both Viewer
+transports. Tapping opens that exact run on the authenticated paired Host;
+ordinary Agent navigation is cancelled on iOS. Older alerts without this target
+retain their generic behavior. Terminal toolbars keep the active or most recent
+run, show Running/Verifying/Paused/Completed/Ended independently of Agent bells,
+and open the run on click. An unviewed completion is highlighted until its run
+has been viewed on that device or a newer run takes its place. Ordinary alerts
+without a stable Agent destination still show the session list and navigation
+message.
 
 Codex and Claude Code `SessionStart` hooks initialize idle session state without
 emitting an alert, including startup, resume, clear and compact. The Host still
@@ -1895,7 +1923,7 @@ Paired iOS devices register with APNs on launch independently of automatic Host
 connection. `ContentView` observes token callbacks and seeds newly initialized
 connection managers. Each Relay client retains the latest token while offline
 and sends it after Viewer registration is acknowledged, including reconnection.
-Debug Mode in iOS Settings displays notification permission, token availability
+The Notifications section in iOS Settings displays notification permission, token availability
 and the most recent APNs registration failure, without exposing the device token.
 
 APNs bundle/topic, signing entitlements and environment must match the installed
