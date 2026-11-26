@@ -2969,6 +2969,14 @@ final public class TmuxService {
         return swaps
     }
 
+    /// Reads the current stable window order through the verified session route.
+    public func currentWindowOrder(in sessionName: String, expectedWorkspacePane: WorkspacePaneIdentity) async throws -> [String] {
+        let listed = try await runWorkspaceCommand([[
+            "list-windows", "-t", Self.sessionTarget(sessionName), "-F", "#{window_id}",
+        ]], target: Self.sessionTarget(sessionName), identity: expectedWorkspacePane, scope: .session)
+        return listed.stdoutString.split(separator: "\n").map(String.init)
+    }
+
     /// Reorders every window in one session using tmux's stable `#{window_id}`.
     /// Existing index slots are retained; no destination is overwritten.
     ///
@@ -2976,7 +2984,7 @@ final public class TmuxService {
     /// UI state that intentionally stores executable tmux targets can migrate
     /// before the refreshed pane snapshot is published.
     @discardableResult
-    public func moveWindows(in sessionName: String, to requestedIds: [String], expectedWorkspacePane: WorkspacePaneIdentity? = nil) async throws -> [String: String] {
+    public func moveWindows(in sessionName: String, to requestedIds: [String], expectedWorkspacePane: WorkspacePaneIdentity? = nil, expectedOrder: [String]? = nil) async throws -> [String: String] {
         guard windowReordersInFlight.insert(sessionName).inserted else {
             throw TmuxError.invalidWindowOrder(reason: "another reorder is already in progress")
         }
@@ -3000,6 +3008,10 @@ final public class TmuxService {
                 }
                 return WindowPosition(stableId: String(fields[0]), index: index)
             }
+
+        guard expectedOrder == nil || original.map(\.stableId) == expectedOrder else {
+            throw TmuxError.invalidWindowOrder(reason: "the window order changed while this move was being prepared")
+        }
 
         // Accept legacy `session:index` requests from an older viewer, but
         // normalize immediately so every actual swap is addressed by @id.

@@ -73,6 +73,12 @@ extension IOSPaneLinkedTabs {
         return mergingTopLevelOrder(reordered, into: current, stored: stored)
     }
 
+    func topLevelOrder(for order: [SessionTabID], stored: [IOSTopLevelTabID]) -> [IOSTopLevelTabID] {
+        let current = windows.map(IOSTopLevelTabID.init(window:)) + items.map(IOSTopLevelTabID.resource)
+        let byID = Dictionary(current.compactMap { tab in tab.sessionTabID.map { ($0, tab) } }, uniquingKeysWith: { first, _ in first })
+        return mergingTopLevelOrder(order.compactMap { byID[$0] }, into: current, stored: stored)
+    }
+
     private func mergingTopLevelOrder(_ order: [IOSTopLevelTabID], into current: [IOSTopLevelTabID], stored: [IOSTopLevelTabID]) -> [IOSTopLevelTabID] {
         var replacement = order.makeIterator()
         let members = Set(order)

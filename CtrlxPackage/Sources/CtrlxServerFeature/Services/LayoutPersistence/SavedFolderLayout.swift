@@ -27,6 +27,7 @@
         var tabOrder: [SavedTabRef]
         /// Order only: never recreates transient Host pages or devices.
         var linkedTabOrder: [PaneLinkedTabID]?
+        var ordersTabGroups: Bool?
         /// Tab-strip entries that were moved to the right split pane.
         var rightSide: [SavedTabRef]
         /// Active tab in the left pane (`nil` → file tree / terminal).
@@ -52,6 +53,7 @@
             browserTabs: [SavedBrowserTab] = [],
             tabOrder: [SavedTabRef] = [],
             linkedTabOrder: [PaneLinkedTabID]? = nil,
+            ordersTabGroups: Bool? = nil,
             rightSide: [SavedTabRef] = [],
             selectedLeft: SavedTabRef? = nil,
             selectedRight: SavedTabRef? = nil,
@@ -65,6 +67,7 @@
             self.browserTabs = browserTabs
             self.tabOrder = tabOrder
             self.linkedTabOrder = linkedTabOrder
+            self.ordersTabGroups = ordersTabGroups
             self.rightSide = rightSide
             self.selectedLeft = selectedLeft
             self.selectedRight = selectedRight

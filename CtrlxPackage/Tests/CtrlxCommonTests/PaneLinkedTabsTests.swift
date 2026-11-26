@@ -1,7 +1,37 @@
+import Foundation
 import Testing
 @testable import CtrlxCommon
 
 struct PaneLinkedTabsTests {
+    @Test("A shrinking manual group remains an anchor when it stays between unchanged rows")
+    func shrinkingGroupRemainsStableAnchor() {
+        let group = SessionTabGroup.manual(UUID())
+        let current: [SessionTabEntry<String>] = [.tab("A"), .group(group, ["X", "Y", "Z"]), .tab("B")]
+        let after: [SessionTabEntry<String>] = [.tab("A"), .group(group, ["Y", "Z"]), .group(.pane("P"), ["X"]), .tab("B")]
+        let anchor = SessionTabEntry.insertionAnchor(for: "X", from: current, to: after)
+        #expect(anchor?.row == .group(group) && anchor?.side == .after)
+    }
+
+    @Test("Restored groups can cross a terminal without changing their retained numeric slot")
+    func dissolvedGroupsWithEqualIndex() {
+        let current: [SessionTabEntry<String>] = [.group(.manual(UUID()), ["X", "Y"]), .tab("B"), .group(.pane("P"), ["S"]), .group(.pane("Q"), ["T"])]
+        let after: [SessionTabEntry<String>] = [.group(.pane("Q"), ["Y", "T"]), .group(.pane("P"), ["X", "S"]), .tab("B")]
+        #expect(SessionTabEntry.positionChanged(of: .group(.pane("P")), from: current, to: after))
+        let anchor = SessionTabEntry.insertionAnchor(for: "X", from: current, to: after)
+        #expect(anchor?.row == .tab("B") && anchor?.side == .before)
+    }
+
+    @Test("Dissolving the only row places a restored group on the corresponding side", arguments: [false, true])
+    func insertionWithoutRetainedRows(toEnd: Bool) {
+        let group = SessionTabGroup.manual(UUID())
+        let current: [SessionTabEntry<String>] = [.group(group, ["X", "Y"])]
+        let x = SessionTabEntry<String>.group(.pane("%1"), ["X"]), y = SessionTabEntry<String>.group(.pane("%2"), ["Y"])
+        let projected = toEnd ? [y, x] : [x, y]
+        let anchor = SessionTabEntry.insertionAnchor(for: "X", from: current, to: projected)
+        #expect(anchor?.row == .group(group))
+        #expect(anchor?.side == (toEnd ? .after : .before))
+    }
+
     private let sources = ["fileA": "%1", "webA": "%1", "simA": "%1", "webB": "%2"]
 
     @Test("Mixed types stay adjacent, source order follows terminals, unbound tabs remain last")
