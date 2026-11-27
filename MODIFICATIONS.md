@@ -7,6 +7,23 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.1.1 — Faster terminal and Agent workflows
+
+- Open a new terminal directly below the current terminal with `Command-T`,
+  preserving the active workspace and split context.
+- Fork an Agent in place with `Command-F`, including native Fork context for
+  Codex and Claude sessions. Probe Claude's login-shell defaults through a PTY
+  so interactive shells cannot stall the Fork.
+- Distinguish completed Workflows from Agents that need attention across Mac
+  and iOS indicators, notifications, and Codex Question delivery.
+- Merge the `bugfix` branch into `main`.
+- Validation: targeted cross-platform regression suites passed in serial mode,
+  including the 12 real Git/tmux Fork combinations and PTY-backed Claude login
+  shell probes. SwiftFormat passed for all 73 changed Swift files; CtrlX brand
+  and technical boundary checks and Git diff checks passed.
+- This release builds macOS only. The final artifact is produced by the formal
+  Developer ID signed and notarized release workflow.
+
 ## 3.1.0 — Rich Orbie replies and iOS selection scrolling
 
 - Render mixed Markdown, repository references, workspace images, Mermaid, and
