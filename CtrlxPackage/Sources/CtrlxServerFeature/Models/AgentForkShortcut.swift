@@ -1,8 +1,28 @@
+import CtrlxCommon
 import CtrlxNetworking
 import Foundation
 
 /// Quick Fork has no form: only its new tab name differs from the source setup.
 enum AgentForkShortcut {
+    struct Target: Sendable {
+        let source: AgentForkSource
+        let tabName: String
+        let hostID: String?
+        let inputState: ViewerWorkspaceInputState?
+    }
+
+    /// Scene menu actions can outlive the tab that registered them.
+    @MainActor
+    static func action(
+        resolve: @escaping @MainActor () -> Target?,
+        perform: @escaping @MainActor (Target, ForkAgentSession) -> Void
+    ) -> @MainActor () -> Void {
+        {
+            guard let target = resolve() else { return }
+            perform(target, request(source: target.source, tabName: target.tabName, date: Date()))
+        }
+    }
+
     static func request(source: AgentForkSource, tabName: String, date: Date, timeZone: TimeZone = .current) -> ForkAgentSession {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")

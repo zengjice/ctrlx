@@ -50,11 +50,11 @@ public struct MainView: View {
         return tmuxService.windows.first { $0.stableId == target.windowID }?.sessionName
     }
 
-    private func adoptCreatedWindow(hostID: String?, windowID: String) {
+    private func adoptCreatedWindow(hostID: String?, windowID: String, select: Bool = true) {
         guard
             let detachedWorkspace, coordinator.detachedWindows.workspaces[detachedWorkspace.id] != nil,
             let target = DetachedTerminalTarget(hostID: hostID, windowID: windowID) else { return }
-        coordinator.detachedWindows.merge(target, into: detachedWorkspace.id, session: terminalSession)
+        coordinator.detachedWindows.merge(target, into: detachedWorkspace.id, select: select, session: terminalSession)
     }
 
     private func selectDetachedWorkspace() {
@@ -3781,6 +3781,18 @@ public struct MainView: View {
     }
 
     private var forkShortcutAction: (@MainActor () -> Void)? {
+        guard forkShortcutTarget != nil else { return nil }
+        return AgentForkShortcut.action(resolve: { forkShortcutTarget }) { target, request in
+            isQuickForkPending = true
+            Task {
+                defer { isQuickForkPending = false }
+                do { try await createAgentFork(request, hostID: target.hostID, inputState: target.inputState, besideSource: true) }
+                catch { attachError = error.localizedDescription }
+            }
+        }
+    }
+
+    private var forkShortcutTarget: AgentForkShortcut.Target? {
         guard !isPresentingSessionPicker, pendingAgentFork == nil, !isCreatingAgentTab, !isQuickForkPending, let id = menuTerminalWindowID else { return nil }
         if !targetsRightPane {
             guard
@@ -3805,16 +3817,7 @@ public struct MainView: View {
             let pane = panes.first(where: { $0.paneId == source.paneID }) else { return nil }
         let name = windowTabLabel(windowName: pane.windowName, windowIndex: pane.windowIndex)
         let inputState = hostID.flatMap { coordinator.viewerConnectionManager?.connection(for: $0)?.relayClient.workspaceInputState }
-        return {
-            guard !isQuickForkPending else { return }
-            let request = AgentForkShortcut.request(source: source, tabName: name, date: Date())
-            isQuickForkPending = true
-            Task {
-                defer { isQuickForkPending = false }
-                do { try await createAgentFork(request, hostID: hostID, inputState: inputState, besideSource: true) }
-                catch { attachError = error.localizedDescription }
-            }
-        }
+        return .init(source: source, tabName: name, hostID: hostID, inputState: inputState)
     }
 
     private func focusRightTerminal(_ id: String) {
@@ -7911,7 +7914,8 @@ public struct MainView: View {
     }
 
     private func presentAgentFork(windowID: String, source: AgentForkSource, hostID: String?, besideSource: Bool) {
-        adoptCreatedWindow(hostID: hostID, windowID: windowID)
+        // A whole-window selection callback would replace the split's left source.
+        adoptCreatedWindow(hostID: hostID, windowID: windowID, select: !besideSource)
         guard
             selectedRemoteSession?.hostId == hostID,
             (selectedRemoteSession?.sessionName ?? currentLocalSessionName) == source.sessionName else { return }

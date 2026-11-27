@@ -167,6 +167,7 @@ final class DetachedTerminalWindows {
     func merge(
         _ target: DetachedTerminalTarget,
         into workspaceID: UUID,
+        select: Bool = true,
         session: (DetachedTerminalTarget) -> String?
     ) -> Bool {
         guard
@@ -180,7 +181,9 @@ final class DetachedTerminalWindows {
         if !destination.members.contains(target) {
             destination.members.append(target)
         }
-        destination.select(target)
+        if select {
+            destination.select(target)
+        }
         closeEmptyWorkspaces()
         return true
     }

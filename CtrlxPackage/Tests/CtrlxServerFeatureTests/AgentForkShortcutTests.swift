@@ -1,4 +1,5 @@
 import AppKit
+import CtrlxCommon
 import CtrlxNetworking
 import Foundation
 import SwiftUI
@@ -7,6 +8,72 @@ import Testing
 
 @MainActor
 struct AgentForkShortcutTests {
+    @Test("A retained quick Fork action resolves the current source and connection when invoked", arguments: [false, true], [false, true])
+    func actionResolvesCurrentTarget(changesHost: Bool, available: Bool) throws {
+        let oldSource = try #require(AgentForkSource(pane: .init(
+            paneId: "%1", sessionName: "old", tmuxWindowId: "@1", currentPath: "/old",
+            agentSession: .init(paneId: "%1", pluginID: "codex"), claudeSessionID: UUID().uuidString
+        )))
+        let source = try #require(AgentForkSource(pane: .init(
+            paneId: "%2", sessionName: "work", tmuxWindowId: "@2", currentPath: "/current",
+            agentSession: .init(paneId: "%2", pluginID: "codex"), claudeSessionID: UUID().uuidString
+        )))
+        var inputState = ViewerWorkspaceInputState()
+        inputState.update(.init(pairId: "current-pair", paneStates: [:]))
+        let latest = AgentForkShortcut.Target(
+            source: source, tabName: "Current", hostID: changesHost ? "current-host" : nil, inputState: changesHost ? inputState : nil
+        )
+        var current: AgentForkShortcut.Target? = .init(source: oldSource, tabName: "Old", hostID: nil, inputState: nil)
+        var resolved = 0
+        var launched: (AgentForkShortcut.Target, ForkAgentSession)?
+        let action = AgentForkShortcut.action(resolve: { resolved += 1
+            return current
+        }) { launched = ($0, $1) }
+        #expect(resolved == 0)
+
+        current = available ? latest : nil
+        action()
+
+        #expect(resolved == 1)
+        if available {
+            let (target, request) = try #require(launched)
+            #expect(target.source == source && request.source == source)
+            #expect(target.hostID == latest.hostID && target.inputState == latest.inputState)
+            #expect(request.windowName?.hasPrefix("Current-") == true)
+            #expect(request.inheritsSourceConfiguration == true)
+        } else {
+            #expect(launched == nil)
+        }
+    }
+
+    @Test("Quick Fork adopts its right terminal without reselecting the detached workspace", arguments: [nil, "host"] as [String?], [false, true])
+    func detachedForkPreservesSource(hostID: String?, sourceOnRight: Bool) throws {
+        let manager = DetachedTerminalWindows()
+        let earlier = try #require(DetachedTerminalTarget(hostID: hostID, windowID: "@1"))
+        let source = try #require(DetachedTerminalTarget(hostID: hostID, windowID: "@2"))
+        let fork = try #require(DetachedTerminalTarget(hostID: hostID, windowID: "@3"))
+        manager.reserve(earlier)
+        let workspace = try #require(manager.workspace(containing: earlier))
+        try #require(manager.merge(source, into: workspace.id, session: { _ in "work" }))
+        let tabs = workspace.tabs.tabs(hostID: hostID, session: "work")
+        if sourceOnRight {
+            tabs.rightSide.insert(.window(source.windowID))
+            tabs.selectedRight = .window(source.windowID)
+        }
+        let revision = workspace.selectionRevision
+
+        try #require(manager.merge(fork, into: workspace.id, select: false, session: { _ in "work" }))
+        tabs.showForkSplit(sourceWindowID: source.windowID, forkWindowID: fork.windowID)
+
+        #expect(manager.workspace(containing: fork) === workspace)
+        #expect(Set(workspace.members) == [earlier, source, fork])
+        #expect(workspace.selection == .window(source.windowID))
+        #expect(workspace.selectionRevision == revision)
+        #expect(!tabs.rightSide.contains(.window(source.windowID)))
+        #expect(tabs.selectedRight == .window(fork.windowID))
+        #expect(tabs.splitRatio == 0.5 && tabs.isRightPaneFocused)
+    }
+
     @Test("The native workbench renders source and Fork side by side at 1:1")
     func nativeSplitGeometry() async throws {
         _ = NSApplication.shared

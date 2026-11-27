@@ -1084,13 +1084,17 @@ versions, not an automatic-resume compatibility claim for other CLI versions.
 ### Fork a native Agent conversation (Mac/iOS)
 
 On Mac, **⌘F** performs **Fork in Place** without a form. It uses the focused
-eligible Agent pane (then the active pane), keeps its directory and Provider,
+eligible Agent pane (then the active pane). The source tab and connection are
+resolved when the shortcut is invoked, including after switching tabs or Hosts.
+It keeps the source directory and Provider,
 and preserves the verified executable, configuration root and supported startup
 options, including explicit model, effort and permission settings. It does not
 apply fresh-launch model defaults. The new tab is named
 `<source-tab>-yyyyMMdd-HHmmss-SSS` in the Mac's local time. The existing workbench
 split displays the source on the left and the new Fork on the right at 1:1, with
-keyboard focus in the Fork. Mac Viewers require `supportsAgentForkInheritance`;
+keyboard focus in the Fork. This also applies in a detached native window: the
+Fork joins that window without replacing the source selected on the left.
+Mac Viewers require `supportsAgentForkInheritance`;
 older Hosts keep the explicit Fork menu available. Unsupported source startup
 options fail before creation rather than silently switching configuration.
 
