@@ -18,6 +18,8 @@ struct MenuCommandsModifier: ViewModifier {
     let onSwitchSession: (@MainActor () -> Void)?
     let onToggleVoiceInput: (@MainActor () -> Void)?
     let allowsSessionNavigation: Bool
+    var onNewAgentNote: (@MainActor () -> Void)? = nil
+    var onShowAgentNotes: (@MainActor () -> Void)? = nil
 
     func body(content: Content) -> some View {
         content
@@ -34,7 +36,9 @@ struct MenuCommandsModifier: ViewModifier {
                 newTerminal: onNewTerminal,
                 fork: onFork,
                 switchSession: onSwitchSession,
-                toggleVoiceInput: onToggleVoiceInput
+                toggleVoiceInput: onToggleVoiceInput,
+                newAgentNote: onNewAgentNote,
+                showAgentNotes: onShowAgentNotes
             ))
     }
 }

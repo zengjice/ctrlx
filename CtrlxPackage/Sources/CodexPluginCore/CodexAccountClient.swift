@@ -20,7 +20,13 @@ struct CodexAccountReply: Sendable {
 extension CodexAccountClient: DependencyKey {
     static let liveValue = Self(read: { command, configRoot in
         #if os(macOS)
-            return try await CodexAccountProcess().read(command: command, configRoot: configRoot)
+            return try await CodexAppServerProcess().run(command: command, configRoot: configRoot) { server, input in
+                let account = try await server.request(2, method: "account/read", params: ["refreshToken": false], input: input)
+                let parsed = try JSONDecoder().decode(CodexAccountParser.AccountResponse.self, from: account)
+                let limits = parsed.account?.type == "chatgpt"
+                    ? try await server.request(3, method: "account/rateLimits/read", params: [:], input: input) : nil
+                return CodexAccountReply(account: account, limits: limits)
+            }
         #else
             throw CodexAccountError.unavailable
         #endif
@@ -41,12 +47,16 @@ enum CodexAccountError: Error, LocalizedError {
 }
 
 #if os(macOS)
-    /// A short-lived, read-only app-server session. No thread or turn is created.
-    private actor CodexAccountProcess {
+    /// A short-lived native configuration/account exchange; never creates a thread or turn.
+    actor CodexAppServerProcess {
         private var buffer = Data()
         private var iterator: AsyncThrowingStream<Data, Error>.Iterator?
 
-        func read(command: String, configRoot: String?) async throws -> CodexAccountReply {
+        func run<Output: Sendable>(
+            command: String,
+            configRoot: String?,
+            exchange: @escaping @Sendable (isolated CodexAppServerProcess, FileHandle) async throws -> Output
+        ) async throws -> Output {
             let process = Process()
             let input = Pipe()
             // A closed child stdin must throw EPIPE instead of terminating the Host.
@@ -104,11 +114,13 @@ enum CodexAccountError: Error, LocalizedError {
 
             @Dependency(\.continuousClock) var clock
             return try await withTaskCancellationHandler {
-                try await withThrowingTaskGroup(of: CodexAccountReply.self) { group in
+                try await withThrowingTaskGroup(of: Output.self) { group in
                     group.addTask {
-                        let result: Result<CodexAccountReply, Error>
-                        do { result = try .success(await self.exchange(input.fileHandleForWriting)) }
-                        catch { result = .failure(error) }
+                        let result: Result<Output, Error>
+                        do {
+                            try await self.initialize(input.fileHandleForWriting)
+                            result = try .success(await exchange(self, input.fileHandleForWriting))
+                        } catch { result = .failure(error) }
                         if process.isRunning {
                             kill(process.processIdentifier, SIGKILL)
                         }
@@ -136,14 +148,9 @@ enum CodexAccountError: Error, LocalizedError {
             }
         }
 
-        private func exchange(_ input: FileHandle) async throws -> CodexAccountReply {
+        private func initialize(_ input: FileHandle) async throws {
             _ = try await request(1, method: "initialize", params: ["clientInfo": ["name": "ctrlx_dashboard", "version": "1"]], input: input)
             try write(["method": "initialized"], to: input)
-            let account = try await request(2, method: "account/read", params: ["refreshToken": false], input: input)
-            let parsed = try JSONDecoder().decode(CodexAccountParser.AccountResponse.self, from: account)
-            let limits = parsed.account?.type == "chatgpt"
-                ? try await request(3, method: "account/rateLimits/read", params: [:], input: input) : nil
-            return CodexAccountReply(account: account, limits: limits)
         }
 
         private func write(_ value: [String: Any], to handle: FileHandle) throws {
@@ -152,7 +159,7 @@ enum CodexAccountError: Error, LocalizedError {
             try handle.write(contentsOf: bytes)
         }
 
-        private func request(_ id: Int, method: String, params: [String: Any], input: FileHandle) async throws -> Data {
+        func request(_ id: Int, method: String, params: [String: Any], input: FileHandle) async throws -> Data {
             try write(["id": id, "method": method, "params": params], to: input)
             while true {
                 while let newline = buffer.firstIndex(of: 10) {

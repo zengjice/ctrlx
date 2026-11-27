@@ -304,6 +304,60 @@ struct CodexPluginCoreTests {
         }
     }
 
+    @Test("Existing Providers are migrated on startup and model edits retain their native identity")
+    func persistentProviders() async throws {
+        let profile = CodexProviderProfile(id: "custom", name: "Custom", baseURL: "https://api.example.com/v1", model: "first", environmentKey: "CUSTOM_API_KEY")
+        let initial = CodexSettings(additionalConfigFolders: ["/fixture/account"], providers: [profile])
+        try await withDependencies {
+            $0[CodexProviderConfigurationClient.self].synchronize = { command, roots, profiles in
+                #expect(command == "codex")
+                #expect(roots == [CodexDistribution.codex.defaultHome().path, "/fixture/account"])
+                #expect(profiles.map(\.id) == [profile.id])
+                #expect(profiles.first?.model == "first")
+            }
+        } operation: {
+            let core = makeCore()
+            try await core.initialize(makeEnv(settings: JSONEncoder().encode(initial)), host: MockPluginHost())
+            var edited = initial
+            edited.providers[0].models = ["second", "third"]
+            try await withDependencies {
+                $0[CodexProviderConfigurationClient.self].synchronize = { _, _, profiles in
+                    #expect(profiles.map(\.id) == [profile.id])
+                    #expect(profiles.first?.models == ["second", "third"])
+                }
+            } operation: {
+                guard case .applied = try await core.applySettings(JSONEncoder().encode(edited)) else {
+                    Issue.record("Provider edits must synchronize native configuration")
+                    return
+                }
+            }
+            await core.shutdown()
+        }
+    }
+
+    @Test("Failed native Provider synchronization does not accept new settings")
+    func providerSynchronizationFailure() async throws {
+        let core = makeCore()
+        try await core.initialize(makeEnv(), host: MockPluginHost())
+        try await withDependencies {
+            $0[CodexProviderConfigurationClient.self].synchronize = { _, _, _ in
+                throw AgentProviderError("Fixture: configuration is read-only")
+            }
+        } operation: {
+            let profile = CodexProviderProfile(id: "custom", name: "Custom", baseURL: "https://api.example.com/v1", model: "first", environmentKey: "CUSTOM_API_KEY")
+            let settings = CodexSettings(commandPath: "/changed/codex", providers: [profile])
+            guard case let .error(field, message) = try await core.applySettings(JSONEncoder().encode(settings)) else {
+                Issue.record("A failed native write must be reported")
+                return
+            }
+            #expect(field == "providers")
+            #expect(message.contains("read-only"))
+            #expect(await core.providerOptions() == [CodexSettings.builtInProvider])
+            #expect(await core.commandForLaunch(projectPath: "/fixture")?.command == "codex")
+        }
+        await core.shutdown()
+    }
+
     @Test("Recovery rebuilds a custom Provider from the recorded identity and removes stale runtime overrides")
     func customProviderRecovery() async throws {
         let id = UUID().uuidString

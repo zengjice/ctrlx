@@ -49,6 +49,14 @@ public struct CodexProviderProfile: Codable, Sendable, Equatable, Identifiable {
     public var environmentKey: String
     public var reasoningEffort: CodexReasoningEffort?
 
+    var isValid: Bool {
+        CodexSettings.isValidProviderID(id)
+            && CodexSettings.isValidEnvironmentKey(environmentKey)
+            && !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && URL(string: baseURL).map { ($0.scheme == "http" || $0.scheme == "https") && $0.host != nil } == true
+            && AgentProviderModels.isValid(defaultModel: model, models: models)
+    }
+
     public init(
         id: String,
         name: String,

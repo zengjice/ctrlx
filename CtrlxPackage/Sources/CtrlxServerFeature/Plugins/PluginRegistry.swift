@@ -43,6 +43,7 @@
 
         /// Most recent failed-init error per id (surfaced in Settings; spec §11).
         public private(set) var failedInit: [String: String] = [:]
+        private var operationWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
 
         // MARK: - Initialization
 
@@ -180,9 +181,40 @@
 
         // MARK: - Enable / disable lifecycle
 
+        /// Settings commits and lifecycle changes share one FIFO per plugin.
+        /// The operation must use enableCore/disableCore rather than reentering this queue.
+        func withPluginOperation<Value: Sendable>(_ id: String, operation: @MainActor () async throws -> Value) async rethrows -> Value {
+            if operationWaiters[id] != nil {
+                await withCheckedContinuation { operationWaiters[id, default: []].append($0) }
+            } else {
+                operationWaiters[id] = []
+            }
+            defer {
+                if let next = operationWaiters[id]?.first {
+                    operationWaiters[id]?.removeFirst()
+                    next.resume()
+                } else {
+                    operationWaiters.removeValue(forKey: id)
+                }
+            }
+            return try await operation()
+        }
+
         /// Construct + `initialize` the core for `id`. On a thrown error the core is
         /// left disabled and the error recorded in `failedInit` (spec §11).
         public func enable(_ id: String, host: any PluginHost, env: PluginEnv) async {
+            await enable(id, host: host, makeEnv: { env })
+        }
+
+        /// Defer reading settings until preceding commits have finished or rolled back.
+        public func enable(_ id: String, host: any PluginHost, makeEnv: @MainActor () -> PluginEnv) async {
+            await withPluginOperation(id) {
+                await enableCore(id, host: host, env: makeEnv())
+            }
+        }
+
+        /// Called only while holding this plugin's operation queue.
+        func enableCore(_ id: String, host: any PluginHost, env: PluginEnv) async {
             guard active[id] == nil else { return }
             guard let core = makeCore(id) else {
                 failedInit[id] = "No core registered for plugin '\(id)'"
@@ -207,6 +239,11 @@
 
         /// `shutdown()` the core for `id` and remove it from `active`.
         public func disable(_ id: String) async {
+            await withPluginOperation(id) { await disableCore(id) }
+        }
+
+        /// Called only while holding this plugin's operation queue.
+        func disableCore(_ id: String) async {
             guard let core = active.removeValue(forKey: id) else { return }
             await core.shutdown()
         }

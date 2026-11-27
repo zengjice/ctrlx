@@ -623,6 +623,7 @@ final public class TmuxService {
     /// The loading indicator is only for the first snapshot after configuration,
     /// not for the permanent discovery poll (including a legitimately empty tmux).
     @ObservationIgnored private var hasCompletedInitialRefresh = false
+    public private(set) var hasAuthoritativePaneSnapshot = false
 
     /// Both the app-wide reconciler and agent plugins inspect the same process
     /// tree. Share one short-lived snapshot so coincident 5s/10s polls do not
@@ -659,6 +660,7 @@ final public class TmuxService {
         self.tmuxPath = tmuxPath
         self.socketPath = socketPath?.isEmpty == true ? nil : socketPath
         hasCompletedInitialRefresh = false
+        hasAuthoritativePaneSnapshot = false
         cachedAgentProcessSnapshot = nil
         agentProcessSnapshotTask?.cancel()
         agentProcessSnapshotTask = nil
@@ -714,6 +716,7 @@ final public class TmuxService {
         }
         let oldPanes = panes
         let oldLayoutPanes = layoutPanes
+        let hadAuthoritativeSnapshot = hasAuthoritativePaneSnapshot
         let questionIDsAtRefreshStart = codexQuestionIDs
 
         defer {
@@ -723,8 +726,10 @@ final public class TmuxService {
                 isRefreshing = false
             }
 
-            // Notify if panes changed (compare sets to ignore order)
-            if Set(panes) != Set(oldPanes) || layoutPanes != oldLayoutPanes, let handler = onPanesChanged {
+            // The first confirmed empty catalog must reach Viewers too.
+            if
+                Set(panes) != Set(oldPanes) || layoutPanes != oldLayoutPanes || hasAuthoritativePaneSnapshot != hadAuthoritativeSnapshot,
+                let handler = onPanesChanged {
                 Task {
                     await handler()
                 }
@@ -732,6 +737,7 @@ final public class TmuxService {
         }
 
         guard FileManager.default.isExecutableFile(atPath: tmuxPath) else {
+            hasAuthoritativePaneSnapshot = false
             if lastError != nil {
                 lastError = nil
             }
@@ -754,6 +760,7 @@ final public class TmuxService {
 
         switch await queryRefreshOutcome(attachedSessions: attachedSessions) {
         case let .assign(newPanes, routes):
+            hasAuthoritativePaneSnapshot = true
             if lastError != nil {
                 lastError = nil
             }
@@ -768,6 +775,7 @@ final public class TmuxService {
                 Task { await injectOverrideIntoEligibleShellPanes() }
             }
         case let .empty(reason):
+            hasAuthoritativePaneSnapshot = true
             if lastError != nil {
                 lastError = nil
             }

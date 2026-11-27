@@ -8,25 +8,27 @@
     @MainActor
     @Suite(.serialized)
     struct DirectorySessionFormTests {
-        @Test("Directory launches default to the official login even when Host agents arrive after the form appears", arguments: ["codex", "claude-code"], [false, true])
-        func defaultProvider(pluginID: String, agentsArriveLate: Bool) async throws {
+        @Test("Directory launches select the Host default even when Agent or Provider metadata arrives late", arguments: ["codex", "claude-code"], ["immediate", "agents-late", "providers-late"])
+        func defaultProvider(pluginID: String, metadata: String) async throws {
             let providerID = pluginID == "codex" ? "openai" : "anthropic"
             let agent = SessionLaunchAgent(
                 id: pluginID, name: pluginID,
                 providers: [.init(id: providerID, name: "Official login"), .init(id: "custom", name: "Custom")],
                 defaultProviderID: "custom"
             )
-            let fixture = Fixture(agents: agentsArriveLate ? [] : [agent])
+            let initialAgents: [SessionLaunchAgent] = metadata == "agents-late" ? []
+                : metadata == "providers-late" ? [.init(id: pluginID, name: pluginID)] : [agent]
+            let fixture = Fixture(agents: initialAgents)
             defer { fixture.window.close() }
             try await fixture.wait { fixture.state.appeared }
-            if agentsArriveLate {
+            if metadata != "immediate" {
                 fixture.state.agents = [agent]
             }
             _ = try await fixture.element("new-session-provider")
             try await fixture.submit()
             let request = try #require(fixture.state.requests.first)
             #expect(request.project?.pluginID == pluginID)
-            #expect(request.providerID == providerID)
+            #expect(request.providerID == "custom")
         }
 
         @Observable @MainActor

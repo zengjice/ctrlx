@@ -22,6 +22,13 @@ public struct WorkbenchKeyboardCommands: Commands {
                 .keyboardShortcut("f", modifiers: .command)
                 .disabled(actions?.fork == nil)
                 .help("Fork beside the source terminal with the same configuration")
+            Divider()
+            Button("New Agent Note") { actions?.newAgentNote?() }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+                .disabled(actions?.newAgentNote == nil)
+            Button("Show Agent Notes") { actions?.showAgentNotes?() }
+                .keyboardShortcut("n", modifiers: [.command, .option])
+                .disabled(actions?.showAgentNotes == nil)
         }
         CommandGroup(before: .windowList) {
             Button("Switch Session…") { actions?.switchSession?() }

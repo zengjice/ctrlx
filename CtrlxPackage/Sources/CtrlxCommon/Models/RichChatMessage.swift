@@ -13,8 +13,37 @@ public struct RichChatMessage: Codable, Equatable, Identifiable, Sendable {
     }
 
     public struct Reference: Codable, Equatable, Sendable {
+        public enum PreviewKind: String, Codable, Sendable {
+            case image
+            case html
+        }
+
         public let target: String
         public let path: String
+        public let previewKind: PreviewKind?
+
+        init(target: String, path: String) {
+            self.target = target
+            self.path = path
+            if target.removingPercentEncoding?.hasSuffix("/") == true {
+                self.previewKind = nil
+            } else {
+                switch (path as NSString).pathExtension.lowercased() {
+                case "png",
+                     "jpg",
+                     "jpeg",
+                     "gif",
+                     "heic",
+                     "webp",
+                     "tiff",
+                     "bmp",
+                     "svg": self.previewKind = .image
+                case "html",
+                     "htm": self.previewKind = .html
+                default: self.previewKind = nil
+                }
+            }
+        }
     }
 
     public let id: UUID

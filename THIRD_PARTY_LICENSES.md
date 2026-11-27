@@ -67,7 +67,10 @@ loaded locally, with no runtime CDN dependency.
 
 The browser bundle, stylesheet assets and full licenses are included in
 `CtrlxCommon/Resources/OrbieChat`. `upstream.json` records archive integrity and
-the bundled JavaScript SHA-256. Rebuild with `bash scripts/build-orbie-chat-assets.sh`.
+the bundled JavaScript SHA-256 and local document-adapter SHA-256. Rebuild with
+`bash scripts/build-orbie-chat-assets.sh`. The pinned Generative Frame source is
+bundled with the scoped `OrbieChat/document.js` adaptation to preserve full HTML
+document structure; it retains the upstream sandbox, transport and script runner.
 Markdown parsing, sanitization and diagrams reuse the artifact-preview libraries above.
 The runtime uses local opaque-origin frames, without the external hosted shim or CDNs.
 

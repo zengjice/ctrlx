@@ -50,7 +50,7 @@ public struct NewAgentTabConfiguration: Identifiable {
         if let unavailableReason {
             throw LaunchError(unavailableReason)
         }
-        guard agents.contains(where: { $0.id == agentID }) else {
+        guard let agent = agents.first(where: { $0.id == agentID }) else {
             throw LaunchError("This agent is no longer available on the selected Host.")
         }
         guard SessionDirectoryPath.isValid(directory) else {
@@ -60,7 +60,7 @@ public struct NewAgentTabConfiguration: Identifiable {
             sessionName: id.sessionName,
             workingDirectory: directory,
             pluginID: agentID,
-            providerID: providerID
+            providerID: agent.providerID(for: providerID)
         )
     }
 
@@ -212,14 +212,8 @@ private struct AgentTabLaunchCard: View {
                 Text(directory).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
             }
             if !agent.providers.isEmpty {
-                Picker("Provider", selection: $providerID) {
-                    ForEach(agent.providers) { provider in
-                        Text(provider.name).tag(Optional(provider.id))
-                    }
-                    Text(agent.defaultProviderLabel).tag(String?.none)
-                }
-                .pickerStyle(.menu)
-                .accessibilityIdentifier("new-agent-provider-\(agent.id)")
+                AgentLaunchProviderPicker(agent: agent, selection: $providerID)
+                    .accessibilityIdentifier("new-agent-provider-\(agent.id)")
             }
             if allowsDirectorySelection {
                 DisclosureGroup("Choose Directory…", isExpanded: $showsDirectories) {

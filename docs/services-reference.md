@@ -941,6 +941,17 @@ visibly rather than falling back to editing agent configuration files.
 registry entries, and `CtrlxPaths` defines the state layout. Per-agent settings
 are decoded by `ClaudeCodeSettings`, `CodexSettings`, or the sidecar's settings
 contract. The old `PluginService` / `CodexPluginInstaller` are not live services.
+Settings saves and plugin enable/disable operations share a per-plugin FIFO in
+the registry, covering file writes, live Core applies and Viewer publication.
+Startup and bundle installers build the environment inside that queue, after any
+preceding save has committed or rolled back. CLI installation adopts its command
+path by reading the latest committed settings inside the same queue and checking
+the expected previous command; Provider edits and unknown fields are preserved.
+A rejected apply restores the previous file (or removes
+a rejected first save) and returns its error to the form without publishing the
+candidate. App-side readers keep the last committed settings while apply is
+pending. A file-write failure never reaches the Core; other plugins can still
+save while one plugin is waiting for native configuration synchronization.
 
 External bundle installation/update lives in
 `CtrlxServerFeature/Distribution/`. Installing a CtrlX sidecar bundle and
@@ -976,12 +987,14 @@ panel does no directory I/O. Cards capture their Host/session when opened;
 editing a path never expands it using the Viewer's home.
 
 Creation forms (New Agent, Start in Directory/worktree, workflow Agent creation
-and Fork) initially select **OpenAI (official login)** for Codex and
-**Anthropic (official login)** for Claude Code when offered by the Host. The
-CLI/default-configuration choice remains available after the named Providers.
-Explicit CLI/custom choices are passed through unchanged; other agents and older
-Hosts without the corresponding official option retain their existing defaults.
-This changes form drafts, not the Host's saved Provider settings.
+and new Orbiters) put the Host's configured default Provider first and select it
+initially. It appears once under its own name, without a second `Default: …`
+entry. The other Providers retain their order, and explicit selections remain
+unchanged. If no valid default is advertised, Codex and Claude Code retain their
+official-login preference and a separate **Current CLI configuration** choice.
+Selected defaults are sent using their actual Provider ID, including when metadata
+arrives after the form opens. This does not change the Host's saved settings.
+Fork keeps its separate current-CLI choice and source/target Provider semantics.
 
 Starting a card creates a **window/tab in the existing tmux session**, not a
 new session or split pane. `TmuxWindowCreation` shares Host-side
@@ -1168,6 +1181,11 @@ overrides are applied to the Agent invocation after login startup files, scoped
 to that invocation and never passed to the parent shell through tmux `-e`; the
 default Claude root explicitly unsets `CLAUDE_CONFIG_DIR`. After the Agent exits,
 ordinary launches retain the shell's normal configuration root.
+Codex custom Provider definitions (ID, name, endpoint, environment-key name and
+Responses/auth flags) are additionally synchronized to native `config.toml` through
+Codex's configuration API, so a later bare `codex resume` can resolve the saved ID.
+Credentials and launch model/default selections remain invocation-scoped. A manual
+resume must provide the environment key and use the original configuration root.
 Fork explicitly starts the same Host login shell used to validate its command,
 independently of Codex telemetry or the tmux session's custom shell defaults.
 POSIX-style login shells (including zsh and bash) are supported; unsupported

@@ -5,7 +5,7 @@ import Testing
 
 @MainActor
 struct NewAgentTabTests {
-    @Test("Agent cards start with their official login while an explicit CLI or custom choice is preserved", arguments: ["codex", "claude-code"])
+    @Test("Agent cards select the configured default while explicit choices are preserved", arguments: ["codex", "claude-code"])
     func initialProvider(pluginID: String) throws {
         let providerID = pluginID == "codex" ? "openai" : "anthropic"
         let agent = SessionLaunchAgent(
@@ -14,10 +14,35 @@ struct NewAgentTabTests {
             defaultProviderID: "custom"
         )
         let config = configuration(agents: [agent])
-        #expect(agent.initialProviderID == providerID)
-        #expect(try config.request(agentID: agent.id, directory: "/repo", providerID: agent.initialProviderID).providerID == providerID)
-        #expect(try config.request(agentID: agent.id, directory: "/repo", providerID: nil).providerID == nil)
+        #expect(agent.initialProviderID == "custom")
+        #expect(agent.orderedProviders.map(\.id) == ["custom", providerID])
+        #expect(try config.request(agentID: agent.id, directory: "/repo", providerID: agent.initialProviderID).providerID == "custom")
+        #expect(try config.request(agentID: agent.id, directory: "/repo", providerID: nil).providerID == "custom")
+        #expect(try config.request(agentID: agent.id, directory: "/repo", providerID: providerID).providerID == providerID)
         #expect(try config.request(agentID: agent.id, directory: "/repo", providerID: "custom").providerID == "custom")
+    }
+
+    @Test("The default appears once at the front and other Providers keep their order")
+    func providerOrder() {
+        let providers: [AgentProviderOption] = [
+            .init(id: "openai", name: "OpenAI"), .init(id: "ark", name: "Ark"), .init(id: "plan", name: "Agent Plan"),
+        ]
+        let agent = SessionLaunchAgent(id: "codex", name: "Codex", providers: providers, defaultProviderID: "plan")
+        #expect(agent.orderedProviders.map(\.id) == ["plan", "openai", "ark"])
+        #expect(agent.orderedProviders.map(\.name) == ["Agent Plan", "OpenAI", "Ark"])
+        #expect(agent.orderedProviders.count == providers.count)
+        #expect(agent.providers == providers)
+        #expect(agent.providerID(for: "ark") == "ark")
+    }
+
+    @Test("Missing or stale default metadata preserves official-login and CLI choices", arguments: ["codex", "claude-code"], [nil, "removed"] as [String?])
+    func providerFallback(pluginID: String, defaultID: String?) {
+        let official = pluginID == "codex" ? "openai" : "anthropic"
+        let agent = SessionLaunchAgent(id: pluginID, name: pluginID, providers: [.init(id: "custom", name: "Custom"), .init(id: official, name: "Official")], defaultProviderID: defaultID)
+        #expect(agent.defaultProvider == nil)
+        #expect(agent.orderedProviders == agent.providers)
+        #expect(agent.initialProviderID == official)
+        #expect(agent.providerID(for: nil) == nil)
     }
 
     private func configuration(host: String? = nil, agents: [SessionLaunchAgent], reason: String? = nil) -> NewAgentTabConfiguration {

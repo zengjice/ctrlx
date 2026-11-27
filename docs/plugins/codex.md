@@ -217,6 +217,18 @@ written to recovery snapshots.
   Ctrl-C or Agent exit. Workspace recovery uses the same per-pane payload path.
   Provider overrides require zsh, bash, sh, dash or ksh; other login shells fail
   explicitly.
+- Native `codex resume <ID>` also needs the saved Provider ID in `config.toml`.
+  On plugin startup and Provider settings saves, CtrlX synchronizes the
+  non-secret `model_providers.<id>` definition through Codex's own
+  `config/batchWrite` API to the default and additional configuration roots.
+  Custom launches, Fork and recovery also ensure it exists in their target root.
+  Editing models or the display name keeps the same ID. This does not change
+  the native default Provider/model or persist the API key. Manual shell resume
+  still needs the Provider's environment variable and the original `CODEX_HOME`;
+  CtrlX launches continue to obtain credentials from Keychain. Deleting a CtrlX
+  Provider removes its Keychain credential but leaves the non-secret native
+  definition available for existing conversations. Remove it in Codex configuration
+  when those conversations no longer need it.
 - Forking preserves the source conversation's `CODEX_HOME`; only the copied
   conversation's Provider overrides change. This allows an official-login
   conversation to fork into a custom Provider (and the reverse) without moving

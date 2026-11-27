@@ -3,9 +3,28 @@
   const root = document.getElementById("messages");
   const latest = document.getElementById("latest");
   const rows = /* @__PURE__ */ new Map(), images = /* @__PURE__ */ new Map(), waitingImages = new Map();
+  const htmlFiles = new Map();
+  const imagePaths = new Map();
   let imageRequestsScheduled = false;
   let dark = false, follow = true, serial = 0, lastHeight = -1, lastAutoScrollY = null;
   const send = (payload) => document.dispatchEvent(new CustomEvent("orbie-native", { detail: JSON.stringify(payload) }));
+  let mermaidLoading, completeMermaid;
+  function loadMermaid() {
+    if (window.mermaid) return Promise.resolve();
+    if (!mermaidLoading) {
+      mermaidLoading = new Promise((resolve, reject) => {
+        completeMermaid = error => {
+          completeMermaid = null;
+          if (error || !window.mermaid) {
+            mermaidLoading = null;
+            reject(new Error(error || 'The diagram renderer is unavailable.'));
+          } else resolve();
+        };
+      });
+      send({ kind: 'mermaid' });
+    }
+    return mermaidLoading;
+  }
   const node = (tag, cls, text) => {
     const el = document.createElement(tag);
     if (cls) el.className = cls;
@@ -22,6 +41,21 @@
   function toggleImage(image, row) {
     image.classList.toggle('expanded-image');
     row.element.classList.toggle('expanding', image.classList.contains('expanded-image'));
+  }
+  function imagePlaceholder(target, alt, reference) {
+    const image = node("img", "image-placeholder");
+    image.alt = alt;
+    image.dataset.imageKey = String(++serial);
+    image.dataset.imageReference = target;
+    if (reference !== undefined) image.dataset.repoReference = String(reference);
+    return image;
+  }
+  function resolveImagePath(row, target, key) {
+    return new Promise(resolve => {
+      imagePaths.set(key, resolve);
+      row.cleanup.push(() => { imagePaths.delete(key); resolve(null); });
+      send({ kind: 'imagePath', messageID: row.model.id, target, key });
+    });
   }
   function requestImages() {
     if (imageRequestsScheduled) return;
@@ -86,7 +120,7 @@
     } else card.append(pre);
     return { card, header, pre };
   }
-  function previewCard(source, language, row, kind) {
+  function previewCard(source, language, row, kind, isDocument = false) {
     const diagramIndex = kind === 'mermaid' ? row.diagramCount++ : 0;
     const { card, header, pre } = codeBlock(source, language, row);
     if (pre.parentElement !== card) {
@@ -140,7 +174,7 @@
       if (kind === "html") {
         widget = OrbieWidgets.createWidget({
           container: preview,
-          code: source,
+          code: OrbieWidgets.prepareDocument(source, isDocument),
           opaqueOrigin: true,
           csp: { cdnOrigins: [] },
           animate: false,
@@ -177,9 +211,12 @@
           raw.click();
           return;
         }
-        mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "default", htmlLabels:false, flowchart:{htmlLabels:false}, maxEdges: 500, maxTextSize: 65536, suppressErrorRendering:true, secure:['secure','securityLevel','startOnLoad','htmlLabels','flowchart','theme','maxEdges','maxTextSize','suppressErrorRendering'] });
-        mermaid.render("orbieDiagram" + ++serial, source).then((result) => {
-          if (card.isConnected && version === runVersion) {
+        loadMermaid().then(() => {
+          if (!card.isConnected || version !== runVersion) return;
+          mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "default", htmlLabels:false, flowchart:{htmlLabels:false}, maxEdges: 500, maxTextSize: 65536, suppressErrorRendering:true, secure:['secure','securityLevel','startOnLoad','htmlLabels','flowchart','theme','maxEdges','maxTextSize','suppressErrorRendering'] });
+          return mermaid.render("orbieDiagram" + ++serial, source);
+        }).then((result) => {
+          if (result && card.isConnected && version === runVersion) {
             const image=node('img', '', '');
             image.alt='Diagram';
             image.src=svgImageURL(sanitizeSVG(result.svg));
@@ -187,6 +224,7 @@
             preview.replaceChildren(image);
           }
         }).catch(() => {
+          if (!card.isConnected || version !== runVersion) return;
           status.textContent = "This diagram could not be rendered. Its source is available.";
           raw.click();
         });
@@ -232,6 +270,7 @@
     row.codes = [];
     row.diagramCount = 0;
     row.redrawDiagrams = [];
+    const version = row.renderVersion = (row.renderVersion || 0) + 1;
     const answer = row.model.answer;
     row.renderedAnswer = answer;
     row.body.replaceChildren();
@@ -287,12 +326,7 @@
         return token.text;
       },
       image(token) {
-        const key = ++serial;
-        const el = node("img", "image-placeholder");
-        el.alt = token.text;
-        el.dataset.imageKey = String(key);
-        el.dataset.imageReference = token.href;
-        return el.outerHTML;
+        return imagePlaceholder(token.href, token.text).outerHTML;
       }
     } });
     const fragment = DOMPurify.sanitize(parser.parse(answer), { RETURN_DOM_FRAGMENT: true, USE_PROFILES: { html: true }, FORBID_TAGS: ["script", "style", "iframe", "object", "embed", "form", "video", "audio", "source", "button", "textarea", "select", "base", "meta", "link"], FORBID_ATTR: ["style", "id", "name", "src", "srcset", "sizes"] });
@@ -315,6 +349,34 @@
         send({ kind: "url", messageID: row.model.id, target });
       };
     }
+    const shownFiles = new Set();
+    const insertions = new Map(), fileRequests = [];
+    let htmlCount = 0;
+    for (const link of fragment.querySelectorAll('a[data-reference]')) {
+      const index = Number(link.dataset.reference), reference = row.model.references[index];
+      if (!reference) continue;
+      const isImage = reference.previewKind === 'image', isHTML = reference.previewKind === 'html';
+      if ((!isImage && !isHTML) || shownFiles.has(reference.path)) continue;
+      shownFiles.add(reference.path);
+      let block = link;
+      while (block.parentNode !== fragment) block = block.parentNode;
+      const anchor = insertions.get(block) || block;
+      let preview;
+      if (isImage) {
+        preview = node('div', 'file-image');
+        preview.append(imagePlaceholder(reference.path, reference.path.split('/').pop(), index));
+      } else if (htmlCount++ >= 4) {
+        preview = node('p', 'issue', 'This reply previews at most four HTML files. Open the file link for more.');
+      } else {
+        const key = String(++serial);
+        preview = node('p', 'issue', 'Loading HTML preview…');
+        htmlFiles.set(key, { row, placeholder: preview });
+        row.cleanup.push(() => htmlFiles.delete(key));
+        fileRequests.push({ kind: 'html', messageID: row.model.id, reference: index, key });
+      }
+      anchor.after(preview);
+      insertions.set(block, preview);
+    }
     for (const el of fragment.querySelectorAll("[data-orbie-card]")) {
       const item = cards[Number(el.dataset.orbieCard)];
       if (!item) {
@@ -324,35 +386,60 @@
       const language = item.language.toLowerCase();
       el.replaceWith(item.complete && ["html", "htm", "mermaid"].includes(language) ? previewCard(item.source, language, row, language === "mermaid" ? "mermaid" : "html") : codeBlock(item.source, language, row).card);
     }
-    const targets = new Map();
+    const paths = new Map(), plans = [];
     for (const img of fragment.querySelectorAll("img")) {
       const key = img.dataset.imageKey, target = img.dataset.imageReference;
+      const index = img.dataset.repoReference === undefined ? undefined : Number(img.dataset.repoReference);
+      const reference = index === undefined ? undefined : row.model.references[index];
       img.removeAttribute("data-image-reference");
-      if (!key || !target) {
+      img.removeAttribute("data-repo-reference");
+      if (!key || !target || (index !== undefined && reference?.previewKind !== 'image')) {
         img.remove();
         continue;
       }
-      const payload = { kind: "image", messageID: row.model.id, target, key };
+      const payload = { kind: "image", messageID: row.model.id, key, ...(reference ? { reference: index } : { target }) };
       const encoder = new TextEncoder();
-      if (encoder.encode(target).length > 4096 || encoder.encode(JSON.stringify(payload)).length > 16384) {
+      if (!reference && (encoder.encode(target).length > 4096 || encoder.encode(JSON.stringify({...payload, kind: 'imagePath'})).length > 16384)) {
         img.replaceWith(node('small', 'issue', 'Image address exceeds the preview limit.'));
         continue;
       }
-      let group = targets.get(target);
-      if (!group) {
-        group = { images: [], issues: [], payload };
-        targets.set(target, group);
+      let path = reference ? Promise.resolve({ path: reference.path }) : paths.get(target);
+      if (!path) {
+        path = resolveImagePath(row, target, key);
+        paths.set(target, path);
+      }
+      plans.push(path.then(result => result && { ...result, image: img, payload, automatic: !!reference }));
+      img.onclick = () => toggleImage(img, row);
+    }
+    row.body.append(fragment);
+    Promise.all(plans).then(entries => {
+      if (row.renderVersion !== version || !row.element.isConnected) return;
+      const targets = new Map();
+      for (const entry of entries) {
+        if (!entry || !entry.image.isConnected) continue;
+        if (entry.error) {
+          entry.image.replaceWith(node('small', 'issue', entry.error));
+          continue;
+        }
+        if (!targets.has(entry.path)) targets.set(entry.path, []);
+        targets.get(entry.path).push(entry);
+      }
+      for (const positions of targets.values()) {
+        const explicit = positions.filter(entry => !entry.automatic);
+        const displayed = explicit.length ? explicit : positions.slice(0, 1);
+        for (const entry of positions) if (!displayed.includes(entry)) (entry.image.closest('.file-image') || entry.image).remove();
+        const key = positions[0].payload.key;
+        const origin = positions.find(entry => entry.automatic) || positions[0];
+        const group = { images: displayed.map(entry => entry.image), issues: [], payload: { ...origin.payload, key } };
         waitingImages.set(key, group);
         row.cleanup.push(() => {
           waitingImages.delete(key);
           if (images.delete(key)) requestImages();
         });
       }
-      group.images.push(img);
-      img.onclick = () => toggleImage(img, row);
-    }
-    row.body.append(fragment);
-    requestImages();
+      requestImages();
+    });
+    fileRequests.forEach(send);
   }
   function dispose(row) {
     row.observer.disconnect();
@@ -360,6 +447,7 @@
     row.element.remove();
   }
   window.orbieChat = {
+    mermaidReady: error => completeMermaid?.(error),
     activeWidgets: () => [...rows.values()].reduce((n, row) => n + row.widgets.size, 0),
     update(messages, title, isDark) {
       const oldFollow = follow;
@@ -433,6 +521,17 @@
     },
     code(messageID, index) {
       return rows.get(messageID)?.codes[index - 1];
+    },
+    html(key, source, error) {
+      const entry = htmlFiles.get(key);
+      if (!entry || !entry.placeholder.isConnected) return;
+      htmlFiles.delete(key);
+      entry.placeholder.replaceWith(error ? node('p', 'issue', error) : previewCard(source, 'html', entry.row, 'html', true));
+    },
+    imagePath(key, path, error) {
+      const resolve = imagePaths.get(key);
+      imagePaths.delete(key);
+      resolve?.({ path, error });
     },
     async image(key, base64, error, svg) {
       const group = images.get(key);

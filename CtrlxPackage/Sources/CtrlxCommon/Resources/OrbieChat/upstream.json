@@ -29,6 +29,7 @@
       "license": "MIT"
     }
   ],
-  "bundle_sha256": "a09899cf5193229a25e5f3a8ba3bf33c0808a224dd3b94797c3e216c7f711ea5",
+  "bundle_sha256": "6c275830653fe543367177b38b96e464adb624271e65a51c4631040df614d1af",
+  "document_adapter_sha256": "aed275763049c6f9f885b90b259b22d8903b30fc40f6744798879c848647a743",
   "build": "bash scripts/build-orbie-chat-assets.sh"
 }
