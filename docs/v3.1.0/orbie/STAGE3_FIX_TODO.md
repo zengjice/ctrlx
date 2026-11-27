@@ -291,3 +291,40 @@ Orbie／Orbiter 界面与 Workflow 编排分别调用共用 Agent 交互能力�
 - [x] `.build-local/orbie-repair-round4/regression.log`：234 项定向测试／19 个套件通过。新增覆盖浮窗滚动更新、重复位置共享重试、iframe／输入值保持、部分名额释放和等待目标失效；色彩空间警告为 0。隔离 WK 探针确认名额释放后自动读取一次并移除超限提示（`render-probe.json`）。
 - [x] 三个 native helper 顺序准备后，Mac Debug workspace 编译通过（`mac-build.log`，未签名编译检查）；包内渲染资源与源码一致，格式、JS 语法、品牌／技术边界、固定 vendor 及差异检查通过。
 - 未执行完整 Mac 窗口 E2E、iOS 构建或长期 CPU／内存采样；未提交、未安装、未发布。
+
+### 2026-11-27：文件引用自动预览与重复等待状态
+
+- [x] 移除浮窗重复的 working 状态卡片，保留顶部／会话状态和异常处理入口。
+- [x] repo 图片引用自动展示，保留原链接，复用现有配额、去重、解码和重试；repo HTML／HTM 文件经来源工作区校验后加载为隔离交互卡片，保留原有内联 HTML 和 Markdown 图片路径。见[实施记录第 14 节](RICH_CONTENT_RENDERING.md#14-文件引用预览与重复状态修复2026-11-27)。
+- [x] `.build-local/orbie-file-previews/regression.log`：165 项定向测试／14 个套件通过。覆盖图片／HTML 文件引用、编码与大小、隔离交互、稳定刷新、局部错误、旧回调失效，以及浅深色的四个原生浮窗状态场景；旧渲染、Files 与 Orbie 回归通过。
+- 隔离 WK 截图：[文件引用直接预览](design/repo-file-previews.png)。回复仅含 repo 文件引用，PNG 正常解码；HTML 读取实际文件，调整预算后 JS 显示 600 次访问／77 位付费用户，无渲染错误（`.build-local/orbie-file-previews/proof/result.json`）。
+- [x] 顺序准备三个 native helper 后，Mac Debug workspace 编译通过（同目录 `mac-build.log`，未签名编译检查），包内 JS／CSS 与源码一致。格式、JS 语法、品牌／技术边界、固定 vendor 和差异检查通过。
+- 未执行安装后的完整 App E2E 或 iOS 构建；未提交、未安装、未发布。
+
+#### 文件引用预览首轮审查修复
+
+- [x] #1：在原脚本运行前恢复 html／head／body 属性，覆盖文件、完整文档围栏和省略包装的围栏；保留普通片段与隔离边界。#2：按规范化工作区路径合并图片／HTML 别名，保留多个显式 Markdown 图片位置。#3：由原生登记预览类型，目录与无扩展名引用不再进入加载。#4：repo 图片用登记路径读取，保留字面反斜杠及百分号文件名，Markdown URL 校验不放宽。见[第 15 节](RICH_CONTENT_RENDERING.md#15-文件引用预览首轮审查修复2026-11-27)。
+- [x] `.build-local/orbie-file-previews-repair1/regression.log` 的 Server 114 项／11 套件与 `common-verified.log` 的 Common 57 项／3 套件通过，合计 171 项／14 套件；覆盖四项故障与原有正常路径。完整文档在三个入口均与直接 WKWebView 的数值 42、属性与样式对照一致。
+- [x] Mac Debug workspace 编译通过（`mac-build-verified.log`，未签名编译检查），包内资源一致且 vendor 未改；格式、JS 语法、品牌／技术边界及差异检查通过。链接空间不足已在按预览清理本 worktree Mac 编译缓存后恢复验证。
+- 未运行安装后的完整 App E2E 或 iOS 构建；未提交、未安装、未发布。
+
+#### 文件引用预览第二轮审查修复
+
+- [x] #5：完整文档分别写入实际 head／body，保留属性、head 元数据与脚本位置、body 直接子节点和主题；普通片段沿用原渲染器，文档替换复用 Generative Frame 重新建帧机制。仍使用原脚本执行器、诊断、握手与隔离边界，测量与观察改用当前正文。见[第 16 节](RICH_CONTENT_RENDERING.md#16-文件引用预览第二轮审查修复2026-11-27)。
+- [x] `.build-local/orbie-file-previews-repair2/regression.log` 的 Server 114 项／11 套件和 `common-final.log` 的 Common 59 项／3 套件通过，合计 173 项／14 套件。三个文档入口均与直接 WKWebView 对照为 42，元数据、脚本父节点、直接子选择器、属性与 onload 一致；正文替换、主题与片段对照回归通过。尺寸检查范围见实施记录。
+- [x] 固定源码构建的 vendor 可重复产生相同校验值，适配器哈希写入 upstream 元数据。Mac Debug workspace 编译通过（`mac-build.log`，未签名编译检查），包内 12 个聊天资源与源码一致；Swift 格式、JS 语法、品牌／技术边界及差异检查通过。
+- 未运行安装后的完整 Mac App E2E 或 iOS 构建；未提交、未安装、未发布。
+
+#### 文件引用预览第三轮审查修复
+
+- [x] #6：按文档边界、body 内容范围与外边距计算卡片高度，补偿滚动偏移，避免视口高度阻止回缩。观察正文与文档元素，文档尺寸回传使用合并定时任务，完成时立即更新上限滚动策略；片段渲染和 head／body 结构不变。见[第 17 节](RICH_CONTENT_RENDERING.md#17-文件引用预览第三轮审查修复2026-11-27)。
+- [x] `.build-local/orbie-file-previews-repair3/regression.log`：61 项定向测试／3 个套件通过。文件和完整文档围栏覆盖 24 点外边距、180／600 点正文，检查底部可见及 480 点上限滚动；同一 iframe 自动回缩至 228 点、仅改上外边距后增至 252 点。既有 padding、片段、文档结构和其他混合渲染回归通过。
+- [x] Mac Debug workspace 编译通过（`mac-build.log`，未签名编译检查），包内 12 个聊天资源与源码一致，资源重建可重复；格式、JS 语法、品牌／技术边界及差异检查通过。
+- 未运行完整 Mac App E2E 或 iOS 构建；未提交、未安装、未发布。
+
+### 2026-11-27：快捷键打开性能优化
+
+- [x] 通用聊天资源移至后台 actor 读取并按进程缓存，启动脚本缩至约 219 KB；约 5.5 MB 的 Mermaid 在图表进入可见区时才加载，多卡片共享一次请求。关闭／重载时取消旧加载并校验代次，保留原有页面销毁与隔离边界。见[第 18 节](RICH_CONTENT_RENDERING.md#18-快捷键打开性能优化2026-11-27)。
+- [x] 同配置合成短回复各测 5 次，第 2–5 次中位数：独立渲染器主线程启动 51.2→3.6 ms，正文可见 203.6→105.0 ms；完整浮窗重复打开正文可见 269.0→152.0 ms。记录位于 `.build-local/orbie-performance/`，不是用户 10 秒卡顿的复现。
+- [x] `regression.log` 的 86 项定向测试／7 套件通过；Mac Debug workspace 编译、包内 12 个资源一致性、Swift 格式、JS 语法、品牌／技术边界及差异检查通过。临时基准测试已移出正式测试目录。
+- 用户暂不方便同步复现，先保留本轮优化；真实 10 秒卡顿根因和安装后效果待验证。未进行完整 Mac App E2E、iOS 构建、安装或提交。

@@ -12,6 +12,7 @@ main { padding:20px 22px 24px; max-width:880px; margin:auto; } article { margin:
 .markdown-body table tr { background:transparent; border-color:var(--line); } .markdown-body table tr:nth-child(2n) { background:var(--soft); } .markdown-body th,.markdown-body td { border-color:var(--line); }
 .markdown-body code { font-family:ui-monospace,Menlo,monospace; background:var(--soft); } .markdown-body pre code { background:transparent; }
 .markdown-body img { max-width:100%; max-height:460px; object-fit:contain; border-radius:8px; background:var(--soft); cursor:zoom-in; } .image-placeholder { min-height:80px; }
+.file-image { margin:12px 0; }
 .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; } button { font:inherit; color:var(--muted); background:var(--soft); border:1px solid var(--line); border-radius:6px; padding:4px 9px; cursor:pointer; }
 button:hover { color:var(--text); } button:focus-visible,a:focus-visible,summary:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .activity { color:var(--muted); font-size:12px; margin:10px 0; } .activity p { margin:4px 0; white-space:pre-wrap; } .issue,.card-error { color:var(--muted); font-size:12px; white-space:pre-wrap; }

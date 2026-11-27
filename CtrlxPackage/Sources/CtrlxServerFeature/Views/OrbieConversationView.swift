@@ -43,7 +43,7 @@ struct OrbieConversationView: View {
         VStack(spacing: 0) {
             RichChatConversation(messages: presentedMessages, title: title, onAction: action, onReference: { id, path in
                 request = FileRequest(messageID: id, path: path)
-            }, imageLoader: loadImage, onHeight: onHeight)
+            }, imageLoader: loadImage, htmlLoader: loadHTML, onHeight: onHeight)
             if let issue {
                 Text(issue).font(.caption).foregroundStyle(.secondary).textSelection(.enabled).padding(8)
             }
@@ -192,16 +192,28 @@ struct OrbieConversationView: View {
         return (context, .local(paneID: current.paneID, tmux: coordinator.tmuxService, windows: coordinator.windowManager, expectedWorkspacePane: current.workspacePane), pane)
     }
 
-    private func loadImage(_ id: UUID, _ reference: String) async throws -> Data {
-        let relativePath = try TerminalArtifactPreview.workspacePath(for: reference)
+    private func loadImage(_ id: UUID, _ path: String) async throws -> Data {
         guard
-            let message = messages.first(where: { $0.id == id }),
-            TerminalArtifactPreview.isImage(path: relativePath) || (relativePath as NSString).pathExtension.lowercased() == "svg" else {
+            TerminalArtifactPreview.isImage(path: path) || (path as NSString).pathExtension.lowercased() == "svg" else {
             throw AgentWorkflowError("Only images inside this Agent’s workspace can be loaded.")
         }
+        return try await loadArtifact(id, path: path)
+    }
+
+    private func loadHTML(_ id: UUID, _ path: String) async throws -> Data {
+        guard ["html", "htm"].contains((path as NSString).pathExtension.lowercased()) else {
+            throw AgentWorkflowError("Only HTML files inside this Agent’s workspace can be loaded.")
+        }
+        return try await loadArtifact(id, path: path)
+    }
+
+    private func loadArtifact(_ id: UUID, path: String) async throws -> Data {
+        guard let message = messages.first(where: { $0.id == id }) else {
+            throw AgentWorkflowError("The source reply is no longer in this view.")
+        }
         let (context, source, pane) = try await source(for: message)
-        let destination = try await TerminalFileDestination.resolve(path: relativePath, context: context, source: source)
-        guard let path = destination.file else { throw AgentWorkflowError("The image link points to a folder.") }
-        return try await TerminalArtifactPreview(link: .init(path: relativePath, paneID: pane.paneId, hostID: nil), context: context, source: source, path: path).load()
+        let destination = try await TerminalFileDestination.resolve(path: path, context: context, source: source)
+        guard let file = destination.file else { throw AgentWorkflowError("The preview link points to a folder.") }
+        return try await TerminalArtifactPreview(link: .init(path: path, paneID: pane.paneId, hostID: nil), context: context, source: source, path: file).load()
     }
 }

@@ -151,7 +151,7 @@ public struct MacOrbiePanelView: View {
                         .accessibilityIdentifier("orbie-panel-conversation")
                         .frame(maxHeight: .infinity)
                 }
-                if status != .ready, status != .working || pending?.activity?.isEmpty != false {
+                if status != .ready, status != .working {
                     statusCard.padding(.horizontal, 22).padding(.vertical, 10)
                 }
                 if let issue = notice ?? serviceIssue {
