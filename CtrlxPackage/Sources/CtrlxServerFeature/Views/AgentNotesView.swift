@@ -50,10 +50,14 @@ struct AgentNotesView: View {
         !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var noteColor: Color {
+        AgentNotePalette.color(at: noteID.flatMap { id in notes.firstIndex { $0.id == id } } ?? 0)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Symbols.noteText.image.foregroundStyle(.secondary)
+                Symbols.noteText.image.foregroundStyle(editing ? noteColor : .secondary)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(editing ? (noteID == nil ? "New Note" : "Note") : "Agent Notes").font(.headline)
                     Text(title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -95,7 +99,14 @@ struct AgentNotesView: View {
                 cards
             }
         }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22))
+        .background {
+            RoundedRectangle(cornerRadius: 22).fill(.regularMaterial)
+                .overlay {
+                    if editing, store.issue == nil {
+                        RoundedRectangle(cornerRadius: 22).fill(noteColor.opacity(0.08))
+                    }
+                }
+        }
         .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(.primary.opacity(0.1)))
         .opacity(closing ? 0 : 1)
         .scaleEffect(closing && !reduceMotion ? 0.96 : 1, anchor: .bottom)
@@ -112,16 +123,21 @@ struct AgentNotesView: View {
 
     private var editor: some View {
         VStack(spacing: 14) {
-            AgentNoteTextEditor(text: $draft, selectAll: noteID != nil, onEscape: { _ = finish(animated: true) })
-                .id(editorID)
-                .background(.background.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .overlay(alignment: .topLeading) {
-                    if draft.isEmpty {
-                        Text("Paste or type a note…").foregroundStyle(.tertiary).padding(14).allowsHitTesting(false)
+            VStack(alignment: .leading, spacing: 8) {
+                RoundedRectangle(cornerRadius: 2).fill(noteColor.opacity(0.65))
+                    .frame(width: 32, height: 4).padding(.horizontal, 14).padding(.top, 14)
+                AgentNoteTextEditor(text: $draft, selectAll: noteID != nil, onEscape: { _ = finish(animated: true) })
+                    .id(editorID)
+                    .overlay(alignment: .topLeading) {
+                        if draft.isEmpty {
+                            Text("Paste or type a note…").foregroundStyle(.tertiary).padding(14).allowsHitTesting(false)
+                        }
                     }
-                }
-                .accessibilityIdentifier("agent-note-editor")
+                    .accessibilityIdentifier("agent-note-editor")
+            }
+            .background(AgentNotePaper(color: noteColor))
+            .clipShape(RoundedRectangle(cornerRadius: 13))
+            .overlay(RoundedRectangle(cornerRadius: 13).strokeBorder(noteColor.opacity(0.3), lineWidth: 0.5).allowsHitTesting(false))
             HStack {
                 if let noteID {
                     Button(role: .destructive) { delete(noteID) } label: { Label("Delete", symbol: .trash) }
@@ -292,23 +308,40 @@ struct AgentNoteCard: View {
     let note: AgentNote
     let colorIndex: Int
     var selected = false
-    private let colors: [Color] = [.pink, .orange, .yellow, .green, .mint, .cyan, .purple]
+
+    private var color: Color {
+        AgentNotePalette.color(at: colorIndex)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            RoundedRectangle(cornerRadius: 2).fill(colors[colorIndex % colors.count].opacity(0.65)).frame(width: 32, height: 4)
+            RoundedRectangle(cornerRadius: 2).fill(color.opacity(0.65)).frame(width: 32, height: 4)
             Text(note.preview).font(.system(size: 14)).foregroundStyle(.primary)
                 .lineLimit(9).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             Text(note.updatedAt, style: .date).font(.caption2).foregroundStyle(.secondary)
         }
         .padding(18)
         .frame(width: 184, height: 244)
-        .background(.background)
-        .background(colors[colorIndex % colors.count].opacity(0.2))
-        .overlay(colors[colorIndex % colors.count].opacity(0.12))
+        .background(AgentNotePaper(color: color))
         .clipShape(RoundedRectangle(cornerRadius: 13))
-        .overlay(RoundedRectangle(cornerRadius: 13).strokeBorder(selected ? colors[colorIndex % colors.count].opacity(0.7) : .primary.opacity(0.1), lineWidth: selected ? 1.5 : 0.5))
+        .overlay(RoundedRectangle(cornerRadius: 13).strokeBorder(selected ? color.opacity(0.7) : .primary.opacity(0.1), lineWidth: selected ? 1.5 : 0.5))
         .shadow(color: .black.opacity(selected ? 0.2 : 0.1), radius: selected ? 16 : 8, x: 0, y: 6)
+    }
+}
+
+private enum AgentNotePalette {
+    static let colors: [Color] = [.pink, .orange, .yellow, .green, .mint, .cyan, .purple]
+
+    static func color(at index: Int) -> Color {
+        colors[index % colors.count]
+    }
+}
+
+private struct AgentNotePaper: View {
+    let color: Color
+
+    var body: some View {
+        Rectangle().fill(.background).overlay(color.opacity(0.12))
     }
 }
 

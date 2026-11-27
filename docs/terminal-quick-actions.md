@@ -129,9 +129,11 @@ a later confirmed closure clears it without allowing an open editor to restore i
 A new note opens with the text editor focused. Paste plain text, then press
 **Escape** or **Command-Return** to save and close; an empty draft is skipped.
 Closing only the notes panel preserves saved notes. The list fans out colored
-cards, with a short opening animation that respects Reduce Motion. Use Left/Right
-to choose a card and Return to open it, or click it. Existing text starts selected
-for Command-C. The editor and card context menu also offer Copy and Delete.
+cards, with a short opening animation that respects Reduce Motion.
+The editor uses the selected card's colored paper and accent stripe; new notes
+start with the leading card's pink. Both surfaces adapt to light and dark mode.
+Use Left/Right to choose a card and Return to open it, or click it. Existing text
+starts selected for Command-C. The editor and card context menu also offer Copy and Delete.
 Large collections use pages to keep every card reachable. Command-W closes the
 notes panel before closing the underlying Agent tab.
 
