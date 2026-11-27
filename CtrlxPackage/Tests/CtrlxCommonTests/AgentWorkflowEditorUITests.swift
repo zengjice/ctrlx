@@ -933,8 +933,8 @@
             }
         }
 
-        @Test(arguments: [false, true])
-        func newAgentSheetUsesToolbarCloseAndPreventsDismissalDuringLaunch(success: Bool) async throws {
+        @Test(arguments: [false, true], [false, true])
+        func newAgentSheetUsesToolbarCloseAndPreventsDismissalDuringLaunch(success: Bool, isNew: Bool) async throws {
             _ = NSApplication.shared
             NSApp.accessibilitySetValue(true, forAttribute: NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface"))
             let definition = AgentWorkflowDefinition(name: "Launch Agent", hostID: UUID(), nodes: [], edges: [], entryNodeID: UUID())
@@ -971,7 +971,7 @@
                 }
                 throw AgentWorkflowError("Fixture launch failed")
             }
-            let host = NSHostingView(rootView: AgentWorkflowEditor(endpoint: endpoint, definition: definition, isNew: true, createAgent: { _ in creation }))
+            let host = NSHostingView(rootView: AgentWorkflowEditor(endpoint: endpoint, definition: definition, isNew: isNew, createAgent: { _ in creation }))
             let window = NSWindow(contentRect: .init(x: -10_000, y: -10_000, width: 700, height: 900), styleMask: .titled, backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             window.contentView = host
@@ -979,6 +979,12 @@
             defer { finish = true
                 window.close()
             }
+            try await wait { element("workflow-agents-toggle", in: window) != nil }
+            #expect(element("workflow-new-agent-tab", in: window) == nil)
+            try await click("workflow-agents-toggle", in: window)
+            let refresh = try #require(element("Refresh Agents", in: window, attributeName: "accessibilityLabel"))
+            let newAgent = try #require(element("workflow-new-agent-tab", in: window))
+            #expect(try frame(newAgent).maxY <= frame(refresh).minY)
             try await click("workflow-new-agent-tab", in: window)
             try await wait("New Agent must expose its toolbar close button") { element("workflow-new-agent-close", in: window) != nil }
             try await wait("The launch sheet must show two Agent cards at its initial height") { window.sheets.first?.frame.height ?? 0 >= 600 }

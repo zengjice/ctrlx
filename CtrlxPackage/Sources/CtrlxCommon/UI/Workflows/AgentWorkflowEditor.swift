@@ -129,6 +129,15 @@ struct AgentWorkflowEditor: View {
                         Button { Task { await refreshInstances() } } label: {
                             Label("Refresh Agents", symbol: .arrowClockwise)
                         }.disabled(refreshing)
+                        if createAgent != nil {
+                            Button("New Agent tab") { showingCreation = true }.disabled(createdAgent != nil || importing)
+                                .accessibilityIdentifier("workflow-new-agent-tab")
+                        }
+                        if createdAgent != nil {
+                            Text("Agent created. Complete any setup in its terminal, then refresh Agents.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Button("Choose another Agent") { createdAgent = nil }.disabled(importing)
+                        }
                         Text("Each selection binds a specific Agent and conversation. Multiple steps can use the same Agent.")
                             .font(.caption).foregroundStyle(.secondary)
                     } label: {
@@ -272,15 +281,6 @@ struct AgentWorkflowEditor: View {
                         .accessibilityIdentifier("workflow-add-content-step")
                     Text(draft.nodes.isEmpty ? "The first step receives the original task." : "Added after: " + draft.appendAfterSteps.map { stepTitle($0) }.joined(separator: ", ") + ". Receives their output; change upstream connections to branch.")
                         .font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                    if createAgent != nil {
-                        Button("New Agent tab") { showingCreation = true }.disabled(createdAgent != nil)
-                            .accessibilityIdentifier("workflow-new-agent-tab")
-                    }
-                    if createdAgent != nil {
-                        Text("Agent created. Complete any setup in its terminal, then refresh Agents.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Button("Choose another Agent") { createdAgent = nil }
-                    }
                 }
                 .disabled(importing)
                 if !draft.nodes.isEmpty {
