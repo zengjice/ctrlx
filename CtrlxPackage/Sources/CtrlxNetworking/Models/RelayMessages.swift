@@ -32,6 +32,9 @@ public struct SessionStateMessage: Codable, Sendable {
     public let pairId: String
     /// Absent on older Hosts. Presence enables persistent workspace references.
     public let workspaceIdentity: WorkspaceIdentityScope?
+    /// True only when paneStates matches a complete, successful tmux discovery.
+    /// Absent on older Hosts; absence cannot confirm terminal closure.
+    public let hasAuthoritativePaneSnapshot: Bool?
     public let supportsWorkspaceInputIdentity: Bool?
     public let supportsTerminalStreamIdentity: Bool?
     public let supportsGuardedTerminalTabClose: Bool?
@@ -140,6 +143,7 @@ public struct SessionStateMessage: Codable, Sendable {
         case supportsResourceAuthorization
         case pairId
         case workspaceIdentity
+        case hasAuthoritativePaneSnapshot
         case supportsWorkspaceInputIdentity
         case supportsTerminalStreamIdentity
         case supportsGuardedTerminalTabClose
@@ -245,6 +249,7 @@ public struct SessionStateMessage: Codable, Sendable {
         simulatorTabs: [RemoteSimulatorTab]? = nil,
         supportsPaneFiles: Bool? = nil, fileTabs: [HostFileTab]? = nil,
         workspaceIdentity: WorkspaceIdentityScope? = nil,
+        hasAuthoritativePaneSnapshot: Bool? = nil,
         supportsWorkspaceInputIdentity: Bool? = nil,
         supportsTerminalStreamIdentity: Bool? = nil,
         supportsGuardedTerminalTabClose: Bool? = nil,
@@ -259,6 +264,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsResourceAuthorization = supportsResourceAuthorization
         self.pairId = pairId
         self.workspaceIdentity = workspaceIdentity
+        self.hasAuthoritativePaneSnapshot = hasAuthoritativePaneSnapshot
         self.supportsWorkspaceInputIdentity = supportsWorkspaceInputIdentity
         self.supportsTerminalStreamIdentity = supportsTerminalStreamIdentity
         self.supportsGuardedTerminalTabClose = supportsGuardedTerminalTabClose
@@ -369,6 +375,7 @@ public struct SessionStateMessage: Codable, Sendable {
             simulatorTabs: legacySimulatorTabs,
             supportsPaneFiles: supportsPaneFiles, fileTabs: legacyFileTabs,
             workspaceIdentity: workspaceIdentity,
+            hasAuthoritativePaneSnapshot: hasAuthoritativePaneSnapshot,
             supportsWorkspaceInputIdentity: supportsWorkspaceInputIdentity,
             supportsTerminalStreamIdentity: supportsTerminalStreamIdentity,
             supportsGuardedTerminalTabClose: supportsGuardedTerminalTabClose,

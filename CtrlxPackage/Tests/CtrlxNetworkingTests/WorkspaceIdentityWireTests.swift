@@ -3,6 +3,22 @@ import Testing
 @testable import CtrlxNetworking
 
 struct WorkspaceIdentityWireTests {
+    @Test("Pane catalog confirmation is optional and survives pairing forwarding", arguments: [nil, false, true] as [Bool?])
+    func paneCatalogCompatibility(confirmed: Bool?) throws {
+        let message = SessionStateMessage(pairId: "", paneStates: [:], hasAuthoritativePaneSnapshot: confirmed).withPairId("paired")
+        let data = try JSONEncoder().encode(message)
+        let decoded = try JSONDecoder().decode(SessionStateMessage.self, from: data)
+        #expect(decoded.pairId == "paired")
+        #expect(decoded.hasAuthoritativePaneSnapshot == confirmed)
+        struct Legacy: Codable {
+            let pairId: String
+            let paneStates: [String: PaneState]
+            let homeDirectory: String
+        }
+        let legacy = try JSONDecoder().decode(Legacy.self, from: data)
+        #expect(try JSONDecoder().decode(SessionStateMessage.self, from: JSONEncoder().encode(legacy)).hasAuthoritativePaneSnapshot == nil)
+    }
+
     @Test("Creation replies preserve their original incarnation and remain compatible with old peers")
     func creationResponseCompatibility() throws {
         let scope = WorkspaceIdentityScope(hostID: UUID(), serverID: "123:456")

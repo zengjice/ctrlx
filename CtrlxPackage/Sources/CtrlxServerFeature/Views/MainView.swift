@@ -22,6 +22,7 @@ public struct MainView: View {
 
     private let detachedWorkspace: DetachedTerminalWorkspace?
     @State private var rejectedTabDropID: UUID?
+    @State private var agentNotesPanel = AgentNotesPanelController()
 
     public init() {
         self.detachedWorkspace = nil
@@ -1199,6 +1200,16 @@ public struct MainView: View {
                 }
             }
             .modifier(menuCommands)
+            .onChange(of: agentNoteTarget?.scope) { agentNotesPanel.dismiss() }
+            .onChange(of: Set(tmuxService.panes.compactMap { $0.workspaceIdentity?.paneID })) { _, live in
+                guard tmuxService.hasAuthoritativePaneSnapshot, tmuxService.panes.allSatisfy({ $0.workspaceIdentity != nil }) else { return }
+                coordinator.agentNotes.reconcile(hostID: nil, livePanes: live)
+            }
+            .onChange(of: tmuxService.hasAuthoritativePaneSnapshot, initial: true) { _, ready in
+                guard ready, tmuxService.panes.allSatisfy({ $0.workspaceIdentity != nil }) else { return }
+                coordinator.agentNotes.reconcile(hostID: nil, livePanes: Set(tmuxService.panes.compactMap { $0.workspaceIdentity?.paneID }))
+            }
+            .onDisappear { agentNotesPanel.dismiss() }
             .onChange(of: coordinator.pendingMenuBarSelection) {
                 applyPendingMenuBarSelection()
             }
@@ -1216,6 +1227,8 @@ public struct MainView: View {
         let switchSession: (@MainActor () -> Void)? = detachedWorkspace == nil && !isPresentingSessionPicker ? openSessionSwitcher : nil
         let voice: (@MainActor () -> Void)? = settings.showStatusBar && terminalQuickActions.active?.isAvailable == true && !isPresentingSessionPicker
             ? terminalQuickActions.toggleVoiceInput : nil
+        let newNote: (@MainActor () -> Void)? = agentNoteTarget == nil ? nil : { @MainActor in showAgentNotes(newNote: true) }
+        let showNotes: (@MainActor () -> Void)? = agentNoteTarget == nil ? nil : { @MainActor in showAgentNotes(newNote: false) }
         return MenuCommandsModifier(
             onOpenContentSearch: { handleOpenContentSearch() },
             tabCount: navigableTabCount,
@@ -1232,7 +1245,9 @@ public struct MainView: View {
             onFork: forkShortcutAction,
             onSwitchSession: switchSession,
             onToggleVoiceInput: voice,
-            allowsSessionNavigation: detachedWorkspace == nil && !isPresentingSessionPicker
+            allowsSessionNavigation: detachedWorkspace == nil && !isPresentingSessionPicker,
+            onNewAgentNote: newNote,
+            onShowAgentNotes: showNotes
         )
     }
 
@@ -2829,6 +2844,15 @@ public struct MainView: View {
     }
 
     @ToolbarContentBuilder private var toolbarContent: some ToolbarContent {
+        ToolbarItem(id: "ctrlx.toolbar.agent-notes", placement: .automatic) {
+            Button { showAgentNotes(newNote: false) } label: { Label("Notes", symbol: .noteText) }
+                .disabled(agentNoteTarget == nil)
+                .help("Agent Notes (⌘⌥N) · New Note (⌘⇧N)")
+                .accessibilityIdentifier("agent-notes-open")
+                .contextMenu {
+                    Button("New Note") { showAgentNotes(newNote: true) }.disabled(agentNoteTarget == nil)
+                }
+        }
         if detachedWorkspace == nil {
             ToolbarItem(id: "ctrlx.toolbar.orbie", placement: .automatic) {
                 Button { coordinator.presentOrbiePanel(openWindow: openWindow) } label: { Label("Orbie", symbol: .sparkles) }
@@ -3714,6 +3738,31 @@ public struct MainView: View {
         return TerminalContentMenuTarget.focused(
             hostID: hostID, sessionName: sessionName, windowID: windowID,
             panes: panes, endpoint: terminalQuickActions.active
+        )
+    }
+
+    private var agentNoteTarget: (scope: AgentNoteScope, title: String)? {
+        guard let target = terminalSplitTarget, let identity = target.workspacePane else { return nil }
+        let scope = AgentNoteScope(hostID: target.hostID, paneID: identity.paneID)
+        let pane: PaneState?
+        let title: String
+        if let hostID = target.hostID {
+            pane = coordinator.remoteSessionStore?.paneState(for: target.paneID, hostId: hostID)
+            title = coordinator.remoteSessionStore?.windows(for: hostID).first { $0.stableId == target.windowID }?.windowName ?? target.sessionName
+        } else {
+            pane = windowManager.paneStates[target.paneID]
+            title = tmuxService.windows.first { $0.stableId == target.windowID }?.windowName ?? target.sessionName
+        }
+        guard pane?.agentSession != nil || !coordinator.agentNotes.notes(for: scope).isEmpty else { return nil }
+        return (scope, title)
+    }
+
+    private func showAgentNotes(newNote: Bool) {
+        guard let target = agentNoteTarget else { return }
+        let scope = target.scope
+        agentNotesPanel.show(
+            scope: scope, title: target.title, store: coordinator.agentNotes, newNote: newNote,
+            isAvailable: coordinator.agentNotes.availability(for: scope)
         )
     }
 
@@ -4871,6 +4920,10 @@ public struct MainView: View {
     /// window. Lifted out so the body's modifier chain stays small enough
     /// for the type checker to handle.
     private func handleCloseCurrentTab() {
+        if agentNotesPanel.window?.isKeyWindow == true {
+            agentNotesPanel.dismiss()
+            return
+        }
         if isPresentingSessionPicker {
             showingSessionSwitcher = false
             showingNewLocalSession = false

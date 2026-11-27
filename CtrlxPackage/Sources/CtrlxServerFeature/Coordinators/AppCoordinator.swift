@@ -160,6 +160,7 @@
         @ObservationIgnored let agentModelReads = AgentModelReadRequests()
         @ObservationIgnored let agentModelDisplayCache = AgentModelDisplayCache()
         let agentModelPreferences: AgentModelPreferences
+        let agentNotes = AgentNotesStore()
 
         @ObservationIgnored var agentRuntimeCatalog: AgentRuntimeCatalog?
         @ObservationIgnored var agentRoleRecovery: AgentRoleRecovery?
@@ -4195,6 +4196,7 @@
                     editorManager: editorManager,
                     recovery: self?.workspaceRecovery
                 )
+                let authoritativePanes = await HostSessionStateSnapshot.isAuthoritative(paneStates, tmux: self?.tmuxService)
 
                 // The merged per-plugin project list (the cores own scanning now).
                 let agentProjects = await self?.currentAgentProjects() ?? []
@@ -4262,6 +4264,7 @@
                     simulatorTabs: await self?.agentSimulator.sharedSimulatorTabs.filter { $0.resourceSessionID == nil },
                     supportsPaneFiles: true, fileTabs: await self?.hostFileTabs.tabs.filter { $0.resourceSessionID == nil },
                     workspaceIdentity: workspaceIdentity,
+                    hasAuthoritativePaneSnapshot: authoritativePanes,
                     supportsWorkspaceInputIdentity: recoveryHostID != nil,
                     supportsTerminalStreamIdentity: true,
                     supportsGuardedTerminalTabClose: true,
@@ -4299,7 +4302,12 @@
                 self.settings.removePairing(id: pairId)
             }
 
-            Self.wirePaneRefresh(tmuxService: tmuxService, windowManager: windowManager, agentSimulator: agentSimulator, files: hostFileTabs, browser: agentBrowser, editors: editorSessionManager, updateResources: { [weak self] in self?.updateResourceSessions($0) }) { [weak connectionManager] in
+            Self.wirePaneRefresh(tmuxService: tmuxService, windowManager: windowManager, agentSimulator: agentSimulator, files: hostFileTabs, browser: agentBrowser, editors: editorSessionManager, updateResources: { [weak self] panes in
+                self?.updateResourceSessions(panes)
+                if self?.tmuxService.hasAuthoritativePaneSnapshot == true, panes.allSatisfy({ $0.workspaceIdentity != nil }) {
+                    self?.agentNotes.reconcile(hostID: nil, livePanes: Set(panes.compactMap { $0.workspaceIdentity?.paneID }))
+                }
+            }) { [weak connectionManager] in
                 await connectionManager?.pushSessionStateToAll()
             }
 
@@ -5068,6 +5076,7 @@
                     })
                     remoteEditorContentStore.retainOnly(activeSessionIds: activeIds, hostID: state.pairId)
                 }
+                Self.wireAgentNotes(on: manager, into: agentNotes)
 
                 // Materialize pre-baked notifications pushed by remote hosts over
                 // the live socket as local desktop notifications — the same alerts
@@ -5142,6 +5151,14 @@
                 logger.info("ViewerConnectionManager set up successfully")
             } catch {
                 logger.error("Failed to set up ViewerConnectionManager: \(error)")
+            }
+        }
+
+        static func wireAgentNotes(on manager: ViewerConnectionManager, into notes: AgentNotesStore) {
+            let receive = manager.onSessionState
+            manager.onSessionState = { [weak notes] state in
+                notes?.reconcile(state)
+                receive?(state)
             }
         }
 

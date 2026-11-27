@@ -102,6 +102,7 @@ public enum Symbols: String {
     case minus
     case minusCircleFill = "minus.circle.fill"
     case moonFill = "moon.fill"
+    case noteText = "note.text"
     case number
     case paintpalette
     case paperplaneFill = "paperplane.fill"
@@ -123,6 +124,7 @@ public enum Symbols: String {
     case rectangleSplit1x2Fill = "rectangle.split.1x2.fill"
     case rectangleSplit2x1 = "rectangle.split.2x1"
     case rectangleSplit2x1Fill = "rectangle.split.2x1.fill"
+    case rectangleStack = "rectangle.stack"
     case rectangleStackBadgeMinus = "rectangle.stack.badge.minus"
     case shield
     case sparkles

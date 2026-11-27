@@ -90,6 +90,8 @@ Git directory, then the home directory, without taking the other side's Files pa
 | Command-N | Open the local New Session picker |
 | Command-T | Create a shell below the focused terminal pane in the same tab; bottom : top starts at 1:5 |
 | Command-F | Fork in place with source settings; show source left and Fork right at 1:1 |
+| Command-Shift-N | Create a note for the focused Agent, ready to paste |
+| Command-Option-N | Open that Agent's note cards |
 | Command-P | Search local and paired-Host sessions, then switch with Return |
 | Command-R | Reload the Browser in the focused split; otherwise refresh sessions |
 | Command-L | Focus and select the active Browser's address |
@@ -111,6 +113,27 @@ Command-T inherits the focused terminal's directory and focuses the new bottom
 pane. It requires a visible terminal; remote Hosts must advertise split sizing.
 Rich-text and control-sequence copy remain menu actions without default shortcuts.
 Shortcuts are fixed; Settings does not provide a shortcut editor.
+
+### Mac Agent notes
+
+The **Notes** toolbar button and the two note shortcuts use the focused Agent
+pane, including in split and detached workbenches on Host and Viewer. Each pane
+has its own local collection, separated by paired Host; moving a pane keeps its
+notes. Notes stay on this Mac and are not sent to the Agent or synced to Viewers.
+Closing the Agent's terminal tab removes its notes. A remote disconnect does not.
+Remote cleanup requires a Host snapshot that explicitly confirms a complete
+terminal catalog. Older Hosts without that confirmation keep the notes. Closing
+the panel during a disconnect still saves its draft against the captured Agent;
+a later confirmed closure clears it without allowing an open editor to restore it.
+
+A new note opens with the text editor focused. Paste plain text, then press
+**Escape** or **Command-Return** to save and close; an empty draft is skipped.
+Closing only the notes panel preserves saved notes. The list fans out colored
+cards, with a short opening animation that respects Reduce Motion. Use Left/Right
+to choose a card and Return to open it, or click it. Existing text starts selected
+for Command-C. The editor and card context menu also offer Copy and Delete.
+Large collections use pages to keep every card reachable. Command-W closes the
+notes panel before closing the underlying Agent tab.
 
 Mac terminal and Git content areas also support two-finger trackpad swipes: move
 fingers left for the previous (left-hand) tab and right for the next (right-hand)

@@ -7,6 +7,13 @@
     /// to the existing discovery paths; a Viewer read must stay a read.
     @MainActor
     enum HostSessionStateSnapshot {
+        static func isAuthoritative(_ panes: [String: PaneState], tmux: TmuxService?) -> Bool {
+            guard let tmux, tmux.hasAuthoritativePaneSnapshot, panes.count == tmux.panes.count else { return false }
+            return tmux.panes.allSatisfy { pane in
+                pane.workspaceIdentity != nil && panes[pane.paneId]?.workspaceIdentity == pane.workspaceIdentity
+            }
+        }
+
         nonisolated static func workspaceIdentity(hostID: UUID?, panes: [String: PaneState]) -> WorkspaceIdentityScope? {
             guard let hostID else { return nil }
             let servers = Set(panes.values.compactMap { $0.workspaceIdentity?.serverID })

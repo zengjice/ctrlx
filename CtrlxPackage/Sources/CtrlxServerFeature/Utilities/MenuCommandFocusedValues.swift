@@ -15,6 +15,8 @@ public struct WorkbenchMenuActions {
     public var fork: (@MainActor () -> Void)?
     public var switchSession: (@MainActor () -> Void)?
     public var toggleVoiceInput: (@MainActor () -> Void)?
+    public var newAgentNote: (@MainActor () -> Void)? = nil
+    public var showAgentNotes: (@MainActor () -> Void)? = nil
 }
 
 public struct WorkbenchMenuActionsKey: FocusedValueKey {
