@@ -19,7 +19,11 @@ extension ClaudeCodePluginCore {
         {"type":"control_request","request_id":"ctrlx-fork-defaults","request":{"subtype":"get_settings"}}
 
         """.utf8)
-        let result = try await runner.runWithExactEnvironment("/usr/bin/env", arguments, ProcessInfo.processInfo.environment, 15, 2 * 1_024 * 1_024, input)
+        // Interactive login shells need a terminal even when invoked with `-c`.
+        // Without one, zsh can be stopped by job control and ignore the probe's
+        // timeout signal. `script` supplies a PTY while preserving startup files.
+        let probe = ["-q", "/dev/null", "/usr/bin/env"] + arguments
+        let result = try await runner.runWithExactEnvironment("/usr/bin/script", probe, ProcessInfo.processInfo.environment, 15, 2 * 1_024 * 1_024, input)
         guard result.isSuccess, !result.outputTruncated else {
             throw AgentForkError("Claude Code could not read the default model for Fork. Check the CLI configuration and retry.")
         }
