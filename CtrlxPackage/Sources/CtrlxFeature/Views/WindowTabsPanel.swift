@@ -192,31 +192,33 @@
                         editTarget(tab, layout: layout) { sharedRow(tab, windows: windows, resources: resources) }
                     case let .group(group, tabs):
                         if let first = tabs.first {
-                            DisclosureGroup(isExpanded: expansion(group)) {
-                                ForEach(tabs, id: \.self) { tab in
-                                    editTarget(tab, layout: layout, members: tabs) { sharedRow(tab, windows: windows, resources: resources) }
-                                }
-                            } label: {
+                            VStack(spacing: 0) {
                                 let title = group.paneID.map { linkedTabs.title(for: $0) } ?? tabTitle(first, windows: windows, resources: resources)
                                 let key = group.paneID.flatMap { linkedTabs.colorKey(for: $0) } ?? String(describing: group)
                                 let attention = AgentAttention(panes: tabs.compactMap { windows[$0] }.flatMap(\.panes))
-                                groupLabel(title, count: tabs.count, colorKey: key, attention: attention)
-                                    .onDrag {
-                                        guard
-                                            let sessionID = sharedSessionID,
-                                            tabs.allSatisfy(linkedTabs.isPrivateFile) || (isConnected && layout.supportsGroupReordering == true) else { return NSItemProvider() }
-                                        return IOSSessionTabDrag.provider(hostID: hostID, sessionID: sessionID, tab: first, group: tabs)
+                                IOSTabGroupHeader(
+                                    isExpanded: expansion(group), canUngroup: isConnected,
+                                    onUngroup: group.paneID == nil ? { edit(.ungroup(first)) } : nil
+                                ) {
+                                    groupLabel(title, count: tabs.count, colorKey: key, attention: attention)
+                                }
+                                .onDrag {
+                                    guard
+                                        let sessionID = sharedSessionID,
+                                        tabs.allSatisfy(linkedTabs.isPrivateFile) || (isConnected && layout.supportsGroupReordering == true) else { return NSItemProvider() }
+                                    return IOSSessionTabDrag.provider(hostID: hostID, sessionID: sessionID, tab: first, group: tabs)
+                                }
+                                .accessibilityHint("Drag to reorder this tab group.")
+                                .tabSeparator()
+                                .tabInsertionLine(dropInsertion?.line, at: entry.id)
+                                .modifier(dropTarget(at: entry.id, layout: layout, destination: .group(tabs)))
+
+                                if expandedGroup == group {
+                                    ForEach(tabs, id: \.self) { tab in
+                                        editTarget(tab, layout: layout, members: tabs) { sharedRow(tab, windows: windows, resources: resources) }
                                     }
-                                    .accessibilityHint("Drag to reorder this tab group.")
-                                    .frame(minHeight: 44).contentShape(.rect)
-                                    .tabSeparator()
-                                    .tabInsertionLine(dropInsertion?.line, at: entry.id)
-                                    .modifier(dropTarget(at: entry.id, layout: layout, destination: .group(tabs)))
-                                    .contextMenu {
-                                        if group.paneID == nil {
-                                            Button("Ungroup Tabs") { edit(.ungroup(first)) }.disabled(!isConnected)
-                                        }
-                                    }
+                                    .padding(.leading, 14)
+                                }
                             }
                             .padding(.horizontal, 14)
                         }

@@ -131,7 +131,11 @@ terminal, Files, Browser, and Simulator tabs. Drag onto a tab or group to combin
 them, or drop at the leading edge of a tab to reorder. Click or tap a group to
 show its tabs vertically. Drops on expanded members reorder within that group.
 Drag a group header to move the group as a unit, including automatic source-pane
-groups. Mac uses a vertical insertion line and iOS uses a horizontal line at the
+groups. In the iOS Tabs panel, tapping the entire group row (name, empty space,
+count, or chevron) expands or collapses it; long-pressing the row starts a group
+drag, just like dragging a single tab. Manual groups expose **Ungroup Tabs** in a
+separate tap-only **⋯** menu, without a competing long-press context menu.
+Mac uses a vertical insertion line and iOS uses a horizontal line at the
 destination; dropping a group does not merge it or change its members' ownership.
 Group drags stay within the current Mac tab strip. Single tabs keep their existing
 grouping and detached-window gestures. Shared group ordering requires an updated
