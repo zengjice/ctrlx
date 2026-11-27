@@ -8,6 +8,23 @@
   let imageRequestsScheduled = false;
   let dark = false, follow = true, serial = 0, lastHeight = -1, lastAutoScrollY = null;
   const send = (payload) => document.dispatchEvent(new CustomEvent("orbie-native", { detail: JSON.stringify(payload) }));
+  let mermaidLoading, completeMermaid;
+  function loadMermaid() {
+    if (window.mermaid) return Promise.resolve();
+    if (!mermaidLoading) {
+      mermaidLoading = new Promise((resolve, reject) => {
+        completeMermaid = error => {
+          completeMermaid = null;
+          if (error || !window.mermaid) {
+            mermaidLoading = null;
+            reject(new Error(error || 'The diagram renderer is unavailable.'));
+          } else resolve();
+        };
+      });
+      send({ kind: 'mermaid' });
+    }
+    return mermaidLoading;
+  }
   const node = (tag, cls, text) => {
     const el = document.createElement(tag);
     if (cls) el.className = cls;
@@ -194,9 +211,12 @@
           raw.click();
           return;
         }
-        mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "default", htmlLabels:false, flowchart:{htmlLabels:false}, maxEdges: 500, maxTextSize: 65536, suppressErrorRendering:true, secure:['secure','securityLevel','startOnLoad','htmlLabels','flowchart','theme','maxEdges','maxTextSize','suppressErrorRendering'] });
-        mermaid.render("orbieDiagram" + ++serial, source).then((result) => {
-          if (card.isConnected && version === runVersion) {
+        loadMermaid().then(() => {
+          if (!card.isConnected || version !== runVersion) return;
+          mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: dark ? "dark" : "default", htmlLabels:false, flowchart:{htmlLabels:false}, maxEdges: 500, maxTextSize: 65536, suppressErrorRendering:true, secure:['secure','securityLevel','startOnLoad','htmlLabels','flowchart','theme','maxEdges','maxTextSize','suppressErrorRendering'] });
+          return mermaid.render("orbieDiagram" + ++serial, source);
+        }).then((result) => {
+          if (result && card.isConnected && version === runVersion) {
             const image=node('img', '', '');
             image.alt='Diagram';
             image.src=svgImageURL(sanitizeSVG(result.svg));
@@ -204,6 +224,7 @@
             preview.replaceChildren(image);
           }
         }).catch(() => {
+          if (!card.isConnected || version !== runVersion) return;
           status.textContent = "This diagram could not be rendered. Its source is available.";
           raw.click();
         });
@@ -426,6 +447,7 @@
     row.element.remove();
   }
   window.orbieChat = {
+    mermaidReady: error => completeMermaid?.(error),
     activeWidgets: () => [...rows.values()].reduce((n, row) => n + row.widgets.size, 0),
     update(messages, title, isDark) {
       const oldFollow = follow;

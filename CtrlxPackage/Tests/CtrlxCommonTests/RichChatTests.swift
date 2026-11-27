@@ -7,6 +7,49 @@
     @MainActor @Suite(.serialized)
     struct RichChatTests {
         @Test
+        func diagramsLoadOnDemandOnceAndSurviveActivityAndThemeUpdates() async throws {
+            _ = NSApplication.shared
+            let renderer = RichChatRenderer(), id = UUID()
+            renderer.update(messages: [.init(id: id, text: "Fast plain reply", answer: "Plain reply without diagrams.")], title: "Orbie", dark: false)
+            renderer.start()
+            let web = try #require(renderer.webView), window = mount(web)
+            web.configuration.userContentController.addUserScript(WKUserScript(source: "window.diagramLoads=0;document.addEventListener('orbie-native',event=>{if(JSON.parse(event.detail).kind==='mermaid')diagramLoads++;});", injectionTime: .atDocumentStart, forMainFrameOnly: true))
+            defer { renderer.stop()
+                window.close()
+            }
+            try await wait(web, "document.body.textContent.includes('Plain reply without diagrams')")
+            #expect(try await bool(web, "!window.mermaid && diagramLoads===0"))
+            #expect(web.configuration.userContentController.userScripts.reduce(0) { $0 + $1.source.utf8.count } < 512 * 1_024)
+            let answer = "```mermaid\nflowchart LR\nA-->B\n```\n\n```mermaid\nsequenceDiagram\nA->>B: Hello\n```"
+            renderer.update(messages: [.init(id: id, text: "Fast plain reply", answer: answer)], title: "Orbie", dark: false)
+            try await wait(web, "document.querySelectorAll('.diagram img').length===2 && [...document.querySelectorAll('.diagram img')].every(image=>image.naturalWidth>0)")
+            #expect(try await bool(web, "diagramLoads===1 && !document.body.textContent.includes('could not be rendered')"))
+            _ = try await web.evaluateJavaScript("window.savedMermaid=window.mermaid;void 0;")
+            renderer.update(messages: [.init(id: id, text: "Fast plain reply", answer: answer, activity: ["Updated"])], title: "Orbie", dark: true)
+            try await wait(web, "document.documentElement.classList.contains('dark') && document.querySelectorAll('.diagram img').length===2")
+            #expect(try await bool(web, "window.mermaid===savedMermaid && diagramLoads===1"))
+        }
+
+        @Test
+        func stoppedBootstrapCannotReloadItsOldPage() async throws {
+            _ = NSApplication.shared
+            let renderer = RichChatRenderer()
+            renderer.update(messages: [.init(id: UUID(), text: "Old", answer: "Old reply")], title: "Orbie", dark: false)
+            renderer.start()
+            let old = try #require(renderer.webView)
+            renderer.stop()
+            renderer.update(messages: [.init(id: UUID(), text: "New", answer: "Current reply")], title: "Orbie", dark: false)
+            renderer.start()
+            let web = try #require(renderer.webView), window = mount(web)
+            defer { renderer.stop()
+                window.close()
+            }
+            try await wait(web, "document.body.textContent.includes('Current reply')")
+            #expect(web !== old && old.configuration.userContentController.userScripts.isEmpty)
+            #expect(try await bool(web, "!window.mermaid && !document.body.textContent.includes('Old reply')"))
+        }
+
+        @Test
         func referencesDecodeOnceAndRejectTraversal() {
             let text = "`<repo:docs/图%20片%2527.md>` <repo:.> (repo:src/file.swift) <repo:../secret> <repo:/etc/passwd> <repo:bad%ZZ> <repo:unfinished"
             let message = RichChatMessage(id: UUID(), text: "", answer: text)
