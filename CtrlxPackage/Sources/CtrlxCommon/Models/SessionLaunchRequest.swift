@@ -73,14 +73,21 @@ public struct SessionLaunchAgent: Identifiable, Sendable, Equatable {
         self.defaultProviderID = defaultProviderID
     }
 
-    public var defaultProviderLabel: String {
-        guard let defaultProviderID else { return "Current CLI configuration" }
-        let name = providers.first { $0.id == defaultProviderID }?.name ?? defaultProviderID
-        return "Default: \(name)"
+    public var defaultProvider: AgentProviderOption? {
+        providers.first { $0.id == defaultProviderID }
+    }
+
+    public var orderedProviders: [AgentProviderOption] {
+        guard let defaultProvider else { return providers }
+        return [defaultProvider] + providers.filter { $0.id != defaultProvider.id }
     }
 
     public var initialProviderID: String? {
-        AgentLaunchDefaults.providerID(pluginID: id, availableIDs: providers.map(\.id))
+        defaultProvider?.id ?? AgentLaunchDefaults.providerID(pluginID: id, availableIDs: providers.map(\.id))
+    }
+
+    public func providerID(for selection: String?) -> String? {
+        selection ?? defaultProvider?.id
     }
 }
 

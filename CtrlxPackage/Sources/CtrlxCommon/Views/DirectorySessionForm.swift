@@ -100,14 +100,8 @@ public struct DirectorySessionForm: View {
                 .accessibilityIdentifier("new-session-agent")
 
                 if let agent = selectedAgent, !agent.providers.isEmpty {
-                    Picker("Provider", selection: $selectedProviderID) {
-                        ForEach(agent.providers) { provider in
-                            Text(provider.name).tag(Optional(provider.id))
-                        }
-                        Text(agent.defaultProviderLabel).tag(String?.none)
-                    }
-                    .pickerStyle(.menu)
-                    .accessibilityIdentifier("new-session-provider")
+                    AgentLaunchProviderPicker(agent: agent, selection: $selectedProviderID)
+                        .accessibilityIdentifier("new-session-provider")
                 }
             }
 
@@ -189,14 +183,14 @@ public struct DirectorySessionForm: View {
     }
 
     private func start() {
-        guard canStart, let agentID else { return }
+        guard canStart, let agent = selectedAgent else { return }
         let worktree = usingWorktree ? try? worktreeState.request(for: worktreeQuery, name: worktreeName) : nil
         guard !usingWorktree || worktree != nil else { return }
         onStart(.directory(
             path: path,
-            pluginID: agentID,
+            pluginID: agent.id,
             worktree: worktree,
-            providerID: selectedProviderID
+            providerID: agent.providerID(for: selectedProviderID)
         ))
     }
 }

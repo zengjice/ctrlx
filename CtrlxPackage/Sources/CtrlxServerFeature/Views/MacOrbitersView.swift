@@ -169,7 +169,7 @@ struct MacOrbitersView: View {
             Button("Create Orbiter") {
                 guard let engine else { return }
                 let fork = creationSource == .fork
-                let provider = fork ? forkProvider : providerID
+                let provider = fork ? forkProvider : engine.providerID(for: providerID)
                 perform {
                     selectedID = try await service.create(pluginID: engine.id, providerID: provider, fork: fork, requestedSource: fork ? requestedForkSource : nil)
                 }
@@ -197,7 +197,8 @@ struct MacOrbitersView: View {
                     ForEach(engines) { Text($0.name).tag(Optional($0.id)) }
                 }.accessibilityIdentifier("orbiter-engine")
                 if !engine.providers.isEmpty {
-                    providerPicker(engine, selection: $providerID, defaultLabel: engine.defaultProviderLabel)
+                    AgentLaunchProviderPicker(agent: engine, selection: $providerID)
+                        .accessibilityIdentifier("orbiter-provider")
                 }
             }
         } else {

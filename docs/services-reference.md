@@ -976,12 +976,14 @@ panel does no directory I/O. Cards capture their Host/session when opened;
 editing a path never expands it using the Viewer's home.
 
 Creation forms (New Agent, Start in Directory/worktree, workflow Agent creation
-and Fork) initially select **OpenAI (official login)** for Codex and
-**Anthropic (official login)** for Claude Code when offered by the Host. The
-CLI/default-configuration choice remains available after the named Providers.
-Explicit CLI/custom choices are passed through unchanged; other agents and older
-Hosts without the corresponding official option retain their existing defaults.
-This changes form drafts, not the Host's saved Provider settings.
+and new Orbiters) put the Host's configured default Provider first and select it
+initially. It appears once under its own name, without a second `Default: …`
+entry. The other Providers retain their order, and explicit selections remain
+unchanged. If no valid default is advertised, Codex and Claude Code retain their
+official-login preference and a separate **Current CLI configuration** choice.
+Selected defaults are sent using their actual Provider ID, including when metadata
+arrives after the form opens. This does not change the Host's saved settings.
+Fork keeps its separate current-CLI choice and source/target Provider semantics.
 
 Starting a card creates a **window/tab in the existing tmux session**, not a
 new session or split pane. `TmuxWindowCreation` shares Host-side

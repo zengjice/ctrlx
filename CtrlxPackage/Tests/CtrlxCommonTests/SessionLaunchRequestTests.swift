@@ -105,10 +105,11 @@ struct SessionLaunchAgentTests {
         #expect(store.launchAgents(for: "office") == [
             .init(id: "codex", name: "Codex", providers: providers, defaultProviderID: "custom"),
         ])
-        #expect(store.launchAgents(for: "office").first?.defaultProviderLabel == "Default: Custom")
+        #expect(store.launchAgents(for: "office").first?.orderedProviders.map(\.id) == ["custom", "openai"])
+        #expect(store.launchAgents(for: "office").first?.initialProviderID == "custom")
 
         store.handlePluginPresentations(.init(pairId: "legacy", presentations: [presentation("codex", name: "Codex")]))
         #expect(store.launchAgents(for: "legacy").first?.providers.isEmpty == true)
-        #expect(store.launchAgents(for: "legacy").first?.defaultProviderLabel == "Current CLI configuration")
+        #expect(store.launchAgents(for: "legacy").first?.defaultProvider == nil)
     }
 }
