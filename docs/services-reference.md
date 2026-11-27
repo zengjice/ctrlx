@@ -946,8 +946,15 @@ installing its event bridge into an agent are distinct operations. See
 ### Start an agent window in an existing session (Mac and iOS)
 
 Mac session tab strips (local and Viewer) also expose **+ → New Agent…**.
-**⌘T** opens the same compact tab picker as **+**, with **New Agent…** selected.
-Use the arrow keys to change the selection, Return to open it, or Escape to dismiss.
+**⌘T** creates a plain shell below the focused terminal pane in the same tab.
+The new bottom pane initially occupies one sixth of the available height, leaving
+the original pane five sixths (rounded to terminal rows, excluding the divider).
+It inherits the source pane's current directory and takes keyboard focus. The
+shortcut targets the active workbench scene, including detached windows and the
+focused side of a workbench split. It is available while a terminal is selected;
+Mac Viewers also require the Host's `supportsPaneSplitSizing` capability.
+**+** opens the compact tab picker with **New Agent…** selected. Use the arrow
+keys to change its selection, Return to open it, or Escape to dismiss.
 The picker also retains New Terminal, resource tabs and the local Open Git action.
 iOS exposes **New Agent…** and **New Terminal** (formerly "New Window") directly
 in the terminal action row and in the title's window-switcher menu. Both use

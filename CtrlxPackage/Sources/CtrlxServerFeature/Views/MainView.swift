@@ -1203,10 +1203,6 @@ public struct MainView: View {
             }
     }
 
-    private func openNewTabMenu() {
-        showingNewTabMenu = true
-    }
-
     private func openSessionSwitcher() {
         showingSessionSwitcher = true
     }
@@ -1216,7 +1212,6 @@ public struct MainView: View {
     }
 
     private var menuCommands: MenuCommandsModifier {
-        let newTab: (@MainActor () -> Void)? = sidebarSessionSelection.wrappedValue != nil && !isPresentingSessionPicker ? openNewTabMenu : nil
         let switchSession: (@MainActor () -> Void)? = detachedWorkspace == nil && !isPresentingSessionPicker ? openSessionSwitcher : nil
         let voice: (@MainActor () -> Void)? = settings.showStatusBar && terminalQuickActions.active?.isAvailable == true && !isPresentingSessionPicker
             ? terminalQuickActions.toggleVoiceInput : nil
@@ -1232,7 +1227,7 @@ public struct MainView: View {
             onNewLocalSession: {
                 showingNewLocalSession = true
             },
-            onNewTab: newTab,
+            onNewTerminal: newTerminalShortcutAction,
             onFork: forkShortcutAction,
             onSwitchSession: switchSession,
             onToggleVoiceInput: voice,
@@ -3702,6 +3697,82 @@ public struct MainView: View {
             return currentSessionTabs?.selectedRight?.windowId
         }
         return selectedRemoteSession == nil ? selectedWindow?.stableId : selectedRemoteWindow?.stableId
+    }
+
+    private var terminalSplitTarget: TerminalContentMenuTarget? {
+        guard !isPresentingSessionPicker, let windowID = menuTerminalWindowID else { return nil }
+        if !targetsRightPane {
+            guard
+                currentSessionTabs?.selectedFileTabId == nil, currentSessionTabs?.selectedBrowserTabId == nil,
+                selectedRemoteSession != nil || (currentSessionTabs?.isGitSelected != true && !showsLocalFileTree(for: selectedWindow)) else { return nil }
+        }
+        let hostID = selectedRemoteSession?.hostId
+        let sessionName = selectedRemoteSession?.sessionName ?? currentLocalSession()?.sessionName ?? ""
+        let panes = hostID.map { coordinator.remoteSessionStore?.windows(for: $0).flatMap(\.panes) ?? [] }
+            ?? Array(windowManager.paneStates.values)
+        return TerminalContentMenuTarget.focused(
+            hostID: hostID, sessionName: sessionName, windowID: windowID,
+            panes: panes, endpoint: terminalQuickActions.active
+        )
+    }
+
+    private var newTerminalShortcutAction: (@MainActor () -> Void)? {
+        guard
+            canCreateTerminal, let target = terminalSplitTarget,
+            terminalMenuTargetIsCurrent(target, binding: terminalMenuBinding(for: target)) else { return nil }
+        if let hostID = target.hostID {
+            guard coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient.hostSupportsPaneSplitSizing == true else { return nil }
+        }
+        return { createTerminalBelow() }
+    }
+
+    private func createTerminalBelow() {
+        guard canCreateTerminal, let target = terminalSplitTarget else { return }
+        let binding = terminalMenuBinding(for: target)
+        guard terminalMenuTargetIsCurrent(target, binding: binding) else { return }
+        let selection = sidebarSessionSelection.wrappedValue
+        isCreatingTerminal = true
+        Task {
+            defer { isCreatingTerminal = false }
+            do {
+                let paneID: String
+                if let hostID = target.hostID {
+                    guard let client = coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient else { return }
+                    let response = try await client.sendCommand(
+                        SplitTmuxPane(direction: .vertical, sizeFraction: 1.0 / 6.0),
+                        paneId: target.paneID, inputBinding: binding
+                    ).get()
+                    guard let created = response.paneId else {
+                        throw ViewerRelayClientError.commandFailed("The Host did not return the new terminal.")
+                    }
+                    paneID = created
+                    await client.requestSessionState()
+                } else {
+                    paneID = try await tmuxService.splitPane(
+                        target.paneID, horizontal: false, sizeFraction: 1.0 / 6.0,
+                        expectedWorkspacePane: target.workspacePane
+                    )
+                    guard
+                        await PaneSurfaceRetry.localWindow(
+                            containing: paneID, serverID: target.workspacePane?.serverID,
+                            windows: { tmuxService.windows }, refresh: { _ = await tmuxService.refreshPanes() }
+                        ) != nil else {
+                        throw ViewerRelayClientError.commandFailed("Terminal created but not visible yet. Try selecting its tab again.")
+                    }
+                    windowManager.updatePaneStates(from: tmuxService.panes)
+                }
+                guard
+                    sidebarSessionSelection.wrappedValue == selection,
+                    let current = terminalSplitTarget, current.hostID == target.hostID,
+                    current.windowID == target.windowID,
+                    current.workspacePane?.isSameWindow(as: target.workspacePane) == true else { return }
+                terminalQuickActions.requestFocus(hostID: target.hostID, paneID: paneID)
+            } catch is CancellationError {
+                return
+            } catch {
+                attachError = "Failed to open terminal below: \(error.localizedDescription)"
+            }
+        }
     }
 
     private func showsLocalFileTree(for window: LocalTmuxWindow?) -> Bool {

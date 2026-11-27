@@ -897,9 +897,12 @@ public struct SplitTmuxPane: CommandSpec, Equatable {
 
     /// Direction to split
     public let direction: SplitDirection
+    /// Fraction of the target pane's usable dimension allocated to the new pane.
+    public let sizeFraction: Double?
 
-    public init(direction: SplitDirection) {
+    public init(direction: SplitDirection, sizeFraction: Double? = nil) {
         self.direction = direction
+        self.sizeFraction = sizeFraction
     }
 
     public var commandType: CommandType {

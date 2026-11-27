@@ -87,6 +87,7 @@ public struct SessionStateMessage: Codable, Sendable {
     public let supportsCodexQuestionAcknowledgement: Bool?
     /// Explicit fit preserves the Host window's pane topology and proportions.
     public let supportsTerminalFit: Bool?
+    public let supportsPaneSplitSizing: Bool?
     public let supportsWorkspaceClipboard: Bool?
     public let supportsBrowserAudio: Bool?
     public let supportsBrowserSharing: Bool?
@@ -167,6 +168,7 @@ public struct SessionStateMessage: Codable, Sendable {
         case supportsTerminalPaste
         case supportsCodexQuestionAcknowledgement
         case supportsTerminalFit
+        case supportsPaneSplitSizing
         case supportsWorkspaceClipboard
         case supportsBrowserAudio
         case supportsBrowserSharing
@@ -212,6 +214,7 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsTerminalPaste: Bool? = nil,
         supportsCodexQuestionAcknowledgement: Bool? = nil,
         supportsTerminalFit: Bool? = nil,
+        supportsPaneSplitSizing: Bool? = nil,
         supportsFileBrowsing: Bool? = nil,
         supportsFileDownloads: Bool? = nil,
         supportsFileUploads: Bool? = nil,
@@ -282,6 +285,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsTerminalPaste = supportsTerminalPaste
         self.supportsCodexQuestionAcknowledgement = supportsCodexQuestionAcknowledgement
         self.supportsTerminalFit = supportsTerminalFit
+        self.supportsPaneSplitSizing = supportsPaneSplitSizing
         self.supportsWorkspaceClipboard = supportsWorkspaceClipboard
         self.supportsBrowserAudio = supportsBrowserAudio
         self.supportsBrowserSharing = supportsBrowserSharing
@@ -332,6 +336,7 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsTerminalPaste: supportsTerminalPaste,
             supportsCodexQuestionAcknowledgement: supportsCodexQuestionAcknowledgement,
             supportsTerminalFit: supportsTerminalFit,
+            supportsPaneSplitSizing: supportsPaneSplitSizing,
             supportsFileBrowsing: supportsFileBrowsing,
             supportsFileDownloads: supportsFileDownloads,
             supportsFileUploads: supportsFileUploads,

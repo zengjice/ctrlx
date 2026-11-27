@@ -99,7 +99,7 @@ struct TabDragPreview: View {
     }
 }
 
-/// The leading "+" button and ⌘T share one picker in the active workbench.
+/// The leading "+" button opens the creation picker in the active workbench.
 struct NewTabMenuButton: View {
     let helpText: String
     let agentConfiguration: NewAgentTabConfiguration
@@ -123,7 +123,7 @@ struct NewTabMenuButton: View {
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .fixedSize()
-        .help("\(helpText) · ⌘T")
+        .help(helpText)
         .accessibilityLabel("New Tab")
         .popover(isPresented: $isPresented) {
             if let presentedAgents {

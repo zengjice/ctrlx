@@ -4151,6 +4151,7 @@
                     supportsTerminalPaste: true,
                     supportsCodexQuestionAcknowledgement: true,
                     supportsTerminalFit: true,
+                    supportsPaneSplitSizing: true,
                     supportsFileBrowsing: true,
                     supportsFileDownloads: true,
                     supportsFileUploads: true,
