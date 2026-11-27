@@ -1,3 +1,4 @@
+import CtrlxNetworking
 import Darwin
 import Foundation
 import Testing
@@ -8,6 +9,64 @@ import Testing
 struct CodexProcessSessionReaderTests {
     private let childID = "01a12863-79a4-7ef0-a50a-2493f7262468"
     private let parentID = "01a10b9d-5efd-72e1-850f-6b6374f064bd"
+
+    @Test("Native cancellation clears only its question without a success/failure hook", arguments: [
+        "request_user_input was cancelled before receiving a response",
+        "aborted by user after 0.1s",
+        "aborted by user after 12.3s",
+    ])
+    func nativeQuestionCancellation(message: String) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-question-cancel-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("rollout-\(childID).jsonl")
+        func record(_ type: String, id: String, output: String? = nil) throws -> Data {
+            var payload = ["type": type, "call_id": id]
+            if let output {
+                payload["output"] = output
+            } else {
+                payload["name"] = "request_user_input"
+                payload["arguments"] = #"{"questions":[{"id":"q","header":"Choice","question":"Continue?","options":[{"label":"Yes","description":"Continue"},{"label":"No","description":"Stop"}]}]}"#
+            }
+            return try JSONSerialization.data(withJSONObject: ["type": "response_item", "payload": payload]) + Data("\n".utf8)
+        }
+        try (header(childID) + Data("\n".utf8) + record("function_call", id: "sync") + record("function_call", id: "async") + record("function_call_output", id: "async", output: "Question queued")).write(to: file)
+        let writer = try FileHandle(forWritingTo: file)
+        defer { try? writer.close() }
+        try writer.seekToEnd()
+        let pid = String(getpid())
+        let runtime = try #require(AgentSessionIdentityClient.processRuntimeID(pid))
+        let reader = CodexProcessSessionReader()
+        let ids = ["\(childID):sync", "\(childID):async"]
+        #expect(await reader.cancelledQuestionIDs(processID: pid, runtimeID: runtime, conversationID: childID, questionIDs: ids).isEmpty)
+        // Editing/dismissing a notes field produces no abort output. Ordinary
+        // tool output containing similar text must also leave questions open.
+        try writer.write(contentsOf: record("function_call_output", id: "async", output: #"{"answers":{"q":"aborted by user after 12.3s"}}"#))
+        #expect(await reader.cancelledQuestionIDs(processID: pid, runtimeID: runtime, conversationID: childID, questionIDs: ids).isEmpty)
+        // Both RespondToModel and turn interruption omit a PostToolUse hook.
+        let cancelled = try record("function_call_output", id: "sync", output: message)
+        try writer.write(contentsOf: cancelled.dropLast(8))
+        #expect(await reader.cancelledQuestionIDs(processID: pid, runtimeID: runtime, conversationID: childID, questionIDs: ids).isEmpty)
+        try writer.write(contentsOf: cancelled.suffix(8))
+        try writer.write(contentsOf: record("function_call_output", id: "other", output: String(repeating: "x", count: CodexProcessSessionReader.completionLimit * 2)))
+        let resolved = await reader.cancelledQuestionIDs(processID: pid, runtimeID: runtime, conversationID: childID, questionIDs: ids)
+        #expect(resolved == [ids[0]])
+        var pane = PaneState(paneId: "%1", agentSession: .init(paneId: "%1", state: .idle))
+        pane.agentSession?.recordQuestion(ids[0])
+        #expect(pane.displayedState == .waiting && [pane].pendingSessionCount == 1)
+        for id in resolved {
+            pane.agentSession?.resolveQuestion(id)
+        }
+        #expect(pane.displayedState == .idle && [pane].pendingSessionCount == 0)
+        #expect(await reader.cancelledQuestionIDs(processID: pid, runtimeID: runtime, conversationID: childID, questionIDs: ids) == [ids[0]])
+        #expect(await reader.cancelledQuestionIDs(processID: pid, runtimeID: "reused", conversationID: childID, questionIDs: ids).isEmpty)
+        #expect(await reader.cancelledQuestionIDs(processID: pid, runtimeID: runtime, conversationID: parentID, questionIDs: ids).isEmpty)
+        let replay = CodexProcessSessionReader()
+        #expect(await replay.cancelledQuestionIDs(processID: pid, runtimeID: runtime, conversationID: childID, questionIDs: ids) == [ids[0]])
+        try writer.write(contentsOf: record("function_call", id: "next"))
+        try writer.write(contentsOf: record("function_call_output", id: "next", output: message))
+        #expect(await reader.cancelledQuestionIDs(processID: pid, runtimeID: runtime, conversationID: childID, questionIDs: [ids[1], "\(childID):next"]) == ["\(childID):next"])
+    }
 
     private func header(_ id: String, source: String = "cli", type: String = "session_meta") -> Data {
         Data("{\"type\":\"\(type)\",\"payload\":{\"id\":\"\(id)\",\"forked_from_id\":\"\(parentID)\",\"source\":\"\(source)\"}}".utf8)

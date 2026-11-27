@@ -15,10 +15,21 @@ public enum NotificationDelivery {
         userInfo["eventType"] as? String == workflowCompletionEventType
     }
 
+    public static func threadIdentifier(_ target: AgentWorkflowNotificationTarget) -> String {
+        "workflow-\(target.hostID)-\(target.runID)"
+    }
+
+    public static func matchesWorkflow(userInfo: [AnyHashable: Any], pairID: String, target: AgentWorkflowNotificationTarget) -> Bool {
+        guard
+            userInfo["pairId"] as? String == pairID,
+            let previous = AgentWorkflowNotificationTarget(userInfo: userInfo) else { return false }
+        return previous.hostID == target.hostID && previous.runID == target.runID
+    }
+
     /// Workflow transitions and open questions/approvals alert in foreground.
     /// Ordinary remote Agent completion remains in the session UI.
     public static func shouldPresentInForeground(isRemote: Bool, userInfo: [AnyHashable: Any]) -> Bool {
-        if !isRemote || isWorkflow(userInfo: userInfo) || userInfo["eventType"] as? String == "agent.question" {
+        if !isRemote || isWorkflow(userInfo: userInfo) || ["agent.question", "agent.approval"].contains(userInfo["eventType"] as? String ?? "") {
             return true
         }
         // Older Hosts identify structured questions only through their action context.

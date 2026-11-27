@@ -68,6 +68,7 @@
 
         private let onState: StateSink
         private let onNotification: NotificationSink
+        private let onQuestions: @Sendable (PluginEvent) async -> Void
         private let onAutoApprove: AutoApproveSink
         private let onAppAction: AppActionSink
         private let isYoloModeEnabled: AutoApproveCheck
@@ -82,6 +83,7 @@
         public init(
             onState: @escaping StateSink = { _, _, _, _, _, _ in },
             onNotification: @escaping NotificationSink = { _, _, _, _ in },
+            onQuestions: @escaping @Sendable (PluginEvent) async -> Void = { _ in },
             onAutoApprove: @escaping AutoApproveSink = { _, _, _ in },
             onAppAction: @escaping AppActionSink = { _, _, _, _ in },
             isYoloModeEnabled: @escaping AutoApproveCheck = { _ in false },
@@ -95,6 +97,7 @@
         ) {
             self.onState = onState
             self.onNotification = onNotification
+            self.onQuestions = onQuestions
             self.onAutoApprove = onAutoApprove
             self.onAppAction = onAppAction
             self.isYoloModeEnabled = isYoloModeEnabled
@@ -111,8 +114,9 @@
             // A final Stop can complete the run while it is being routed.
             let quietCompletion: Bool
             if
-                case .doneWorking = event.state, event.completionTurn != nil,
-                let notice = event.notification, notice.isQuestion != true, let ingressPeer {
+                case .doneWorking = event.state,
+                event.completionTurn != nil || event.workflow?.kind == .failed,
+                event.notification?.isQuestion != true, let ingressPeer {
                 quietCompletion = await shouldSuppressAgentCompletion(event, ingressPeer)
             } else {
                 quietCompletion = false
@@ -155,12 +159,18 @@
                 await onWorkflow(event, ingressPeer)
             }
             let paneID = event.tmuxPane ?? event.sessionID
+            if event.notification?.isQuestion == true || event.resolvedQuestionIDs != nil {
+                await onQuestions(event)
+            }
             if let state = event.state {
                 // Yolo auto-approve (spec §6): an auto-approvable permission on a
                 // yolo pane is approved silently — deliver .allow, keep the session
                 // working, and suppress the notification. The form is never shown.
                 // A non-awaiting state IS the retract: there is no separate signal.
                 var effectiveState = state
+                if quietCompletion {
+                    effectiveState = .idle
+                }
                 var suppressNotification = false
                 if
                     case let .awaitingPermission(permission, requestID) = state,

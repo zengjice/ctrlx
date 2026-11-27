@@ -1255,7 +1255,7 @@ actor AgentWorkflowStore {
         return loaded
     }
 
-    func commit(_ updated: AgentWorkflowArchive) throws {
+    func commit(_ updated: AgentWorkflowArchive, notification override: AgentWorkflowNotification? = nil) throws {
         var updated = updated
         updated.schemaVersion = AgentWorkflowArchive.currentSchemaVersion
         var addedNotification = false
@@ -1263,7 +1263,9 @@ actor AgentWorkflowStore {
             for run in updated.runs {
                 guard let old = previous.runs.first(where: { $0.id == run.id }) else { continue }
                 let kind: AgentWorkflowNotification.Kind?
-                if run.status == .completed, old.status != .completed {
+                if override?.target.runID == run.id {
+                    kind = override?.kind
+                } else if run.status == .completed, old.status != .completed {
                     kind = .completed
                 } else if
                     run.status == .paused, old.status != .paused || run.issue != old.issue,
@@ -1276,7 +1278,7 @@ actor AgentWorkflowStore {
                     if updated.notifications == nil {
                         updated.notifications = [:]
                     }
-                    let notification = AgentWorkflowNotification(run: run, hostID: updated.hostID, kind: kind)
+                    let notification = override.flatMap { $0.target.runID == run.id ? $0 : nil } ?? AgentWorkflowNotification(run: run, hostID: updated.hostID, kind: kind)
                     updated.notifications?[run.id] = notification
                     addedNotification = true
                 }

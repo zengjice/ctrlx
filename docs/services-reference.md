@@ -1826,8 +1826,9 @@ The Workflow editor's **Notify when individual Agents finish** switch is off by
 default, including for existing workflows. The Host sends a single **Workflow
 completed** alert after recording successful completion. Turn completion alerts
 for workflow-owned input are quiet by default, including tool-only turns with
-no reply text. Questions, approvals, failures, and independent Agent turns
-still use their normal alerts. The preference is copied into each new run
+no reply text. Quiet turn completions also publish idle rather than an unread
+Agent completion, so they do not add bells, attention rows or app-icon counts.
+Independent Agent turns retain their ordinary behavior. The preference is copied into each new run
 when it starts. Completion means the entire run, including any steps after
 loop approval. Automatic blocking pauses (receipt timeout, failure, round limit,
 expired authorization) create one **Workflow needs attention** alert per new
@@ -1835,8 +1836,30 @@ blocking issue. A new error in a still-running task also alerts while the run is
 already paused; repeated checks of the same issue stay quiet. Manual Pause and
 End are silent; End is not successful completion.
 Both Workflow alerts and actionable questions/approvals can display in foreground
-iOS. Question attention keeps the question-mark icon; other Agent attention keeps
-the bell. Neither icon claims that a Workflow has completed.
+iOS. Question attention uses a question mark on session/tab rows, the iOS attention
+entry and Mac menu rows. Tool questions have their own pending IDs alongside
+Agent state: an async question can need an answer while its Agent is working.
+Synchronous tool success and correlated async replies clear only the matching
+question. Codex cancellation is confirmed from the kernel-verified active
+rollout's `function_call_output`, on lifecycle updates and the existing
+ten-second reconciliation tick. It does not depend on a `PostToolUseFailure`
+subscription: [Codex 0.162.1 returns cancellation as a tool error](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/tools/handlers/request_user_input.rs#L80-L87),
+which is [saved as native output](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/tools/parallel.rs#L288-L311).
+The same reader recognizes the call's [native abort output](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/tools/parallel.rs#L314-L329)
+(`aborted by user after …s`) when the user interrupts the turn from the question UI.
+A key press that only leaves the notes editor does not produce this evidence
+and does not dismiss the question.
+Changing the native conversation clears its old questions; viewing a pane or a
+working update does not dismiss unanswered asynchronous questions.
+Neither question marks nor Agent bells claim that a Workflow has completed.
+
+Workflow questions carry the workflow and step names and open the asking Agent.
+Permission/plan approvals atomically pause the run and save one actionable
+workflow alert instead of sending a second Agent alert. Workflow-owned failures
+likewise use the run's blocking alert. Repeated checks of one approval request
+do not create new alerts. Mac and iOS group/replace delivered alerts by Host/run,
+while preserving Agent destinations and current-request checks for questions
+and approvals. Distinct runs and paired Hosts keep separate groups.
 
 The Host atomically saves the latest notification intent with each run transition
 (schema 12); migration does not notify for historical completions. Submission
@@ -1856,7 +1879,15 @@ transports. Tapping opens that exact run on the authenticated paired Host;
 ordinary Agent navigation is cancelled on iOS. Older alerts without this target
 retain their generic behavior. Terminal toolbars keep the active or most recent
 run, show Running/Verifying/Paused/Completed/Ended independently of Agent bells,
-and open the run on click. An unviewed completion is highlighted until its run
+and open the run on click. iOS session rows also show the latest run's name,
+step, round and status, with a green completion check and a separate Ended state.
+This metadata travels in ordinary pane snapshots rather than polling each list
+row. A blocking run contributes one attention entry when no asking/approval
+Agent already represents it; that entry opens the run. An unread Agent completion
+does not substitute for a workflow fault: the fault takes display priority without
+discarding the underlying unread state or creating duplicate pane keys.
+Manual pauses stay quiet.
+An unviewed completion is highlighted until its run
 has been viewed on that device or a newer run takes its place. Ordinary alerts
 without a stable Agent destination still show the session list and navigation
 message.
@@ -1870,7 +1901,8 @@ Codex `PreToolUse` events for `request_user_input` and `request_user_input_async
 produce a question notification on the Host, independently of terminal visibility
 or focus. The plugin deduplicates by `(session_id, tool_use_id)` and leaves Agent
 state and response forms unchanged: an asynchronous question does not stop the
-Agent. This uses the existing wildcard hook bridge, not terminal polling or
+Agent. The Host separately tracks its pending question for presentation. This
+uses the existing wildcard hook bridge, not terminal polling or
 question auto-expansion. The hook fields and both tools were checked against
 [Codex 0.162.1](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/core/src/hook_runtime.rs).
 
@@ -1878,7 +1910,8 @@ During a workflow, the Host also uses these existing question events and Claude
 Code's `awaitingReplies` to allow human input for the asking Agent's current
 invocation. The workflow and other branches continue; a later `working` state
 does not close this permission. Verified task completion revokes the permission
-before the next automatic handoff. Notifications retain this same delivery path.
+before the next automatic handoff. Questions retain their Agent notification
+delivery path, with workflow context when the current invocation is verified.
 Permission and plan approvals still pause the workflow.
 
 iOS system alerts use APNs exclusively, independent of Viewer WebSocket presence.
@@ -1897,8 +1930,10 @@ snapshots from all paired Hosts in that foreground period. Missing or disconnect
 Hosts do not become zero counts; returning to the app no longer clears the badge
 unconditionally. This badge delivery change requires both the Relay and iOS update.
 The Notification Service Extension decrypts alerts and scopes
-replacement to `(pairId, AgentID)`. Foreground remote alerts are shown only for
-`agent.question` or a structured `askUserQuestion` action from older Hosts;
+replacement to `(pairId, Host/run)` for workflow-owned alerts, otherwise
+`(pairId, AgentID)`. Foreground remote alerts are shown for workflow completion,
+workflow attention, `agent.question`, `agent.approval`, or a valid structured
+action context from older Hosts;
 ordinary remote activity remains in the session UI. Local
 follow-up questions, reply failures and on-device alerts retain their presentation.
 Codex tool-hook questions offer tap-to-open rather than fabricated answer buttons;
@@ -1914,6 +1949,41 @@ harness may capture live-message context but never displays it as an iOS alert.
 Update both iOS and Relay for this delivery policy: an older Relay still suppresses
 APNs while the Viewer is connected. No background-monitor compatibility mode or
 local-notification fallback is provided when APNs is unavailable.
+
+Initial implementation verification on 2026-11-27 used the uncommitted notification
+changes based on
+`f0cdcdc2`; the changed Swift sources/tests have SHA-256 `453e869864f97cb12596b47109f0e5b982be4a47c0604640f5575e731cb9964a`
+(path plus contents, sorted by workspace-relative path). The bounded workflow,
+notification and status regression passed; four opt-in native checks were skipped.
+The final targeted workflow notification/control, question lifecycle and presentation
+run passed 70 tests. macOS `CtrlxServer` and iOS-device `Ctrlx` Debug workspace
+builds passed with `CODE_SIGNING_ALLOWED=NO`; the iOS build included the notification
+extension. SwiftFormat, both repository boundary checks and `git diff --check`
+passed. No app was installed, and physical-device APNs arrival, sound/banner
+presentation and a full cross-platform E2E run were not verified.
+
+First review repair verification on 2026-11-27 passed 87 targeted tests, including
+fault priority over unread completion, question/approval deduplication, native
+Codex cancellation without a failure hook, partial-line completion, large
+subsequent output and conversation replacement. macOS and iOS-device Debug
+workspace builds, SwiftFormat, both repository boundary checks and
+`git diff --check` passed. The changed Swift sources/tests have SHA-256
+`5335cc5dcc7bb6e5403926cf937e8a376598e4490d95b3edc8d114b1db61f345`
+(sorted workspace-relative paths and contents, each followed by a NUL byte).
+Cancellation evidence used native-record replay through a real writable rollout
+descriptor; an interactive Codex cancellation and physical-device notification
+presentation were not exercised.
+
+Second review repair verification passed the same 87 targeted tests with the
+question-outcome replay expanded to cancellation plus two native abort durations.
+It checks partial writes, repeated scans, preservation of unrelated questions,
+ordinary answer text and zero pending count after the last question clears while
+idle. The two abort cases failed before the matcher change. The Host reader was
+compiled by the package tests; SwiftFormat, both boundary checks and
+`git diff --check` passed. The changed Swift sources/tests have SHA-256
+`8d097a8f164c0225891566b33df1a5bab37480ad81ad8b42ae21032e73a9e700`
+(the same sorted path/content encoding). No interactive key presses or
+physical-device notifications were exercised.
 
 Authenticated notification support is saved with each paired Viewer's public key,
 so Host restarts preserve offline navigation targets and answer buttons. A new key,

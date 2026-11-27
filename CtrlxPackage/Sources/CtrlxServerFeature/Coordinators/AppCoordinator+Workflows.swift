@@ -157,6 +157,16 @@ extension AppCoordinator {
             }, onFailure: { workflowLogger.error("\($0)") })
             tmuxService.workflowInputGate = gate
             controlClientManager.workflowInputGate = gate
+            agentWorkflowPresentationTask?.cancel()
+            agentWorkflowPresentationTask = Task { @MainActor [weak self] in
+                for await _ in await store.changes() {
+                    guard !Task.isCancelled, let self else { return }
+                    do {
+                        let archive = try await store.snapshot()
+                        await publishWorkflowPresentation(archive)
+                    } catch { workflowLogger.error("Could not update workflow presentation: \(error)") }
+                }
+            }
 
         } catch {
             agentWorkflowStartupError = "Could not load workflows on this Mac: \(error.localizedDescription)"
@@ -172,6 +182,9 @@ extension AppCoordinator {
     }
 
     func stopAgentWorkflows() async {
+        agentWorkflowPresentationTask?.cancel()
+        agentWorkflowPresentationTask = nil
+        _ = windowManager.applyWorkflowPresentation([:])
         await agentMessages?.shutdown()
         agentMessages = nil
         agentRuntimeCatalog = nil
@@ -384,11 +397,26 @@ extension AppCoordinator {
         ["local"] + settings.pairedViewers.flatMap { ["push:\($0.id)", "live:\($0.id)"] }
     }
 
+    private func publishWorkflowPresentation(_ archive: AgentWorkflowArchive) async {
+        let statuses = AgentWorkflowPaneStatus.presentations(
+            runs: archive.runs, hostID: archive.hostID,
+            attentionRunIDs: Set(archive.notifications?.values.filter { $0.kind == .attention }.map { $0.target.runID } ?? [])
+        )
+        if windowManager.applyWorkflowPresentation(statuses) {
+            await connectedViewerManager?.pushSessionStateToAll()
+        }
+        await broadcastBadgeDecreaseIfNeeded()
+    }
+
     func submitWorkflowNotification(_ event: AgentWorkflowNotification, destination: String) async throws {
+        if let store = agentWorkflowStore {
+            let archive = try await store.snapshot()
+            await publishWorkflowPresentation(archive)
+        }
         if destination == "local" {
             try await terminalNotificationService.submitWorkflowNotification(.init(
                 title: event.title, body: event.body, paneState: nil,
-                eventType: event.eventType, workflow: event.target
+                agentID: event.agentID, eventType: event.eventType, workflow: event.target
             ))
         } else {
             guard let manager = connectedViewerManager else { throw AgentWorkflowError("The Relay connection is not ready.") }

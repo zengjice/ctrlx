@@ -26,7 +26,7 @@ public struct AgentNotificationPresentation: Equatable, Sendable {
         self.agentID = agentID
         self.eventType = eventType
         self.workflow = workflow
-        guard let paneState else {
+        guard let paneState, workflow == nil else {
             self.title = title
             self.subtitle = subtitle
             self.body = body

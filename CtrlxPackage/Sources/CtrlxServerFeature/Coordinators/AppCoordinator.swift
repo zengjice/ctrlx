@@ -165,6 +165,7 @@
         @ObservationIgnored var agentMessages: AgentMessageService?
         @ObservationIgnored var agentWorkflowNotifications: AgentWorkflowNotificationDelivery?
         @ObservationIgnored var agentWorkflowStore: AgentWorkflowStore?
+        @ObservationIgnored var agentWorkflowPresentationTask: Task<Void, Never>?
 
         var agentWorkflowService: AgentWorkflowService?
 
@@ -816,6 +817,9 @@
                     )
                     // (handlePluginNotification also forwards the push to iOS,
                     // baking the action-button context when a form is open.)
+                },
+                onQuestions: { [weak self] event in
+                    await self?.handlePluginQuestions(event)
                 },
                 onAutoApprove: { [weak self] pluginID, sessionID, requestID in
                     // Yolo auto-approve (spec §6): the dispatcher already decided the
@@ -1924,6 +1928,7 @@
                     state: state
                 )
             }
+            await windowManager.reconcileResolvedQuestions(forPane: tmuxPane)
             await connectedViewerManager?.pushSessionStateToAll()
             // The two pushes above only reach *connected* viewers over the live
             // WebSocket. When this state change CLEARS attention (the agent
@@ -1944,6 +1949,14 @@
             await connectedViewerManager?.broadcastBadgeUpdate(badge: badge)
         }
 
+        private func handlePluginQuestions(_ event: PluginEvent) async {
+            guard currentPluginEventIsValid else { return }
+            windowManager.applyQuestions(event)
+            await windowManager.reconcileResolvedQuestions(forPane: event.tmuxPane)
+            await connectedViewerManager?.pushSessionStateToAll()
+            await broadcastBadgeDecreaseIfNeeded()
+        }
+
         /// NotificationSink → format the pane context and event copy once for
         /// Mac desktop notifications and paired viewers via the
         /// encrypted APNs path for iOS and live socket for Mac Viewers.
@@ -1960,6 +1973,11 @@
             formState: AgentState? = nil
         ) async {
             guard currentPluginEventIsValid else { return }
+            if
+                notification.isQuestion == true, let questionID = notification.questionID, let paneId,
+                windowManager.paneStates[paneId]?.agentSession?.pendingQuestionIDs?.contains(questionID) != true {
+                return
+            }
             if
                 pluginID == "codex", notification.isQuestion == true,
                 let paneId, paneId.hasPrefix("%"), let questionID = notification.questionID,
@@ -1986,11 +2004,33 @@
             }
             let paneState = paneId.flatMap { windowManager.paneStates[$0] }
             let agentID = self.agentID(forPane: paneId)
+            var workflowContext: AgentWorkflowStore.NotificationContext?
+            if
+                isQuestion || formState?.openForm != nil,
+                let store = agentWorkflowStore, let agentID, let paneState,
+                let runtimeID = paneState.agentSession?.processRuntimeID,
+                let conversationID = paneState.claudeSessionID {
+                do {
+                    workflowContext = try await store.notificationContext(agentID: agentID, runtimeID: runtimeID, conversationID: conversationID)
+                    guard currentPluginEventIsValid else { return }
+                    if
+                        let workflowContext, let formState, let requestID = formState.openForm?.requestID, !isQuestion,
+                        try await store.pauseForApproval(context: workflowContext, requestID: requestID, body: notification.body, action: action) {
+                        return
+                    }
+                } catch {
+                    logger.error("Could not associate workflow attention: \(error)")
+                }
+            }
+            guard currentPluginEventIsValid else { return }
             let presentation = AgentNotificationPresentation(
-                title: notification.title,
+                title: workflowContext.map { "\($0.run.definition.name) · \($0.nodeName)" } ?? notification.title,
+                subtitle: workflowContext == nil ? nil : (isQuestion ? "Needs your answer" : notification.title),
                 body: notification.body,
-                paneState: paneState,
-                agentID: agentID
+                paneState: workflowContext == nil ? paneState : nil,
+                agentID: agentID,
+                eventType: isQuestion ? "agent.question" : nil,
+                workflow: workflowContext?.target
             )
             await deliverNotification(presentation, paneID: paneId, action: action, isQuestion: isQuestion)
         }
@@ -2011,7 +2051,8 @@
                 action: action,
                 isQuestion: isQuestion ? true : nil,
                 agentID: presentation.agentID,
-                eventType: presentation.eventType
+                eventType: presentation.eventType,
+                workflow: presentation.workflow
             )
         }
 

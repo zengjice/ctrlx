@@ -490,7 +490,7 @@ final public class ConnectedViewer: Identifiable {
     func sendWorkflowLiveNotification(_ event: AgentWorkflowNotification) async -> Bool {
         await sendAgentNotification(.init(
             title: event.title, body: event.body, eventType: event.eventType,
-            pairId: id, workflow: event.target
+            pairId: id, paneId: event.paneID, agentID: event.agentID, workflow: event.target, action: event.action
         ).forPeer(supportsStableAgentNotifications: supportsStableAgentNotifications), isQuestion: nil)
     }
 

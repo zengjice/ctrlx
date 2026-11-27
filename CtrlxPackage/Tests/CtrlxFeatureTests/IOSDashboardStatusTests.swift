@@ -8,6 +8,42 @@ import Testing
 struct IOSDashboardStatusTests {
     private let now = Date(timeIntervalSince1970: 1_792_232_400)
 
+    @Test("Unread completion cannot hide the workflow failure entry", arguments: [false, true])
+    func workflowFailureOutranksUnreadCompletion(allWaiting: Bool) {
+        let host = pairedHost("office")
+        let node = AgentWorkflowNode(name: "Review", content: .init(text: "Review"))
+        var definition = AgentWorkflowDefinition(name: "Bugfix", hostID: UUID(), nodes: [node], edges: [], entryNodeID: node.id)
+        definition.notifyOnAgentCompletion = true
+        var run = AgentWorkflowRun(definition: definition, instances: [], createdAt: now, authorizationExpiresAt: now.addingTimeInterval(3_600))
+        run.status = .paused
+        run.issue = "B failed"
+        let workflow = AgentWorkflowPaneStatus(run: run, hostID: definition.hostID, needsAttention: true)
+        var a = PaneState(paneId: "%1", sessionName: "work", agentSession: .init(paneId: "%1", state: .doneWorking(summary: "A complete")))
+        var b = PaneState(paneId: "%2", sessionName: "work", agentSession: .init(paneId: "%2", state: allWaiting ? .doneWorking(summary: "Done") : .idle))
+        a.workflow = workflow
+        b.workflow = workflow
+        var panes = [PaneKey(pairId: host.id, paneId: a.paneId): a, PaneKey(pairId: host.id, paneId: b.paneId): b]
+        let pending = [a, b].pendingAttentionPanes
+        #expect(pending.count == 1 && pending.filter(\.showsWorkflowAttention).count == 1)
+        let items = IOSPendingAttention.items(hosts: [host], paneStates: panes, catalogs: [:])
+        #expect(items.count == 1 && Set(items.map(\.id)).count == items.count)
+        #expect(items.first?.status == .workflow && items.first?.workflow?.runID == run.id)
+        #expect(IOSPendingAttention.directTarget(in: items, connectedHostIDs: [host.id])?.workflow?.runID == run.id)
+        #expect(status(paired: [host.id], panes: panes).pendingCount == 1)
+        let humanStates: [AgentState] = [.awaitingReplies(.init(questions: []), requestID: "question"), .awaitingPlanApproval(.init(title: "Plan", plan: ""), requestID: "plan")]
+        for state in humanStates {
+            a.agentSession?.state = state
+            panes[.init(pairId: host.id, paneId: a.paneId)] = a
+            #expect([a, b].pendingAttentionPanes.map(\.paneId) == [a.paneId])
+            let human = IOSPendingAttention.items(hosts: [host], paneStates: panes, catalogs: [:])
+            #expect(human.count == 1 && human.first?.workflow == nil)
+            #expect(human.first?.status == (state.openForm?.requestID == "question" ? .reply : .approval))
+        }
+        a.workflow = nil
+        a.agentSession?.state = .doneWorking(summary: "A complete")
+        #expect([a].pendingAttentionPanes.count == 1 && !a.showsWorkflowAttention)
+    }
+
     private func status(
         paired: Set<String> = ["office", "home"], connected: Set<String> = ["office", "home"],
         connecting: Bool = false, panes: [PaneKey: PaneState] = [:], hosts: [DashboardHost] = [], elapsed: Double = 0

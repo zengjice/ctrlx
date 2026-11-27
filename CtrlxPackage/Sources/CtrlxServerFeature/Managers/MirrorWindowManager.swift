@@ -12,6 +12,26 @@ final public class MirrorWindowManager {
     /// Unified per-pane state keyed by pane ID.
     /// Contains tmux metadata, agent session, terminal title, and yolo mode.
     public private(set) var paneStates: [String: PaneState] = [:]
+    private var workflowPresentation: [WorkspacePaneIdentity: AgentWorkflowPaneStatus] = [:]
+
+    func applyWorkflowPresentation(_ statuses: [WorkspacePaneIdentity: AgentWorkflowPaneStatus]) -> Bool {
+        guard workflowPresentation != statuses else { return false }
+        workflowPresentation = statuses
+        return true
+    }
+
+    func workflowStatus(for pane: PaneState) -> AgentWorkflowPaneStatus? {
+        guard let identity = pane.workspaceIdentity else { return nil }
+        return workflowPresentation.first { $0.key.isSamePane(as: identity) }?.value
+    }
+
+    var presentedPaneStates: [String: PaneState] {
+        paneStates.mapValues { pane in
+            var pane = pane
+            pane.workflow = workflowStatus(for: pane)
+            return pane
+        }
+    }
 
     public private(set) var worktreeRepositories: [RepositoryWorktreeStatus] = []
     private(set) var gitWorktreePathsByDirectory: [String: String] = [:]
@@ -144,6 +164,27 @@ final public class MirrorWindowManager {
         var state = paneStates[paneID] ?? PaneState(paneId: paneID)
         state.codexQuestionID = questionID
         paneStates[paneID] = state
+    }
+
+    func applyQuestions(_ event: PluginEvent) {
+        guard let paneID = event.tmuxPane else { return }
+        let changedConversation = paneStates[paneID]?.claudeSessionID != event.sessionID
+        updateSession(paneId: paneID) { session in
+            session.pluginID = event.pluginID
+            if changedConversation {
+                session.pendingQuestionIDs = nil
+            }
+            if let id = event.notification?.questionID, event.notification?.isQuestion == true {
+                session.recordQuestion(id)
+            }
+            for id in event.resolvedQuestionIDs ?? [] {
+                session.resolveQuestion(id)
+            }
+        }
+        paneStates[paneID]?.claudeSessionID = event.sessionID
+        if event.notification?.isQuestion == true {
+            clearCLISessionState(forSessionOfPane: paneID)
+        }
     }
 
     /// Updates the pane states dictionary from tmux pane metadata.
@@ -611,7 +652,8 @@ final public class MirrorWindowManager {
 
                 guard !Task.isCancelled, let self else { break }
                 await self.refreshDetectedAgentSessions(processNamesByPlugin: processNamesProvider())
-                if await self.reconcileAbortedOrFailedTurns() {
+                let questionsChanged = await self.reconcileResolvedQuestions()
+                if await self.reconcileAbortedOrFailedTurns() || questionsChanged {
                     await self.onAgentProcessReconciliationChanged?()
                 }
             }
@@ -710,6 +752,26 @@ final public class MirrorWindowManager {
             session.detectedProjectPath = projectPath
         }
         paneStates[paneID]?.claudeSessionID = sessionID
+    }
+
+    @discardableResult
+    func reconcileResolvedQuestions(forPane paneID: String? = nil) async -> Bool {
+        @Dependency(CodexTurnStateClient.self) var turns
+        var changed = false
+        for (id, pane) in paneStates where paneID == nil || paneID == id {
+            guard
+                !Task.isCancelled, let pending = pane.agentSession?.pendingQuestionIDs, !pending.isEmpty,
+                let binding = currentAgentBinding(forPane: id), CodexProcessSessionReader.supports(pluginID: binding.pluginID),
+                let conversation = pane.claudeSessionID else { continue }
+            let context = AgentEventContext(binding: binding, conversationID: conversation)
+            let cancelled = await turns.cancelledQuestionIDs(binding.processID, binding.runtimeID, conversation, pending)
+            guard !Task.isCancelled, context.matches(paneStates[id], runtimeID: agentIdentities.runtimeID) else { continue }
+            for question in cancelled where paneStates[id]?.agentSession?.pendingQuestionIDs?.contains(question) == true {
+                paneStates[id]?.agentSession?.resolveQuestion(question)
+                changed = true
+            }
+        }
+        return changed
     }
 
     func reconcileAbortedOrFailedTurns() async -> Bool {
@@ -1209,6 +1271,9 @@ final public class MirrorWindowManager {
         // the project path so the sidebar has a name before the next tmux refresh
         // confirms the pane.
         updateSession(paneId: paneId) { session in
+            if paneStates[paneId]?.claudeSessionID != sessionID {
+                session.pendingQuestionIDs = nil
+            }
             session.pluginID = pluginID
             if let projectPath, !projectPath.isEmpty {
                 session.detectedProjectPath = projectPath
@@ -1292,7 +1357,7 @@ final public class MirrorWindowManager {
     /// per session (`Collection.pendingSessionCount`). Matches the number of
     /// bell rows the menu bar dropdown shows.
     public var pendingSessionCount: Int {
-        paneStates.values.pendingSessionCount
+        presentedPaneStates.values.pendingSessionCount
     }
 
     /// The `pendingSessionCount` high-water mark last observed by

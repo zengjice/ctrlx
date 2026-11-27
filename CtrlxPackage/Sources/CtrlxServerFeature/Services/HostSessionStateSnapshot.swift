@@ -26,6 +26,7 @@
             for (paneId, var state) in paneStates {
                 state.editorSession = editorManager.editorSessionInfo(for: paneId)
                 state.workspaceRecovery = recovery?.recoveryState(for: state)
+                state.workflow = windowManager.workflowStatus(for: state)
                 paneStates[paneId] = state
             }
             return paneStates

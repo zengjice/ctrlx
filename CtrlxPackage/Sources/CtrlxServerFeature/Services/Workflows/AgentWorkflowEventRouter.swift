@@ -234,7 +234,9 @@ actor AgentWorkflowEventRouter {
     }
 
     func suppressesAgentCompletion(_ event: PluginEvent, peer: PluginIngressPeer) async throws -> Bool {
-        guard !stopped, let turn = event.completionTurn else { return false }
+        let failure = event.workflow?.kind == .failed
+        let turn = event.completionTurn ?? event.workflow.flatMap { $0.kind == .failed ? PluginWorkflowTurn(nativeTurnID: $0.nativeTurnID, transcriptPath: $0.transcriptPath) : nil }
+        guard !stopped, let turn else { return false }
         let receipts = pending.values
         let archive = try await store.snapshot()
         let current = archive.instances.first { AgentReplyEvidence.owns(event, instance: $0, peer: peer) }
@@ -265,7 +267,7 @@ actor AgentWorkflowEventRouter {
                 return !submission.continuationOnly && matchesAgent(bound)
                     && matchesTurn(id: submission.context.candidate.nativeTurnID, path: submission.context.candidate.transcriptPath)
             }), let run = archive.runs.first(where: { $0.id == receipt.context.runID }) {
-            return run.definition.notifyOnAgentCompletion != true
+            return failure ? !run.status.isTerminal : run.definition.notifyOnAgentCompletion != true
         }
 
         let run = archive.runs.reversed().first { run in
@@ -274,7 +276,7 @@ actor AgentWorkflowEventRouter {
                     && run.instance(for: invocation).map(matchesAgent) == true
             }
         }
-        return run.map { $0.definition.notifyOnAgentCompletion != true } ?? false
+        return run.map { failure ? !$0.status.isTerminal : $0.definition.notifyOnAgentCompletion != true } ?? false
     }
 
     private func isSupersededSubmission(

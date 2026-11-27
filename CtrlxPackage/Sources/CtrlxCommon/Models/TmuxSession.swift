@@ -47,7 +47,10 @@ public struct TmuxSession: Identifiable, Sendable {
     /// agent-derived), used to check the current item in the "Set State" menu.
     /// `nil` when the session shows the plain terminal glyph (issue #695).
     public var displayedState: CLISessionState? {
-        CLISessionState.displayed(override: cliSessionState, agentState: agentSession?.state)
+        if cliSessionState == nil, agentSession?.hasPendingQuestions == true {
+            return .waiting
+        }
+        return CLISessionState.displayed(override: cliSessionState, agentState: agentSession?.state)
     }
 
     /// The custom description for this session.

@@ -44,13 +44,18 @@
                             open(item)
                         } label: {
                             HStack {
+                                if item.status == .reply {
+                                    Symbols.questionmarkCircle.image
+                                        .foregroundStyle(.orange)
+                                        .accessibilityLabel("Questions")
+                                }
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(item.tabName)
                                         .font(.headline)
                                     Text(item.sessionName.isEmpty ? item.hostName : "\(item.hostName) · \(item.sessionName)")
                                         .font(.subheadline)
                                         .foregroundStyle(.secondary)
-                                    if item.agentID == nil {
+                                    if item.agentID == nil && item.workflow == nil {
                                         Text("Tab location unavailable")
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
@@ -61,7 +66,7 @@
                                     }
                                 }
                                 Spacer()
-                                if item.agentID != nil {
+                                if item.agentID != nil || item.workflow != nil {
                                     Symbols.chevronRight.image
                                         .font(.footnote.weight(.semibold))
                                         .foregroundStyle(.tertiary)
@@ -71,7 +76,7 @@
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .disabled(item.agentID == nil)
+                        .disabled(item.agentID == nil && item.workflow == nil)
                     }
                 }
             }

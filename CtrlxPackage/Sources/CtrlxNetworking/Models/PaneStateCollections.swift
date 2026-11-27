@@ -124,12 +124,23 @@ public extension Collection where Element == PaneState {
     /// same-named sessions don't merge.
     var pendingAttentionPanes: [PaneState] {
         let terminalPaneIDs = Set(terminalOnlySessions().filter { $0.displayedState == .waiting }.map(\.representativePaneId))
-        return filter { pane in
+        var pending = filter { pane in
+            if pane.showsWorkflowAttention {
+                return false
+            }
             if pane.agentSession != nil {
                 return pane.displayedState == .waiting
             }
             return terminalPaneIDs.contains(pane.paneId)
         }
+        var representedRuns = Set(pending.filter { $0.agentSession?.needsHumanResponse == true }.compactMap { $0.workflow?.runID })
+        for pane in sorted(by: { $0.paneId < $1.paneId }) {
+            guard
+                let workflow = pane.workflow, pane.showsWorkflowAttention,
+                representedRuns.insert(workflow.runID).inserted else { continue }
+            pending.append(pane)
+        }
+        return pending
     }
 
     var pendingSessionCount: Int {

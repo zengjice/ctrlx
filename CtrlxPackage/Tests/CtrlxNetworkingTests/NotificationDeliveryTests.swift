@@ -4,6 +4,23 @@ import Testing
 
 @Suite("iOS APNs notification delivery")
 struct NotificationDeliveryTests {
+    @Test("Run grouping replaces all its event kinds without crossing Hosts, pairs or runs")
+    func runGrouping() {
+        let first = AgentWorkflowNotificationTarget(hostID: UUID(), runID: UUID(), eventID: UUID())
+        let next = AgentWorkflowNotificationTarget(hostID: first.hostID, runID: first.runID, eventID: UUID())
+        let other = AgentWorkflowNotificationTarget(hostID: first.hostID, runID: UUID(), eventID: UUID())
+        let otherHost = AgentWorkflowNotificationTarget(hostID: UUID(), runID: first.runID, eventID: UUID())
+        var info: [AnyHashable: Any] = first.userInfo
+        info["pairId"] = "office"
+        #expect(NotificationDelivery.threadIdentifier(first) == NotificationDelivery.threadIdentifier(next))
+        #expect(NotificationDelivery.matchesWorkflow(userInfo: info, pairID: "office", target: next))
+        #expect(!NotificationDelivery.matchesWorkflow(userInfo: info, pairID: "home", target: next))
+        #expect(!NotificationDelivery.matchesWorkflow(userInfo: info, pairID: "office", target: other))
+        #expect(!NotificationDelivery.matchesWorkflow(userInfo: info, pairID: "office", target: otherHost))
+        #expect(NotificationDelivery.shouldPresentInForeground(isRemote: true, userInfo: ["eventType": "agent.approval"]))
+        #expect(!NotificationDelivery.isWorkflow(userInfo: ["eventType": "agent.question"]))
+    }
+
     @Test("Question metadata survives the APNs content round trip")
     func foregroundQuestion() throws {
         let content = NotificationContent(

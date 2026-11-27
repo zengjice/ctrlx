@@ -114,7 +114,9 @@ class NotificationService: UNNotificationServiceExtension {
 
             // Remove previous notifications for this session before showing the new one
             // This keeps only the most recent notification per pane/session
-            if let agentID = notificationContent.agentID {
+            if let workflow = notificationContent.workflow {
+                await removePreviousWorkflowNotifications(pairID: notificationContent.pairId, target: workflow)
+            } else if let agentID = notificationContent.agentID {
                 await removePreviousNotifications(pairId: notificationContent.pairId, agentID: agentID)
             }
 
@@ -130,7 +132,7 @@ class NotificationService: UNNotificationServiceExtension {
                 for (key, value) in workflow.userInfo {
                     content.userInfo[key] = value
                 }
-                content.threadIdentifier = "workflow-\(workflow.runID)"
+                content.threadIdentifier = NotificationDelivery.threadIdentifier(workflow)
             }
             if let agentID = notificationContent.agentID {
                 for (key, value) in agentID.notificationUserInfo {
@@ -226,6 +228,15 @@ class NotificationService: UNNotificationServiceExtension {
         if !identifiersToRemove.isEmpty {
             center.removeDeliveredNotifications(withIdentifiers: identifiersToRemove)
         }
+    }
+
+    private func removePreviousWorkflowNotifications(pairID: String, target: AgentWorkflowNotificationTarget) async {
+        let center = UNUserNotificationCenter.current()
+        let delivered = await center.deliveredNotifications()
+        let identifiers = delivered.filter {
+            NotificationDelivery.matchesWorkflow(userInfo: $0.request.content.userInfo, pairID: pairID, target: target)
+        }.map(\.request.identifier)
+        center.removeDeliveredNotifications(withIdentifiers: identifiers)
     }
 
     private func deliverWithFailure(reason: DecryptionFailureReason, hostName: String?) {

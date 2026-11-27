@@ -1,6 +1,32 @@
 import CtrlxNetworking
 import SwiftUI
 
+public struct WorkflowPaneStatusLabel: View {
+    public let status: AgentWorkflowPaneStatus
+
+    public init(status: AgentWorkflowPaneStatus) {
+        self.status = status
+    }
+
+    private var symbol: Symbols {
+        switch status.status {
+        case .completed: .checkmarkCircleFill
+        case .ended: .stopCircleFill
+        case .paused: status.needsAttention ? .exclamationmarkTriangle : .pause
+        case .running,
+             .finishing: .flowchart
+        }
+    }
+
+    public var body: some View {
+        Label("Workflow · \(status.title) · \(status.detail)", symbol: symbol)
+            .font(.caption)
+            .foregroundStyle(status.status == .completed ? Color.green : .secondary)
+            .lineLimit(2)
+            .accessibilityIdentifier("workflow-pane-status")
+    }
+}
+
 /// Uses the Host's workflow state; toggling affects all participants in the run.
 @MainActor
 public struct AgentWorkflowControlButton: View {
@@ -156,7 +182,7 @@ private struct WorkflowTerminalStatus: View {
         switch run.summary.status {
         case .completed: .checkmarkCircleFill
         case .ended: .stopCircleFill
-        case .paused: .pause
+        case .paused: run.notification == nil ? .pause : .exclamationmarkTriangle
         case .running,
              .finishing: .flowchart
         }
@@ -184,6 +210,9 @@ private struct WorkflowTerminalStatus: View {
 
 public extension AgentWorkflowRunState {
     var progressTitle: String {
+        if summary.status == .paused, let notification {
+            return notification.approvalRequestID == nil ? "Needs attention" : "Needs approval"
+        }
         if
             !summary.status.isTerminal, summary.status != .paused,
             nodes.contains(where: { [.uncertain, .awaitingAcceptance].contains($0.invocation?.status) }) {

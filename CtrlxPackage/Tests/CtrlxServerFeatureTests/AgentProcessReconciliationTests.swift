@@ -11,6 +11,45 @@
     @MainActor
     @Suite
     struct AgentProcessReconciliationTests {
+        @Test("Cancelled questions reconcile without clearing another question or a replacement session", arguments: [false, true])
+        func reconcilesCancelledQuestion(replaced: Bool) async throws {
+            let conversation = UUID().uuidString, next = UUID().uuidString
+            let process = PluginIngressPeer.Process(processID: 101, parentProcessID: 1, userID: 501, startSeconds: 100, startMicroseconds: 0)
+            let peer = try #require(PluginIngressPeer.capture(peerPID: 101, userID: 501, inspect: { _ in process }))
+            let duringRead = LockIsolated<(@MainActor @Sendable () -> Void)?>(nil)
+            try await withDependencies {
+                $0[AgentSessionIdentityClient.self].runtimeID = { _ in process.runtimeID }
+                $0[CodexTurnStateClient.self].cancelledQuestionIDs = { pid, runtime, session, pending in
+                    #expect(pid == "101" && runtime == process.runtimeID && session == conversation)
+                    #expect(pending == ["\(conversation):sync", "\(conversation):async"])
+                    await duringRead.value?()
+                    return ["\(conversation):sync"]
+                }
+            } operation: {
+                let manager = makeWindowManager()
+                var pane = try #require(manager.paneStates["%5"])
+                pane.workspaceIdentity = .init(serverID: "server", sessionID: UUID(), windowID: UUID(), paneID: UUID())
+                manager.setPaneStatesForPreview([pane])
+                _ = manager.reconcileDetectedAgentSessions(detected())
+                let binding = try #require(manager.currentAgentBinding(forPane: "%5"))
+                let submitted = PluginEvent(pluginID: "codex", sessionID: conversation, state: .working, tmuxPane: "%5", workflow: .init(kind: .submitted, nativeTurnID: UUID().uuidString, transcriptPath: "/fixture/rollout.jsonl", text: "Task"))
+                #expect(manager.acceptCurrentEvent(submitted, binding: binding, peer: peer, nativeConversationID: nil) != nil)
+                manager.applyState(pluginID: "codex", sessionID: conversation, state: .working, tmuxPane: "%5", projectPath: nil)
+                for call in ["sync", "async"] {
+                    manager.applyQuestions(.init(pluginID: "codex", sessionID: conversation, notification: .init(title: "Question", body: "Which?", isQuestion: true, questionID: "\(conversation):\(call)"), tmuxPane: "%5"))
+                }
+                if replaced {
+                    duringRead.setValue {
+                        manager.applyState(pluginID: "codex", sessionID: next, state: .working, tmuxPane: "%5", projectPath: nil)
+                        manager.applyQuestions(.init(pluginID: "codex", sessionID: next, notification: .init(title: "New question", body: "Which?", isQuestion: true, questionID: "\(next):new"), tmuxPane: "%5"))
+                    }
+                }
+                #expect(await manager.reconcileResolvedQuestions() == !replaced)
+                #expect(manager.paneStates["%5"]?.agentSession?.pendingQuestionIDs == (replaced ? ["\(next):new"] : ["\(conversation):async"]))
+                #expect(manager.paneStates["%5"]?.agentSession?.state == .working)
+            }
+        }
+
         private func makeWindowManager(tmuxService: TmuxService? = nil) -> MirrorWindowManager {
             withDependencies {
                 $0[PreferencesService.self] = .inMemory()

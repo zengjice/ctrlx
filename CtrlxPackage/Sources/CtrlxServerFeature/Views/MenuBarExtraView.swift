@@ -58,6 +58,10 @@ public struct MenuBarExtraView: View {
         let hasAny = !local.isEmpty || !remote.isEmpty
 
         Text("Needs attention")
+        workflowAttentionRows(panes: Array(windowManager.presentedPaneStates.values), route: "local")
+        ForEach(remote, id: \.host.id) { entry in
+            workflowAttentionRows(panes: entry.sessions.flatMap { $0.windows.flatMap(\.panes) }, route: entry.host.id)
+        }
         ForEach(local) { session in
             localSessionRows(for: session, waitingOnly: true)
         }
@@ -186,16 +190,31 @@ public struct MenuBarExtraView: View {
 
     // MARK: - Session Rows
 
-    /// Rows for one local tmux session, emitted in the session's sidebar
-    /// position: one row per agent pane (window/pane order), or the session's
-    /// single terminal-only row when no pane owns an agent.
+    @ViewBuilder
+    private func workflowAttentionRows(panes: [PaneState], route: String) -> some View {
+        let rows = panes.pendingAttentionPanes.filter(\.showsWorkflowAttention).compactMap(\.workflow)
+        ForEach(rows, id: \.runID) { workflow in
+            Button {
+                coordinator.workflowNavigation.open(.init(hostID: workflow.hostID, runID: workflow.runID, eventID: workflow.runID), route: route)
+                NSApp.setActivationPolicy(.regular)
+                openWindow(id: "workflows")
+                Self.bringAppToFront()
+            } label: {
+                Label("\(workflow.name) · Needs attention", symbol: .exclamationmarkTriangle)
+            }
+        }
+    }
+
+    /// One row per Agent, or one terminal-only row for the session.
     @ViewBuilder
     private func localSessionRows(for session: LocalTmuxSession, waitingOnly: Bool = false) -> some View {
-        let panes = session.windows.flatMap(\.panes).compactMap { windowManager.paneStates[$0.paneId] }
+        let states = windowManager.presentedPaneStates
+        let panes = session.windows.flatMap(\.panes).compactMap { states[$0.paneId] }
         let agents = panes.compactMap(\.agentSession)
-        let visible = agents.filter { !waitingOnly || localDisplayedState(for: $0) == .waiting }
+        let eligible = waitingOnly ? panes.filter { !$0.showsWorkflowAttention } : panes
+        let visible = eligible.compactMap(\.agentSession).filter { !waitingOnly || localDisplayedState(for: $0) == .waiting }
         if agents.isEmpty {
-            if let terminal = panes.terminalOnlySessions().first, !waitingOnly || terminal.displayedState == .waiting {
+            if let terminal = eligible.terminalOnlySessions().first, !waitingOnly || terminal.displayedState == .waiting {
                 localTerminalSessionButton(for: terminal)
             }
         } else {
@@ -211,9 +230,10 @@ public struct MenuBarExtraView: View {
     private func remoteSessionRows(for session: TmuxSession, host: PairedHost, waitingOnly: Bool = false) -> some View {
         let panes = session.windows.flatMap(\.panes)
         let agents = panes.compactMap(\.agentSession)
-        let visible = agents.filter { !waitingOnly || remoteDisplayedState(for: $0, host: host) == .waiting }
+        let eligible = waitingOnly ? panes.filter { !$0.showsWorkflowAttention } : panes
+        let visible = eligible.compactMap(\.agentSession).filter { !waitingOnly || remoteDisplayedState(for: $0, host: host) == .waiting }
         if agents.isEmpty {
-            if let terminal = panes.terminalOnlySessions().first, !waitingOnly || terminal.displayedState == .waiting {
+            if let terminal = eligible.terminalOnlySessions().first, !waitingOnly || terminal.displayedState == .waiting {
                 remoteTerminalSessionButton(for: terminal, host: host)
             }
         } else {
@@ -237,7 +257,8 @@ public struct MenuBarExtraView: View {
             // terminal glyph.
             rowLabel(
                 title: localTitle(for: session),
-                displayedState: localDisplayedState(for: session) ?? .idle
+                displayedState: localDisplayedState(for: session) ?? .idle,
+                isQuestion: AgentAttention(session: session) == .question
             )
         }
     }
@@ -255,7 +276,8 @@ public struct MenuBarExtraView: View {
         } label: {
             rowLabel(
                 title: "\(remoteTitle(for: session, host: host)) · \(host.displayName(showUsername: settings.hasDuplicateHostName(for: host)))",
-                displayedState: remoteDisplayedState(for: session, host: host) ?? .idle
+                displayedState: remoteDisplayedState(for: session, host: host) ?? .idle,
+                isQuestion: AgentAttention(session: session) == .question
             )
         }
     }
@@ -329,7 +351,7 @@ public struct MenuBarExtraView: View {
     /// override (issue #702) so rows match the sidebar's indicator; `nil` is
     /// the plain terminal glyph for an unpinned terminal-only session.
     @ViewBuilder
-    private func rowLabel(title: String, displayedState: CLISessionState?) -> some View {
+    private func rowLabel(title: String, displayedState: CLISessionState?, isQuestion: Bool = false) -> some View {
         switch displayedState {
         case .waiting:
             Label {
@@ -338,7 +360,9 @@ public struct MenuBarExtraView: View {
                 // NSMenuItem renders SF Symbols as template images, stripping
                 // foregroundStyle. Pre-render through ImageRenderer with
                 // isTemplate=false so the accent color survives.
-                if let image = Self.attentionIconImage {
+                if isQuestion {
+                    Symbols.questionmarkCircle.image
+                } else if let image = Self.attentionIconImage {
                     Image(nsImage: image)
                 } else {
                     Symbols.handsAndSparklesFill.image

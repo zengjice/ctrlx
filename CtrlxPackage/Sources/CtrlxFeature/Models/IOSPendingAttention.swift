@@ -7,6 +7,7 @@ struct IOSPendingAttention: Identifiable {
         case approval = "Needs approval"
         case waiting = "Waiting"
         case completed = "Completed"
+        case workflow = "Workflow needs attention"
 
         init(_ state: AgentState?) {
             switch state {
@@ -25,6 +26,7 @@ struct IOSPendingAttention: Identifiable {
     let sessionName: String
     let tabName: String
     let status: Status
+    var workflow: AgentWorkflowNotificationTarget? = nil
 
     static func items(
         hosts: [PairedHost], paneStates: [PaneKey: PaneState], catalogs: [String: ViewerWorkspaceCatalog]
@@ -59,9 +61,12 @@ struct IOSPendingAttention: Identifiable {
                     pane.windowName
                 }
                 let tabName = splitPaneNumbers[pane.paneId].map { "\(tab) · Pane \($0)" } ?? tab
+                let runAttention = pane.showsWorkflowAttention ? pane.workflow : nil
                 return Self(
                     id: PaneKey(pairId: host.id, paneId: pane.paneId), agentID: agentID, hostName: hostName,
-                    sessionName: pane.sessionName, tabName: tabName, status: Status(pane.agentSession?.state)
+                    sessionName: pane.sessionName, tabName: runAttention.map { "\($0.name) · \($0.nodeName ?? $0.title)" } ?? tabName,
+                    status: runAttention != nil ? .workflow : (pane.agentSession?.hasPendingQuestions == true ? .reply : Status(pane.agentSession?.state)),
+                    workflow: runAttention.map { .init(hostID: $0.hostID, runID: $0.runID, eventID: $0.runID) }
                 )
             }
         }
@@ -69,7 +74,7 @@ struct IOSPendingAttention: Identifiable {
 
     static func directTarget(in items: [Self], connectedHostIDs: Set<String>) -> Self? {
         guard
-            items.count == 1, let item = items.first, item.agentID != nil,
+            items.count == 1, let item = items.first, item.agentID != nil || item.workflow != nil,
             connectedHostIDs.contains(item.id.pairId) else { return nil }
         return item
     }

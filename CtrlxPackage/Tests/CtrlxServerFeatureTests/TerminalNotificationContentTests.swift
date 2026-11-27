@@ -5,6 +5,23 @@ import Testing
 @testable import CtrlxServerFeature
 
 struct TerminalNotificationContentTests {
+    @Test(arguments: ["agent.question", "agent.approval"])
+    func workflowHumanAttentionKeepsWorkflowCopyAndAgentNavigation(type: String) {
+        let target = AgentWorkflowNotificationTarget(hostID: UUID(), runID: UUID(), eventID: UUID())
+        let agent = AgentID(hostID: target.hostID, paneID: UUID())
+        let presentation = AgentNotificationPresentation(
+            title: "Bugfix · Review", subtitle: "Needs your answer", body: "Which directory?",
+            paneState: .init(paneId: "%7", sessionName: "work", windowName: "agent"),
+            agentID: agent, eventType: type, workflow: target
+        )
+        let content = TerminalNotificationService.content(paneId: "%7", notification: presentation, hostId: "office")
+        #expect(content.title == "Bugfix · Review")
+        #expect(content.subtitle == "Needs your answer")
+        #expect(content.threadIdentifier == NotificationDelivery.threadIdentifier(target))
+        #expect(AgentID(notificationUserInfo: content.userInfo) == agent)
+        #expect(!NotificationDelivery.isWorkflow(userInfo: content.userInfo))
+    }
+
     @Test(arguments: [nil, "host-a"] as [String?], ["Session Idle", "Permission: Bash", "Codex wants answers"])
     func nativeContentPreservesContextStatusAndRouting(hostID: String?, title: String) {
         let presentation = AgentNotificationPresentation(

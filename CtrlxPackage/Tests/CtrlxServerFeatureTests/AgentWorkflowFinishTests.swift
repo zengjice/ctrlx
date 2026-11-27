@@ -166,6 +166,52 @@ struct AgentWorkflowFinishTests {
         #expect(result.invocations.map(\.nodeID) == [f.invocation.nodeID, repair.id])
     }
 
+    @Test("Approval pause and actionable notification are durable and deduplicated")
+    func approvalNotification() async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        #expect(try await f.store.notificationContext(agentID: f.instance.agentID, runtimeID: "replaced", conversationID: f.instance.conversationID) == nil)
+        let context = try #require(await f.store.notificationContext(agentID: f.instance.agentID, runtimeID: f.instance.processRuntimeID, conversationID: f.instance.conversationID))
+        let action = NotificationActionContext(sessionId: f.instance.paneID, pluginId: f.instance.pluginID, requestId: "approve", form: .permission(.init(alwaysSuggestionID: nil)))
+        #expect(try await f.store.pauseForApproval(context: context, requestID: "approve", body: "Allow Bash?", action: action))
+        let first = try #require(await f.store.snapshot().notifications?[f.run.id])
+        #expect(first.eventType == "agent.approval")
+        #expect(first.agentID == f.instance.agentID && first.action == action)
+        #expect(first.title.contains(f.run.definition.name))
+        #expect(first.body.contains(context.nodeName) && first.body.contains("Allow Bash?"))
+        #expect(try await f.store.snapshot().runs.first?.status == .paused)
+        #expect(try await f.store.pauseForApproval(context: context, requestID: "approve", body: "Allow Bash?", action: action))
+        #expect(try await f.store.snapshot().notifications?[f.run.id]?.id == first.id)
+        let fileURL = await f.store.fileURL
+        let reopened = AgentWorkflowStore(fileURL: fileURL, hostID: f.instance.hostID)
+        #expect(try await reopened.snapshot().notifications?[f.run.id] == first)
+        let run = try #require(await reopened.snapshot().runs.first)
+        let status = AgentWorkflowPaneStatus(run: run, hostID: f.instance.hostID, needsAttention: true)
+        #expect(status.title == "Needs attention" && status.nodeName == context.nodeName)
+        #expect(try JSONDecoder().decode(AgentWorkflowPaneStatus.self, from: JSONEncoder().encode(status)) == status)
+        var firstPane = PaneState(paneId: "%1", agentSession: .init(paneId: "%1", state: .working))
+        firstPane.workflow = status
+        var secondPane = PaneState(paneId: "%2", agentSession: .init(paneId: "%2", state: .working))
+        secondPane.workflow = status
+        #expect([firstPane, secondPane].pendingAttentionPanes.count == 1)
+        secondPane.agentSession?.recordQuestion("native:question")
+        let pending = [firstPane, secondPane].pendingAttentionPanes
+        #expect(pending.map(\.paneId) == ["%2"])
+        let presentations = AgentWorkflowPaneStatus.presentations(runs: [run], hostID: f.instance.hostID, attentionRunIDs: [run.id])
+        #expect(presentations[f.instance.workspacePane]?.runID == run.id)
+    }
+
+    @Test("An older approval cannot replace a newer operator pause")
+    func approvalPreservesOperatorControl() async throws {
+        let f = try await fixture(completion: .explicit)
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let context = try #require(await f.store.notificationContext(agentID: f.instance.agentID, runtimeID: f.instance.processRuntimeID, conversationID: f.instance.conversationID))
+        _ = try await f.store.update(runID: f.run.id) { $0.pause(reason: "Operator pause", operatorInitiated: true) }
+        #expect(try await !f.store.pauseForApproval(context: context, requestID: "old", body: "Allow?", action: nil))
+        #expect(try await f.store.snapshot().runs.first?.issue == "Operator pause")
+        #expect(try await f.store.snapshot().notifications?[f.run.id] == nil)
+    }
+
     @Test("Workflow alerts once and individual stop alerts are opt-in", arguments: [nil, true] as [Bool?])
     func completionNotifications(notifyOnAgentCompletion: Bool?) async throws {
         let completedRuns = LockIsolated([UUID]())
@@ -233,10 +279,12 @@ struct AgentWorkflowFinishTests {
         await dispatcher.dispatch(noReply, ingressPeer: f.peer)
         #expect(completedRuns.value.isEmpty)
         await dispatcher.dispatch(event("Workflow turn", turn: "turn-1"), ingressPeer: f.peer)
-        let unsuppressed = ["Manual turn", "Turn failed", "Other tool-only turn", "Other transcript"]
+        let unsuppressed = ["Manual turn", "Other tool-only turn", "Other transcript"]
         let workflowNotices = ["Workflow tool-only turn", "Workflow turn without reply", "Workflow turn"]
         #expect(notices.value == unsuppressed + (notifyOnAgentCompletion == true ? workflowNotices : []))
         #expect(states.value.count == 7)
+        #expect(states.value[1] == .idle)
+        #expect(states.value[4].needsAttention == (notifyOnAgentCompletion == true))
         #expect(completedRuns.value == [f.run.id])
 
         let sameRun = try await f.store.update(runID: f.run.id) { _ in }

@@ -18,6 +18,29 @@
     @MainActor
     @Suite
     struct PluginRuntimeStatusWiringTests {
+        @Test("Question-only events reach pane snapshots and clear only their own question")
+        func pendingQuestions() async {
+            let manager = makeWindowManager()
+            manager.applyState(pluginID: "codex", sessionID: "native", state: .working, tmuxPane: "%7", projectPath: nil)
+            #expect(manager.setCLISessionState(.idle, for: "%7"))
+            let dispatcher = PluginEventDispatcher(onQuestions: { event in
+                await manager.applyQuestions(event)
+            })
+            await dispatcher.dispatch(.init(pluginID: "codex", sessionID: "native", notification: .init(title: "Question", body: "Which?", isQuestion: true, questionID: "native:call"), tmuxPane: "%7"))
+            #expect(manager.paneStates["%7"]?.agentSession?.isWorking == true)
+            #expect(manager.paneStates["%7"]?.displayedState == .waiting)
+            var resolved = PluginEvent(pluginID: "codex", sessionID: "native", tmuxPane: "%7")
+            resolved.resolvedQuestionIDs = ["native:other"]
+            await dispatcher.dispatch(resolved)
+            #expect(manager.paneStates["%7"]?.agentSession?.hasPendingQuestions == true)
+            resolved.resolvedQuestionIDs = ["native:call"]
+            await dispatcher.dispatch(resolved)
+            #expect(manager.paneStates["%7"]?.displayedState == .working)
+            manager.applyQuestions(.init(pluginID: "codex", sessionID: "native", notification: .init(title: "Question", body: "Which?", isQuestion: true, questionID: "native:next"), tmuxPane: "%7"))
+            manager.applyState(pluginID: "codex", sessionID: "new-session", state: .working, tmuxPane: "%7", projectPath: nil)
+            #expect(manager.paneStates["%7"]?.agentSession?.hasPendingQuestions == false)
+        }
+
         @Test("Session state menus reject replaced sessions while allowing changed child panes")
         func sessionStateIdentity() {
             let manager = makeWindowManager()

@@ -18,6 +18,8 @@ public struct PluginEvent: Codable, Sendable, Equatable {
 
     /// A pre-baked Mac notification + iOS push (strings formatted by the core).
     public let notification: NotificationSpec?
+    /// Completion/cancellation of a previously announced tool question.
+    public var resolvedQuestionIDs: [String]?
 
     /// Discrete agent-blind Mac-side triggers (markdown suggestion, pane close…).
     public let appActions: [AppAction]

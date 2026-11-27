@@ -523,6 +523,10 @@
         }
 
         private func openAttentionItem(_ item: IOSPendingAttention) {
+            if let target = item.workflow {
+                pushService.pendingWorkflow = .init(target: target, pairID: item.id.pairId)
+                return
+            }
             guard let agentID = item.agentID else { return }
             pushService.pendingDeepLink = .init(paneId: item.id.paneId, agentID: agentID, hostId: item.id.pairId)
         }

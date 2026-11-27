@@ -77,6 +77,49 @@ struct AgentWorkflowNotificationTests {
         #expect(try await fixture.store.snapshot().notifications?[fixture.run.id] == nil)
     }
 
+    @Test("A parallel failure keeps priority over an in-flight approval")
+    func approvalCannotReplaceParallelFailure() async throws {
+        let f = try await fixture()
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let observations = (0..<2).map { index in
+            AgentWorkflowObservation(
+                pluginID: "codex", processID: Int32(100 + index), processRuntimeID: "runtime-\(index)",
+                workspacePane: .init(serverID: "tmux", sessionID: UUID(), windowID: UUID(), paneID: UUID()),
+                paneID: "%\(index)", conversationID: "native-\(index)", displayName: "Agent \(index)", workingDirectory: "/work",
+                capabilities: .init(maximumInputBytes: 100_000), readiness: .ready
+            )
+        }
+        let instances = try await f.store.reconcile(observations)
+        let entry = AgentWorkflowNode(name: "Start", content: .init(text: "Start"))
+        let a = AgentWorkflowNode(name: "A", agentInstanceID: instances[0].id)
+        let b = AgentWorkflowNode(name: "B", agentInstanceID: instances[1].id)
+        let definition = try await f.store.saveDefinition(.init(
+            name: "Parallel",
+            hostID: f.run.definition.hostID,
+            nodes: [entry, a, b],
+            edges: [.init(source: entry.id, target: a.id), .init(source: entry.id, target: b.id)],
+            entryNodeID: entry.id
+        ), expectedRevision: nil)
+        let started = try await f.store.start(definitionID: definition.id, expectedRevision: definition.revision, requestID: UUID(), now: .now, authorizationExpiresAt: .now.addingTimeInterval(3_600))
+        let active = try await f.store.update(runID: started.id) { execution in
+            _ = try execution.prepareInvocation(nodeID: entry.id, now: .now)
+            for (node, instance) in zip([a, b], instances) {
+                let call = try execution.prepareInvocation(nodeID: node.id, now: .now)
+                try execution.beginWriting(invocationID: call.id, instance: instance, now: .now)
+                try execution.accept(invocationID: call.id, instance: instance, nativeTurnID: node.name)
+            }
+        }
+        let context = try #require(await f.store.notificationContext(agentID: instances[0].agentID, runtimeID: instances[0].processRuntimeID, conversationID: instances[0].conversationID))
+        let failed = try #require(active.invocations.first { $0.nodeID == b.id })
+        _ = try await f.store.update(runID: active.id) {
+            try $0.fail(invocationID: failed.id, instance: instances[1], nativeTurnID: "B", reason: "Branch failed")
+        }
+        let notice = try #require(await f.store.snapshot().notifications?[active.id])
+        #expect(try await f.store.pauseForApproval(context: context, requestID: "approval", body: "Allow?", action: nil))
+        #expect(try await f.store.snapshot().notifications?[active.id]?.id == notice.id)
+        #expect(try await f.store.snapshot().runs.first(where: { $0.id == active.id })?.invocations.first(where: { $0.id == failed.id })?.status == .failed)
+    }
+
     @Test
     func migrationDoesNotNotifyHistoricalCompletions() async throws {
         let fixture = try await fixture()

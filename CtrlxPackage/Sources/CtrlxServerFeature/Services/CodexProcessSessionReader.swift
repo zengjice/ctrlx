@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-/// Reads only the active writer's metadata, never argv (which names the parent
+/// Reads metadata and question outcomes from the active writer, never argv (which names the parent
 /// of a fork) or a history-directory search (which can belong to another pane).
 actor CodexProcessSessionReader {
     static func supports(pluginID: String) -> Bool {
@@ -11,6 +11,111 @@ actor CodexProcessSessionReader {
     static let headerLimit = 256 * 1_024
     static let completionLimit = 1_024 * 1_024
     private static let descriptorLimit = 4_096
+    private struct QuestionKey: Hashable {
+        let processID: String
+        let runtimeID: String
+        let conversationID: String
+    }
+
+    private struct QuestionScan {
+        let writer: Rollout
+        var ids: Set<String> = []
+        var cancelled: Set<String> = []
+        var offset: off_t = 0
+        var modified = timespec()
+    }
+
+    private var questionScans: [QuestionKey: QuestionScan] = [:]
+
+    func cancelledQuestionIDs(processID: String, runtimeID: String, conversationID: String, questionIDs: [String]) -> [String] {
+        let key = QuestionKey(processID: processID, runtimeID: runtimeID, conversationID: conversationID)
+        let prefix = conversationID + ":"
+        let ids = Set(questionIDs.filter { $0.hasPrefix(prefix) }.map { String($0.dropFirst(prefix.count)) })
+        guard !ids.isEmpty else {
+            questionScans.removeValue(forKey: key)
+            return []
+        }
+        guard
+            !Task.isCancelled, let pid = Int32(processID), let conversation = UUID(uuidString: conversationID),
+            AgentSessionIdentityClient.processRuntimeID(processID) == runtimeID,
+            let writer = activeRollout(pid: pid, conversationID: conversation), let header = readHeader(writer),
+            Self.sessionID(header: header, path: writer.path) == conversationID,
+            let fd = openRollout(writer) else { return [] }
+        defer { close(fd) }
+        var before = stat()
+        guard fstat(fd, &before) == 0 else { return [] }
+        var scan = questionScans[key] ?? QuestionScan(writer: writer)
+        if
+            scan.writer != writer || before.st_size < scan.offset ||
+            (before.st_size == scan.offset && (before.st_mtimespec.tv_sec != scan.modified.tv_sec || before.st_mtimespec.tv_nsec != scan.modified.tv_nsec)) {
+            scan = QuestionScan(writer: writer)
+        }
+        let newIDs = ids.subtracting(scan.ids)
+        let existing = scanQuestionRecords(fd, from: scan.offset, to: before.st_size, ids: ids.subtracting(newIDs), stopAtCall: false)
+        let added = scanQuestionRecords(fd, from: 0, to: before.st_size, ids: newIDs, stopAtCall: true)
+        var after = stat()
+        guard
+            !Task.isCancelled, fstat(fd, &after) == 0, after.st_size == before.st_size,
+            after.st_mtimespec.tv_sec == before.st_mtimespec.tv_sec, after.st_mtimespec.tv_nsec == before.st_mtimespec.tv_nsec,
+            AgentSessionIdentityClient.processRuntimeID(processID) == runtimeID,
+            activeRollout(pid: pid, conversationID: conversation) == writer, readHeader(writer) == header,
+            let existing, let added else { return [] }
+        scan.ids = ids
+        scan.cancelled = scan.cancelled.intersection(ids).union(existing.ids).union(added.ids)
+        scan.offset = max(existing.end, added.end)
+        scan.modified = before.st_mtimespec
+        // Retain only small cursors, bounded even as processes and conversations close.
+        if questionScans[key] == nil, questionScans.count >= 32 {
+            questionScans.removeAll()
+        }
+        questionScans[key] = scan
+        return scan.cancelled.sorted().map { prefix + $0 }
+    }
+
+    private func scanQuestionRecords(_ fd: Int32, from start: off_t, to end: off_t, ids: Set<String>, stopAtCall: Bool) -> (ids: Set<String>, end: off_t)? {
+        guard !ids.isEmpty else { return ([], start) }
+        var remaining = ids, cancelled: Set<String> = []
+        var chunkEnd = end
+        var recordEnd: off_t?, completeEnd: off_t?
+        let boundary = max(0, start - 1)
+        while chunkEnd > boundary {
+            let offset = max(boundary, chunkEnd - off_t(Self.completionLimit))
+            guard !Task.isCancelled, let bytes = readChunk(fd, from: offset, to: chunkEnd) else { return nil }
+            for index in bytes.indices.reversed() where bytes[index] == 10 {
+                let newline = offset + off_t(index)
+                if completeEnd == nil {
+                    completeEnd = newline + 1
+                }
+                defer { recordEnd = newline }
+                guard
+                    let recordEnd, newline + 1 < recordEnd,
+                    recordEnd - newline - 1 <= Self.completionLimit else { continue }
+                let line = recordEnd <= chunkEnd ? bytes[(index + 1)..<Int(recordEnd - offset)] : readChunk(fd, from: newline + 1, to: recordEnd)
+                guard
+                    let line,
+                    let record = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                    record["type"] as? String == "response_item",
+                    let payload = record["payload"] as? [String: Any],
+                    let id = payload["call_id"] as? String, remaining.contains(id),
+                    let type = payload["type"] as? String else { continue }
+                if type == "function_call_output", let output = payload["output"] as? String {
+                    let output = output.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let message = "request_user_input was cancelled before receiving a response"
+                    if output == message || output.wholeMatch(of: /aborted by user after [0-9]+\.[0-9]s/) != nil {
+                        cancelled.insert(id)
+                    }
+                }
+                if stopAtCall, ["function_call", "function_call_output"].contains(type) {
+                    remaining.remove(id)
+                    if remaining.isEmpty {
+                        return (cancelled, completeEnd ?? start)
+                    }
+                }
+            }
+            chunkEnd = offset
+        }
+        return (cancelled, completeEnd ?? start)
+    }
 
     func sessionID(processID: String, runtimeID: String) -> String? {
         guard

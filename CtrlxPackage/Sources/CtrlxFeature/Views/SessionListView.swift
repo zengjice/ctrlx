@@ -553,6 +553,7 @@
             // Real terminal progress wins across the session; a working agent
             // supplies an indeterminate fallback when no pane reports progress.
             let sessionProgress = panes.effectiveProgress
+            let workflows = Dictionary(grouping: panes.compactMap(\.workflow), by: \.runID).values.compactMap(\.first).sorted { $0.name < $1.name }
 
             NavigationLink(value: SessionNavigation(
                 sessionName: session.sessionName,
@@ -580,6 +581,12 @@
                             customEmoji: session.customEmoji,
                             windowCount: session.windows.count
                         )
+                    }
+                    ForEach(workflows, id: \.runID) { workflow in
+                        WorkflowPaneStatusLabel(status: workflow)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.leading, 32)
+                            .padding(.top, 4)
                     }
                 }
                 // The visual progress bar is rendered as an .overlay outside

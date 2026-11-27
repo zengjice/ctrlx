@@ -6,6 +6,32 @@ import Testing
 
 @Suite("Codex question notifications")
 struct CodexQuestionNotificationTests {
+    @Test("Tool completion resolves synchronous questions but keeps async questions open")
+    func resolution() async throws {
+        let core = makeCore()
+        _ = try await core.handleIngress(frame(tool: "request_user_input"))
+        let answered = try await core.handleIngress(frame(tool: "request_user_input", event: "PostToolUse"))
+        #expect(answered?.resolvedQuestionIDs == ["session:call"])
+        let asyncReturn = try await core.handleIngress(frame(event: "PostToolUse"))
+        #expect(asyncReturn?.resolvedQuestionIDs == nil)
+        let cancelled = try await core.handleIngress(frame(event: "PostToolUseFailure"))
+        #expect(cancelled?.resolvedQuestionIDs == ["session:call"])
+    }
+
+    @Test("Async replies resolve only their correlated question")
+    func asynchronousReply() async throws {
+        let core = makeCore()
+        _ = try await core.handleIngress(frame())
+        let item = try String(decoding: JSONEncoder().encode(["request_user_input_async", "call"]), as: UTF8.self)
+        let replies = try JSONSerialization.data(withJSONObject: [["answer": "Current", "questionItemId": item]])
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "hook_event_name": "UserPromptSubmit", "session_id": "session", "cwd": "/host/repo",
+            "prompt": "<send_user_message_question_reply>\(String(decoding: replies, as: UTF8.self))</send_user_message_question_reply>",
+        ])
+        let event = try await core.handleIngress(.init(pluginID: "codex", context: ["TMUX_PANE": "%7"], payload: payload))
+        #expect(event?.resolvedQuestionIDs == ["session:call"])
+    }
+
     @Test("Synchronous and asynchronous questions notify without changing state", arguments: [
         "request_user_input", "request_user_input_async", "functions.request_user_input", "functions.request_user_input_async",
     ])

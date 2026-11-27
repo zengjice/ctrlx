@@ -17,10 +17,20 @@ public enum AgentAttention: Equatable, Sendable {
         }
     }
 
+    public init?(session: AgentSession) {
+        if session.hasPendingQuestions {
+            self = .question
+        } else if let attention = Self(state: session.state) {
+            self = attention
+        } else {
+            return nil
+        }
+    }
+
     public init?(panes: some Sequence<PaneState>) {
         var hasAttention = false
         for pane in panes {
-            guard let state = pane.agentSession?.state, let attention = Self(state: state) else { continue }
+            guard let session = pane.agentSession, let attention = Self(session: session) else { continue }
             if attention == .question {
                 self = .question
                 return
@@ -61,7 +71,7 @@ public struct SessionStatusPresentation: Equatable, Sendable {
             self.label = AgentAttention.question.accessibilityLabel
             return
         }
-        if let attention = AgentAttention(state: agent.state) {
+        if let attention = AgentAttention(session: agent) {
             self.indicator = .attention(attention)
         } else {
             self.indicator = agent.isWorking ? .working : .idle

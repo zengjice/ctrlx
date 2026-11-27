@@ -288,7 +288,8 @@ final public class ConnectedViewerManager {
         action: NotificationActionContext? = nil,
         isQuestion: Bool? = nil,
         agentID: AgentID? = nil,
-        eventType: String? = nil
+        eventType: String? = nil,
+        workflow: AgentWorkflowNotificationTarget? = nil
     ) async {
         await withTaskGroup(of: Void.self) { group in
             for connection in connections.values where connection.state.isConnected {
@@ -301,7 +302,8 @@ final public class ConnectedViewerManager {
                         action: action,
                         isQuestion: isQuestion,
                         agentID: agentID,
-                        eventType: eventType
+                        eventType: eventType,
+                        workflow: workflow
                     )
                 }
             }
@@ -319,7 +321,8 @@ final public class ConnectedViewerManager {
             submitted = await connection.sendWorkflowLiveNotification(event)
         } else {
             submitted = await connection.sendCustomPushNotification(
-                title: event.title, body: event.body, paneId: nil,
+                title: event.title, body: event.body, paneId: event.paneID,
+                action: event.action, agentID: event.agentID,
                 eventType: event.eventType, workflow: event.target, includeLiveNotification: false
             )
         }

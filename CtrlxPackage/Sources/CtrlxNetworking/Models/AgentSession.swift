@@ -23,6 +23,8 @@ public struct AgentSession: Codable, Sendable, Equatable {
     /// (`markHandled`). The open response form, when any, rides the `awaiting*`
     /// cases, so it travels in the snapshot/status messages automatically.
     public var state: AgentState
+    /// Tool questions can remain open while the Agent continues working.
+    public var pendingQuestionIDs: [String]?
     /// Host-verified process incarnation; absent on older Hosts or before detection.
     public var processRuntimeID: String?
 
@@ -46,7 +48,27 @@ public struct AgentSession: Codable, Sendable, Equatable {
     }
 
     public var needsAttention: Bool {
-        state.needsAttention
+        state.needsAttention || hasPendingQuestions
+    }
+
+    public var hasPendingQuestions: Bool {
+        pendingQuestionIDs?.isEmpty == false
+    }
+
+    public var needsHumanResponse: Bool {
+        hasPendingQuestions || state.openForm != nil
+    }
+
+    public mutating func recordQuestion(_ id: String) {
+        guard !id.isEmpty, pendingQuestionIDs?.contains(id) != true else { return }
+        pendingQuestionIDs = (pendingQuestionIDs ?? []) + [id]
+    }
+
+    public mutating func resolveQuestion(_ id: String) {
+        pendingQuestionIDs?.removeAll { $0 == id }
+        if pendingQuestionIDs?.isEmpty == true {
+            pendingQuestionIDs = nil
+        }
     }
 
     /// The project folder name from the detected project path (last component),
@@ -63,6 +85,9 @@ public struct AgentSession: Codable, Sendable, Equatable {
 
     /// Human-readable status label for accessibility and testing.
     public var statusLabel: String {
+        if hasPendingQuestions {
+            return "Questions"
+        }
         switch state {
         case .working: return "Working"
         case .awaitingPlanApproval: return "Plan approval"
@@ -92,6 +117,7 @@ public struct AgentSession: Codable, Sendable, Equatable {
         case pluginID
         case detectedProjectPath
         case state
+        case pendingQuestionIDs
         case processRuntimeID
     }
 
@@ -101,6 +127,7 @@ public struct AgentSession: Codable, Sendable, Equatable {
         self.pluginID = try container.decodeIfPresent(String.self, forKey: .pluginID) ?? "claude-code"
         self.detectedProjectPath = try container.decodeIfPresent(String.self, forKey: .detectedProjectPath)
         self.state = try container.decodeIfPresent(AgentState.self, forKey: .state) ?? .idle
+        self.pendingQuestionIDs = try container.decodeIfPresent([String].self, forKey: .pendingQuestionIDs)
         self.processRuntimeID = try container.decodeIfPresent(String.self, forKey: .processRuntimeID)
     }
 }

@@ -79,6 +79,7 @@
             }
             if let workflow = notification.workflow {
                 userInfo.merge(workflow.userInfo) { _, current in current }
+                content.threadIdentifier = NotificationDelivery.threadIdentifier(workflow)
             }
             content.userInfo = userInfo
             return content
@@ -131,8 +132,12 @@
 
             let content = TerminalNotificationService.content(paneId: paneId, notification: notification, hostId: hostId)
 
+            let identifier = notification.workflow.map(NotificationDelivery.threadIdentifier) ?? UUID().uuidString
+            if notification.workflow != nil {
+                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier])
+            }
             let request = UNNotificationRequest(
-                identifier: notification.workflow?.eventID.uuidString ?? UUID().uuidString,
+                identifier: identifier,
                 content: content,
                 trigger: nil
             )

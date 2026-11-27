@@ -53,21 +53,32 @@ public struct AgentWorkflowNotification: Codable, Equatable, Identifiable, Senda
     public let round: Int
     public let issue: String?
     public let createdAt: Date
+    public var nodeName: String?
+    public var agentID: AgentID?
+    public var paneID: String?
+    public var action: NotificationActionContext?
+    public var approvalRequestID: String?
     public var deliveries: [Delivery]?
     public var id: UUID {
         target.eventID
     }
 
     public var title: String {
-        kind == .completed ? "Workflow completed" : "Workflow needs attention"
+        if approvalRequestID != nil {
+            return "\(name) · Needs approval"
+        }
+        return kind == .completed ? "\(name) · Workflow completed" : "\(name) · Needs attention"
     }
 
     public var eventType: String {
-        kind == .completed ? NotificationDelivery.workflowCompletionEventType : NotificationDelivery.workflowAttentionEventType
+        if approvalRequestID != nil {
+            return "agent.approval"
+        }
+        return kind == .completed ? NotificationDelivery.workflowCompletionEventType : NotificationDelivery.workflowAttentionEventType
     }
 
     public var body: String {
-        let context = "\(name) · Round \(round)"
+        let context = (["Round \(round)"] + (nodeName.map { [$0] } ?? [])).joined(separator: " · ")
         return issue.map { "\(context)\n\(String($0.prefix(200)))" } ?? context
     }
 
@@ -78,5 +89,7 @@ public struct AgentWorkflowNotification: Codable, Equatable, Identifiable, Senda
         self.round = run.round
         self.issue = kind == .attention ? run.issue : nil
         self.createdAt = createdAt
+        let call = run.invocations.last { $0.round == run.round && ($0.status == .failed || $0.status == .uncertain || $0.status == .running) }
+        self.nodeName = call.flatMap { call in run.definition.nodes.first { $0.id == call.nodeID }?.name }
     }
 }

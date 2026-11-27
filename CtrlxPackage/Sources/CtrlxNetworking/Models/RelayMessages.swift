@@ -490,6 +490,13 @@ public struct PaneState: Codable, Sendable, Identifiable {
 
     /// The coding-agent session running in this pane, if any
     public var agentSession: AgentSession?
+    /// Latest run for this stable pane, supplied by the Host alongside Agent state.
+    public var workflow: AgentWorkflowPaneStatus?
+
+    /// A real question/approval can represent its run; unread completion cannot.
+    public var showsWorkflowAttention: Bool {
+        workflow?.needsAttention == true && !(displayedState == .waiting && agentSession?.needsHumanResponse == true)
+    }
 
     /// Latest Host task-event time used for session ordering, persisted by pane
     /// identity. Terminal output and viewing do not change it. Optional for older Hosts.
@@ -580,7 +587,10 @@ public struct PaneState: Codable, Sendable, Identifiable {
     /// its badge count treat `== .waiting` as the needs-attention/pending bucket,
     /// so a manual override is honored there too (issue #702).
     public var displayedState: CLISessionState? {
-        CLISessionState.displayed(override: cliSessionState, agentState: agentSession?.state)
+        if cliSessionState == nil, agentSession?.hasPendingQuestions == true {
+            return .waiting
+        }
+        return CLISessionState.displayed(override: cliSessionState, agentState: agentSession?.state)
     }
 
     public init(

@@ -202,6 +202,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         }
 
         let reviewer = await approvalsReviewer(for: action)
+        let resolvedQuestions = CodexQuestionNotification.resolvedIDs(payload: frame.payload)
         guard
             let output = CodexTranslator.translate(
                 action: action,
@@ -218,6 +219,11 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
                 agentName: distribution.displayName
             )
         else {
+            if !resolvedQuestions.isEmpty {
+                var event = PluginEvent(pluginID: frame.pluginID, sessionID: action.sessionId, tmuxPane: tmuxPane)
+                event.resolvedQuestionIDs = resolvedQuestions
+                return event
+            }
             return nil
         }
 
@@ -237,7 +243,9 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
             pendingRequests[form.requestID] = pending
         }
 
-        return PluginWorkflowHook.addingEvidence(to: output.event, from: frame, nativeTurnKey: "turn_id")
+        var event = output.event
+        event.resolvedQuestionIDs = resolvedQuestions.isEmpty ? nil : resolvedQuestions
+        return PluginWorkflowHook.addingEvidence(to: event, from: frame, nativeTurnKey: "turn_id")
     }
 
     /// Resolve the tmux pane for an event. On a session start with a pane,
