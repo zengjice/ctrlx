@@ -119,7 +119,7 @@ struct ClaudeWorkflowTranscriptTests {
         #expect(try parser.consume(summary("blocked", parent: "answer", errors: ["Continue"])) == nil)
         #expect(parser.updateCandidate("Final answer") == nil)
         _ = try parser.consume(answer("final", parent: "blocked", text: "Final answer\n"))
-        #expect(try parser.consume(summary("stop", parent: "final")) == .succeeded("Final answer"))
+        #expect(try parser.consume(summary("stop", parent: "final")) == .succeeded("Final answer\n"))
         #expect(parser.activity.map(\.kind) == [.update, .tool])
         #expect(parser.activity.map(\.text) == ["I’ll check the saved tasks.", "Called Bash"])
         #expect(parser.activity.allSatisfy { $0.timestamp == Date(timeIntervalSince1970: 1) })
@@ -131,7 +131,21 @@ struct ClaudeWorkflowTranscriptTests {
         _ = try parser.consume(answer("answer", parent: "user", text: "\nFinal\n  answer\n"))
         #expect(try parser.consume(summary("stop", parent: "answer")) == nil)
         #expect(parser.updateCandidate("Final answer") == nil)
-        #expect(parser.updateCandidate("  \nFinal\n  answer\r\n") == .succeeded("Final\n  answer"))
+        #expect(parser.updateCandidate("  \nFinal\n  answer\r\n") == .succeeded("\nFinal\n  answer\n"))
+        #expect(parser.updateCandidate(" \n ") == nil)
+    }
+
+    @Test(arguments: [false, true])
+    func completedMarkdownRetainsIndentationForImmediateLateAndRecoveredCompletion(lateCandidate: Bool) throws {
+        let raw = "    <div>HTML code example</div>\n\n"
+        var parser = try started()
+        #expect(parser.updateCandidate(lateCandidate ? "" : raw.trimmingCharacters(in: .whitespacesAndNewlines)) == nil)
+        _ = try parser.consume(answer("answer", parent: "user", text: raw))
+        let outcome = try parser.consume(summary("stop", parent: "answer"))
+        #expect(outcome == (lateCandidate ? nil : .succeeded(raw)))
+        #expect(parser.recoveredCompletion == .succeeded(raw))
+        #expect(parser.updateCandidate("Different answer") == nil)
+        #expect(parser.updateCandidate(raw.trimmingCharacters(in: .whitespacesAndNewlines)) == .succeeded(raw))
         #expect(parser.updateCandidate(" \n ") == nil)
     }
 

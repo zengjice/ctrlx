@@ -1,0 +1,34 @@
+{
+  "packages": [
+    {
+      "name": "generative-frame",
+      "version": "0.0.12",
+      "source": "https://registry.npmjs.org/generative-frame/-/generative-frame-0.0.12.tgz",
+      "integrity": "sha512-eTX+pxuwuKKYZMjZ6/JAO0u6YTSRIjo/4TELntjgYnPTU0qcBL0cL1LLIH70Gv2vZmsYVpf6HPjQZqb3GJWz3Q==",
+      "license": "MIT"
+    },
+    {
+      "name": "safe-content-frame",
+      "version": "0.0.34",
+      "source": "https://registry.npmjs.org/safe-content-frame/-/safe-content-frame-0.0.34.tgz",
+      "integrity": "sha512-js/Tt/SWUGdBi+pt8NuMlg5OkDLD+5Q8sTItzAFr4Xr+geHkTOc0Vl2LA+BUsPFZ3fdT4hbRjWaPb9DoPEvHDw==",
+      "license": "MIT"
+    },
+    {
+      "name": "highlight.js",
+      "version": "11.11.1",
+      "source": "https://registry.npmjs.org/highlight.js/-/highlight.js-11.11.1.tgz",
+      "integrity": "sha512-Xwwo44whKBVCYoliBQwaPvtd/2tYFkRQtXDWj1nackaV2JPXx3L0+Jvd8/qCJ2p+ML0/XVkJ2q+Mr+UVdpJK5w==",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "name": "github-markdown-css",
+      "version": "5.8.1",
+      "source": "https://registry.npmjs.org/github-markdown-css/-/github-markdown-css-5.8.1.tgz",
+      "integrity": "sha512-8G+PFvqigBQSWLQjyzgpa2ThD9bo7+kDsriUIidGcRhXgmcaAWUIpCZf8DavJgc+xifjbCG+GvMyWr0XMXmc7g==",
+      "license": "MIT"
+    }
+  ],
+  "bundle_sha256": "a09899cf5193229a25e5f3a8ba3bf33c0808a224dd3b94797c3e216c7f711ea5",
+  "build": "bash scripts/build-orbie-chat-assets.sh"
+}

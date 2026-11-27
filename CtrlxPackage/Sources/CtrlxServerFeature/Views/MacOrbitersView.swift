@@ -92,21 +92,19 @@ struct MacOrbitersView: View {
                         }.accessibilityIdentifier("orbiter-new-draft")
                     }
                 }.padding().frame(minWidth: 220, maxWidth: 300)
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        if let issue = service.issue {
-                            Text(issue).foregroundStyle(.red).textSelection(.enabled)
-                        }
-                        if let notice {
-                            Text(notice).textSelection(.enabled)
-                        }
-                        if let record = selectedRecord {
-                            details(record)
-                        } else {
-                            draftForm
-                        }
-                    }.padding().frame(maxWidth: .infinity, alignment: .leading)
-                }.frame(minWidth: 400)
+                VStack(alignment: .leading, spacing: 14) {
+                    if let issue = service.issue {
+                        Text(issue).foregroundStyle(.red).textSelection(.enabled)
+                    }
+                    if let notice {
+                        Text(notice).textSelection(.enabled)
+                    }
+                    if let record = selectedRecord {
+                        details(record)
+                    } else {
+                        ScrollView { draftForm }
+                    }
+                }.padding().frame(minWidth: 400, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }.frame(minWidth: 740, minHeight: 620)
             .task {
@@ -275,32 +273,17 @@ struct MacOrbitersView: View {
                     Button("Latest Messages") { Task { await service.loadHistory(endingAt: nil) } }
                 }
             }.disabled(service.isBusy)
-            ForEach(service.history(record)) { message in
-                Text(message.text).font(.headline).textSelection(.enabled)
-                OrbieMessageActivity(entries: message.activity ?? [], isPending: message.isPending)
-                if let answer = message.answer {
-                    Text(answer).textSelection(.enabled)
-                    Button("Give to Orbie…") { perform {
-                        guard let orbie = coordinator.orbie else { throw AgentWorkflowError("Orbie is unavailable.") }
-                        try await orbie.stageReport("Summarize this Orbiter reply and identify unverified claims.\nOrbiter: \(record.title)\n\n" + OrbieAgentCatalog.bounded(answer, bytes: 6_000))
-                        notice = "Reply added to Orbie’s draft. Review it before sending."
-                    } }
-                } else {
-                    Text(message.issue ?? "Waiting for a verified reply…").foregroundStyle(.secondary)
+            OrbieConversationView(messages: service.history(record), title: record.title, orbiterID: record.id, onStop: { message in
+                perform { try await service.stopWaiting(message) }
+            }, onGiveToOrbie: { message in
+                perform {
+                    guard let orbie = coordinator.orbie, let answer = message.answer else { throw AgentWorkflowError("Orbie is unavailable.") }
+                    try await orbie.stageReport("Summarize this Orbiter reply and identify unverified claims.\nOrbiter: \(record.title)\n\n" + OrbieAgentCatalog.bounded(answer, bytes: 6_000))
+                    notice = "Reply added to Orbie’s draft. Review it before sending."
                 }
-                if let attachments = message.attachments, !attachments.isEmpty {
-                    Menu("Open Saved Attachments") {
-                        ForEach(attachments, id: \.path) { attachment in
-                            Button(URL(fileURLWithPath: attachment.path).lastPathComponent) {
-                                files = .init(directory: URL(fileURLWithPath: attachment.path).deletingLastPathComponent().path, reveal: attachment.path)
-                            }
-                        }
-                    }
-                }
-                if message.isPending {
-                    Button("Stop Waiting") { perform { try await service.stopWaiting(message) } }.disabled(service.isBusy)
-                }
-            }
+            })
+            .id(record.id)
+            .frame(minHeight: 240, maxHeight: .infinity)
             TextEditor(text: Binding(get: { service.drafts[record.id] ?? record.draft }, set: { service.drafts[record.id] = $0 })).frame(height: 100).border(.quaternary)
             Button("Send") { perform { try await service.send(record.id) } }.disabled(service.isBusy || service.availability(record) != nil)
         }
@@ -319,14 +302,14 @@ struct MacOrbitersView: View {
     }
 }
 
-private struct AgentMaterialFiles: Identifiable {
+struct AgentMaterialFiles: Identifiable {
     let id = UUID()
     let directory: String
     var reveal: String?
 }
 
 @MainActor
-private struct AgentMaterialFilesView: View {
+struct AgentMaterialFilesView: View {
     let files: AgentMaterialFiles
     @Environment(\.dismiss) private var dismiss
     @State private var browser = FileBrowserState()

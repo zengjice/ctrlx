@@ -128,6 +128,11 @@ public struct TerminalArtifactPreview: Identifiable {
 
     /// Resolve document-relative URLs lexically; the Host then checks the real workspace boundary.
     public func documentLink(_ reference: String) throws -> TerminalFileLinkRequest {
+        let path = try Self.workspacePath(for: reference, documentPath: link.path)
+        return .init(path: path, paneID: link.paneID, hostID: link.hostID)
+    }
+
+    public nonisolated static func workspacePath(for reference: String, documentPath: String = "") throws -> String {
         // Preserve existing escapes when a Markdown URL mixes Unicode and percent encoding.
         guard
             let encoded = reference.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed.union(CharacterSet(charactersIn: "%#"))),
@@ -135,7 +140,7 @@ public struct TerminalArtifactPreview: Identifiable {
             !url.path.isEmpty, !url.path.hasPrefix("/"), !url.path.contains("\\") else {
             throw FileBrowserError.message("Only files inside this workspace can be previewed.")
         }
-        var parts = link.path.split(separator: "/").dropLast().map(String.init)
+        var parts = documentPath.split(separator: "/").dropLast().map(String.init)
         for part in url.path.split(separator: "/") {
             if part == "." {
                 continue
@@ -149,7 +154,7 @@ public struct TerminalArtifactPreview: Identifiable {
         }
         let path = parts.isEmpty ? "." : parts.joined(separator: "/")
         guard RepositoryFileLink.isValid(path: path) else { throw FileBrowserError.message("Invalid workspace-relative link.") }
-        return .init(path: path, paneID: link.paneID, hostID: link.hostID)
+        return path
     }
 
     public func loadDocumentImage(_ reference: String) async throws -> Data {

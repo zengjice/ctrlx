@@ -1,3 +1,4 @@
+import AppKit
 import ClaudeCodePluginCore
 import CodexPluginCore
 import ConcurrencyExtras
@@ -7,7 +8,9 @@ import CtrlxNetworking
 import CtrlxPluginProtocol
 import Dependencies
 import Foundation
+import SwiftUI
 import Testing
+import WebKit
 @testable import CtrlxServerFeature
 
 @MainActor
@@ -18,7 +21,7 @@ struct AgentMessageRecoveryTests {
         let transcript: URL
         let peer: PluginIngressPeer
 
-        func event(_ kind: PluginWorkflowEvent.Kind, pending: Bool = false) -> PluginEvent {
+        func event(_ kind: PluginWorkflowEvent.Kind, pending: Bool = false, text: String? = nil) -> PluginEvent {
             .init(
                 pluginID: message.instance.pluginID, sessionID: message.instance.conversationID,
                 tmuxPane: message.instance.paneID,
@@ -26,7 +29,7 @@ struct AgentMessageRecoveryTests {
                     kind: kind,
                     nativeTurnID: "turn",
                     transcriptPath: transcript.path,
-                    text: kind == .submitted ? message.prompt : "Full reply",
+                    text: text ?? (kind == .submitted ? message.prompt : "Full reply"),
                     hasPendingWork: pending
                 )
             )
@@ -64,7 +67,7 @@ struct AgentMessageRecoveryTests {
         return result
     }
 
-    private func records(_ plugin: String, conversation: String, turn: String = "turn", finished: Bool = true, completionOnly: Bool = false) throws -> Data {
+    private func records(_ plugin: String, conversation: String, turn: String = "turn", finished: Bool = true, completionOnly: Bool = false, reply: String = "Full reply") throws -> Data {
         var rows: [[String: Any]] = []
         if plugin == "codex" {
             if !completionOnly {
@@ -74,7 +77,7 @@ struct AgentMessageRecoveryTests {
                 ]
             }
             if finished {
-                rows.append(["type": "event_msg", "payload": ["type": "task_complete", "turn_id": turn, "last_agent_message": "Full reply"]])
+                rows.append(["type": "event_msg", "payload": ["type": "task_complete", "turn_id": turn, "last_agent_message": reply]])
             }
         } else {
             if !completionOnly {
@@ -82,7 +85,7 @@ struct AgentMessageRecoveryTests {
             }
             if finished {
                 rows += [
-                    ["type": "assistant", "uuid": "answer", "parentUuid": "user", "message": ["id": "message", "stop_reason": "end_turn", "content": [["type": "text", "text": "Full reply"]]]],
+                    ["type": "assistant", "uuid": "answer", "parentUuid": "user", "message": ["id": "message", "stop_reason": "end_turn", "content": [["type": "text", "text": reply]]]],
                     ["type": "system", "subtype": "stop_hook_summary", "uuid": "stop", "parentUuid": "answer", "hookErrors": [], "hookAdditionalContext": [], "preventedContinuation": false, "stopReason": ""],
                 ]
             }
@@ -162,6 +165,60 @@ struct AgentMessageRecoveryTests {
         #expect(saved.issue == "Rejected." && saved.answer == nil)
         #expect(f.support.writes.count == 1)
         try await f.support.cleanup()
+    }
+
+    @Test(arguments: [false, true])
+    func claudeMarkdownIndentationSurvivesCompletionStorageAndChatRendering(restart: Bool) async throws {
+        try await withDependencies {
+            $0[PreferencesService.self] = .inMemory()
+            $0[SecretsService.self] = .inMemory()
+            $0[SimulatorSystemClient.self] = SimulatorSystemClient()
+        } operation: {
+            _ = NSApplication.shared
+            let f = try await fixture("claude-code")
+            let raw = "    <div>Indented HTML remains code</div>\n\n"
+            if restart {
+                await f.support.interaction.shutdown()
+            } else {
+                try await f.support.interaction.receive(f.event(.stopCandidate, text: raw.trimmingCharacters(in: .whitespacesAndNewlines)), peer: f.peer)
+            }
+            let file = try FileHandle(forWritingTo: f.transcript)
+            try file.seekToEnd()
+            try file.write(contentsOf: records("claude-code", conversation: f.message.instance.conversationID, completionOnly: true, reply: raw))
+            try file.close()
+            if restart {
+                try await f.support.restartInteraction()
+            }
+            try await wait(.succeeded, f)
+            let store = AgentMessageStore(directory: f.support.root.appendingPathComponent("messages"))
+            let saved = try #require(try await store.message(f.message.id))
+            #expect(saved.answer == raw)
+
+            let window = NSWindow(contentRect: .init(x: -10_000, y: -10_000, width: 680, height: 500), styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let hosting = NSHostingView(rootView: OrbieConversationView(messages: [saved], title: "Claude", onStop: { _ in }).environment(AppCoordinator()))
+            window.contentView = hosting
+            window.orderBack(nil)
+            defer { window.contentView = nil
+                window.close()
+            }
+            func webView(_ view: NSView) -> WKWebView? {
+                if let web = view as? WKWebView {
+                    return web
+                }
+                return view.subviews.compactMap(webView).first
+            }
+            var rendered = false
+            for _ in 0..<300 {
+                if let web = webView(hosting), (try? await web.evaluateJavaScript("document.querySelectorAll('pre').length===1 && document.querySelectorAll('iframe').length===0 && document.querySelector('pre').textContent.includes('Indented HTML remains code')")) as? Bool == true {
+                    rendered = true
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            #expect(rendered)
+            try await f.support.cleanup()
+        }
     }
 
     @Test(arguments: ["codex", "claude-code"])

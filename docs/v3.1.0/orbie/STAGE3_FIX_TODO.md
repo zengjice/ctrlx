@@ -255,3 +255,39 @@ Orbie／Orbiter 界面与 Workflow 编排分别调用共用 Agent 交互能力�
 - 定向回归 `OrbieRefreshTests|OrbieTests|OrbiePanelTests|OrbiePanelRedesignTests|AgentRoleRestoreRefreshTests|AgentRoleResumeUITests|AgentMessageHistoryTests` 共 34 项／7 个套件通过，记录在 `.build-local/orbie-refresh-fix/tests-final.log`。包含慢扫描／扫描失败期间重设、旧绑定回写防护、取消、恢复去重、待审批输入保护、状态稳定、错误保留，以及完整历史和离屏原生界面回归。
 - 3 个受影响 Swift 文件格式检查、品牌／技术边界和差异检查通过；顺序准备三个 native helper 后，Mac Debug workspace 编译通过（同目录 `mac-build.log`，仅编译，未签名安装）。
 - 本轮不操作用户运行中的 Agent；未在另一台 Mac 的历史数据上执行恢复，未安装、未发布。
+
+### 2026-11-26：混合回复与聊天内 HTML 交互
+
+- [x] 按用户确认的[混合内容方案](RICH_CONTENT_RENDERING.md)接入浮窗、完整 Orbie 和 Orbiter：Markdown、repo 文件引用、代码高亮、工作区图片、Mermaid 与 HTML/CSS/JavaScript 可在一条回复中混排；沿用原有回复核验和到达时机。
+- [x] 采用随包固定版本的 Generative Frame、highlight.js 与 github-markdown-css，复用现有 Marked、DOMPurify 和 Mermaid。HTML 在无同源权限的 iframe 中运行；原生动作校验消息及工作区身份，支持原文回退和重新加载。
+- [x] 保留未变化的消息与交互状态，补齐滚动跟随、上翻保留位置、延迟解析、浅深色、长代码折叠及卡片放大。收起或切换会话释放渲染器，离屏卡片允许重新运行。
+- `.build-local/orbie-rendering-proof/regression-final.log`：64 项定向回归／10 个套件通过；固定资源重建一致后额外复跑 4 项渲染测试通过（与前项重叠）。顺序准备 native helper 后，Mac Debug workspace 编译通过，最终记录为 `mac-build-final.log`；格式、品牌／技术边界及差异检查通过。
+- 隔离原生 WKWebView 验证真实 HTML 交互、父页面／网络限制、稳定刷新及浅深色截图；独立签名诊断验证真实脚本死循环后原生主线程仍响应、可回到原文并建立新渲染器。该诊断不代替 App 整体 E2E；未做长期 CPU／内存采样。未安装、未提交、未发布，未操作用户 Agent。
+
+#### 混合回复首轮审查修复
+
+- [x] 修复分诊接受的 9 项 P2：repo token 身份／转义示例、Markdown 缩进、浮窗推荐角色选择、图片路径规范化、解析后图片目标、手动暂停、Files 新标签请求、活动展开状态及主线程全量编码。具体改动沿用原编号，见[实施记录第 10 节](RICH_CONTENT_RENDERING.md#10-首轮审查修复2026-11-26)。
+- [x] `.build-local/orbie-repair-round1/regression-final.log`：151 项定向测试／14 个套件通过。新增覆盖原故障与正常对照，包括 100 条大历史更新、iframe 保留、角色历史／草稿切换及 Files 来源身份；普通 Files 复用与显式新建回归也通过。
+- [x] 三个 native helper 顺序准备后，Mac Debug workspace 编译通过（`mac-build-final.log`，未签名编译检查）；SwiftFormat、JS 语法、品牌／技术边界、资源校验及差异检查通过。
+- 隔离 WK 探针复验两种正文 repo 引用、转义、暂停及活动折叠。未复测具体编码耗时、未做完整 App E2E 或长期 CPU／内存采样；未提交、未安装、未发布。
+
+#### 混合回复第二轮审查修复
+
+- [x] 修复原 #1、#2、#4、#7 及新 #10：引用按校验后的 URI 目标登记，补齐未闭合标记恢复、带标题及引用式链接；Claude 核验保留规范化比较但三个完成出口均返回原文；SVG 解码器使用相同规范化路径；分栏请求只选择本工作区合法左侧内容；超限图片在桥接前显示错误。见[第二轮实施记录](RICH_CONTENT_RENDERING.md#11-第二轮审查修复2026-11-26)。
+- [x] `.build-local/orbie-repair-round2/regression.log`：212 项／18 个套件通过；`workflow-regression.log` 另有 163 项／2 个套件通过，两组不重叠，合计 375 项／20 个套件。覆盖真实 Claude 解析器经完成／重启、历史落盘到原生聊天的链路，及分栏归属／选区快照、图片限额和原有正常场景。
+- [x] 三个 native helper 顺序准备后，Mac Debug workspace 编译通过（`mac-build.log`，未签名编译检查）；App 包内 JS 与源码一致。格式、JS 语法、品牌／技术边界、资源及差异检查通过。
+- 真实 PNG 的超长 `data:` 回复经隔离 WK 探针显示明确错误，无图片事件、无残留占位。未执行完整 Mac 窗口 E2E、真实 CLI 会话或长期 CPU／内存采样；未提交、未安装、未发布。
+
+#### 混合回复第三轮审查修复
+
+- [x] #11：聊天与 Files 共用 SVG helper，保留文档内 `<use>`，继续清除外部引用及脚本。#12：按同一消息的图片目标去重，读取一次后分发至所有位置，不跨消息共用结果，保持 24 个唯一组预算。#13：解码成功后移除占位，失败显示局部原因，旧解码回调不得修改替换后的回复。见[第三轮实施记录](RICH_CONTENT_RENDERING.md#12-第三轮审查修复2026-11-26)。
+- [x] `.build-local/orbie-repair-round3/regression.log`：230 项定向测试／19 个套件通过；包含 Files 既有 SVG／Markdown 验证，以及引用绘制像素、重复读取／配额、错误分发和异步生命周期回归。隔离 WK 与 Files 对照同样通过（`comparison-probe.json`）。
+- [x] 三个 native helper 顺序准备后，Mac Debug workspace 编译通过（`mac-build.log`，未签名编译检查）；包内脚本与源码一致，格式、JS 语法、品牌／技术边界及差异检查通过。
+- 未执行完整 Mac 窗口 E2E、iOS 构建或长期 CPU／内存采样；未提交、未安装、未发布。
+
+#### 混合回复第四轮审查修复
+
+- [x] #14：保留因配额等待的图片组，消息移除／替换释放名额后按可用数量自动重试，仅恢复对应图片节点，保留 HTML 状态；清理已失效的等待目标，永久错误不自动重试。#15：PNG 夹具改用显式设备 RGB 蓝色，增加解码后尺寸与不透明蓝色像素断言。见[第四轮实施记录](RICH_CONTENT_RENDERING.md#13-第四轮审查修复2026-11-26)。
+- [x] `.build-local/orbie-repair-round4/regression.log`：234 项定向测试／19 个套件通过。新增覆盖浮窗滚动更新、重复位置共享重试、iframe／输入值保持、部分名额释放和等待目标失效；色彩空间警告为 0。隔离 WK 探针确认名额释放后自动读取一次并移除超限提示（`render-probe.json`）。
+- [x] 三个 native helper 顺序准备后，Mac Debug workspace 编译通过（`mac-build.log`，未签名编译检查）；包内渲染资源与源码一致，格式、JS 语法、品牌／技术边界、固定 vendor 及差异检查通过。
+- 未执行完整 Mac 窗口 E2E、iOS 构建或长期 CPU／内存采样；未提交、未安装、未发布。
