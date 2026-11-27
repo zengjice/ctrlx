@@ -2660,10 +2660,14 @@ final public class TmuxService {
     public func splitPane(
         _ target: String,
         horizontal: Bool,
+        sizeFraction: Double? = nil,
         workingDirectory: String? = nil,
         shellCommand: String? = nil,
         expectedWorkspacePane: WorkspacePaneIdentity? = nil
     ) async throws -> String {
+        if let sizeFraction, !sizeFraction.isFinite || sizeFraction <= 0 || sizeFraction >= 1 {
+            throw TmuxError.commandFailed(message: "The new pane's size fraction must be between 0 and 1.")
+        }
         let flag = horizontal ? "-h" : "-v"
         var args = [
             "split-window",
@@ -2671,6 +2675,10 @@ final public class TmuxService {
             "-t", target,
             "-P", "-F", "#{pane_id}", // Print new pane ID
         ] + terminalEnvironmentVars.flatMap { ["-e", $0] }
+        if let sizeFraction {
+            let dimension = horizontal ? "pane_width" : "pane_height"
+            args.append(contentsOf: ["-l", "#{e|*|f|0:#{e|-|:#{\(dimension)},1},\(sizeFraction)}"])
+        }
 
         let startDirectory = if let workingDirectory, !workingDirectory.isEmpty {
             workingDirectory

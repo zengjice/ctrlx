@@ -411,9 +411,9 @@ struct TerminalPasteTransportTests {
             host.onSessionStateRequest = {
                 SessionStateMessage(
                     pairId: "", paneStates: [:], supportsDirectoryBrowsing: true,
-                    supportsDirectoryCreation: capability, supportsSessionWorktrees: capability,
+                    supportsDirectoryCreation: capability, supportsSessionWorktrees: capability, supportsAgentForkInheritance: capability,
                     supportsTerminalPaste: capability, supportsCodexQuestionAcknowledgement: capability,
-                    supportsTerminalFit: capability
+                    supportsTerminalFit: capability, supportsPaneSplitSizing: capability
                 )
             }
             var commands: [CommandType] = []
@@ -444,6 +444,17 @@ struct TerminalPasteTransportTests {
                 try await waitUntil { host.isViewerConnected && viewer.isHostConnected && receivedState.value }
                 let frameCount = await relay.encryptedFrames
                 #expect(!viewer.hostSupportsCodexQuestionAcknowledgement)
+                #expect(!viewer.hostSupportsPaneSplitSizing)
+                #expect(!viewer.hostSupportsAgentForkInheritance)
+                let forkSource = try #require(AgentForkSource(pane: .init(paneId: "%7", sessionName: "source", currentPath: "/source", agentSession: .init(paneId: "%7", pluginID: "codex"), claudeSessionID: UUID().uuidString)))
+                let inheritedFork = ForkAgentSession(source: forkSource, windowName: "source-time", inheritsSourceConfiguration: true)
+                if case .success = await viewer.sendCommand(inheritedFork, paneId: "") {
+                    Issue.record("Old Host accepted inherited Fork")
+                }
+                let sizedSplit = SplitTmuxPane(direction: .vertical, sizeFraction: 1.0 / 6.0)
+                if case .success = await viewer.sendCommand(sizedSplit, paneId: "%7") {
+                    Issue.record("Old Host accepted sized pane splitting")
+                }
                 let draft = await viewer.sendCommand(SendKeystroke([.text("draft")], acknowledgeCompletion: true), paneId: "%7")
                 if case .success = draft {
                     Issue.record("Old Host accepted acknowledged draft submission")
@@ -492,10 +503,18 @@ struct TerminalPasteTransportTests {
                 // A later capability offer enables the operation, but is never
                 // carried over to a disconnected or replacement Host.
                 host.onSessionStateRequest = {
-                    SessionStateMessage(pairId: "", paneStates: [:], supportsDirectoryCreation: true, supportsSessionWorktrees: true, supportsTerminalPaste: true, supportsCodexQuestionAcknowledgement: true, supportsTerminalFit: true, supportsFileBrowsing: true)
+                    SessionStateMessage(pairId: "", paneStates: [:], supportsDirectoryCreation: true, supportsSessionWorktrees: true, supportsAgentForkInheritance: true, supportsTerminalPaste: true, supportsCodexQuestionAcknowledgement: true, supportsTerminalFit: true, supportsPaneSplitSizing: true, supportsFileBrowsing: true)
                 }
                 await host.pushSessionState()
-                try await waitUntil { viewer.hostSupportsCodexQuestionAcknowledgement && viewer.hostSupportsTerminalPaste && viewer.hostSupportsTerminalFit && viewer.hostSupportsDirectoryCreation && viewer.hostSupportsFileBrowsing && viewer.hostSupportsSessionWorktrees }
+                try await waitUntil { viewer.hostSupportsCodexQuestionAcknowledgement && viewer.hostSupportsTerminalPaste && viewer.hostSupportsTerminalFit && viewer.hostSupportsPaneSplitSizing && viewer.hostSupportsAgentForkInheritance && viewer.hostSupportsDirectoryCreation && viewer.hostSupportsFileBrowsing && viewer.hostSupportsSessionWorktrees }
+                if case let .failure(error) = await viewer.sendCommand(sizedSplit, paneId: "%7") {
+                    Issue.record("Sized pane splitting rejected after capability offer: \(error)")
+                }
+                #expect(commands.last == sizedSplit.commandType)
+                if case let .failure(error) = await viewer.sendCommand(inheritedFork, paneId: "") {
+                    Issue.record("Inherited Fork rejected after capability offer: \(error)")
+                }
+                #expect(commands.last == inheritedFork.commandType)
                 #expect(await viewer.send(PrepareSessionWorktree(path: "/Host").commandType, paneId: ""))
                 #expect(commands.last == PrepareSessionWorktree(path: "/Host").commandType)
                 #expect(await viewer.send(worktreeSession.commandType, paneId: ""))
@@ -537,7 +556,7 @@ struct TerminalPasteTransportTests {
                 #expect(commands == [PasteTerminalText(text: "host-rejected").commandType, SendKeystroke([.enter]).commandType])
                 #expect(failures.last?.contains("Paste rejected by tmux") == true)
                 await viewer.disconnect()
-                #expect(!viewer.hostSupportsCodexQuestionAcknowledgement && !viewer.hostSupportsTerminalPaste && !viewer.hostSupportsTerminalFit && !viewer.hostSupportsDirectoryCreation && !viewer.hostSupportsSessionWorktrees)
+                #expect(!viewer.hostSupportsCodexQuestionAcknowledgement && !viewer.hostSupportsTerminalPaste && !viewer.hostSupportsTerminalFit && !viewer.hostSupportsPaneSplitSizing && !viewer.hostSupportsAgentForkInheritance && !viewer.hostSupportsDirectoryCreation && !viewer.hostSupportsSessionWorktrees)
             } catch {
                 await viewer.disconnect()
                 await host.disconnect()

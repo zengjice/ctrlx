@@ -7,6 +7,26 @@ import Testing
 @testable import CodexPluginCore
 
 struct CodexResumeUpgradeTests {
+    @Test("Quick Fork preserves Codex and Traex source options and executable", arguments: [CodexDistribution.codex, .traex])
+    func inheritedFork(distribution: CodexDistribution) async throws {
+        let id = UUID().uuidString
+        let options = ["--model", "source-model", "--config", "model_reasoning_effort=high", "--sandbox", "workspace-write", "--ask-for-approval", "never"]
+        try await withDependencies {
+            $0[AgentForkHistoryClient.self].root = { _, roots, _ in
+                #expect(roots == ["/source/config"])
+                return "/source/config"
+            }
+            $0[AgentResumeExecutableClient.self].resolve = { executable, _ in try #require(executable) }
+        } operation: {
+            let core: any AgentSessionForking = CodexPluginCore(distribution: distribution)
+            let invocation = AgentResumeInvocation(executable: "/source/agent", arguments: options, configurationRoots: [distribution.homeVariable: "/source/config"])
+            let command = try await core.commandForFork(sessionID: id, projectPath: "/source/project", inheriting: invocation).command
+            #expect(command.command == "/source/agent")
+            #expect(command.args.starts(with: ["fork", id, "-C", "/source/project"] + options))
+            #expect(command.env[distribution.homeVariable] == "/source/config")
+        }
+    }
+
     @Test("Legacy version warnings are reevaluated using the CLI that will actually run")
     func legacyWarning() async {
         let core = CodexPluginCore()

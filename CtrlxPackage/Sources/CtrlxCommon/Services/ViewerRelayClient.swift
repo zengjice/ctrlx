@@ -111,6 +111,8 @@ final public class ViewerRelayClient {
     }
 
     public private(set) var hostSupportsTerminalFit = false
+    public private(set) var hostSupportsPaneSplitSizing = false
+    public private(set) var hostSupportsAgentForkInheritance = false
     public private(set) var hostSupportsWorkspaceClipboard = false
     public private(set) var hostSupportsBrowserAudio = false
     public private(set) var hostSupportsBrowserSharing = false
@@ -571,6 +573,8 @@ final public class ViewerRelayClient {
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to add a terminal to this session."))
         case .resourceTab where !hostSupportsIndependentResources:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to use independent resource tabs."))
+        case let .forkAgentSession(spec) where spec.inheritsSourceConfiguration == true && !hostSupportsAgentForkInheritance:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to Fork with the source configuration."))
         case .manageAgentWorkflows where hostAgentWorkflowVersion != AgentWorkflowWire.version:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to manage Agent workflows."))
         case .trustAgentHooks where !hostSupportsAgentHookTrust:
@@ -650,6 +654,8 @@ final public class ViewerRelayClient {
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to paste clipboard text"))
         case let .resizeTmuxPane(spec) where spec.userInitiated == true && !hostSupportsTerminalFit:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to fit terminal panes"))
+        case let .splitTmuxPane(spec) where spec.sizeFraction != nil && !hostSupportsPaneSplitSizing:
+            return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to set terminal split proportions"))
         case .closeTerminalTab where !workspaceInputState.supportsGuardedTerminalTabClose:
             return .failure(ViewerRelayClientError.commandFailed("Update the Host Mac to close terminal tabs from this device."))
         default:
@@ -1325,6 +1331,8 @@ final public class ViewerRelayClient {
             hostWorkflowAgentPluginIDs = Set(sessionState.workflowAgentPluginIDs ?? [])
             simulatorTabs = sessionState.simulatorTabs ?? []
             hostSupportsTerminalFit = sessionState.supportsTerminalFit == true
+            hostSupportsPaneSplitSizing = sessionState.supportsPaneSplitSizing == true
+            hostSupportsAgentForkInheritance = sessionState.supportsAgentForkInheritance == true
             hostSupportsCtrlXAppUpdate = sessionState.supportsCtrlXAppUpdate == true
             hostSupportsCtrlXAppUpdateCheck = sessionState.supportsCtrlXAppUpdateCheck == true
             ctrlXAppUpdateState = sessionState.ctrlXAppUpdate
@@ -1368,6 +1376,8 @@ final public class ViewerRelayClient {
             hostSupportsRepositoryFileLinks = false
             hostSupportsFileDownloads = false
             hostSupportsTerminalFit = false
+            hostSupportsPaneSplitSizing = false
+            hostSupportsAgentForkInheritance = false
             logger.info("Host device connected")
             hostSubscriptionInactive = false
 
@@ -1422,6 +1432,8 @@ final public class ViewerRelayClient {
             hostSupportsRepositoryFileLinks = false
             hostSupportsFileDownloads = false
             hostSupportsTerminalFit = false
+            hostSupportsPaneSplitSizing = false
+            hostSupportsAgentForkInheritance = false
             logger.info(
                 "Received peerHello from host",
                 metadata: ["appVersion": "\(peerHello.appVersion)"]
@@ -1459,6 +1471,8 @@ final public class ViewerRelayClient {
             hostSupportsRepositoryFileLinks = false
             hostSupportsFileDownloads = false
             hostSupportsTerminalFit = false
+            hostSupportsPaneSplitSizing = false
+            hostSupportsAgentForkInheritance = false
             quickPhraseSync?.reset()
             logger.info("Host device disconnected")
             isHostConnected = false
@@ -1478,6 +1492,8 @@ final public class ViewerRelayClient {
             hostSupportsRepositoryFileLinks = false
             hostSupportsFileDownloads = false
             hostSupportsTerminalFit = false
+            hostSupportsPaneSplitSizing = false
+            hostSupportsAgentForkInheritance = false
             quickPhraseSync?.reset()
             logger.info("Host blocked: subscription inactive")
             hostSubscriptionInactive = true
@@ -1808,6 +1824,8 @@ final public class ViewerRelayClient {
         hostSupportsRepositoryFileLinks = false
         hostSupportsFileDownloads = false
         hostSupportsTerminalFit = false
+        hostSupportsPaneSplitSizing = false
+        hostSupportsAgentForkInheritance = false
         quickPhraseSync?.reset()
         connectionGeneration.invalidate()
         awaitingPong = false

@@ -357,7 +357,16 @@ public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking,
         return try await commandForResume(descriptor).loggingOutFirst(arguments: ["auth", "logout"])
     }
 
+    public func commandForFork(sessionID: String, projectPath: String, inheriting invocation: AgentResumeInvocation) async throws -> AgentForkLaunch {
+        let descriptor = try await recoveryDescriptor(sessionID: sessionID, projectPath: projectPath, invocation: invocation)
+        return try await commandForRestore(descriptor, isFork: true)
+    }
+
     public func commandForResume(_ descriptor: AgentResumeDescriptor) async throws -> AgentForkLaunch {
+        try await commandForRestore(descriptor, isFork: false)
+    }
+
+    private func commandForRestore(_ descriptor: AgentResumeDescriptor, isFork: Bool) async throws -> AgentForkLaunch {
         guard
             descriptor.pluginID == Self.pluginID, UUID(uuidString: descriptor.sessionID) != nil,
             descriptor.configurationRoot.hasPrefix("/"), descriptor.projectPath.hasPrefix("/") else {
@@ -374,13 +383,16 @@ public actor ClaudeCodePluginCore: AgentProviderSelecting, AgentProviderForking,
         let executable = try await executables.resolve(descriptor.executable, settings.commandPath)
         let provider = try await providerConfiguration(descriptor.providerID)
         var environment = provider.environment
+        if isFork {
+            environment.removeValue(forKey: "ANTHROPIC_MODEL")
+        }
         if !descriptor.usesDefaultConfiguration {
             environment["CLAUDE_CONFIG_DIR"] = root
         }
         return AgentForkLaunch(
             command: LaunchCommand(
                 command: executable,
-                args: ["--resume", descriptor.sessionID] + descriptor.arguments + provider.modelPickerArguments,
+                args: ["--resume", descriptor.sessionID] + (isFork ? ["--fork-session"] : []) + descriptor.arguments + provider.modelPickerArguments,
                 env: environment
             ),
             unsetEnvironment: Self.unique(provider.unsetEnvironment + (descriptor.usesDefaultConfiguration ? ["CLAUDE_CONFIG_DIR"] : []))

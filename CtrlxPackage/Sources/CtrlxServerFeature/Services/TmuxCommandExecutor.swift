@@ -103,8 +103,12 @@ public actor TmuxCommandExecutor {
                 let newPaneId = try await tmuxService.splitPane(
                     command.paneId,
                     horizontal: spec.direction == .horizontal,
+                    sizeFraction: spec.sizeFraction,
                     expectedWorkspacePane: command.expectedWorkspacePane
                 )
+                if spec.sizeFraction != nil {
+                    _ = await tmuxService.refreshPanes()
+                }
                 return .success(for: command.id, paneId: newPaneId)
 
             case .selectTmuxPane:

@@ -7,6 +7,29 @@ import Testing
 @testable import ClaudeCodePluginCore
 
 struct ClaudeResumeUpgradeTests {
+    @Test("Quick Fork reuses Claude source options without probing fresh-launch defaults")
+    func inheritedFork() async throws {
+        let id = UUID().uuidString
+        let options = ["--model", "source-model", "--effort", "high", "--permission-mode", "plan"]
+        try await withDependencies {
+            $0[AgentForkHistoryClient.self].root = { _, roots, _ in
+                #expect(roots == ["/source/claude"])
+                return "/source/claude"
+            }
+            $0[AgentResumeExecutableClient.self].resolve = { executable, _ in try #require(executable) }
+            $0[ProcessRunner.self].runWithExactEnvironment = { _, _, _, _, _, _ in
+                Issue.record("Quick Fork probed launch defaults")
+                throw CancellationError()
+            }
+        } operation: {
+            let core: any AgentSessionForking = ClaudeCodePluginCore()
+            let command = try await core.commandForFork(sessionID: id, projectPath: "/source/project", inheriting: .init(executable: "/source/claude-cli", arguments: options, configurationRoots: ["CLAUDE_CONFIG_DIR": "/source/claude"])).command
+            #expect(command.command == "/source/claude-cli")
+            #expect(command.args == ["--resume", id, "--fork-session"] + options)
+            #expect(command.env == ["CLAUDE_CONFIG_DIR": "/source/claude"])
+        }
+    }
+
     @Test("Recovery reevaluates legacy warnings and CLI upgrades through the plugin contract", arguments: ["2.1.276 (Claude Code)", "2.1.308 (Claude Code)", "2.1.319 (Claude Code)", "2.1.327 (Claude Code)"])
     func legacyWarning(version: String) async {
         let core: any AgentSessionResuming = ClaudeCodePluginCore()

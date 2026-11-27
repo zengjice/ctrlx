@@ -20,6 +20,17 @@ struct TerminalContentMenuTarget: Equatable, Sendable {
         self.workspacePane = pane.workspaceIdentity
     }
 
+    @MainActor
+    static func focused(hostID: String?, sessionName: String, windowID: String, panes: [PaneState], endpoint: TerminalQuickActionEndpoint?) -> Self? {
+        let candidates = panes.filter { $0.sessionName == sessionName && $0.stableWindowId == windowID }
+            .sorted { $0.paneIndex < $1.paneIndex }
+        let focused = endpoint.flatMap { endpoint in
+            endpoint.hostID == hostID && endpoint.isAvailable ? candidates.first { $0.paneId == endpoint.paneID } : nil
+        }
+        guard let pane = focused ?? candidates.first(where: \.isActive) ?? candidates.first else { return nil }
+        return Self(hostID: hostID, pane: pane)
+    }
+
     func matches(hostID: String?, pane: PaneState?) -> Bool {
         self.hostID == hostID && pane?.paneId == paneID && pane?.sessionName == sessionName
             && pane?.stableWindowId == windowID && pane?.workspaceIdentity == workspacePane

@@ -195,12 +195,21 @@
                     windowManager.updatePaneStates(from: await tmuxService.refreshPanes())
                     await refreshAgentCommandIdentity()
                 },
-                launch: { [weak self] source, windowName, prepared, providerID, creationID in
+                inherit: { [weak self] source in
+                    guard let self else { throw AgentForkError("Host is shutting down.") }
+                    return try await inheritedAgentForkLaunch(source)
+                },
+                launch: { [weak self] source, windowName, prepared, providerID, creationID, inheritsSource in
                     guard let self else { throw AgentForkError("Host is shutting down.") }
                     if let creationID {
                         try await validateOrbiterFork(creationID, source: source)
                     }
-                    let shortcutDefaults = forkAgentModelShortcuts(pluginID: source.pluginID, providerID: providerID)
+                    let sourcePreferences = source.workspaceIdentity.map {
+                        agentModelPreferences.preferences(for: .init(hostID: "local", windowID: $0.windowID))
+                    }
+                    let shortcutDefaults = inheritsSource
+                        ? sourcePreferences?.defaults ?? sourcePreferences?.hidden ?? .init()
+                        : forkAgentModelShortcuts(pluginID: source.pluginID, providerID: providerID)
                     let agentLaunch = try tmuxService.agentLaunch(prepared)
                     let paneID = try await tmuxService.newWindow(
                         sessionName: source.sessionName, workingDirectory: prepared.workingDirectory,
@@ -223,6 +232,9 @@
                     }
                     if let captured = try? await tmuxService.captureWorkspacePane(target: paneID) {
                         agentModelPreferences.initialize(.init(pane: captured.identity, defaults: shortcutDefaults), hostID: "local")
+                        if inheritsSource, let sourcePreferences {
+                            agentModelPreferences.update(sourcePreferences.hidden, for: .init(hostID: "local", windowID: captured.identity.windowID))
+                        }
                     }
                     await connectedViewerManager?.pushSessionStateToAll()
                     return paneID
@@ -4186,12 +4198,14 @@
                     supportsSessionWorktrees: true,
                     supportsAgentWindowLaunch: true,
                     supportsAgentFork: true,
+                    supportsAgentForkInheritance: true,
                     supportsAgentRestart: true,
                     supportsAgentLogout: true,
                     supportsAgentForkDirectory: true,
                     supportsTerminalPaste: true,
                     supportsCodexQuestionAcknowledgement: true,
                     supportsTerminalFit: true,
+                    supportsPaneSplitSizing: true,
                     supportsFileBrowsing: true,
                     supportsFileDownloads: true,
                     supportsFileUploads: true,

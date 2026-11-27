@@ -81,14 +81,15 @@ new-terminal, session-search and voice buttons also show them in their help text
 Commands target the active workbench
 window. Tab navigation, new terminals and close-tab follow the last focused side
 of its split; voice input follows the focused native terminal endpoint.
-New terminals use the selected Files directory on the focused side, then the
+New terminal tabs use the selected Files directory on the focused side, then the
 source terminal's current directory. Local workspaces fall back to the retained
 Git directory, then the home directory, without taking the other side's Files path.
 
 | Shortcut | Action |
 |---|---|
 | Command-N | Open the local New Session picker |
-| Command-T | Create a terminal in the current session and focused split |
+| Command-T | Create a shell below the focused terminal pane in the same tab; bottom : top starts at 1:5 |
+| Command-F | Fork in place with source settings; show source left and Fork right at 1:1 |
 | Command-P | Search local and paired-Host sessions, then switch with Return |
 | Command-R | Reload the Browser in the focused split; otherwise refresh sessions |
 | Command-L | Focus and select the active Browser's address |
@@ -106,6 +107,8 @@ Git directory, then the home directory, without taking the other side's Files pa
 Tab shortcuts include terminals, Git, Files and Browser tabs, follow drag-reordered
 positions, and wrap within the focused split. Command-Shift-[ / ] is no longer
 bound. Extended actions use the same Command-Option modifiers as navigation.
+Command-T inherits the focused terminal's directory and focuses the new bottom
+pane. It requires a visible terminal; remote Hosts must advertise split sizing.
 Rich-text and control-sequence copy remain menu actions without default shortcuts.
 Shortcuts are fixed; Settings does not provide a shortcut editor.
 

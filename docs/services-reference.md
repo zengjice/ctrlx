@@ -946,8 +946,15 @@ installing its event bridge into an agent are distinct operations. See
 ### Start an agent window in an existing session (Mac and iOS)
 
 Mac session tab strips (local and Viewer) also expose **+ → New Agent…**.
-**⌘T** opens the same compact tab picker as **+**, with **New Agent…** selected.
-Use the arrow keys to change the selection, Return to open it, or Escape to dismiss.
+**⌘T** creates a plain shell below the focused terminal pane in the same tab.
+The new bottom pane initially occupies one sixth of the available height, leaving
+the original pane five sixths (rounded to terminal rows, excluding the divider).
+It inherits the source pane's current directory and takes keyboard focus. The
+shortcut targets the active workbench scene, including detached windows and the
+focused side of a workbench split. It is available while a terminal is selected;
+Mac Viewers also require the Host's `supportsPaneSplitSizing` capability.
+**+** opens the compact tab picker with **New Agent…** selected. Use the arrow
+keys to change its selection, Return to open it, or Escape to dismiss.
 The picker also retains New Terminal, resource tabs and the local Open Git action.
 iOS exposes **New Agent…** and **New Terminal** (formerly "New Window") directly
 in the terminal action row and in the title's window-switcher menu. Both use
@@ -1072,12 +1079,21 @@ versions, not an automatic-resume compatibility claim for other CLI versions.
 
 ### Fork a native Agent conversation (Mac/iOS)
 
-On Mac, press **⌘F** in an eligible terminal tab to open **Fork in Current Directory**.
+On Mac, **⌘F** performs **Fork in Place** without a form. It uses the focused
+eligible Agent pane (then the active pane), keeps its directory and Provider,
+and preserves the verified executable, configuration root and supported startup
+options, including explicit model, effort and permission settings. It does not
+apply fresh-launch model defaults. The new tab is named
+`<source-tab>-yyyyMMdd-HHmmss-SSS` in the Mac's local time. The existing workbench
+split displays the source on the left and the new Fork on the right at 1:1, with
+keyboard focus in the Fork. Mac Viewers require `supportsAgentForkInheritance`;
+older Hosts keep the explicit Fork menu available. Unsupported source startup
+options fail before creation rather than silently switching configuration.
 
 Right-click a local or Viewer terminal tab or its content → **Fork → In Current
 Directory / In Other Directory… / In New Worktree…**. Codex and Claude Code
 implement the optional `AgentSessionForking` capability; sidecars retain their
-existing wire contract. All modes open the shared naming panel before creation.
+existing wire contract. These menu destinations open the shared naming panel before creation.
 Current Directory uses the source pane's directory directly. In Other Directory,
 choose an existing directory on the same Host by entering `/…` or `~/…` or by
 browsing folders. The copied conversation and the new tmux window use that
@@ -1152,8 +1168,9 @@ Ordinary Terminal windows keep their existing tmux startup behavior.
 Fork is an explicit action, independent of Auto-run. It does not send `/fork`,
 use the last session, send a continuation prompt, or copy source telemetry/approval
 state.
-Fork uses the target Provider's launch model/effort and shortcut defaults, not
-source-tab overrides. With no Provider override, it follows the current CLI
+Menu-based Fork uses the target Provider's launch model/effort and shortcut defaults, not
+source-tab overrides. Quick Fork (⌘F) instead retains the source invocation and its
+model-shortcut display preferences. With no Provider override, it follows the current CLI
 configuration, independently of the configured New Agent Provider. Codex's native
 Fork already resolves the current launch configuration. Claude custom Providers
 pass their model and optional effort explicitly; otherwise the Host reads the

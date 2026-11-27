@@ -14,12 +14,14 @@ public struct WorkbenchKeyboardCommands: Commands {
             Button("New Session") { actions?.newLocalSession?() }
                 .keyboardShortcut("n", modifiers: .command)
                 .disabled(actions?.newLocalSession == nil)
-            Button("New Tab…") { actions?.newTab?() }
+            Button("New Terminal") { actions?.newTerminal?() }
                 .keyboardShortcut("t", modifiers: .command)
-                .disabled(actions?.newTab == nil)
-            Button("Fork…") { actions?.fork?() }
+                .disabled(actions?.newTerminal == nil)
+                .help("Open a terminal below the focused pane (1:5)")
+            Button("Fork in Place") { actions?.fork?() }
                 .keyboardShortcut("f", modifiers: .command)
                 .disabled(actions?.fork == nil)
+                .help("Fork beside the source terminal with the same configuration")
         }
         CommandGroup(before: .windowList) {
             Button("Switch Session…") { actions?.switchSession?() }

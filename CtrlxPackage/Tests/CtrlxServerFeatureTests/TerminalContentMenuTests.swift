@@ -4,6 +4,30 @@ import Testing
 @testable import CtrlxServerFeature
 
 struct TerminalContentMenuTests {
+    @MainActor
+    @Test("Split shortcuts prefer native focus only on the same Host", arguments: [true, false], ["host-a", "host-b"])
+    func splitShortcutFocus(visible: Bool, endpointHost: String) throws {
+        let active = PaneState(paneId: "%1", sessionName: "work", tmuxWindowId: "@1", paneIndex: 0, currentPath: "/active", isActive: true)
+        let focused = PaneState(paneId: "%2", sessionName: "work", tmuxWindowId: "@1", paneIndex: 1, currentPath: "/focused")
+        let endpoint = TerminalQuickActionEndpoint(hostID: endpointHost, paneID: "%2", isVisible: { visible }, enqueue: { _ in })
+        let target = try #require(TerminalContentMenuTarget.focused(hostID: "host-a", sessionName: "work", windowID: "@1", panes: [active, focused], endpoint: endpoint))
+        let usesFocus = visible && endpointHost == "host-a"
+        #expect(target.paneID == (usesFocus ? "%2" : "%1"))
+        #expect(target.directory == (usesFocus ? "/focused" : "/active"))
+    }
+
+    @MainActor
+    @Test("A split shortcut stays in the selected window and session")
+    func splitShortcutScope() throws {
+        let other = PaneState(paneId: "%1", sessionName: "other", tmuxWindowId: "@1", paneIndex: 0, isActive: true)
+        let first = PaneState(paneId: "%2", sessionName: "work", tmuxWindowId: "@2", paneIndex: 0)
+        let second = PaneState(paneId: "%3", sessionName: "work", tmuxWindowId: "@2", paneIndex: 1)
+        let endpoint = TerminalQuickActionEndpoint(hostID: nil, paneID: "%1", isVisible: { true }, enqueue: { _ in })
+        let target = try #require(TerminalContentMenuTarget.focused(hostID: nil, sessionName: "work", windowID: "@2", panes: [second, other, first], endpoint: endpoint))
+        #expect(target.paneID == "%2")
+        #expect(TerminalContentMenuTarget.focused(hostID: nil, sessionName: "work", windowID: "@1", panes: [other], endpoint: endpoint) == nil)
+    }
+
     @Test("A content menu retains its clicked pane's directory and Host")
     func clickedPane() throws {
         var pane = PaneState(paneId: "%1", sessionName: "work", tmuxWindowId: "@1", currentPath: "/Host/clicked")
