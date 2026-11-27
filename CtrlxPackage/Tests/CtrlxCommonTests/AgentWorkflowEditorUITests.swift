@@ -802,13 +802,20 @@
             }
             available = true
             try await click("workflow-agents-toggle", in: window)
+            #expect(element("Refresh Agents", in: window, attributeName: "accessibilityLabel") == nil)
+            try await click("workflow-add-existing-agent", in: window)
+            try await wait { refreshCount > 1 }
+            let refreshesBeforeManualReload = refreshCount
             try await click("Refresh Agents", in: window, attributeName: "accessibilityLabel")
+            try await wait { refreshCount > refreshesBeforeManualReload }
             try await wait("The restarted target must clear the unavailable warning") {
                 guard
                     refreshCount > 1, let toggle = element("workflow-agents-toggle", in: window),
                     let label = attribute("accessibilityLabel", from: toggle) as? String else { return false }
                 return !label.contains(warning)
             }
+            try await click("workflow-agent-picker-cancel", in: window)
+            try await wait { window.sheets.isEmpty }
             try await click("workflow-agents-toggle", in: window)
             if bindUnassignedStep {
                 try await click("workflow-step-toggle-\(unassigned.id)", in: window)
@@ -982,9 +989,10 @@
             try await wait { element("workflow-agents-toggle", in: window) != nil }
             #expect(element("workflow-new-agent-tab", in: window) == nil)
             try await click("workflow-agents-toggle", in: window)
-            let refresh = try #require(element("Refresh Agents", in: window, attributeName: "accessibilityLabel"))
+            #expect(element("Refresh Agents", in: window, attributeName: "accessibilityLabel") == nil)
+            let existingAgent = try #require(element("workflow-add-existing-agent", in: window))
             let newAgent = try #require(element("workflow-new-agent-tab", in: window))
-            #expect(try frame(newAgent).maxY <= frame(refresh).minY)
+            #expect(try frame(newAgent).maxY <= frame(existingAgent).minY)
             try await click("workflow-new-agent-tab", in: window)
             try await wait("New Agent must expose its toolbar close button") { element("workflow-new-agent-close", in: window) != nil }
             try await wait("The launch sheet must show two Agent cards at its initial height") { window.sheets.first?.frame.height ?? 0 >= 600 }

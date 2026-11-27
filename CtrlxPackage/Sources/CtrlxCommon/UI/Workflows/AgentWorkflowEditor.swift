@@ -126,9 +126,6 @@ struct AgentWorkflowEditor: View {
                         }
                         Button { showingParticipantPicker = true } label: { Label("Add existing Agent", symbol: .plus) }
                             .accessibilityIdentifier("workflow-add-existing-agent")
-                        Button { Task { await refreshInstances() } } label: {
-                            Label("Refresh Agents", symbol: .arrowClockwise)
-                        }.disabled(refreshing)
                         if createAgent != nil {
                             Button("New Agent tab") { showingCreation = true }.disabled(createdAgent != nil || importing)
                                 .accessibilityIdentifier("workflow-new-agent-tab")
