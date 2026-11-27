@@ -10,6 +10,7 @@
         let onAction: (UUID, String) -> Void
         let onReference: (UUID, String) -> Void
         let imageLoader: (UUID, String) async throws -> Data
+        let htmlLoader: (UUID, String) async throws -> Data
         let onHeight: (CGFloat) -> Void
         @Environment(\.colorScheme) private var colorScheme
         @State private var renderer = RichChatRenderer()
@@ -19,6 +20,7 @@
             onAction: @escaping (UUID, String) -> Void,
             onReference: @escaping (UUID, String) -> Void,
             imageLoader: @escaping (UUID, String) async throws -> Data,
+            htmlLoader: @escaping (UUID, String) async throws -> Data,
             onHeight: @escaping (CGFloat) -> Void = { _ in }
         ) {
             self.messages = messages
@@ -26,6 +28,7 @@
             self.onAction = onAction
             self.onReference = onReference
             self.imageLoader = imageLoader
+            self.htmlLoader = htmlLoader
             self.onHeight = onHeight
         }
 
@@ -70,6 +73,7 @@
                 renderer.onAction = onAction
                 renderer.onReference = onReference
                 renderer.imageLoader = imageLoader
+                renderer.htmlLoader = htmlLoader
                 renderer.onHeight = onHeight
                 renderer.start()
             }
@@ -77,6 +81,7 @@
                 renderer.onAction = onAction
                 renderer.onReference = onReference
                 renderer.imageLoader = imageLoader
+                renderer.htmlLoader = htmlLoader
                 renderer.onHeight = onHeight
                 renderer.update(messages: messages, title: title, dark: colorScheme == .dark)
             }
@@ -94,6 +99,7 @@
         @ObservationIgnored var onAction: (UUID, String) -> Void = { _, _ in }
         @ObservationIgnored var onReference: (UUID, String) -> Void = { _, _ in }
         @ObservationIgnored var imageLoader: ((UUID, String) async throws -> Data)?
+        @ObservationIgnored var htmlLoader: ((UUID, String) async throws -> Data)?
         @ObservationIgnored var onHeight: (CGFloat) -> Void = { _ in }
         @ObservationIgnored private var messages: [RichChatMessage] = []
         @ObservationIgnored private var title = "Orbie"
@@ -101,7 +107,7 @@
         @ObservationIgnored private var generation = UUID()
         @ObservationIgnored private var updateTask: Task<Void, Never>?
         @ObservationIgnored private var timeoutTask: Task<Void, Never>?
-        @ObservationIgnored private var imageTasks: [String: Task<Void, Never>] = [:]
+        @ObservationIgnored private var resourceTasks: [String: Task<Void, Never>] = [:]
         private static let world = WKContentWorld.world(name: "OrbieNative")
         static let origin = URL(string: "https://orbie.ctrlx.invalid/")
 
@@ -201,10 +207,10 @@
             ready = false
             updateTask?.cancel()
             timeoutTask?.cancel()
-            for task in imageTasks.values {
+            for task in resourceTasks.values {
                 task.cancel()
             }
-            imageTasks.removeAll()
+            resourceTasks.removeAll()
             webView?.configuration.userContentController.removeScriptMessageHandler(forName: "orbie", contentWorld: Self.world)
             webView?.configuration.userContentController.removeAllUserScripts()
             webView?.stopLoading()
@@ -244,9 +250,22 @@
             } else if payload.kind == "reference", let index = payload.reference, model.references.indices.contains(index) {
                 onReference(id, model.references[index].path)
             } else if
-                payload.kind == "image", let target = payload.target, let key = payload.key,
+                payload.kind == "imagePath", let target = payload.target, let key = payload.key,
                 target.utf8.count <= 4_096, key.utf8.count <= 100, model.answer != nil {
-                loadImage(id: id, target: target, key: key)
+                resolveImagePath(target: target, key: key)
+            } else if payload.kind == "image", let key = payload.key, key.utf8.count <= 100, model.answer != nil {
+                if let index = payload.reference {
+                    guard model.references.indices.contains(index), model.references[index].previewKind == .image else { return }
+                    loadImage(id: id, path: model.references[index].path, key: key)
+                } else if let target = payload.target, target.utf8.count <= 4_096 {
+                    do { try loadImage(id: id, path: TerminalArtifactPreview.workspacePath(for: target), key: key) }
+                    catch { return }
+                }
+            } else if
+                payload.kind == "html", let index = payload.reference, model.references.indices.contains(index),
+                let key = payload.key, key.utf8.count <= 100, model.answer != nil,
+                model.references[index].previewKind == .html {
+                loadHTML(id: id, path: model.references[index].path, key: key)
             } else if payload.kind == "code", let index = payload.reference, index > 0, index <= 10_000 {
                 copyCode(id: id, index: index)
             } else if
@@ -276,16 +295,31 @@
             }
         }
 
-        private func loadImage(id: UUID, target: String, key: String) {
-            guard imageTasks[key] == nil else { return }
+        private func resolveImagePath(target: String, key: String) {
             let token = generation
-            imageTasks[key] = Task { [weak self] in
+            var path = "", failure = ""
+            do { path = try TerminalArtifactPreview.workspacePath(for: target) }
+            catch { failure = error.localizedDescription }
+            Task { [weak self] in
+                guard let self, generation == token, let webView else { return }
+                do {
+                    _ = try await webView.callAsyncJavaScript("window.orbieChat.imagePath(key, path, error);", arguments: ["key": key, "path": path, "error": failure], in: nil, contentWorld: .page)
+                } catch {
+                    guard generation == token else { return }
+                    fail("The image path could not be resolved. Your original reply is available below.")
+                }
+            }
+        }
+
+        private func loadImage(id: UUID, path: String, key: String) {
+            guard resourceTasks[key] == nil else { return }
+            let token = generation
+            resourceTasks[key] = Task { [weak self] in
                 guard let self else { return }
                 var base64 = "", failure = "", svg = ""
                 do {
-                    let path = try TerminalArtifactPreview.workspacePath(for: target)
                     guard let imageLoader else { throw CocoaError(.featureUnsupported) }
-                    let bytes = try await imageLoader(id, target)
+                    let bytes = try await imageLoader(id, path)
                     if (path as NSString).pathExtension.lowercased() == "svg" {
                         svg = try TerminalArtifactPreview.svgSource(bytes)
                     } else {
@@ -295,12 +329,45 @@
                 } catch is CancellationError { return }
                 catch { failure = error.localizedDescription }
                 guard generation == token, !Task.isCancelled, let webView else { return }
-                imageTasks[key] = nil
+                resourceTasks[key] = nil
                 do {
                     _ = try await webView.callAsyncJavaScript("window.orbieChat.image(key, base64, error, svg);", arguments: ["key": key, "base64": base64, "error": failure, "svg": svg], in: nil, contentWorld: .page)
                 } catch {
                     guard generation == token else { return }
                     fail("The preview could not load its image. Your original reply is available below.")
+                }
+            }
+        }
+
+        nonisolated static func htmlSource(_ data: Data) throws -> String {
+            guard
+                !data.isEmpty, data.count <= 512 * 1_024,
+                let text = String(data: data, encoding: .utf8), !text.contains("\0") else {
+                throw CocoaError(.fileReadInapplicableStringEncoding)
+            }
+            return text
+        }
+
+        private func loadHTML(id: UUID, path: String, key: String) {
+            guard resourceTasks[key] == nil else { return }
+            let token = generation
+            resourceTasks[key] = Task { [weak self] in
+                guard let self else { return }
+                var source = "", failure = ""
+                do {
+                    guard let htmlLoader else { throw CocoaError(.featureUnsupported) }
+                    let bytes = try await htmlLoader(id, path)
+                    do { source = try Self.htmlSource(bytes) }
+                    catch { failure = "HTML previews require a non-empty UTF-8 file no larger than 512 KiB." }
+                } catch is CancellationError { return }
+                catch { failure = error.localizedDescription }
+                guard generation == token, !Task.isCancelled, let webView else { return }
+                resourceTasks[key] = nil
+                do {
+                    _ = try await webView.callAsyncJavaScript("window.orbieChat.html(key, source, error);", arguments: ["key": key, "source": source, "error": failure], in: nil, contentWorld: .page)
+                } catch {
+                    guard generation == token else { return }
+                    fail("The HTML preview could not be loaded. Your original reply is available below.")
                 }
             }
         }

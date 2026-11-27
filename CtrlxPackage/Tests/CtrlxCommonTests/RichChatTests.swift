@@ -14,6 +14,406 @@
         }
 
         @Test
+        func previewKindsUseFileExtensionsAndPreserveExplicitDirectories() {
+            let answer = "<repo:html> <repo:html/> <repo:png/> <repo:dir/page.html/> <repo:dir/page.svg%2F> <repo:page.HTML> <repo:plot.svg> <repo:literal%252F.svg>"
+            let references = RichChatMessage(id: UUID(), text: "", answer: answer).references
+            #expect(references.map(\.previewKind) == [nil, nil, nil, nil, nil, .html, .image, .image])
+            #expect(references.last?.path == "literal%2F.svg")
+        }
+
+        @Test(arguments: [1, 2])
+        func imageAliasesShareOneReadAndKeepExplicitMarkdownPositions(positions: Int) async throws {
+            _ = NSApplication.shared
+            let renderer = RichChatRenderer()
+            var paths: [String] = []
+            renderer.imageLoader = { _, path in
+                paths.append(path)
+                return Data(#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="16"><rect width="24" height="16" fill="blue"/></svg>"#.utf8)
+            }
+            let answer = "![first](./图.svg)\n\n" + (positions == 2 ? "![second](folder/../%E5%9B%BE.svg)\n\n" : "") + "<repo:图.svg> <repo:%E5%9B%BE.svg>"
+            renderer.update(messages: [.init(id: UUID(), text: "Aliases", answer: answer)], title: "Orbie", dark: false)
+            renderer.start()
+            let web = try #require(renderer.webView), window = mount(web)
+            defer { renderer.stop()
+                window.close()
+            }
+            try await wait(web, "document.querySelectorAll('img').length===\(positions) && [...document.querySelectorAll('img')].every(i=>i.naturalWidth===24 && !i.classList.contains('image-placeholder'))")
+            #expect(paths == ["图.svg"])
+            #expect(try await bool(web, "!document.querySelector('.file-image') && document.querySelectorAll('a.repo').length===2 && !document.querySelector('small.issue')"))
+        }
+
+        @Test
+        func HTMLAliasesDoNotConsumeAnotherFilesPreviewSlot() async throws {
+            _ = NSApplication.shared
+            let renderer = RichChatRenderer()
+            var paths: [String] = []
+            renderer.htmlLoader = { _, path in paths.append(path)
+                return Data("<p>\(path)</p>".utf8)
+            }
+            let answer = "<repo:图.html> <repo:%E5%9B%BE.html>\n\n<repo:b.htm>\n\n<repo:c.html>\n\n<repo:d.html>"
+            renderer.update(messages: [.init(id: UUID(), text: "Four files", answer: answer)], title: "Orbie", dark: false)
+            renderer.start()
+            let web = try #require(renderer.webView), window = mount(web)
+            defer { renderer.stop()
+                window.close()
+            }
+            try await wait(web, "document.querySelectorAll('.card').length===4 && [...document.querySelectorAll('iframe')].filter(f=>f.title==='Interactive HTML preview').length===4")
+            #expect(paths.sorted() == ["b.htm", "c.html", "d.html", "图.html"])
+            #expect(try await bool(web, "!document.body.innerText.includes('at most four HTML files') && !document.body.innerText.includes('Loading HTML preview') && document.querySelectorAll('a.repo').length===5"))
+        }
+
+        @Test
+        func explicitDirectoryLinksNeverStartAnAutomaticPreview() async throws {
+            _ = NSApplication.shared
+            let renderer = RichChatRenderer()
+            var paths: [String] = []
+            renderer.imageLoader = { _, path in paths.append(path)
+                throw FileBrowserError.message("Unexpected image")
+            }
+            renderer.htmlLoader = { _, path in paths.append(path)
+                return Data("<p>Valid HTML</p>".utf8)
+            }
+            let answer = "<repo:html> <repo:html/> <repo:png/> <repo:dir/page.html/> <repo:dir/image.svg%2F>\n\n<repo:page.HTML>"
+            renderer.update(messages: [.init(id: UUID(), text: "Directories", answer: answer)], title: "Orbie", dark: false)
+            renderer.start()
+            let web = try #require(renderer.webView), window = mount(web)
+            defer { renderer.stop()
+                window.close()
+            }
+            try await wait(web, "document.querySelector('iframe')?.title==='Interactive HTML preview'")
+            #expect(paths == ["page.HTML"])
+            #expect(try await bool(web, "document.querySelectorAll('a.repo').length===6 && !document.querySelector('img') && !document.body.innerText.includes('Loading HTML preview')"))
+        }
+
+        @Test
+        func repoImagesReadLiteralBackslashAndPercentFilenamesWithoutURLParsing() async throws {
+            _ = NSApplication.shared
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let svg = Data(#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="16"><rect width="24" height="16" fill="red"/></svg>"#.utf8)
+            for name in ["chart\\example.svg", "literal%2F.svg"] {
+                try svg.write(to: root.appendingPathComponent(name))
+            }
+            let renderer = RichChatRenderer()
+            var paths: [String] = [], references: [String] = []
+            renderer.imageLoader = { _, path in paths.append(path)
+                return try Data(contentsOf: root.appendingPathComponent(path))
+            }
+            renderer.onReference = { _, path in references.append(path) }
+            renderer.update(messages: [.init(id: UUID(), text: "Literal names", answer: "`<repo:chart%5Cexample.svg>` <repo:literal%252F.svg>\n\n![Markdown remains restricted](chart%5Cexample.svg)")], title: "Orbie", dark: false)
+            renderer.start()
+            let web = try #require(renderer.webView), window = mount(web)
+            defer { renderer.stop()
+                window.close()
+            }
+            try await wait(web, "document.querySelectorAll('img').length===2 && [...document.querySelectorAll('img')].every(i=>i.naturalWidth===24) && document.querySelectorAll('small.issue').length===1")
+            #expect(paths.sorted() == ["chart\\example.svg", "literal%2F.svg"])
+            #expect(try await bool(web, "document.body.innerText.includes('Only files inside this workspace')"))
+            _ = try await web.evaluateJavaScript("document.querySelector('a.repo').click()")
+            try await Task.sleep(for: .milliseconds(50))
+            #expect(references == ["chart\\example.svg"])
+        }
+
+        @Test(arguments: ["file", "fence", "implicit-fence"])
+        func completeHTMLFilePreservesDocumentAttributesBeforeScriptsRun(mode: String) async throws {
+            _ = NSApplication.shared
+            let document = #"""
+            <!doctype html><html lang="zh-CN" dir="rtl" data-document="kept"><head data-head="kept">
+            <meta name="initial" content="41"><script>window.headParent=document.currentScript.parentElement===document.head;</script>
+            <style>body.app > #result { color:rgb(12,34,56); }</style></head>
+            <body id="page" class="app" data-initial="41" data-sample="x</script>y" onload="document.body.dataset.loaded='yes'">
+            <p id="result">waiting</p><script>document.getElementById('result').textContent=Number(document.head.querySelector('meta[name=initial]').content)+1;</script>
+            </body></html>
+            """#
+            let source = mode == "implicit-fence" ? document
+                .replacingOccurrences(of: #"<!doctype html><html lang="zh-CN" dir="rtl" data-document="kept"><head data-head="kept">"#, with: "")
+                .replacingOccurrences(of: "</head>", with: "")
+                .replacingOccurrences(of: "</html>", with: "") : document
+            let configuration = WKWebViewConfiguration()
+            configuration.websiteDataStore = .nonPersistent()
+            let direct = WKWebView(frame: .zero, configuration: configuration), directWindow = mount(direct)
+            defer { directWindow.close() }
+            direct.loadHTMLString(source, baseURL: nil)
+            try await wait(direct, "document.querySelector('#result')?.textContent==='42' && document.body.dataset.loaded==='yes'")
+            let inspect = "return {value:document.getElementById('result').textContent,color:getComputedStyle(document.getElementById('result')).color,lang:document.documentElement.lang,dir:document.documentElement.dir,body:document.body.id,initial:document.body.dataset.initial,sample:document.body.dataset.sample,head:document.head.dataset.head??'',loaded:document.body.dataset.loaded,headScript:String(window.headParent),metaParent:String(document.head.querySelector('meta[name=initial]').parentElement===document.head),directChild:String(document.getElementById('result').parentElement===document.body)};"
+            let baseline = try await direct.callAsyncJavaScript(inspect, arguments: [:], in: nil, contentWorld: .page) as? [String: String]
+            let renderer = RichChatRenderer()
+            renderer.htmlLoader = { _, _ in Data(source.utf8) }
+            renderer.update(messages: [.init(id: UUID(), text: "Whole document", answer: mode == "file" ? "<repo:page.html>" : "```html\n\(source)\n```")], title: "Orbie", dark: false)
+            renderer.start()
+            let web = try #require(renderer.webView), observer = FrameObserver()
+            web.configuration.userContentController.add(observer, name: "chatTest")
+            web.configuration.userContentController.addUserScript(WKUserScript(source: "if(window.parent!==window)window.webkit.messageHandlers.chatTest.postMessage('frame');", injectionTime: .atDocumentEnd, forMainFrameOnly: false))
+            let window = mount(web)
+            defer { renderer.stop()
+                window.close()
+            }
+            try await wait(web, "document.querySelector('iframe')?.title==='Interactive HTML preview'")
+            let frame = try #require(observer.frame)
+            let actual = try await web.callAsyncJavaScript("for(let n=0;n<100 && document.body.dataset.loaded!=='yes';n++)await new Promise(resolve=>setTimeout(resolve,20));" + inspect, arguments: [:], in: frame, contentWorld: .page) as? [String: String]
+            #expect(baseline?["value"] == "42" && baseline?["color"] == "rgb(12, 34, 56)")
+            #expect(actual == baseline)
+            #expect(actual?["headScript"] == "true" && actual?["metaParent"] == "true" && actual?["directChild"] == "true")
+            #expect(try await bool(web, "document.querySelector('iframe').contentDocument===null && !document.querySelector('#result')"))
+        }
+
+        @Test(arguments: ["file", "fence"], [180, 600])
+        func documentMarginsKeepBottomContentVisible(mode: String, height: Int) async throws {
+            _ = NSApplication.shared
+            let source = """
+            <!doctype html><html><head><style>body { margin:24px; } #total { height:\(height)px;display:flex;align-items:flex-end; }</style></head>
+            <body><main id="total"><span id="bottom">Bottom content</span></main></body></html>
+            """
+            let renderer = RichChatRenderer()
+            renderer.htmlLoader = { _, _ in Data(source.utf8) }
+            renderer.update(messages: [.init(id: UUID(), text: "Document margins", answer: mode == "file" ? "<repo:page.html>" : "```html\n\(source)\n```")], title: "Orbie", dark: false)
+            renderer.start()
+            let web = try #require(renderer.webView), observer = FrameObserver()
+            web.configuration.userContentController.add(observer, name: "chatTest")
+            web.configuration.userContentController.addUserScript(WKUserScript(source: "if(window.parent!==window)window.webkit.messageHandlers.chatTest.postMessage('frame');", injectionTime: .atDocumentEnd, forMainFrameOnly: false))
+            let window = mount(web)
+            defer { renderer.stop()
+                window.close()
+            }
+            try await wait(web, "document.querySelector('iframe')?.title==='Interactive HTML preview' && document.querySelector('iframe').getBoundingClientRect().height>100")
+            let frame = try #require(observer.frame)
+            let metrics = try await web.callAsyncJavaScript("""
+            const overflow=getComputedStyle(document.documentElement).overflowY;
+            if (innerHeight===480) window.scrollTo(0,document.documentElement.scrollHeight);
+            return {viewport:innerHeight,bottom:document.getElementById('bottom').getBoundingClientRect().bottom,overflow,scrolled:scrollY>0};
+            """, arguments: [:], in: frame, contentWorld: .page) as? [String: Any]
+            #expect(metrics?["viewport"] as? Int == min(height + 48, 480))
+            #expect(try #require(metrics?["bottom"] as? Double) <= Double(try #require(metrics?["viewport"] as? Int)))
+            #expect(metrics?["overflow"] as? String == (height + 48 > 480 ? "auto" : "hidden"))
+            #expect(metrics?["scrolled"] as? Bool == (height + 48 > 480))
+        }
+
+        @Test
+        func documentContentSizeCanShrinkWithoutViewportFloor() async throws {
+            _ = NSApplication.shared
+            let renderer = RichChatRenderer()
+            renderer.start()
+            let web = try #require(renderer.webView), observer = FrameObserver()
+            web.configuration.userContentController.add(observer, name: "chatTest")
+            web.configuration.userContentController.addUserScript(WKUserScript(source: "if(window.parent!==window)window.webkit.messageHandlers.chatTest.postMessage('frame');", injectionTime: .atDocumentEnd, forMainFrameOnly: false))
+            let window = mount(web)
+            defer { renderer.stop()
+                window.close()
+            }
+            try await wait(web, "!!window.OrbieWidgets")
+            _ = try await web.evaluateJavaScript("""
+            const container=document.createElement('div');document.body.append(container);
+            window.testEnded=false;
+            window.testWidget=OrbieWidgets.createWidget({container,code:OrbieWidgets.prepareDocument('<html><head><style>body { margin:24px; }</style></head><body><div id="content" style="height:600px">Content</div></body></html>',true),opaqueOrigin:true,csp:{cdnOrigins:[]},animate:false,minHeight:60,maxHeight:480});
+            testWidget.on('end',()=>window.testEnded=true);void 0;
+            """)
+            try await wait(web, "testEnded")
+            let tall = try await web.callAsyncJavaScript("return (await testWidget.inspect()).size.height;", arguments: [:], in: nil, contentWorld: .page)
+            #expect(tall as? Int == 648)
+            let frame = try #require(observer.frame)
+            _ = try await web.callAsyncJavaScript("document.getElementById('content').style.height='180px';", arguments: [:], in: frame, contentWorld: .page)
+            let short = try await web.callAsyncJavaScript("return (await testWidget.inspect()).size.height;", arguments: [:], in: nil, contentWorld: .page)
+            #expect(short as? Int == 228)
+            try await wait(web, "testWidget.iframe.getBoundingClientRect().height===228")
+            _ = try await web.callAsyncJavaScript("document.body.style.marginTop='48px';", arguments: [:], in: frame, contentWorld: .page)
+            try await wait(web, "testWidget.iframe.getBoundingClientRect().height===252")
+            _ = try await web.evaluateJavaScript("testWidget.dispose()")
+        }
+
+        @Test
+        func completeDocumentKeepsRuntimeAndSizingAfterReplacingBodyContents() async throws {
+            _ = NSApplication.shared
+            let renderer = RichChatRenderer()
+            renderer.htmlLoader = { _, _ in Data(#"""
+            <!doctype html><html><head><meta name="initial" content="41"><style>body { margin:0;padding:16px; }</style></head>
+            <body><p>waiting</p><script>document.body.innerHTML='<div id="total" style="height:180px">'+(Number(document.head.querySelector('meta[name=initial]').content)+1)+'</div>';</script></body></html>
+            """#.utf8) }
+            renderer.update(messages: [.init(id: UUID(), text: "Body replacement", answer: "<repo:page.html>")], title: "Orbie", dark: false)
+            renderer.start()
+            let web = try #require(renderer.webView), observer = FrameObserver()
+            web.configuration.userContentController.add(observer, name: "chatTest")
+            web.configuration.userContentController.addUserScript(WKUserScript(source: "if(window.parent!==window)window.webkit.messageHandlers.chatTest.postMessage('frame');", injectionTime: .atDocumentEnd, forMainFrameOnly: false))
+            let window = mount(web)
+            defer { renderer.stop()
+                window.close()
+            }
+            try await wait(web, "document.querySelector('iframe')?.getBoundingClientRect().height>=212")
+            let frame = try #require(observer.frame)
+            let value = try await web.callAsyncJavaScript("return document.querySelector('body > #total')?.textContent;", arguments: [:], in: frame, contentWorld: .page)
+            #expect(value as? String == "42")
+            #expect(try await bool(web, "[...document.querySelectorAll('.card-error')].every(e=>!e.textContent)"))
+        }
+
+        @Test
+        func documentReplacementRemountsAndKeepsFragmentRenderingAndTheme() async throws {
+            _ = NSApplication.shared
+            let renderer = RichChatRenderer()
+            renderer.start()
+            let web = try #require(renderer.webView), observer = FrameObserver()
+            web.configuration.userContentController.add(observer, name: "chatTest")
+            web.configuration.userContentController.addUserScript(WKUserScript(source: "if(window.parent!==window)window.webkit.messageHandlers.chatTest.postMessage('frame');", injectionTime: .atDocumentEnd, forMainFrameOnly: false))
+            let window = mount(web)
+            defer { renderer.stop()
+                window.close()
+            }
+            try await wait(web, "!!window.OrbieWidgets")
+            _ = try await web.evaluateJavaScript("""
+            const container=document.createElement('div');document.body.append(container);
+            window.testEnded=false;
+            window.testDocument='<html style="--document-value:42"><head><meta name="value" content="42"></head><body><p id="total">42</p></body></html>';
+            window.testWidget=OrbieWidgets.createWidget({container,code:OrbieWidgets.prepareDocument(testDocument,true),opaqueOrigin:true,csp:{cdnOrigins:[]},animate:false,minHeight:60,tokens:OrbieWidgets.defaultThemeTokens('dark')});
+            testWidget.on('end',()=>window.testEnded=true);void 0;
+            """)
+            try await wait(web, "testEnded")
+            let initial = try #require(observer.frame)
+            let initialTheme = try await web.callAsyncJavaScript("return genframe.theme==='dark' && document.documentElement.dataset.theme==='dark' && getComputedStyle(document.documentElement).colorScheme==='dark' && document.documentElement.style.getPropertyValue('--document-value')==='42';", arguments: [:], in: initial, contentWorld: .page)
+            #expect(initialTheme as? Bool == true)
+            _ = try await web.callAsyncJavaScript("window.oldDocument=testWidget.iframe;await testWidget.replace('<button id=fragment>Fragment</button>');", arguments: [:], in: nil, contentWorld: .page)
+            #expect(try await bool(web, "oldDocument!==testWidget.iframe && !oldDocument.isConnected"))
+            let fragment = try #require(observer.frame)
+            let isFragment = try await web.callAsyncJavaScript("return document.querySelector('#gf-root > #fragment')?.textContent;", arguments: [:], in: fragment, contentWorld: .page)
+            #expect(isFragment as? String == "Fragment")
+            _ = try await web.callAsyncJavaScript("window.oldFragment=testWidget.iframe;await testWidget.replace(OrbieWidgets.prepareDocument(testDocument,true));testWidget.setTheme(OrbieWidgets.defaultThemeTokens('dark'));await testWidget.inspect();", arguments: [:], in: nil, contentWorld: .page)
+            #expect(try await bool(web, "oldFragment!==testWidget.iframe && !oldFragment.isConnected"))
+            let document = try #require(observer.frame)
+            let themed = try await web.callAsyncJavaScript("return document.querySelector('body > #total')?.textContent==='42' && !!document.head.querySelector('meta[name=value]') && genframe.theme==='dark';", arguments: [:], in: document, contentWorld: .page)
+            #expect(themed as? Bool == true)
+            _ = try await web.callAsyncJavaScript("document.body.innerHTML='<div style=\"height:180px\">Updated</div>';", arguments: [:], in: document, contentWorld: .page)
+            let height = try await web.callAsyncJavaScript("return (await testWidget.inspect()).size.height;", arguments: [:], in: nil, contentWorld: .page)
+            #expect(height as? Int == 180)
+            _ = try await web.evaluateJavaScript("testWidget.dispose()")
+        }
+
+        @Test
+        func repoImageLinksPreviewWithoutDuplicatingMarkdownImages() async throws {
+            _ = NSApplication.shared
+            let renderer = RichChatRenderer(), png = try smallPNG()
+            var requests: [String] = [], references: [String] = []
+            renderer.imageLoader = { _, path in requests.append(path)
+                return png
+            }
+            renderer.onReference = { _, path in references.append(path) }
+            let answer = #"""
+            四款商品图放在一起，方便比较：`<repo:outputs/背%20包.jpg>`。
+
+            [再次打开](repo:outputs/背%20包.jpg)
+
+            ![已有图片](outputs/direct.png)
+
+            <repo:outputs/direct.png>
+
+            转义 \<repo:outputs/example.png>。
+
+            ```text
+            <repo:outputs/code.png>
+            ```
+            """#
+            renderer.update(messages: [.init(id: UUID(), text: "图片引用", answer: answer)], title: "Orbie", dark: false)
+            renderer.start()
+            let web = try #require(renderer.webView), window = mount(web)
+            defer { renderer.stop()
+                window.close()
+            }
+            try await wait(web, "document.querySelectorAll('img').length===2 && [...document.querySelectorAll('img')].every(i=>i.naturalWidth===16 && !i.classList.contains('image-placeholder'))")
+            #expect(requests.sorted() == ["outputs/direct.png", "outputs/背 包.jpg"])
+            #expect(try await bool(web, "document.querySelectorAll('a.repo').length===3 && document.querySelectorAll('.file-image').length===1 && !document.querySelector('pre img')"))
+            _ = try await web.evaluateJavaScript("document.querySelector('a.repo').click()")
+            try await Task.sleep(for: .milliseconds(50))
+            #expect(references == ["outputs/背 包.jpg"])
+        }
+
+        @Test
+        func repoHTMLFileRunsInIsolatedFrameAndSurvivesRefresh() async throws {
+            _ = NSApplication.shared
+            let renderer = RichChatRenderer(), id = UUID()
+            var requests: [(UUID, String)] = []
+            let png = try smallPNG().base64EncodedString()
+            renderer.htmlLoader = { id, path in
+                requests.append((id, path))
+                return Data("<button id='counter' onclick='this.textContent=Number(this.textContent)+1'>0</button><img src='data:image/png;base64,\(png)'><script>window.fileScriptRan=true;</script>".utf8)
+            }
+            let answer = "已改成本地单文件网页：`<repo:outputs/图%2525表.html>`。\n\n[再次打开](repo:outputs/图%2525表.html)"
+            renderer.update(messages: [.init(id: id, text: "直接写一个本地网页", answer: answer)], title: "Orbie", dark: false)
+            renderer.start()
+            let web = try #require(renderer.webView), observer = FrameObserver()
+            web.configuration.userContentController.add(observer, name: "chatTest")
+            web.configuration.userContentController.addUserScript(WKUserScript(source: "if(window.parent!==window)window.webkit.messageHandlers.chatTest.postMessage('frame');", injectionTime: .atDocumentEnd, forMainFrameOnly: false))
+            let window = mount(web)
+            defer { renderer.stop()
+                window.close()
+            }
+            try await wait(web, "document.querySelector('iframe')?.title==='Interactive HTML preview'")
+            let frame = try #require(observer.frame)
+            let result = try await web.callAsyncJavaScript("await document.querySelector('img').decode();document.getElementById('counter').click();return {count:document.getElementById('counter').textContent,script:window.fileScriptRan,image:document.querySelector('img').naturalWidth};", arguments: [:], in: frame, contentWorld: .page) as? [String: Any]
+            #expect(result?["count"] as? String == "1" && result?["script"] as? Bool == true && result?["image"] as? Int == 16)
+            #expect(requests.count == 1 && requests.first?.0 == id && requests.first?.1 == "outputs/图%25表.html")
+            #expect(try await bool(web, "!window.fileScriptRan && document.querySelector('iframe').contentDocument===null && document.querySelectorAll('a.repo').length===2"))
+            let blocked = try await web.callAsyncJavaScript("try {await fetch('https://example.com');return false;}catch{return true;}", arguments: [:], in: frame, contentWorld: .page)
+            #expect(blocked as? Bool == true)
+            _ = try await web.evaluateJavaScript("window.savedFrame=document.querySelector('iframe');void 0;")
+            renderer.update(messages: [.init(id: id, text: "直接写一个本地网页", answer: answer, activity: ["Refreshed"])], title: "Orbie", dark: true)
+            try await wait(web, "document.documentElement.classList.contains('dark')")
+            #expect(try await bool(web, "savedFrame===document.querySelector('iframe')"))
+            #expect(requests.count == 1)
+            let value = try await web.callAsyncJavaScript("return document.getElementById('counter').textContent;", arguments: [:], in: frame, contentWorld: .page)
+            #expect(value as? String == "1")
+        }
+
+        @Test
+        func HTMLFileFailuresAreLocalAndReadCountIsBounded() async throws {
+            _ = NSApplication.shared
+            let renderer = RichChatRenderer()
+            var paths: [String] = []
+            renderer.htmlLoader = { _, path in paths.append(path)
+                return Data()
+            }
+            let answer = (0..<5).map { "`<repo:outputs/\($0).html>`" }.joined(separator: "\n\n") + "\n\n正文继续显示。"
+            renderer.update(messages: [.init(id: UUID(), text: "HTML files", answer: answer)], title: "Orbie", dark: false)
+            renderer.start()
+            let web = try #require(renderer.webView), window = mount(web)
+            defer { renderer.stop()
+                window.close()
+            }
+            try await wait(web, "[...document.querySelectorAll('.markdown-body .issue')].filter(e=>e.textContent.includes('UTF-8')).length===4")
+            #expect(paths.count == 4 && !paths.contains("outputs/4.html"))
+            #expect(try await bool(web, "document.querySelectorAll('a.repo').length===5 && !document.querySelector('iframe') && document.body.innerText.includes('正文继续显示') && document.body.innerText.includes('at most four HTML files') && !document.body.innerText.includes('Loading HTML preview')"))
+            #expect(renderer.error == nil)
+        }
+
+        @Test
+        func removedHTMLFileCannotInstallLatePreview() async throws {
+            _ = NSApplication.shared
+            let renderer = RichChatRenderer(), id = UUID()
+            var pending: CheckedContinuation<Data, Never>?
+            renderer.htmlLoader = { _, _ in await withCheckedContinuation { pending = $0 } }
+            renderer.update(messages: [.init(id: id, text: "Old file", answer: "`<repo:old.html>`")], title: "Orbie", dark: false)
+            renderer.start()
+            let web = try #require(renderer.webView), window = mount(web)
+            defer { renderer.stop()
+                window.close()
+            }
+            try await wait(web, "document.body.innerText.includes('Loading HTML preview')")
+            for _ in 0..<50 where pending == nil {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            let continuation = try #require(pending)
+            renderer.update(messages: [.init(id: id, text: "New reply", answer: "当前回复无需网页预览。")], title: "Orbie", dark: false)
+            try await wait(web, "document.body.innerText.includes('当前回复无需网页预览')")
+            continuation.resume(returning: Data("<button>Stale HTML</button>".utf8))
+            try await Task.sleep(for: .milliseconds(150))
+            #expect(try await bool(web, "!document.querySelector('iframe') && !document.querySelector('.card') && !document.body.innerText.includes('Stale HTML')"))
+        }
+
+        @Test
+        func HTMLSourceRejectsInvalidEncodingAndSize() throws {
+            for bytes in [Data(), Data([0xFF]), Data([0]), Data(repeating: 65, count: 512 * 1_024 + 1)] {
+                #expect(throws: CocoaError.self) { try RichChatRenderer.htmlSource(bytes) }
+            }
+            #expect(try RichChatRenderer.htmlSource(Data("<h1>HTML</h1>".utf8)) == "<h1>HTML</h1>")
+        }
+
+        @Test
         func incompleteMarkersAndMarkdownLinkDefinitionsKeepValidTargets() async throws {
             _ = NSApplication.shared
             let renderer = RichChatRenderer()
@@ -64,7 +464,7 @@
             let renderer = RichChatRenderer()
             var paths: [String] = []
             renderer.imageLoader = { _, target in
-                try paths.append(TerminalArtifactPreview.workspacePath(for: target))
+                paths.append(target)
                 return Data(#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="blue"/></svg>"#.utf8)
             }
             renderer.update(messages: [.init(id: UUID(), text: "SVG", answer: "![control](images/图.svg) ![encoded](images/图%2Esvg)")], title: "Orbie", dark: false)
@@ -75,7 +475,7 @@
                 window.close()
             }
             try await wait(web, "[...document.querySelectorAll('img')].filter(i=>i.naturalWidth===40 && i.src.startsWith('data:image/svg+xml')).length===2")
-            #expect(paths == ["images/图.svg", "images/图.svg"])
+            #expect(paths == ["images/图.svg"])
             #expect(try await bool(web, "document.querySelectorAll('small.issue,.image-placeholder').length===0"))
         }
 
@@ -521,7 +921,7 @@
                 window.close()
             }
             try await wait(web, "document.querySelectorAll('small.issue').length===3")
-            #expect(Set(paths) == ["a(draft).png", "images/图%20片.png", "./images/plot.png"])
+            #expect(Set(paths) == ["a(draft).png", "images/图 片.png", "images/plot.png"])
             #expect(try await bool(web, "document.querySelectorAll('.image-placeholder').length===0 && document.body.textContent.includes('Image unavailable: a(draft).png')"))
         }
 

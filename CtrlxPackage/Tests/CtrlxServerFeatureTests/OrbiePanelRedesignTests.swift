@@ -300,8 +300,8 @@ struct OrbiePanelRedesignTests {
         try await f.cleanup()
     }
 
-    @Test(arguments: [ColorScheme.light, .dark])
-    func nativePanelShowsActionablePendingReplyAndKeepsComposerVisible(scheme: ColorScheme) async throws {
+    @Test(arguments: [ColorScheme.light, .dark], [AgentWorkflowInvocationStatus.running, .uncertain])
+    func nativePanelShowsActionablePendingReplyAndKeepsComposerVisible(scheme: ColorScheme, delivery: AgentWorkflowInvocationStatus) async throws {
         try await withDependencies {
             $0[PreferencesService.self] = .inMemory()
             $0[SecretsService.self] = .inMemory()
@@ -313,10 +313,12 @@ struct OrbiePanelRedesignTests {
             let original = await f.orbie()
             try await original.create(pluginID: "codex", providerID: nil)
             var message = try AgentMessage(instance: #require(original.instance), text: "Review the Orbie panel interaction and suggest the next step.")
-            message.status = .uncertain
-            var activity = AgentTurnActivityLog()
-            activity.record(id: "read", kind: .file, text: "Read panel.swift")
-            message.activity = activity.entries
+            message.status = delivery
+            if delivery == .uncertain {
+                var activity = AgentTurnActivityLog()
+                activity.record(id: "read", kind: .file, text: "Read panel.swift")
+                message.activity = activity.entries
+            }
             try await f.interaction.store.insert(message)
             let store = OrbieStore(paths: f.paths, hostID: f.hostID)
             var saved = try await store.load()
@@ -335,14 +337,18 @@ struct OrbiePanelRedesignTests {
             defer { window.close() }
             try await Task.sleep(for: .milliseconds(250))
             hosting.layoutSubtreeIfNeeded()
-            for identifier in ["orbie-panel-terminal", "orbie-panel-open-agent", "orbie-panel-draft", "orbie-panel-send"] {
+            let identifiers = ["orbie-panel-terminal", "orbie-panel-draft", "orbie-panel-send"] + (delivery == .uncertain ? ["orbie-panel-open-agent"] : [])
+            for identifier in identifiers {
                 let control = try #require(find(identifier, in: hosting))
                 let selector = NSSelectorFromString("accessibilityFrame")
                 let implementation = try #require(control.method(for: selector))
                 let frame = unsafeBitCast(implementation, to: (@convention(c) (AnyObject, Selector) -> CGRect).self)(control, selector)
                 #expect(frame.width > 0 && frame.height > 0 && window.frame.contains(frame), Comment(rawValue: "\(identifier): \(frame), window: \(window.frame)"))
             }
-            _ = try await waitForConversation("document.body.innerText.includes('Read panel.swift')", in: hosting)
+            _ = try await waitForConversation(delivery == .uncertain ? "document.body.innerText.includes('Read panel.swift')" : "document.body.innerText.includes('Waiting for a verified reply')", in: hosting)
+            if delivery == .running {
+                #expect(find("orbie-panel-open-agent", in: hosting) == nil)
+            }
             #expect(find("orbie-panel-search", in: hosting) == nil)
             if let evidence = ProcessInfo.processInfo.environment["CTRLX_ORBIE_UI_EVIDENCE"], let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) {
                 hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
