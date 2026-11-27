@@ -31,7 +31,8 @@ struct AgentWorkflowFinishTests {
         maximumRounds: Int = 5,
         notifyOnAgentCompletion: Bool? = nil,
         onCompleted: @escaping @Sendable (AgentWorkflowRun) -> Void = { _ in },
-        inspect: @escaping @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance = { $0 }
+        inspect: @escaping @Sendable (AgentWorkflowInstance) async throws -> AgentWorkflowInstance = { $0 },
+        synchronizeEvents: @escaping @Sendable (UUID) async throws -> Void = { _ in }
     ) async throws -> Fixture {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ctrlx-workflow-finish-\(UUID())")
         let hostID = UUID()
@@ -91,9 +92,73 @@ struct AgentWorkflowFinishTests {
         })
         return try .init(
             directory: directory, store: store,
-            service: AgentWorkflowAgentService(store: store, inspect: inspect, synchronizeEvents: { _ in }, provider: { _ in CodexPluginCore() }),
+            service: AgentWorkflowAgentService(store: store, inspect: inspect, synchronizeEvents: synchronizeEvents, provider: { _ in CodexPluginCore() }),
             instance: instance, run: active, invocation: #require(active.invocations.first), peer: peer
         )
+    }
+
+    @Test("Reply-end completion acknowledges complete-step without changing the run", arguments: [
+        AgentWorkflowRunStatus.running, .paused, .completed, .ended,
+    ])
+    func automaticCompletionIsInformational(status: AgentWorkflowRunStatus) async throws {
+        let f = try await fixture(allowsFinish: false, synchronizeEvents: { _ in
+            Issue.record("An informational acknowledgement must not wait for receipt verification")
+            throw AgentWorkflowError("The Agent's current turn is awaiting receipt verification.")
+        })
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        if status != .running {
+            try await f.store.update(runID: f.run.id) {
+                switch status {
+                case .paused: $0.pause(reason: "Operator pause")
+                case .completed:
+                    try $0.succeed(.init(invocationID: f.invocation.id, nativeTurnID: "turn-1", text: "Verified answer", completedAt: .now), instance: f.instance, now: .now)
+                case .ended: $0.end()
+                default: Issue.record("Unexpected test status")
+                }
+            }
+        }
+        let before = try await f.store.snapshot().runs[0]
+        let ledger = f.directory.appendingPathComponent("ledger.json")
+        let bytes = try Data(contentsOf: ledger)
+        let request = JSONRPCRequest(id: "step", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        for _ in 0..<2 {
+            let response = await f.service.handle(request, peer: f.peer)
+            #expect(response.ok)
+            #expect(response.result?["status"] == .string(status.rawValue))
+            #expect(response.result?["message"]?.stringValue?.contains("automatically") == true)
+            #expect(try await f.store.snapshot().runs[0] == before)
+            #expect(try Data(contentsOf: ledger) == bytes)
+        }
+        if status == .running || status == .paused {
+            #expect(before.invocations[0].result == nil && before.invocations[0].stepTurn == nil)
+            let completed = try await f.store.update(runID: f.run.id) {
+                try $0.succeed(.init(invocationID: f.invocation.id, nativeTurnID: "turn-1", text: "Final answer", completedAt: .now), instance: f.instance, now: .now)
+            }
+            #expect(completed.invocations[0].status == .succeeded)
+            #expect(completed.status == (status == .paused ? .paused : .completed))
+        }
+    }
+
+    @Test("Reply-end complete-step still verifies the caller and live conversation", arguments: [false, true])
+    func automaticCompletionChecksIdentity(changedConversation: Bool) async throws {
+        let f = try await fixture(inspect: { instance in
+            var live = instance
+            if changedConversation {
+                live.conversationID = "another-conversation"
+            }
+            return live
+        })
+        defer { try? FileManager.default.removeItem(at: f.directory) }
+        let request = JSONRPCRequest(id: "step", method: "workflow.completeStep", params: ["invocationId": .string(f.invocation.id.uuidString)])
+        let stranger = try #require(PluginIngressPeer.capture(peerPID: 12, userID: 501) { pid in
+            .init(processID: pid, parentProcessID: 1, userID: 501, startSeconds: 100, startMicroseconds: 0)
+        })
+        #expect(await f.service.handle(request, peer: nil).error?.code == "workflow_denied")
+        #expect(await f.service.handle(request, peer: stranger).error?.code == "workflow_denied")
+        if changedConversation {
+            #expect(await f.service.handle(request, peer: f.peer).error?.code == "workflow_denied")
+        }
+        #expect(try await f.store.snapshot().runs[0] == f.run)
     }
 
     @Test(arguments: [false, true])
