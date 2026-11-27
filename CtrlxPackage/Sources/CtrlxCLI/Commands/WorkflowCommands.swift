@@ -115,7 +115,7 @@ struct WorkflowTerminationOptions: ParsableArguments {
 struct WorkflowCompleteStepCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "complete-step", abstract: "Complete the current multi-reply workflow step",
-        discussion: "Call from the current Agent turn when the configured step task is complete, then provide its final result. Proposals and discussion can end without this command. This does not end the entire workflow."
+        discussion: "Call from the current Agent turn when the configured step task is complete, then provide its final result. Proposals and discussion can end without this command. Steps configured to complete when the reply ends return an informational success without changing workflow state. The Host still verifies the final reply. This does not end the entire workflow."
     )
 
     @Option(name: .long, help: "Invocation UUID supplied with this workflow task") var invocation: String

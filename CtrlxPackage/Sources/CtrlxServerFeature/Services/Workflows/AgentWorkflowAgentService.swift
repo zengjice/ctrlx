@@ -53,8 +53,15 @@ actor AgentWorkflowAgentService {
         do {
             let requestedTurn = exitsLoop ? try await store.loopExitTurn(invocationID: invocationID) : nil
             try await refreshInstances()
-            try await synchronizeEvents(invocationID)
-            let archive = try await store.snapshot()
+            var archive = try await store.snapshot()
+            let completesAutomatically = completesStep && archive.runs.contains { run in
+                guard let invocation = run.invocations.first(where: { $0.id == invocationID }) else { return false }
+                return run.definition.nodes.first(where: { $0.id == invocation.nodeID })?.completion == .replyEnded
+            }
+            if !completesAutomatically {
+                try await synchronizeEvents(invocationID)
+                archive = try await store.snapshot()
+            }
             guard
                 let run = archive.runs.first(where: { $0.invocations.contains { $0.id == invocationID } }),
                 let invocation = run.invocations.first(where: { $0.id == invocationID }),
@@ -73,7 +80,9 @@ actor AgentWorkflowAgentService {
                 return denied(request.id, "The Agent process or conversation changed.")
             }
             let updated: AgentWorkflowRun
-            if let requestedTurn {
+            if completesAutomatically {
+                updated = run
+            } else if let requestedTurn {
                 guard
                     invocation.resultTurnID == requestedTurn.nativeTurnID,
                     invocation.resultTranscriptPath == requestedTurn.transcriptPath else {
@@ -118,7 +127,9 @@ actor AgentWorkflowAgentService {
                 "runId": .string(updated.id.uuidString),
                 "invocationId": .string(invocationID.uuidString),
                 "status": .string(updated.status.rawValue),
-                "message": .string(completesStep
+                "message": .string(completesAutomatically
+                    ? "This step completes automatically when the reply ends; no explicit completion request is needed. The Host still verifies the final reply before handoff."
+                    : completesStep
                     ? "Step completion saved. Provide this turn's final result; downstream handoff waits for verification and an unpaused workflow."
                     : exitsLoop
                     ? "Loop exit saved. Provide this turn's final result; the after-loop step waits for verification and an unpaused workflow."

@@ -97,6 +97,15 @@ Code, reports and other files stay in the task's working directory. Downstream
 Agents read agreed workspace paths. Text results follow the configured
 connections; workflow-supplied images use the attachment reader above.
 
+`workflow complete-step --invocation '<UUID supplied with the task>'` calls
+JSON-RPC `workflow.completeStep` with only `invocationId`. For an explicitly
+completed step it records the completion request; the Host still verifies the
+final reply before handoff. For a step configured to complete when the reply ends,
+it returns an informational success without changing the run or recording a
+completion request. This acknowledgement does not wait for submission-receipt
+verification. Repeated calls leave the run unchanged. Caller identity and
+live-conversation checks still apply; this does not end or resume a workflow.
+
 `workflow finish` requests completion of the current, explicitly authorized
 workflow invocation. Completion conditions are defined in the workflow task or
 step instructions; the CLI does not define business criteria. This command
