@@ -7,6 +7,26 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.1.0 — Rich Orbie replies and iOS selection scrolling
+
+- Render mixed Markdown, repository references, workspace images, Mermaid, and
+  sandboxed interactive HTML in the Mac Orbie panel, full Orbie conversation,
+  and Orbiter conversations. Preserve interaction state, bounded image loading,
+  and workspace file routing. See
+  [rich content rendering](docs/v3.1.0/orbie/RICH_CONTENT_RENDERING.md).
+- Keep selected text active while allowing fullscreen terminal drags to scroll
+  the remote TUI on iOS; normal-buffer history scrolling remains local. See
+  [iOS viewport and scrolling](docs/swiftterm-ios-scrolling.md).
+- Validation: targeted regression suites covering rich chat rendering, artifact
+  previews, terminal scrolling and selection routing, detached windows, Orbie
+  conversations, Agent recovery, and Claude Workflow transcripts passed in
+  serial mode. SwiftFormat passed for all 24 changed Swift files; CtrlX brand
+  and technical boundary checks, JavaScript and shell syntax checks, and Git
+  diff checks passed.
+- This release builds macOS only. The iOS behavior change passed focused tests;
+  physical-iPhone acceptance was not rerun for this version. The final artifact
+  is produced by the formal Developer ID signed and notarized release workflow.
+
 ## 3.0.182 — Grouped tab reordering and reliable Workflow state
 
 - Reorder linked Tab groups as complete units on Mac and iOS, including shared
