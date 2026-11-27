@@ -51,7 +51,8 @@ public protocol PluginCore: Actor {
 
     /// Apply user settings (raw JSON from `settings.json`). The core decodes its
     /// typed struct and runs semantic validation; return `.error` to surface
-    /// inline (spec §11).
+    /// inline (spec §11). The Host serializes saves per plugin, including the
+    /// disk write, this asynchronous apply and publication of accepted settings.
     func applySettings(_ raw: Data) async -> SettingsResult
 
     /// Graceful teardown (stop FSEvents watchers, flush). Called on disable/quit.

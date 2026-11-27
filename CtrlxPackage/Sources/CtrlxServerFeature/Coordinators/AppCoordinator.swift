@@ -153,6 +153,7 @@
         /// `internal` (not `private`) so `@testable import` tests can inject a
         /// pre-configured `PluginRegistry` without calling `setupAllServices()`.
         @ObservationIgnored var pluginRegistry: PluginRegistry?
+        @ObservationIgnored private var pendingPluginSettings: [String: Data] = [:]
         @ObservationIgnored var agentModelCatalogs: [String: AgentModelRuntimeCache] = [:]
         @ObservationIgnored var agentHookTrustRequests: Set<String> = []
         @ObservationIgnored var agentModelRequests: Set<String> = []
@@ -290,7 +291,8 @@
 
         /// The single agent-blind event dispatcher; its sinks are wired to the
         /// local adapter methods (status/notification/app-action) below.
-        @ObservationIgnored private var pluginDispatcher: PluginEventDispatcher?
+        /// Internal for isolated lifecycle tests without starting live ingress.
+        @ObservationIgnored var pluginDispatcher: PluginEventDispatcher?
 
         /// The one app-owned ingress socket server. Coexists with
         /// `hookServer`; in normal runs no frames reach it (hook bridges aren't
@@ -895,9 +897,7 @@
             for id in pluginIDs {
                 paths.ensurePluginStateDir(id)
                 let host = makePluginHost(id: id, dispatcher: dispatcher, paths: paths)
-                let env = makePluginEnv(id: id, registry: registry, paths: paths)
-
-                await registry.enable(id, host: host, env: env)
+                await registry.enable(id, host: host, makeEnv: { makePluginEnv(id: id, registry: registry, paths: paths) })
                 if let failure = registry.failedInit[id] {
                     logger.warning("Plugin '\(id)' left disabled: \(failure)")
                 }
@@ -923,8 +923,7 @@
                 registry.registerSidecar(manifest: manifest, root: root, source: resolved.source)
                 paths.ensurePluginStateDir(id)
                 let host = makePluginHost(id: id, dispatcher: dispatcher, paths: paths)
-                let env = makePluginEnv(id: id, registry: registry, paths: paths)
-                await registry.enable(id, host: host, env: env)
+                await registry.enable(id, host: host, makeEnv: { makePluginEnv(id: id, registry: registry, paths: paths) })
                 if let failure = registry.failedInit[id] {
                     logger.warning("Sidecar plugin '\(id)' left disabled: \(failure)")
                 }
@@ -1253,17 +1252,17 @@
             else {
                 return nil
             }
-            guard registry.isRegistered(id) else { return nil }
-            paths.ensurePluginStateDir(id)
-            let host = makePluginHost(id: id, dispatcher: dispatcher, paths: paths)
-            let env = makePluginEnv(id: id, registry: registry, paths: paths)
-            await registry.enable(id, host: host, env: env)
-            // The enabled-plugin set changed; re-push the complete presentation
-            // set to all connected viewers (spec §7.2/§7.3) and refresh the
-            // OTLP namespace table (issue #617).
-            await connectedViewerManager?.pushPluginPresentationsToAll(pluginPresentations())
-            await refreshOTLPPluginNamespaces()
-            return registry.isEnabled(id)
+            return await registry.withPluginOperation(id) {
+                guard registry.isRegistered(id) else { return nil }
+                paths.ensurePluginStateDir(id)
+                let host = makePluginHost(id: id, dispatcher: dispatcher, paths: paths)
+                let env = makePluginEnv(id: id, registry: registry, paths: paths)
+                await registry.enableCore(id, host: host, env: env)
+                // Publish lifecycle changes before the next operation for this plugin.
+                await connectedViewerManager?.pushPluginPresentationsToAll(pluginPresentations())
+                await refreshOTLPPluginNamespaces()
+                return registry.isEnabled(id)
+            }
         }
 
         /// Disable a plugin by id (CLI `plugin disable`). `shutdown()`s the core
@@ -1271,20 +1270,16 @@
         /// otherwise the resulting enabled state (always `false`).
         func disablePluginViaCLI(_ id: String) async -> Bool? {
             guard let registry = pluginRegistry else { return nil }
-            guard registry.isRegistered(id) else { return nil }
-            await registry.disable(id)
-            // Drop the disabled plugin's last-pushed projects so they stop
-            // surfacing in the iOS sidebar / New Session picker (`mergedPluginProjects`
-            // flattens every entry, with no active-plugin check).
-            pluginProjects.removeValue(forKey: id)
-            // The enabled-plugin set changed; re-push the complete presentation
-            // set to all connected viewers (spec §7.2/§7.3), then push session
-            // state so viewers see the now-removed projects immediately.
-            await connectedViewerManager?.pushPluginPresentationsToAll(pluginPresentations())
-            await connectedViewerManager?.pushSessionStateToAll()
-            // A disabled plugin's OTLP records must stop classifying (issue #617).
-            await refreshOTLPPluginNamespaces()
-            return registry.isEnabled(id)
+            return await registry.withPluginOperation(id) {
+                guard registry.isRegistered(id) else { return nil }
+                await registry.disableCore(id)
+                // Drop disabled projects before a queued enable can publish replacements.
+                pluginProjects.removeValue(forKey: id)
+                await connectedViewerManager?.pushPluginPresentationsToAll(pluginPresentations())
+                await connectedViewerManager?.pushSessionStateToAll()
+                await refreshOTLPPluginNamespaces()
+                return registry.isEnabled(id)
+            }
         }
 
         // MARK: - URL install / remove / update-check (Task 14 — thin wrappers)
@@ -1661,20 +1656,43 @@
 
         /// Raw settings.json bytes for a plugin (empty Data if none yet).
         public func pluginSettingsData(id: String) -> Data {
+            if let committed = pendingPluginSettings[id] {
+                return committed
+            }
             guard let paths = ctrlxPaths else { return Data() }
             return (try? Data(contentsOf: paths.pluginSettingsPath(id))) ?? Data()
         }
 
-        /// Persist a plugin's settings.json and, only on a successful write, push
-        /// the new settings live to the enabled core (if any). Returns `nil` on
-        /// success or an error string on failure — surfacing a failed write so the
-        /// live core never diverges from disk (which would silently revert on the
-        /// next launch).
+        /// Serialize each plugin's write/apply/publication so an older async apply
+        /// cannot overwrite a newer save. Rejected settings restore the previous file.
         @discardableResult
         public func setPluginSettings(id: String, _ data: Data) async -> String? {
+            await withPluginOperation(id) { await savePluginSettings(id: id, data) }
+        }
+
+        private func withPluginOperation<Value: Sendable>(_ id: String, operation: @MainActor () async throws -> Value) async rethrows -> Value {
+            if let registry = pluginRegistry {
+                return try await registry.withPluginOperation(id, operation: operation)
+            }
+            return try await operation()
+        }
+
+        func adoptAgentCLICommand(_ agent: InstallableAgentCLI, path: String, expectedCommand: String) async throws {
+            try await withPluginOperation(agent.id) {
+                let data = pluginSettingsData(id: agent.id)
+                let updated = try AgentCLICommandSettings.adopting(path, expectedCommand: expectedCommand, agent: agent, data: data)
+                if let error = await savePluginSettings(id: agent.id, updated) {
+                    throw AgentCLIError(message: error)
+                }
+            }
+        }
+
+        private func savePluginSettings(id: String, _ data: Data) async -> String? {
             guard let paths = ctrlxPaths else { return "Plugin state not initialised" }
             let url = paths.pluginSettingsPath(id)
+            let previous: Data?
             do {
+                previous = FileManager.default.fileExists(atPath: url.path) ? try Data(contentsOf: url) : nil
                 try FileManager.default.createDirectory(
                     at: url.deletingLastPathComponent(),
                     withIntermediateDirectories: true
@@ -1683,8 +1701,23 @@
             } catch {
                 return String(describing: error)
             }
-            // SettingsResult.error surfacing is deferred to the settings UI (P2-T5).
-            _ = await pluginRegistry?.core(id)?.applySettings(data)
+            // Menus and Viewer presentations must not read the unconfirmed file
+            // while the core is validating/synchronizing its native configuration.
+            pendingPluginSettings[id] = previous ?? Data()
+            defer { pendingPluginSettings.removeValue(forKey: id) }
+            if let core = pluginRegistry?.core(id), case let .error(_, message) = await core.applySettings(data) {
+                do {
+                    if let previous {
+                        try previous.write(to: url, options: .atomic)
+                    } else {
+                        try FileManager.default.removeItem(at: url)
+                    }
+                } catch {
+                    return "\(message) The previous plugin settings could not be restored: \(error.localizedDescription)"
+                }
+                return message
+            }
+            pendingPluginSettings.removeValue(forKey: id)
             pluginSettingsRevision += 1
             // Provider choices/defaults travel in plugin presentations. Republish
             // them so already-connected Viewers update without reconnecting.
@@ -1810,11 +1843,7 @@
                 },
                 useInstalledCommand: { [weak self] agent, path, expectedCommand in
                     guard let self else { throw CancellationError() }
-                    let data = pluginSettingsData(id: agent.id)
-                    let updated = try AgentCLICommandSettings.adopting(path, expectedCommand: expectedCommand, agent: agent, data: data)
-                    if let error = await setPluginSettings(id: agent.id, updated) {
-                        throw AgentCLIError(message: error)
-                    }
+                    try await adoptAgentCLICommand(agent, path: path, expectedCommand: expectedCommand)
                 }
             )
             agentCLIInstallations = installations

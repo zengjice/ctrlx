@@ -121,6 +121,11 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         stateDirectory = env.stateDir
         otlpReceiverEndpoint = env.otlpReceiverEndpoint
         command = settings.commandPath
+        do {
+            try await synchronizeProviders(settings)
+        } catch {
+            await log(.warn, error.localizedDescription)
+        }
         await refreshProjects()
         #if os(macOS)
             startWatchers()
@@ -505,7 +510,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         guard UUID(uuidString: sessionID) != nil else { throw AgentForkError("Invalid Codex conversation ID.") }
         @Dependency(AgentForkHistoryClient.self) var history
         let root = try await history.root(sessionID, codexHomeRoots().map(\.path), distribution.historyLayout)
-        let provider = try await providerConfiguration(targetProviderID)
+        let provider = try await providerConfiguration(targetProviderID, configurationRoot: root)
         var environment = provider.environment
         // The fork must read history from the source root; Provider overrides
         // only change how the copied conversation talks to its model endpoint.
@@ -602,7 +607,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         let executable = try await executables.resolve(descriptor.executable, settings.commandPath)
         let provider = try await providerConfiguration(
             descriptor.providerID,
-            catalogCommand: executable, includesModelDefaults: !isFork
+            catalogCommand: executable, includesModelDefaults: !isFork, configurationRoot: root
         )
         var arguments = descriptor.providerID == nil || isFork ? descriptor.arguments : Self.removingProviderOverrides(descriptor.arguments)
         if !arguments.contains(Self.bypassHookTrustArgument) {
@@ -640,7 +645,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
 
     private func providerConfiguration(
         _ requestedID: String?,
-        catalogCommand: String? = nil, includesModelDefaults: Bool = true
+        catalogCommand: String? = nil, includesModelDefaults: Bool = true, configurationRoot: String? = nil
     ) async throws -> CodexProviderLaunch {
         guard let providerID = requestedID else { return CodexProviderLaunch(arguments: [], environment: [:]) }
         guard await providerOptions().contains(where: { $0.id == providerID }) else {
@@ -655,13 +660,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         guard let profile = settings.providers.first(where: { $0.id == providerID }) else {
             throw AgentProviderError("The selected \(distribution.displayName) Provider no longer exists in Settings → Agents → \(distribution.displayName).")
         }
-        guard
-            CodexSettings.isValidProviderID(profile.id),
-            CodexSettings.isValidEnvironmentKey(profile.environmentKey),
-            !profile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-            let url = URL(string: profile.baseURL), url.scheme == "http" || url.scheme == "https", url.host != nil,
-            AgentProviderModels.isValid(defaultModel: profile.model, models: profile.models)
-        else {
+        guard profile.isValid else {
             throw AgentProviderError("The selected \(distribution.displayName) Provider has invalid settings. Edit it in Settings → Agents → \(distribution.displayName) → Providers.")
         }
         let account = AgentProviderKeychainAccount.account(pluginID: distribution.pluginID, providerID: profile.id)
@@ -673,6 +672,10 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         }
         guard let apiKey, !apiKey.isEmpty else {
             throw AgentProviderError("Add an API key for \(distribution.displayName) Provider '\(profile.name)' in Settings → Agents → \(distribution.displayName) → Providers.")
+        }
+        if distribution == .codex {
+            @Dependency(CodexProviderConfigurationClient.self) var configuration
+            try await configuration.synchronize(catalogCommand ?? settings.commandPath, [configurationRoot ?? distribution.defaultHome().path], [profile])
         }
         let prefix = "model_providers.\(profile.id)"
         var arguments = [
@@ -849,6 +852,11 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
 
     public func applySettings(_ raw: Data) async -> SettingsResult {
         let decoded = distribution.settings(from: raw)
+        do {
+            try await synchronizeProviders(decoded)
+        } catch {
+            return .error(field: "providers", message: error.localizedDescription)
+        }
         let foldersChanged = decoded.additionalConfigFolders != settings.additionalConfigFolders
         settings = decoded
         command = decoded.commandPath
@@ -859,6 +867,16 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
             }
         #endif
         return .applied
+    }
+
+    private func synchronizeProviders(_ settings: CodexSettings) async throws {
+        guard distribution == .codex, !settings.providers.isEmpty else { return }
+        @Dependency(CodexProviderConfigurationClient.self) var configuration
+        try await configuration.synchronize(
+            settings.commandPath,
+            [distribution.defaultHome().path] + settings.additionalConfigFolders,
+            settings.providers
+        )
     }
 
     // MARK: - Private helpers

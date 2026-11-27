@@ -1,7 +1,7 @@
 #if os(macOS)
     import CryptoKit
-    import Foundation
     import CtrlxPluginProtocol
+    import Foundation
 
     // MARK: - InstallError
 
@@ -785,8 +785,7 @@
 
             // Step 8: enable the plugin (registry.enable is @MainActor async).
             let host = await makeHost(id)
-            let env = await makeEnv(id)
-            await registry.enable(id, host: host, env: env)
+            await registry.enable(id, host: host, makeEnv: { makeEnv(id) })
 
             // Step 9: if init failed, report failure but leave files for retry.
             if let failure = await MainActor.run(body: { registry.failedInit[id] }) {
@@ -960,8 +959,7 @@
             }
 
             let host = await makeHost(id)
-            let env = await makeEnv(id)
-            await registry.enable(id, host: host, env: env)
+            await registry.enable(id, host: host, makeEnv: { makeEnv(id) })
 
             if let failure = await MainActor.run(body: { registry.failedInit[id] }) {
                 return .failure(.enableFailed(failure))
@@ -1002,7 +1000,9 @@
                 }
                 return .success(())
             }
-            if case .failure = checkResult { return checkResult }
+            if case .failure = checkResult {
+                return checkResult
+            }
 
             // Best-effort uninstall via the core (removes hook files etc.)
             if let core = await MainActor.run(body: { registry.core(id) }) {
