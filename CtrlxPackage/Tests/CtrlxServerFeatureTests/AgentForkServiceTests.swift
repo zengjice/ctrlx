@@ -50,6 +50,9 @@ final private class ForkFixture {
     var refreshes = 0
     var launchSources: [AgentForkSource] = []
     var launchProviders: [String?] = []
+    var inheritedSources: [AgentForkSource] = []
+    var launchInheritance: [Bool] = []
+    var changesDuringInheritance = false
 
     init() throws {
         self.original = try #require(AgentForkSource(pane: PaneState(
@@ -76,7 +79,16 @@ final private class ForkFixture {
                 MainActor.preconditionIsolated()
                 self.refreshes += 1
             },
-            launch: { source, name, preparation, providerID, _ in
+            inherit: { source in
+                self.inheritedSources.append(source)
+                await Task.detached { }.value
+                if self.changesDuringInheritance {
+                    self.current = nil
+                }
+                return AgentForkLaunch(command: LaunchCommand(command: "source-agent", args: ["fork", source.sessionID], env: ["CODEX_HOME": "/source/config"]))
+            },
+            launch: { source, name, preparation, providerID, _, inherited in
+                self.launchInheritance.append(inherited)
                 MainActor.preconditionIsolated()
                 await Task.detached { }.value
                 MainActor.preconditionIsolated()
@@ -101,6 +113,27 @@ private actor ForkBackgroundCaller {
 
 @MainActor
 struct AgentForkServiceTests {
+    @Test("Inherited Fork is idempotent and rechecks source after configuration capture", arguments: [false, true])
+    func inheritedFork(sourceChanges: Bool) async throws {
+        let fixture = try ForkFixture()
+        fixture.changesDuringInheritance = sourceChanges
+        let service = fixture.service()
+        try await withDependencies { $0[SessionDirectoryClient.self].resolve = { $0 } } operation: {
+            let request = ForkAgentSession(source: fixture.original, windowName: "source-date", inheritsSourceConfiguration: true)
+            if sourceChanges {
+                await #expect(throws: AgentForkError.self) { try await service.fork(request) }
+                #expect(fixture.launches.isEmpty)
+            } else {
+                _ = try await service.fork(request)
+                _ = try await service.fork(request)
+                #expect(fixture.launches.count == 1)
+                #expect(fixture.launches.first?.preparation.launch?.command == "source-agent")
+                #expect(fixture.launchInheritance == [true])
+            }
+            #expect(fixture.inheritedSources == [fixture.original])
+        }
+    }
+
     @Test("Fork forwards the selected Provider to creation once, including cached retries", arguments: [nil, "openai", "custom"] as [String?])
     func launchProvider(providerID: String?) async throws {
         let fixture = try ForkFixture()

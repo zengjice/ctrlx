@@ -362,7 +362,7 @@ struct AgentForkWorktreeTests {
                     let service = AgentForkService(
                         source: { $0 == source.paneID ? source : nil }, core: { _ in core },
                         refresh: { _ = await tmux.refreshPanes() },
-                        launch: { source, name, prepared, _, creationID in
+                        launch: { source, name, prepared, _, creationID, _ in
                             let agentLaunch = try tmux.agentLaunch(prepared)
                             return try await tmux.newWindow(
                                 sessionName: source.sessionName,

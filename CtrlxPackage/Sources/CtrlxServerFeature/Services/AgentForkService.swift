@@ -9,7 +9,8 @@ final class AgentForkService {
     private let source: @MainActor (String) -> AgentForkSource?
     private let core: @MainActor (String) -> (any AgentSessionForking)?
     private let refresh: @MainActor () async -> Void
-    private let launch: @MainActor (AgentForkSource, String, SessionLaunchPreparation, String?, UUID?) async throws -> String
+    private let inherit: @MainActor (AgentForkSource) async throws -> AgentForkLaunch
+    private let launch: @MainActor (AgentForkSource, String, SessionLaunchPreparation, String?, UUID?, Bool) async throws -> String
     private var operations: [UUID: (request: ForkAgentSession, source: AgentForkSource, task: Task<String, Error>)] = [:]
     private var completed: [UUID] = []
 
@@ -17,11 +18,13 @@ final class AgentForkService {
         source: @escaping @MainActor (String) -> AgentForkSource?,
         core: @escaping @MainActor (String) -> (any AgentSessionForking)?,
         refresh: @escaping @MainActor () async -> Void,
-        launch: @escaping @MainActor (AgentForkSource, String, SessionLaunchPreparation, String?, UUID?) async throws -> String
+        inherit: @escaping @MainActor (AgentForkSource) async throws -> AgentForkLaunch = { _ in throw AgentForkError("Source configuration is unavailable.") },
+        launch: @escaping @MainActor (AgentForkSource, String, SessionLaunchPreparation, String?, UUID?, Bool) async throws -> String
     ) {
         self.source = source
         self.core = core
         self.refresh = refresh
+        self.inherit = inherit
         self.launch = launch
     }
 
@@ -91,11 +94,8 @@ final class AgentForkService {
             sourceDirectory = resolved
             directory = resolved
         }
-        let command = try await forkCommand(
-            agent,
-            sessionID: source.sessionID,
-            projectPath: directory,
-            targetProviderID: request.targetProviderID
+        let command = try await request.inheritsSourceConfiguration == true ? inherit(source) : forkCommand(
+            agent, sessionID: source.sessionID, projectPath: directory, targetProviderID: request.targetProviderID
         )
         _ = try validate(source)
         if let worktree = request.worktree {
@@ -115,7 +115,7 @@ final class AgentForkService {
             )
             _ = try validate(source)
             let windowName = request.windowName ?? request.worktree?.name ?? (forkCommand.command.command as NSString).lastPathComponent.appending(" fork")
-            return try await launch(source, windowName, SessionLaunchPreparation(workingDirectory: directory, fork: forkCommand), request.targetProviderID, creationID)
+            return try await launch(source, windowName, SessionLaunchPreparation(workingDirectory: directory, fork: forkCommand), request.targetProviderID, creationID, request.inheritsSourceConfiguration == true)
         } catch {
             throw AgentForkError(error.localizedDescription + (request.worktree == nil ? "" : "\nThe new worktree is kept at \(directory). Check it before retrying."))
         }

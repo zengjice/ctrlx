@@ -413,6 +413,7 @@ public struct MainView: View {
     @State private var showingNewTabMenu = false
     @State private var showingSessionSwitcher = false
     @State private var pendingAgentFork: AgentForkConfiguration?
+    @State private var isQuickForkPending = false
     @State private var pendingTerminalRename: (@MainActor (String) -> Void)?
     @State private var terminalRenameName = ""
     @State private var restartingAgents: Set<PaneKey> = []
@@ -3780,7 +3781,7 @@ public struct MainView: View {
     }
 
     private var forkShortcutAction: (@MainActor () -> Void)? {
-        guard !isPresentingSessionPicker, pendingAgentFork == nil, let id = menuTerminalWindowID else { return nil }
+        guard !isPresentingSessionPicker, pendingAgentFork == nil, !isCreatingAgentTab, !isQuickForkPending, let id = menuTerminalWindowID else { return nil }
         if !targetsRightPane {
             guard
                 currentSessionTabs?.selectedFileTabId == nil, currentSessionTabs?.selectedBrowserTabId == nil,
@@ -3790,14 +3791,30 @@ public struct MainView: View {
         let hostID = selectedRemoteSession?.hostId
         let panes: [PaneState]
         if let hostID {
-            guard agentForkUnavailableReason(hostID: hostID) == nil else { return nil }
+            guard
+                agentForkUnavailableReason(hostID: hostID) == nil,
+                coordinator.viewerConnectionManager?.connection(for: hostID)?.relayClient.hostSupportsAgentForkInheritance == true else { return nil }
             panes = selectedRemoteSessionWindows.first { $0.stableId == id }?.panes ?? []
         } else {
             panes = currentLocalSession()?.windows.first { $0.stableId == id }?.panes
                 .compactMap { windowManager.paneStates[$0.paneId] } ?? []
         }
-        guard panes.contains(where: { AgentForkSource(pane: $0) != nil }) else { return nil }
-        return { pendingAgentFork = agentForkConfiguration(panes: panes, hostID: hostID, destination: .currentDirectory) }
+        let focused = terminalQuickActions.active.flatMap { $0.hostID == hostID && $0.isAvailable ? $0.paneID : nil }
+        guard
+            let source = AgentForkConfiguration.orderedSources(panes: panes, focusedPaneID: focused).first,
+            let pane = panes.first(where: { $0.paneId == source.paneID }) else { return nil }
+        let name = windowTabLabel(windowName: pane.windowName, windowIndex: pane.windowIndex)
+        let inputState = hostID.flatMap { coordinator.viewerConnectionManager?.connection(for: $0)?.relayClient.workspaceInputState }
+        return {
+            guard !isQuickForkPending else { return }
+            let request = AgentForkShortcut.request(source: source, tabName: name, date: Date())
+            isQuickForkPending = true
+            Task {
+                defer { isQuickForkPending = false }
+                do { try await createAgentFork(request, hostID: hostID, inputState: inputState, besideSource: true) }
+                catch { attachError = error.localizedDescription }
+            }
+        }
     }
 
     private func focusRightTerminal(_ id: String) {
@@ -7849,7 +7866,7 @@ public struct MainView: View {
         )
     }
 
-    private func createAgentFork(_ request: ForkAgentSession, hostID: String?, inputState: ViewerWorkspaceInputState?) async throws {
+    private func createAgentFork(_ request: ForkAgentSession, hostID: String?, inputState: ViewerWorkspaceInputState?, besideSource: Bool = false) async throws {
         guard !isCreatingAgentTab else { throw AgentForkError("An Agent tab is already being created. Please wait.") }
         recordUserTabSelection()
         isCreatingAgentTab = true
@@ -7873,10 +7890,7 @@ public struct MainView: View {
                     let window = coordinator.remoteSessionStore?.windows(for: hostID).first(where: {
                         $0.sessionName == request.source.sessionName && $0.panes.contains(where: { $0.paneId == paneID })
                     }) {
-                    adoptCreatedWindow(hostID: hostID, windowID: window.stableId)
-                    if selectedRemoteSession?.hostId == hostID && selectedRemoteSession?.sessionName == request.source.sessionName {
-                        selectTerminalWindow(stableId: window.stableId)
-                    }
+                    presentAgentFork(windowID: window.stableId, source: request.source, hostID: hostID, besideSource: besideSource)
                     return
                 }
                 try await Task.sleep(for: PaneSurfaceRetry.delay)
@@ -7889,14 +7903,43 @@ public struct MainView: View {
                     window.panes.contains(where: { $0.workspaceIdentity?.isSameSession(as: identity) == true }) else {
                     throw AgentForkError("The session changed while creating the Fork. Select the restored session.")
                 }
-                adoptCreatedWindow(hostID: nil, windowID: window.stableId)
-                if currentLocalSession()?.sessionName == request.source.sessionName {
-                    selectTerminalWindow(stableId: window.stableId)
-                }
+                presentAgentFork(windowID: window.stableId, source: request.source, hostID: nil, besideSource: besideSource)
                 return
             }
         }
         attachError = "Fork created but not visible yet. Select its tab when it appears; do not create another Fork."
+    }
+
+    private func presentAgentFork(windowID: String, source: AgentForkSource, hostID: String?, besideSource: Bool) {
+        adoptCreatedWindow(hostID: hostID, windowID: windowID)
+        guard
+            selectedRemoteSession?.hostId == hostID,
+            (selectedRemoteSession?.sessionName ?? currentLocalSessionName) == source.sessionName else { return }
+        guard besideSource else {
+            selectTerminalWindow(stableId: windowID)
+            return
+        }
+        guard ownsTerminal(hostID: hostID, windowID: source.windowID) else { return }
+        let tabs = tabStore.tabs(hostID: hostID, session: source.sessionName)
+        if detachedWorkspace == nil {
+            if let hostID {
+                let members = remoteSessionWindows(hostId: hostID, sessionName: source.sessionName).map(\.stableId)
+                tabs.placeRemoteTerminal(source.windowID, onRight: false, sessionWindowIDs: members)
+                tabs.placeRemoteTerminal(windowID, onRight: true, sessionWindowIDs: members)
+            } else {
+                recordUserTabSelection(onRight: false)
+                placeLocalTerminal(source.windowID, onRight: false, sessionName: source.sessionName, tabs: tabs)
+                recordUserTabSelection(onRight: true)
+                placeLocalTerminal(windowID, onRight: true, sessionName: source.sessionName, tabs: tabs)
+            }
+        }
+        tabs.showForkSplit(sourceWindowID: source.windowID, forkWindowID: windowID)
+        selectTerminalWindow(stableId: source.windowID)
+        tabs.isRightPaneFocused = true
+        if hostID != nil, detachedWorkspace == nil {
+            tabs.recordRemoteSplitRatio(0.5)
+        }
+        focusRightTerminal(windowID)
     }
 
     private func createAgentTab(_ request: CreateTmuxWindow, hostID: String?, localIdentity: WorkspacePaneIdentity?, remoteBinding: ViewerWorkspaceInputBinding) async throws {

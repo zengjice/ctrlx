@@ -18,9 +18,10 @@ public struct WorkbenchKeyboardCommands: Commands {
                 .keyboardShortcut("t", modifiers: .command)
                 .disabled(actions?.newTerminal == nil)
                 .help("Open a terminal below the focused pane (1:5)")
-            Button("Fork…") { actions?.fork?() }
+            Button("Fork in Place") { actions?.fork?() }
                 .keyboardShortcut("f", modifiers: .command)
                 .disabled(actions?.fork == nil)
+                .help("Fork beside the source terminal with the same configuration")
         }
         CommandGroup(before: .windowList) {
             Button("Switch Session…") { actions?.switchSession?() }

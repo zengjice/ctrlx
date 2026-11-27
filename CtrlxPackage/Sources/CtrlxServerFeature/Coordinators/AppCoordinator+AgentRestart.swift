@@ -31,14 +31,24 @@ extension AppCoordinator {
     }
 
     private func captureAgentRestartIdentity(_ request: RestartAgentSession, workspace: WorkspacePaneIdentity?) async throws -> AgentSessionIdentity {
+        try await captureAgentCommandIdentity(request.source, workspace: workspace) { request.matches($0, runtimeID: $1) }
+    }
+
+    func captureAgentForkIdentity(_ source: AgentForkSource, runtimeID: String? = nil) async throws -> AgentSessionIdentity {
+        try await captureAgentCommandIdentity(source, workspace: source.workspaceIdentity) {
+            source.matches($0) && (runtimeID == nil || runtimeID == $1)
+        }
+    }
+
+    private func captureAgentCommandIdentity(_ source: AgentForkSource, workspace: WorkspacePaneIdentity?, matches: (AgentForkSource, String) -> Bool) async throws -> AgentSessionIdentity {
         @Dependency(AgentSessionIdentityClient.self) var identities
         windowManager.updatePaneStates(from: await tmuxService.refreshPanes())
         await refreshAgentCommandIdentity()
         guard
             let registry = pluginRegistry,
             let detected = await tmuxService.detectAgentPanesIfAvailable(processNamesByPlugin: registry.processNamesByPlugin, refreshSnapshot: true),
-            let process = detected[request.source.paneID], let state = windowManager.paneStates[request.source.paneID],
-            let native = await identities.currentIdentity(in: state, detected: process), request.matches(native.source, runtimeID: native.runtimeID),
+            let process = detected[source.paneID], let state = windowManager.paneStates[source.paneID],
+            let native = await identities.currentIdentity(in: state, detected: process), matches(native.source, native.runtimeID),
             workspace == nil || workspace?.isSamePane(as: native.source.workspaceIdentity) == true else {
             throw AgentRestartError("The Agent conversation or terminal changed, or its identity is unverified. Reopen the current tab's menu.")
         }

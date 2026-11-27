@@ -89,6 +89,7 @@ Git directory, then the home directory, without taking the other side's Files pa
 |---|---|
 | Command-N | Open the local New Session picker |
 | Command-T | Create a shell below the focused terminal pane in the same tab; bottom : top starts at 1:5 |
+| Command-F | Fork in place with source settings; show source left and Fork right at 1:1 |
 | Command-P | Search local and paired-Host sessions, then switch with Return |
 | Command-R | Reload the Browser in the focused split; otherwise refresh sessions |
 | Command-L | Focus and select the active Browser's address |

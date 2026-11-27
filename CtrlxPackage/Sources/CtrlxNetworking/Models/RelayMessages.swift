@@ -77,6 +77,7 @@ public struct SessionStateMessage: Codable, Sendable {
     /// until this capability is explicitly advertised.
     public let supportsAgentWindowLaunch: Bool?
     public let supportsAgentFork: Bool?
+    public let supportsAgentForkInheritance: Bool?
     public let supportsAgentRestart: Bool?
     public let supportsAgentLogout: Bool?
     /// Older Hosts ignore a Fork's target directory, so Viewers only expose it
@@ -162,6 +163,7 @@ public struct SessionStateMessage: Codable, Sendable {
         case supportsRepositoryFileLinks
         case supportsAgentWindowLaunch
         case supportsAgentFork
+        case supportsAgentForkInheritance
         case supportsAgentRestart
         case supportsAgentLogout
         case supportsAgentForkDirectory
@@ -208,6 +210,7 @@ public struct SessionStateMessage: Codable, Sendable {
         supportsSessionWorktrees: Bool? = nil,
         supportsAgentWindowLaunch: Bool? = nil,
         supportsAgentFork: Bool? = nil,
+        supportsAgentForkInheritance: Bool? = nil,
         supportsAgentRestart: Bool? = nil,
         supportsAgentLogout: Bool? = nil,
         supportsAgentForkDirectory: Bool? = nil,
@@ -279,6 +282,7 @@ public struct SessionStateMessage: Codable, Sendable {
         self.supportsRepositoryFileLinks = supportsRepositoryFileLinks
         self.supportsAgentWindowLaunch = supportsAgentWindowLaunch
         self.supportsAgentFork = supportsAgentFork
+        self.supportsAgentForkInheritance = supportsAgentForkInheritance
         self.supportsAgentRestart = supportsAgentRestart
         self.supportsAgentLogout = supportsAgentLogout
         self.supportsAgentForkDirectory = supportsAgentForkDirectory
@@ -330,6 +334,7 @@ public struct SessionStateMessage: Codable, Sendable {
             supportsSessionWorktrees: supportsSessionWorktrees,
             supportsAgentWindowLaunch: supportsAgentWindowLaunch,
             supportsAgentFork: supportsAgentFork,
+            supportsAgentForkInheritance: supportsAgentForkInheritance,
             supportsAgentRestart: supportsAgentRestart,
             supportsAgentLogout: supportsAgentLogout,
             supportsAgentForkDirectory: supportsAgentForkDirectory,

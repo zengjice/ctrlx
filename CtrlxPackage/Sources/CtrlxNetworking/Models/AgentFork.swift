@@ -140,13 +140,16 @@ public struct ForkAgentSession: CommandSpec, Equatable {
     public let workingDirectory: String?
     /// Optional target Provider. `nil` uses the current CLI configuration.
     public let targetProviderID: String?
+    /// Quick Fork keeps the verified source invocation instead of launch defaults.
+    public let inheritsSourceConfiguration: Bool?
     public init(
         requestID: UUID = UUID(),
         source: AgentForkSource,
         windowName: String? = nil,
         worktree: Worktree? = nil,
         workingDirectory: String? = nil,
-        targetProviderID: String? = nil
+        targetProviderID: String? = nil,
+        inheritsSourceConfiguration: Bool? = nil
     ) {
         self.requestID = requestID
         self.source = source
@@ -154,9 +157,13 @@ public struct ForkAgentSession: CommandSpec, Equatable {
         self.worktree = worktree
         self.workingDirectory = workingDirectory
         self.targetProviderID = targetProviderID
+        self.inheritsSourceConfiguration = inheritsSourceConfiguration
     }
 
     public func validateName() throws {
+        if inheritsSourceConfiguration == true, worktree != nil || workingDirectory != nil || targetProviderID != nil {
+            throw AgentForkError("An inherited Fork must keep its source directory and Provider.")
+        }
         if let windowName {
             guard
                 !windowName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,

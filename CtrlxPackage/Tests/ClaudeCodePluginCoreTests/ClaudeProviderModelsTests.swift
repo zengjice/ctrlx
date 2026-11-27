@@ -51,6 +51,11 @@ struct ClaudeProviderModelsTests {
             let fork = try await core.commandForFork(sessionID: id, projectPath: "/project", targetProviderID: "team")
             #expect(fork.command.env["CLAUDE_CONFIG_DIR"] == "/source/config")
             #expect(try modelIDs(ClaudeProviderModelPicker.extracting(from: fork.command.args).settings) == ["model-a", "model-b"])
+            let inherited = try await core.commandForFork(sessionID: id, projectPath: "/project", inheriting: .init(executable: "/tools/claude", arguments: launch.args + ["--model", "source-model"], configurationRoots: ["CLAUDE_CONFIG_DIR": "/source/config"], providerID: "team"))
+            #expect(inherited.command.args.contains("source-model"))
+            #expect(inherited.command.args.contains("--fork-session"))
+            #expect(inherited.command.env["ANTHROPIC_MODEL"] == nil)
+            #expect(inherited.command.env["ANTHROPIC_API_KEY"] == launch.env["ANTHROPIC_API_KEY"])
             let saved = try await core.recoveryDescriptor(sessionID: id, projectPath: "/project", invocation: .init(executable: "/tools/claude", arguments: launch.args, configurationRoots: ["CLAUDE_CONFIG_DIR": "/source/config"], providerID: "team"))
             #expect(saved.arguments == ["--effort", "high"])
             profile.models = ["model-a", "model-c"]

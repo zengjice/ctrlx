@@ -64,6 +64,13 @@ struct CodexProviderModelsTests {
             #expect(!descriptor.arguments.joined().contains("-key"))
             profile.models = ["model-a", "model-c"]
             _ = try await core.applySettings(encoded())
+            let sourceOptions = launch.args.map { $0 == "model-a" ? "source-model" : ($0 == "model_reasoning_effort=\"high\"" ? "model_reasoning_effort=\"low\"" : $0) }
+            let inherited = try await core.commandForFork(sessionID: id, projectPath: "/project", inheriting: .init(executable: "/tools/agent", arguments: sourceOptions, providerID: "team"))
+            #expect(inherited.command.args.contains("source-model"))
+            #expect(!inherited.command.args.contains("model-a"))
+            #expect(inherited.command.args.contains("model_reasoning_effort=\"low\""))
+            #expect(!inherited.command.args.contains("model_reasoning_effort=\"high\""))
+            #expect(inherited.command.env["API_KEY"] == "\(distribution.pluginID)-key")
             let resumed = try await core.commandForResume(descriptor)
             #expect(resumed.command.env["API_KEY"] == "\(distribution.pluginID)-key")
             #expect(try CodexModelCatalog.parse(Data(contentsOf: catalog)).map(\.id) == ["model-a", "model-c"])

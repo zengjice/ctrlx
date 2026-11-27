@@ -514,7 +514,16 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         return distribution.automationVersionPolicy.automaticResumeUnavailableReason(currentVersion)
     }
 
+    public func commandForFork(sessionID: String, projectPath: String, inheriting invocation: AgentResumeInvocation) async throws -> AgentForkLaunch {
+        let descriptor = try await recoveryDescriptor(sessionID: sessionID, projectPath: projectPath, invocation: invocation, preservesSourceOptions: true)
+        return try await commandForRestore(descriptor, isFork: true)
+    }
+
     public func recoveryDescriptor(sessionID: String, projectPath: String, invocation: AgentResumeInvocation? = nil) async throws -> AgentResumeDescriptor {
+        try await recoveryDescriptor(sessionID: sessionID, projectPath: projectPath, invocation: invocation, preservesSourceOptions: false)
+    }
+
+    private func recoveryDescriptor(sessionID: String, projectPath: String, invocation: AgentResumeInvocation?, preservesSourceOptions: Bool) async throws -> AgentResumeDescriptor {
         guard UUID(uuidString: sessionID) != nil else { throw AgentForkError("Invalid Codex conversation ID.") }
         @Dependency(AgentForkHistoryClient.self) var history
         let roots: [String]
@@ -527,7 +536,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         let arguments = try Self.resumeArguments(
             invocation?.arguments ?? [],
             allowsProviderOverrides: invocation?.providerID != nil,
-            distribution: distribution
+            preservesSourceOptions: preservesSourceOptions, distribution: distribution
         )
         return AgentResumeDescriptor(
             pluginID: distribution.pluginID,
@@ -543,8 +552,8 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         )
     }
 
-    private static func resumeArguments(_ arguments: [String], allowsProviderOverrides: Bool = false, distribution: CodexDistribution = .codex) throws -> [String] {
-        let arguments = allowsProviderOverrides ? removingProviderOverrides(arguments) : arguments
+    private static func resumeArguments(_ arguments: [String], allowsProviderOverrides: Bool = false, preservesSourceOptions: Bool = false, distribution: CodexDistribution = .codex) throws -> [String] {
+        let arguments = allowsProviderOverrides && !preservesSourceOptions ? removingProviderOverrides(arguments) : arguments
         return try AgentResumeArguments.capture(
             arguments,
             values: distribution.resumeValueOptions,
@@ -565,6 +574,10 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
     }
 
     public func commandForResume(_ descriptor: AgentResumeDescriptor) async throws -> AgentForkLaunch {
+        try await commandForRestore(descriptor, isFork: false)
+    }
+
+    private func commandForRestore(_ descriptor: AgentResumeDescriptor, isFork: Bool) async throws -> AgentForkLaunch {
         guard
             descriptor.pluginID == distribution.pluginID, UUID(uuidString: descriptor.sessionID) != nil,
             descriptor.configurationRoot.hasPrefix("/"), descriptor.projectPath.hasPrefix("/") else {
@@ -574,16 +587,16 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         // Only the recorded root is eligible. A changed settings list must not
         // silently resume another account's copy of the same conversation.
         let root = try await history.root(descriptor.sessionID, [descriptor.configurationRoot], distribution.historyLayout)
-        guard try Self.resumeArguments(descriptor.arguments, allowsProviderOverrides: descriptor.providerID != nil, distribution: distribution) == descriptor.arguments else {
+        guard try Self.resumeArguments(descriptor.arguments, allowsProviderOverrides: descriptor.providerID != nil, preservesSourceOptions: isFork, distribution: distribution) == descriptor.arguments else {
             throw AgentForkError("Invalid Codex recovery options.")
         }
         @Dependency(AgentResumeExecutableClient.self) var executables
         let executable = try await executables.resolve(descriptor.executable, settings.commandPath)
         let provider = try await providerConfiguration(
             descriptor.providerID,
-            catalogCommand: executable
+            catalogCommand: executable, includesModelDefaults: !isFork
         )
-        var arguments = descriptor.providerID == nil ? descriptor.arguments : Self.removingProviderOverrides(descriptor.arguments)
+        var arguments = descriptor.providerID == nil || isFork ? descriptor.arguments : Self.removingProviderOverrides(descriptor.arguments)
         if !arguments.contains(Self.bypassHookTrustArgument) {
             arguments.append(Self.bypassHookTrustArgument)
         }
@@ -610,7 +623,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
         }
         return AgentForkLaunch(command: LaunchCommand(
             command: executable,
-            args: topLevelArguments + ["resume", descriptor.sessionID, "-C", descriptor.projectPath] + arguments + provider.arguments + terminalTelemetryArguments(),
+            args: topLevelArguments + [isFork ? "fork" : "resume", descriptor.sessionID, "-C", descriptor.projectPath] + arguments + provider.arguments + terminalTelemetryArguments(),
             env: provider.environment.merging([distribution.homeVariable: root]) { _, root in root }
         ))
     }
@@ -619,7 +632,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
 
     private func providerConfiguration(
         _ requestedID: String?,
-        catalogCommand: String? = nil
+        catalogCommand: String? = nil, includesModelDefaults: Bool = true
     ) async throws -> CodexProviderLaunch {
         guard let providerID = requestedID else { return CodexProviderLaunch(arguments: [], environment: [:]) }
         guard await providerOptions().contains(where: { $0.id == providerID }) else {
@@ -662,7 +675,7 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
             "-c", #"\#(prefix).wire_api="responses""#,
             "-c", "\(prefix).requires_openai_auth=false",
         ]
-        if let reasoningEffort = profile.reasoningEffort {
+        if includesModelDefaults, let reasoningEffort = profile.reasoningEffort {
             arguments += ["-c", "model_reasoning_effort=\(Self.tomlString(reasoningEffort.rawValue))"]
         }
         let catalogURL = try await providerModelCatalogURL(
@@ -670,7 +683,9 @@ public actor CodexPluginCore: AgentProviderSelecting, AgentProviderForking, Agen
             command: catalogCommand ?? settings.commandPath
         )
         arguments += ["-c", "model_catalog_json=\(Self.tomlString(catalogURL.path))"]
-        arguments += ["--model", profile.model]
+        if includesModelDefaults {
+            arguments += ["--model", profile.model]
+        }
         return CodexProviderLaunch(
             arguments: arguments,
             environment: [

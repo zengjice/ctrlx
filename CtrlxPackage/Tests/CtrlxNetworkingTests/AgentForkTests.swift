@@ -3,6 +3,21 @@ import Testing
 @testable import CtrlxNetworking
 
 struct AgentForkTests {
+    @Test("Inherited Fork is additive on the wire and cannot change Provider or destination")
+    func inheritedConfiguration() throws {
+        let source = try #require(AgentForkSource(pane: .init(paneId: "%1", sessionName: "work", currentPath: "/source", agentSession: .init(paneId: "%1", pluginID: "codex"), claudeSessionID: UUID().uuidString)))
+        let legacy = ForkAgentSession(source: source)
+        #expect(try JSONDecoder().decode(ForkAgentSession.self, from: JSONEncoder().encode(legacy)).inheritsSourceConfiguration == nil)
+        let inherited = ForkAgentSession(source: source, windowName: "source-time", inheritsSourceConfiguration: true)
+        #expect(try JSONDecoder().decode(ForkAgentSession.self, from: JSONEncoder().encode(inherited)) == inherited)
+        try inherited.validateName()
+        #expect(throws: AgentForkError.self) { try ForkAgentSession(source: source, targetProviderID: "other", inheritsSourceConfiguration: true).validateName() }
+        #expect(throws: AgentForkError.self) { try ForkAgentSession(source: source, workingDirectory: "/other", inheritsSourceConfiguration: true).validateName() }
+        let state = SessionStateMessage(pairId: "host", paneStates: [:], supportsAgentForkInheritance: true)
+        #expect(state.withPairId("viewer").supportsAgentForkInheritance == true)
+        #expect(SessionStateMessage(pairId: "legacy", paneStates: [:]).supportsAgentForkInheritance == nil)
+    }
+
     @Test("Fork explains unsupported Agents, unverified IDs and unavailable directories without enabling invalid sources")
     func unavailableReasons() {
         var pane = PaneState(paneId: "%1", sessionName: "work", currentPath: "/repo", agentSession: .init(paneId: "%1", pluginID: "codex"))
