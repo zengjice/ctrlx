@@ -7,6 +7,21 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.1.2 — Workflow polish and iOS tab groups
+
+- Acknowledge explicit completion calls for steps configured to finish when the
+  Agent reply ends as informational successes without changing Workflow state;
+  the Host still verifies the caller, live conversation and final reply.
+- Put new Agent creation and post-creation guidance in the participating Agents
+  section, and remove the duplicate refresh action from Workflow configuration.
+- Make the full iOS Tabs group row expand or collapse its members, support
+  long-press group dragging, and isolate “Ungroup Tabs” in a dedicated menu.
+- Merge the `bugfix` branch into `main`.
+- Validation: Workflow command, Workflow editor UI, Workflow finish, and iOS Tab
+  group header tests passed serially.
+- This release builds macOS only. The final artifact is produced by the formal
+  Developer ID signed and notarized release workflow.
+
 ## 3.1.1 — Faster terminal and Agent workflows
 
 - Open a new terminal directly below the current terminal with `Command-T`,
