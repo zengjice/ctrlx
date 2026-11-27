@@ -11,11 +11,15 @@
     @MainActor
     @Suite("Terminal input-row selection routing", .serialized)
     struct TerminalSelectionRoutingTests {
-        @Test("Only handle drags capture a selected terminal; other drags retain local scrolling", arguments: [2, 3], [false, true])
-        func selectionPanUsesItsInstalledDelegate(tapCount: Int, mouseMode: Bool) async throws {
+        @Test("Only handle drags capture a selected terminal; other drags retain their scrolling route", arguments: [2, 3], ["off", "normal", "alternate"])
+        func selectionPanUsesItsInstalledDelegate(tapCount: Int, mode: String) async throws {
             let (window, view) = await makeView()
             defer { close(window, view) }
+            if mode == "alternate" {
+                feed(view, "\u{1b}[?1049h")
+            }
             feed(view, "hello world\r\n> input")
+            let mouseMode = mode != "off"
             if mouseMode {
                 feed(view, "\u{1b}[?1000h\u{1b}[?1006h")
                 #expect(!view.isScrollEnabled)
@@ -27,7 +31,7 @@
             tap(view, count: tapCount, column: 1, row: 0)
             let pan = try #require(view.panSelectionGesture)
             #expect(pan.delegate === view)
-            #expect(view.isScrollEnabled)
+            #expect(view.isScrollEnabled == (mode != "alternate"))
             // An idle recognizer reports the origin, next to the start handle.
             #expect(pan.delegate?.gestureRecognizerShouldBegin?(pan) == true)
             view.setSelectionRange(start: .init(col: 20, row: 4), end: .init(col: 25, row: 4))
@@ -72,10 +76,13 @@
 
         final private class TerminalPanDelegate: NSObject, UIGestureRecognizerDelegate { }
 
-        @Test("Mouse mode locks the outer vertical drag only while no text is selected")
-        func selectionReleasesOuterMouseScrollLock() async {
+        @Test("Selected fullscreen scrolling locks the outer viewport; normal-buffer selection releases it", arguments: [false, true])
+        func selectionReleasesOuterMouseScrollLock(alternate: Bool) async {
             let (window, view) = await makeView()
             defer { close(window, view) }
+            if alternate {
+                feed(view, "\u{1b}[?1049h")
+            }
             feed(view, "selected text\u{1b}[?1000h")
             let coordinator = TerminalStreamContainerView.Coordinator()
             coordinator.terminalView = view
@@ -91,7 +98,7 @@
                 coordinator.scrollViewWillBeginDragging(scroll)
                 scroll.contentOffset.y = 140
                 coordinator.scrollViewDidScroll(scroll)
-                #expect(scroll.contentOffset.y == (selected ? 140 : 80))
+                #expect(scroll.contentOffset.y == (selected && !alternate ? 140 : 80))
             }
         }
 

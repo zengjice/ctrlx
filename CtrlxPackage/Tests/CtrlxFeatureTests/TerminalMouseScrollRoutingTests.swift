@@ -8,6 +8,52 @@
     @MainActor
     @Suite("iOS fullscreen mouse scrolling", .serialized)
     struct TerminalMouseScrollRoutingTests {
+        @Test("A retained selection follows the active buffer's scrolling route, independent of Agent name", arguments: ["codex", "traex"], [false, true])
+        func selectedDragUsesTheActiveBuffer(agent: String, alternate: Bool) async throws {
+            let fixture = TerminalSelectionRoutingTests()
+            let (window, view) = await fixture.makeView()
+            defer { fixture.close(window, view) }
+            view.scrollingAgentID = agent
+            view.frame.size.height = view.getOptimalFrameSize().height
+            for line in 0..<80 {
+                view.feed(text: "line \(line)\r\n")
+            }
+            if alternate {
+                view.feedTerminalData(Array("\u{1b}[?1049h".utf8)[...])
+                view.feed(text: "selected text")
+            }
+            view.feed(text: "\u{1b}[?1000h\u{1b}[?1006h")
+            view.scroll(toPosition: 1)
+            view.setSelectionRange(start: .init(col: 0, row: view.getTerminal().buffer.yDisp), end: .init(col: 4, row: view.getTerminal().buffer.yDisp))
+            let selection = try #require(view.getSelection())
+            let offset = view.contentOffset
+            let mousePan = try #require(view.gestureRecognizers?.compactMap { $0 as? TerminalMousePanGestureRecognizer }.first)
+            #expect(view.usesRemoteMouseScrolling == alternate)
+            #expect(view.isScrollEnabled == !alternate)
+            #expect(view.gestureRecognizerShouldBegin(mousePan) == alternate)
+            var raw = Data()
+            view.onRawInput = { raw.append($0) }
+            let pan = TestTerminalPan()
+            pan.state = .began
+            pan.point = CGPoint(x: view.cellDimension.width * 10.5, y: offset.y + view.cellDimension.height * 2.5)
+            pan.delta.y = view.cellDimension.height * 3 + 0.01
+            view.handleMouseModePan(pan)
+            #expect(raw.isEmpty == !alternate)
+            #expect(view.selectionActive && view.getSelection() == selection)
+            #expect(view.contentOffset == offset)
+            pan.state = .ended
+            pan.speed.y = 1_000
+            view.handleMouseModePan(pan)
+            #expect(!view.isMouseScrollDecelerating)
+            raw.removeAll()
+            view.clearSelection()
+            #expect(view.usesRemoteMouseScrolling && !view.isScrollEnabled)
+            pan.state = .began
+            pan.delta.y = view.cellDimension.height * 3 + 0.01
+            view.handleMouseModePan(pan)
+            #expect(!raw.isEmpty)
+        }
+
         @Test("Returning a frozen pixel viewport to the tail restores output following", arguments: [0.0, 34.0], [false, true])
         func pixelReturnToTailResumesFollowing(bottomInset: Double, rowAlreadyAtTail: Bool) async throws {
             let fixture = TerminalSelectionRoutingTests()

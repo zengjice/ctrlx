@@ -693,7 +693,9 @@ enum TerminalCursorTapNavigation {
         }
 
         var usesRemoteMouseScrolling: Bool {
-            guard isMouseModeActive, !selectionActive else { return false }
+            // Fullscreen TUIs own their history; their alternate buffer cannot
+            // scroll it locally, even while a selection remains on screen.
+            guard isMouseModeActive, !selectionActive || getTerminal().isCurrentBufferAlternate else { return false }
             guard canScroll else { return true }
             // Accessibility paging can move the pixels without updating yDisp.
             // SwiftTerm aligns the live screen's first row, capped by UIKit's maximum.
@@ -742,6 +744,7 @@ enum TerminalCursorTapNavigation {
             // Route it through the inherited handle hit test so other drags scroll.
             if gestureRecognizer is UIPanGestureRecognizer, gestureRecognizer.delegate == nil {
                 gestureRecognizer.delegate = self
+                mouseModePanGesture?.require(toFail: gestureRecognizer)
             }
         }
 
@@ -902,7 +905,7 @@ enum TerminalCursorTapNavigation {
                 let location = isCodexFullscreenScroll ? mouseScrollLocation : gesture.location(in: self)
                 emitMouseModeScrollEvents(deltaY: Double(translation.y), at: location)
                 if gesture.state == .ended {
-                    if inputEnabled, window != nil, usesRemoteMouseScrolling, isCodexFullscreenScroll {
+                    if inputEnabled, window != nil, !selectionActive, usesRemoteMouseScrolling, isCodexFullscreenScroll {
                         mouseScrollAnimator.start(velocity: Double(gesture.velocity(in: self).y))
                     } else {
                         cancelMouseScroll()

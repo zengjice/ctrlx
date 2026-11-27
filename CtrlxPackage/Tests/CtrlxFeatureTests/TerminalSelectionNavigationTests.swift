@@ -8,8 +8,8 @@
     @MainActor
     @Suite("Terminal selection navigation", .serialized)
     struct TerminalSelectionNavigationTests {
-        @Test("Selection drags block native Back while retaining handles and scrolling", arguments: [false, true])
-        func selectionReservesNavigation(hasAdjacentWindow: Bool) async throws {
+        @Test("Selection drags block native Back while retaining handles and scrolling", arguments: [false, true], [false, true])
+        func selectionReservesNavigation(hasAdjacentWindow: Bool, fullscreen: Bool) async throws {
             let fixture = TerminalSelectionRoutingTests()
             let (window, terminal) = await fixture.makeView()
             defer { fixture.close(window, terminal) }
@@ -36,10 +36,10 @@
             }
             #expect(!selectionGuard.gestureRecognizer(selectionGuard, shouldReceive: UITouch()))
             #expect(!selectionGuard.gestureRecognizerShouldBegin(selectionGuard))
-            terminal.feedTerminalData(Array("selected text".utf8)[...])
+            terminal.feedTerminalData(Array(((fullscreen ? "\u{1b}[?1049h\u{1b}[?1000h" : "") + "selected text").utf8)[...])
             terminal.selectAll(nil)
             let handles = try #require(terminal.panSelectionGesture)
-            #expect(handles.isEnabled && terminal.isScrollEnabled)
+            #expect(handles.isEnabled && terminal.isScrollEnabled == !fullscreen)
             #expect(selectionGuard.gestureRecognizer(selectionGuard, shouldReceive: UITouch()))
             #expect(selectionGuard.gestureRecognizerShouldBegin(selectionGuard))
             for back in navigationGestures {
@@ -60,7 +60,7 @@
             #expect(!selectionGuard.gestureRecognizer(selectionGuard, shouldReceive: UITouch()))
             #expect(!selectionGuard.gestureRecognizerShouldBegin(selectionGuard))
             #expect(swipe.canStart(at: CGPoint(x: 180, y: 200)) == hasAdjacentWindow)
-            #expect(terminal.isScrollEnabled)
+            #expect(terminal.isScrollEnabled == !fullscreen)
             #expect(edgeBack.isEnabled == originalEnabled && edgeBack.delegate === originalDelegate)
         }
     }

@@ -970,15 +970,15 @@ delegate of lazily added pans that have no delegate, so SwiftTerm's handle hit t
 actually consulted. A drag away from the handles scrolls while retaining the selection;
 a handle drag extends it with the existing magnifier and edge scrolling.
 
-During local selection, CtrlX also enables the inner history pan and releases the outer
+During normal-buffer selection, CtrlX enables the inner history pan and releases the outer
 viewport's mouse-mode vertical lock. That lock is decided at drag start and retained
 through deceleration, so output clearing the selection cannot move the viewport back to
 the drag's starting Y. Repeated mouse-mode reports disable only the native mouse pan
 installed by SwiftTerm, preserving the existing selection handles.
 
-Selection and retained history both keep wheel input local. Copying or clearing a
-selection in history leaves local scrolling enabled until the inner terminal returns to
-its live tail. This uses the visible content offset and native bottom geometry, rather
+In a normal buffer, selection and retained history keep wheel input local. Copying or
+clearing a selection in history leaves local scrolling enabled until the inner terminal
+returns to its live tail. This uses the visible content offset and native bottom geometry, rather
 than `yDisp` alone: accessibility paging can change the former without updating the latter.
 The resting tail is the live screen's first-row offset capped by UIKit's maximum offset;
 bottom insets must not require scrolling past the position reached by SwiftTerm itself.
@@ -987,6 +987,16 @@ combined with a partial-row viewport reaches the same tail; earlier pages keep n
 Offset and layout changes also refresh local scroll availability. A subsequent gesture
 at the live tail can then send remote wheel input again. Horizontal
 overflow remains owned by the outer viewport; selection does not enable Window switching.
+An alternate-screen TUI owns its history rather than exposing it as local scrollback.
+When mouse mode is enabled there, a vertical drag away from the selection handles keeps
+sending remote wheel input while the selection remains active. Both local scroll views
+wait for that wheel pan; the wheel pan waits for the selection-handle hit test. The
+outer viewport therefore cannot consume the vertical drag instead of the TUI. Selected
+drags do not start momentum. This routing follows the native buffer/mouse mode, not
+the Agent name: inline Traex history remains local, and Codex's existing fullscreen
+three-row wheel compensation is unchanged. Horizontal overflow and selection handles
+retain their own gestures; without mouse mode, scrolling remains local.
+
 Selection drags also reserve the terminal viewport against native edge Back and iOS 26
 content Back. A viewport-local pan guard allows the selection handles and both scroll
 views to keep recognizing; it never changes the navigation controller's gestures or
