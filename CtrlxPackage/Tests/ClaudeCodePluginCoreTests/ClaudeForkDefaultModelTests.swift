@@ -30,9 +30,9 @@ struct ClaudeForkDefaultModelTests {
         try await withDependencies {
             $0[AgentForkHistoryClient.self].root = { _, _, _ in root }
             $0[ProcessRunner.self].runWithExactEnvironment = { executable, arguments, _, timeout, limit, input in
-                #expect(executable == "/usr/bin/env")
-                #expect(Array(arguments.prefix(2)) == ["-C", "/target repo"])
-                #expect(arguments[3] == "-ilc")
+                #expect(executable == "/usr/bin/script")
+                #expect(Array(arguments.prefix(6)) == ["-q", "/dev/null", "/usr/bin/env", "-C", "/target repo", "/bin/zsh"])
+                #expect(arguments[6] == "-ilc")
                 let script = try #require(arguments.last)
                 #expect(script.contains("claude '-p'"))
                 #expect(script.contains("--no-session-persistence"))
@@ -96,12 +96,16 @@ struct ClaudeForkDefaultModelTests {
             $0.continuousClock = ContinuousClock()
         } operation: {
             try await ProcessRunner.liveValue.runWithExactEnvironment(
-                "/usr/bin/env", ["-C", root.path, "/bin/zsh", "-ilc", "export ANTHROPIC_MODEL=\"$1\"; shift; claude \"$@\"", "fork", defaultModel] + launch.command.args,
+                "/usr/bin/script", ["-q", "/dev/null", "/usr/bin/env", "-C", root.path, "/bin/zsh", "-ilc", "export ANTHROPIC_MODEL=\"$1\"; shift; claude \"$@\"", "fork", defaultModel] + launch.command.args,
                 ["HOME": root.path, "ZDOTDIR": root.path, "PATH": "/usr/bin:/bin"], 15, 100_000, nil
             )
         }
         #expect(result.isSuccess)
-        #expect(result.stdoutString.split(separator: "\n").map(String.init) == ["sonnet", "--model", model, "--resume", id, "--fork-session"])
+        let output = result.stdoutString
+            .replacingOccurrences(of: "\r", with: "")
+            .replacingOccurrences(of: "\u{8}", with: "")
+            .replacingOccurrences(of: "^D", with: "")
+        #expect(output.split(separator: "\n").map(String.init) == ["sonnet", "--model", model, "--resume", id, "--fork-session"])
     }
 
     @Test("Fork retains model selectors and CLI environment precedence", arguments: ["opusplan", "opusplan[1m]", "haiku"])
@@ -182,7 +186,7 @@ struct ClaudeForkDefaultModelTests {
             $0.continuousClock = ContinuousClock()
         } operation: {
             try await ProcessRunner.liveValue.runWithExactEnvironment(
-                "/usr/bin/env", arguments, ["HOME": root.path, "ZDOTDIR": root.path, "PATH": "/usr/bin:/bin", "ANTHROPIC_MODEL": "sonnet"],
+                "/usr/bin/script", ["-q", "/dev/null", "/usr/bin/env"] + arguments, ["HOME": root.path, "ZDOTDIR": root.path, "PATH": "/usr/bin:/bin", "ANTHROPIC_MODEL": "sonnet"],
                 15, 100_000, Data()
             )
         }
