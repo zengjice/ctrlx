@@ -135,7 +135,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     reply = "DEVELOPMENT_DONE: implemented safe_divide in sample.py."
             elif invocation and "Only judge the findings" in prompt:
                 assert codex and "P2 REVIEW_FINDING" in prompt
-                reply = "Accepted: REVIEW_FINDING — add an explicit zero-denominator guard. Rejected: none. No repair performed yet."
+                if phase == 0:
+                    call = ("exec_command", {"cmd": f"ctrlx workflow complete-step --invocation {invocation} --json", "login": False})
+                else:
+                    reply = "Accepted: REVIEW_FINDING — add an explicit zero-denominator guard. Rejected: none. No repair performed yet."
             elif invocation and "Fix the Accepted findings" in prompt:
                 assert codex and "Accepted: REVIEW_FINDING" in "\n".join(text_values(messages)), "Developer lost its judgment context"
                 assert "Accepted: REVIEW_FINDING" not in prompt, "Completion-only edge forwarded a judgment"
@@ -165,11 +168,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     if "if denominator == 0:" not in source:
                         reply = "P2 REVIEW_FINDING: sample.py:2 needs an explicit zero-denominator guard."
                     elif phase == 1:
-                        call = ("Bash", {"command": f'ctrlx workflow finish --invocation {invocation} --reason "No P0-P3 findings" --json', "description": "End the authorized review-loop fixture"})
+                        call = ("Bash", {"command": f'ctrlx workflow exit-loop --invocation {invocation} --reason "No P2 or higher-priority findings" --json', "description": "Approve the review-loop fixture"})
                     else:
                         result_json(previous)
-                        state["finishConfirmed"] = True
-                        reply = "No P0–P3 findings. Workflow complete."
+                        state["exitConfirmed"] = True
+                        reply = "No P2 or higher-priority findings. Continue to Commit."
+            elif invocation and "Commit the reviewed changes" in prompt:
+                assert codex and "Answer from Review (round 2)" in prompt
+                reply = "COMMIT_DONE: fixture commit verified."
+            elif invocation and "If you are in the primary working tree" in prompt:
+                assert codex and "COMMIT_DONE" in prompt
+                reply = "MERGE_DONE: fixture branches verified."
             if state:
                 state["phase"] += 1
         except Exception as error:
@@ -257,7 +266,7 @@ def run():
                 env["CLAUDE_CONFIG_DIR"] = str(config)
                 (config / ".claude.json").write_text(json.dumps({"hasCompletedOnboarding": True, "projects": {str(project): {"hasTrustDialogAccepted": True}}}))
                 hook = {"hooks": [{"type": "command", "command": shlex.join([sys.executable, str(bridge)]), "timeout": 30}]}
-                (config / "settings.json").write_text(json.dumps({"env": {"ANTHROPIC_API_KEY": "ctrlx-loopback-fixture", "ANTHROPIC_BASE_URL": endpoint, "DISABLE_AUTOUPDATER": "1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}, "permissions": {"allow": ["Bash(cat sample.py)", "Bash(ctrlx workflow finish:*)"]}, "hooks": {event: [hook] for event in ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd", "PreToolUse", "PostToolUse"]}}))
+                (config / "settings.json").write_text(json.dumps({"env": {"ANTHROPIC_API_KEY": "ctrlx-loopback-fixture", "ANTHROPIC_BASE_URL": endpoint, "DISABLE_AUTOUPDATER": "1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}, "permissions": {"allow": ["Bash(cat sample.py)", "Bash(ctrlx workflow exit-loop:*)"]}, "hooks": {event: [hook] for event in ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd", "PreToolUse", "PostToolUse"]}}))
                 args = ["/opt/homebrew/bin/claude", "--model", "claude-sonnet-4-5", "Say fixture ready."]
             target = f"review-loop:{index}"
             pane = tmux(*(["new-session", "-d", "-s", "review-loop", "-x", "140", "-y", "42", "-P", "-F", "#{pane_id}"] if index == 0 else ["new-window", "-d", "-t", target, "-P", "-F", "#{pane_id}"]), "-c", str(project), "/bin/sh")
@@ -301,10 +310,10 @@ def run():
         states = {model.agent: model.states for model in models}
         assert not any(state.get("error") for model in models for state in model.states.values())
         assert any(state.get("imageRead") for state in models[0].states.values())
-        assert any(state.get("finishConfirmed") for state in models[1].states.values())
+        assert any(state.get("exitConfirmed") for state in models[1].states.values())
         evidence["modelEvidence"] = states
         (OUTPUT / "native-evidence.json").write_text(json.dumps(evidence, ensure_ascii=False, indent=2))
-        print("PASS: two native Agent instances, image read, review, judgment, repair, repeated review and authorized finish")
+        print("PASS: two native Agent instances, image read, review, judgment, repair, repeated review, approval and simulated commit/merge")
     finally:
         if socket.exists():
             for index in range(len(manifest["agents"])):

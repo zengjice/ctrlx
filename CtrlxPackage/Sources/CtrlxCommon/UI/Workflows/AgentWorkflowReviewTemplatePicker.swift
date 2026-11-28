@@ -30,7 +30,9 @@ struct AgentWorkflowReviewTemplatePicker: View {
                     Text("3. Developer: judge the findings, without fixing yet")
                     Text("4. Content: prepare repair instructions")
                     Text("5. Developer: fix Accepted findings")
-                    Text("Edit the Review task after applying this template, including when to finish and any report requirements. Then repeat from Review. The default limit is five rounds.")
+                    Text("6. Developer: commit the reviewed changes after approval")
+                    Text("7. Developer: merge worktree branches in the primary working tree, or merge main into the current branch")
+                    Text("Repeat from Review until no P2 or higher-priority findings remain, then continue to Commit and Merge. The default limit is 100 rounds. Edit the instructions and approval condition after applying this template.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }

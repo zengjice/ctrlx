@@ -266,7 +266,7 @@ struct AgentWorkflowNativeReviewLoopTests {
         let agentService = AgentWorkflowAgentService(store: store, inspect: inspectConversation, synchronizeEvents: {
             try await ingress.waitForPendingFrames()
             try await router.requireVerifiedSubmission($0)
-        })
+        }, provider: { cores[$0] })
         await api.setRequestHandler { request, peer in await agentService.handle(request, peer: peer) }
         try await api.start(root.appendingPathComponent("api.sock").path)
         do {
@@ -337,7 +337,6 @@ struct AgentWorkflowNativeReviewLoopTests {
             _ = try await store.uploadAttachment(.finish(id: imageID, sha256: SHA256.hash(data: image).map { String(format: "%02x", $0) }.joined()))
             var draft = AgentWorkflowDefinition(name: "Native development and review", hostID: hostID, nodes: [], edges: [], entryNodeID: UUID(), initialInput: .init(text: "Implement the attached fixture image. USER_IMAGE_TASK", attachmentIDs: [imageID]))
             try AgentWorkflowReviewTemplate.apply(to: &draft, developerID: #require(instances.first { $0.pluginID == "codex" }?.id), reviewerID: #require(instances.first { $0.pluginID == "claude-code" }?.id))
-            draft.nodes[1].input.text += "\nEnd this workflow only when there are no P0, P1, P2 or P3 findings."
             draft.nodes[1].input.attachmentIDs = [imageID]
             let definition = try await store.saveDefinition(draft, expectedRevision: nil)
             let run = try await store.start(definitionID: definition.id, expectedRevision: definition.revision, requestID: UUID(), now: Date(), authorizationExpiresAt: Date().addingTimeInterval(180))
@@ -354,14 +353,16 @@ struct AgentWorkflowNativeReviewLoopTests {
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             try encoder.encode(latest).write(to: root.appendingPathComponent("native-run.json"))
             try #require(latest.status == .completed, Comment(rawValue: latest.issue ?? "Native sample did not finish."))
-            #expect(latest.round == 2 && latest.invocations.count == 6)
+            #expect(latest.round == 2 && latest.invocations.count == 8)
             #expect(zip(latest.instances, run.instances).allSatisfy { pair in pair.0.matchesProcess(pair.1) })
             if clearsConversation || freshCodex {
                 #expect(latest.instances.first { $0.pluginID == "codex" }?.conversationID != run.instances.first { $0.pluginID == "codex" }?.conversationID)
             } else {
                 #expect(latest.instances == run.instances)
             }
-            #expect(latest.finishRequest != nil)
+            #expect(latest.hasExitedLoop && latest.finishRequest == nil)
+            #expect(latest.invocations.first { $0.nodeID == definition.nodes[5].id }?.result?.text == "COMMIT_DONE: fixture commit verified.")
+            #expect(latest.invocations.first { $0.nodeID == definition.nodes[6].id }?.result?.text == "MERGE_DONE: fixture branches verified.")
             #expect(latest.invocations.allSatisfy { $0.result?.text.contains("FIXTURE_ERROR") == false })
             #expect(latest.invocations.filter { $0.nodeID == definition.entryNodeID }.count == 1)
             #expect(latest.invocations.filter { $0.delivery.input.attachmentIDs == [imageID] }.count == 3)

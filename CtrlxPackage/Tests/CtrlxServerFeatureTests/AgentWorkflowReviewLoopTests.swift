@@ -54,7 +54,6 @@ struct AgentWorkflowReviewLoopTests {
         _ = try await store.uploadAttachment(.finish(id: imageID, sha256: SHA256.hash(data: image).map { String(format: "%02x", $0) }.joined()))
         var definition = AgentWorkflowDefinition(name: "Requested sample", hostID: hostID, nodes: [], edges: [], entryNodeID: UUID(), initialInput: .init(text: "USER_IMAGE_TASK: implement this image", attachmentIDs: [imageID]))
         AgentWorkflowReviewTemplate.apply(to: &definition, developerID: agents[0].id, reviewerID: agents[1].id)
-        definition.nodes[1].input.text += "\nEnd this workflow only when there are no P0, P1, P2 or P3 findings."
         let saved = try await store.saveDefinition(definition, expectedRevision: nil)
         let run = try await store.start(definitionID: saved.id, expectedRevision: saved.revision, requestID: UUID(), now: now, authorizationExpiresAt: now.addingTimeInterval(3_600))
         #expect(run.instances.count == 2)
@@ -68,14 +67,14 @@ struct AgentWorkflowReviewLoopTests {
         do {
             await runner.schedule(runID: run.id)
             let steps = saved.nodes
-            let order = [steps[0], steps[1], steps[2], steps[4], steps[1]]
-            let answers = ["DEVELOPMENT_DONE", "P2 REVIEW_FINDING: missing validation", "Accepted: REVIEW_FINDING. Rejected: none.", "REPAIR_DONE", "No P0–P3 findings."]
+            let order = [steps[0], steps[1], steps[2], steps[4], steps[1], steps[5], steps[6]]
+            let answers = ["DEVELOPMENT_DONE", "P2 REVIEW_FINDING: missing validation", "Accepted: REVIEW_FINDING. Rejected: none.", "REPAIR_DONE", "No P2 or higher-priority findings.", "COMMIT_DONE", "MERGE_DONE"]
             for (index, step) in order.enumerated() {
                 try await waitUntil { await probe.writes.count > index }
                 let invocation = await probe.writes[index]
                 let agent = try #require(run.instances.first { $0.id == invocation.delivery.toAgentID })
                 #expect(invocation.nodeID == step.id && invocation.delivery.toAgentID == step.agentInstanceID)
-                #expect(invocation.round == (index == 4 ? 2 : 1))
+                #expect(invocation.round == (index >= 4 ? 2 : 1))
                 let input = invocation.delivery.input
                 #expect(input.attachmentIDs == (index == 0 ? [imageID] : []))
                 if index == 0 {
@@ -93,10 +92,14 @@ struct AgentWorkflowReviewLoopTests {
                     #expect(input.text.contains("Fix the Accepted findings"))
                     #expect(!input.text.contains("Accepted: REVIEW_FINDING"))
                     #expect(await probe.writes[2].delivery.toAgentID == agent.id)
+                } else if index == 5 {
+                    #expect(input.text.contains("Answer from Review (round 2)") && input.text.contains(answers[4]))
+                } else if index == 6 {
+                    #expect(input.text.contains("Answer from Commit (round 2)") && input.text.contains("COMMIT_DONE"))
                 }
                 let turn = "native-\(invocation.id)"
                 try await runner.accepted(runID: run.id, invocationID: invocation.id, instance: agent, nativeTurnID: turn, transcriptPath: "/fixture/native.jsonl")
-                if [0, 3].contains(index) {
+                if step.completion == .explicit {
                     try await store.update(runID: run.id) { try $0.requestStepCompletion(invocationID: invocation.id, instance: agent, turnID: turn, now: now) }
                 }
                 if index == 0 {
@@ -105,7 +108,7 @@ struct AgentWorkflowReviewLoopTests {
                 }
                 if index == 4 {
                     try await store.update(runID: run.id) {
-                        try $0.requestFinish(invocationID: invocation.id, instance: agent, reason: "No P0–P3 findings", now: now)
+                        try $0.requestFinish(invocationID: invocation.id, instance: agent, reason: "No P2 or higher-priority findings", now: now, exitsLoop: true)
                     }
                 }
                 try await runner.succeeded(runID: run.id, result: .init(invocationID: invocation.id, nativeTurnID: turn, text: answers[index], completedAt: now), instance: agent)
@@ -113,15 +116,16 @@ struct AgentWorkflowReviewLoopTests {
             try await waitUntil { try await store.snapshot().runs[0].status == .completed }
             await runner.shutdown()
             let complete = try await store.snapshot().runs[0]
-            #expect(await probe.writes.count == 5)
-            #expect(complete.invocations.count == 6)
+            #expect(await probe.writes.count == 7)
+            #expect(complete.invocations.count == 8)
+            #expect(complete.hasExitedLoop && complete.finishRequest == nil)
             #expect(complete.invocations.filter { $0.nodeID == steps[0].id }.count == 1)
             #expect(complete.invocations.first { $0.nodeID == steps[3].id }?.result?.text == steps[3].input.text)
             #expect(complete.instances == run.instances)
             _ = try AgentWorkflowExecution(validating: complete)
             let state = AgentWorkflowRunState(complete, currentInstances: run.instances)
             #expect(state.nodes[0].isSkipped && state.nodes[0].invocation == nil)
-            #expect(state.nodes[1].invocation?.status == .succeeded)
+            #expect(state.nodes[5].invocation?.status == .succeeded && state.nodes[6].invocation?.status == .succeeded)
             if let output = ProcessInfo.processInfo.environment["CTRLX_WORKFLOW_STEP_EVIDENCE"] {
                 let destination = URL(fileURLWithPath: output)
                 try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
@@ -137,31 +141,32 @@ struct AgentWorkflowReviewLoopTests {
     }
 
     @Test
-    func passingFirstReviewFinishesBeforeJudgmentAndRepairAreDispatched() throws {
+    func passingFirstReviewRunsCommitAndMergeWithoutDispatchingJudgmentOrRepair() throws {
         let hostID = UUID()
         let agents = observations().map { $0.instance(hostID: hostID, id: UUID()) }
         var definition = AgentWorkflowDefinition(name: "Already correct", hostID: hostID, nodes: [], edges: [], entryNodeID: UUID())
         AgentWorkflowReviewTemplate.apply(to: &definition, developerID: agents[0].id, reviewerID: agents[1].id)
-        definition.nodes[1].input.text += "\nEnd this workflow only when there are no P0, P1, P2 or P3 findings."
         var execution = try AgentWorkflowExecution(definition: definition, instances: agents, now: now, authorizationExpiresAt: now.addingTimeInterval(3_600))
-        for (index, node) in definition.nodes.prefix(2).enumerated() {
+        for node in [definition.nodes[0], definition.nodes[1], definition.nodes[5], definition.nodes[6]] {
+            #expect(execution.readyNodeIDs == [node.id])
             let task = try execution.prepareInvocation(nodeID: node.id, now: now)
-            let agent = agents[index]
+            let agent = try #require(agents.first { $0.id == node.agentInstanceID })
             try execution.beginWriting(invocationID: task.id, instance: agent, now: now)
             try execution.didWrite(invocationID: task.id)
             try execution.accept(invocationID: task.id, instance: agent, nativeTurnID: task.id.uuidString, transcriptPath: "/fixture/native.jsonl")
             if node.completion == .explicit {
                 try execution.requestStepCompletion(invocationID: task.id, instance: agent, turnID: task.id.uuidString, now: now)
             }
-            if index == 0 {
-                #expect(throws: AgentWorkflowError.self) { try execution.requestFinish(invocationID: task.id, instance: agent, reason: "Not granted", now: now) }
-            } else {
-                try execution.requestFinish(invocationID: task.id, instance: agent, reason: "No P0–P3 findings", now: now)
+            #expect(throws: AgentWorkflowError.self) { try execution.requestFinish(invocationID: task.id, instance: agent, reason: "Cannot skip the remaining steps", now: now) }
+            if node.id == definition.nodes[1].id {
+                try execution.requestFinish(invocationID: task.id, instance: agent, reason: "No P2 or higher-priority findings", now: now, exitsLoop: true)
             }
             try execution.succeed(.init(invocationID: task.id, nativeTurnID: task.id.uuidString, text: node.name, completedAt: now), instance: agent, now: now)
         }
         #expect(execution.run.status == .completed && execution.run.round == 1)
-        #expect(execution.run.invocations.count == 2 && execution.readyNodeIDs.isEmpty)
+        #expect(execution.run.invocations.count == 4 && execution.readyNodeIDs.isEmpty)
+        #expect(Set(execution.run.invocations.map(\.nodeID)).isDisjoint(with: Set(definition.nodes[2...4].map(\.id))))
+        #expect(execution.run.hasExitedLoop && execution.run.finishRequest == nil)
     }
 
     @Test
@@ -170,9 +175,8 @@ struct AgentWorkflowReviewLoopTests {
         let agents = observations().map { $0.instance(hostID: hostID, id: UUID()) }
         var definition = AgentWorkflowDefinition(name: "Restore", hostID: hostID, nodes: [], edges: [], entryNodeID: UUID())
         AgentWorkflowReviewTemplate.apply(to: &definition, developerID: agents[0].id, reviewerID: agents[1].id)
-        definition.nodes[1].input.text += "\nEnd this workflow only when there are no P0, P1, P2 or P3 findings."
         var execution = try AgentWorkflowExecution(definition: definition, instances: agents, now: now, authorizationExpiresAt: now.addingTimeInterval(3_600))
-        for node in definition.nodes {
+        for node in definition.nodes.prefix(5) {
             let task = try execution.prepareInvocation(nodeID: node.id, now: now)
             if node.kind == .content {
                 continue

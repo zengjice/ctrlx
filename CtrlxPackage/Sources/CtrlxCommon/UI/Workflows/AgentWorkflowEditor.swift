@@ -103,7 +103,7 @@ struct AgentWorkflowEditor: View {
                         Button("Develop, review and repair…") { showingReviewTemplate = true }
                             .disabled(instances.count < 2)
                             .accessibilityIdentifier("workflow-review-template")
-                        Text("Choose a Developer and a Reviewer. The template separates development, judgment and repair, and repeats from review.")
+                        Text("Choose a Developer and a Reviewer. Repeat review, judgment and repair, then commit and merge after approval.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }

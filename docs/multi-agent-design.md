@@ -101,7 +101,7 @@ Codex 新建或 resume 后停在输入框时可能尚未触发 Hook；首次任�
 
 ### 多轮讨论与步骤完成
 
-Agent 步骤的 `Complete step` 提供两种方式：`When the reply ends` 沿用原生最终回答核验后交接；`When the Agent completes the step` 允许同一个步骤跨多轮对话，只在 Agent 调用 `ctrlx workflow complete-step --invocation <ID>` 后核验该轮最终结果并交接。开发／评审／修复模板的 Initial development、Repair 默认使用明确完成；Review、Judge findings 保持回答结束交接，内容步骤保持自动执行。旧配置默认维持原方式，不修改正在运行的快照。
+Agent 步骤的 `Complete step` 提供两种方式：`When the reply ends` 沿用原生最终回答核验后交接；`When the Agent completes the step` 允许同一个步骤跨多轮对话，只在 Agent 调用 `ctrlx workflow complete-step --invocation <ID>` 后核验该轮最终结果并交接。开发／评审／修复模板的 Initial development、Judge findings、Repair 默认使用明确完成；Review、Commit、Merge 保持回答结束交接，内容步骤保持自动执行。旧配置默认维持原方式，不修改正在运行的快照。
 
 对于 `When the reply ends` 步骤，通过身份核验的 `complete-step` 调用会返回成功提示，说明无需显式完成，而不是报“当前轮次尚未接收”。这次信息性确认不等待提交回执核验，但仍核验调用者与当前 Agent 会话。此调用不写完成标记、不修改运行状态，也不提前交接；重复调用保持幂等，最终仍由 Host 核验回复后交接。
 
@@ -133,29 +133,31 @@ Mac Host、Mac Viewer 和 iOS 的当前 Agent 标签工具栏显示「暂停工�
 
 ### Developer / Reviewer：先开发，再评审、判断、修复
 
-Mac／iOS 新建配置，在 `Quick start` 点击 `Develop, review and repair…`，选择两个不同的现有 Agent 标签后点击 `Use template`。应用后直接在 Review 步骤的任务预设中统一填写评审要求、报告保存要求和结束条件；不增加独立的结束条件输入框。两者使用同一工作目录，让 Reviewer 直接检查代码；它无需接收 Developer 的回答。没有标签时可先用 `New Agent tab` 创建，再刷新目录。
+Mac／iOS 新建配置，在 `Quick start` 点击 `Develop, review and repair…`，选择两个不同的现有 Agent 标签后点击 `Use template`。应用后可在 Review 步骤的任务预设中修改评审要求、报告保存要求和批准条件。两者使用同一工作目录，让 Reviewer 直接检查代码；它无需接收 Developer 的回答。没有标签时可先用 `New Agent tab` 创建，再刷新目录。
 
-应用模板后，在 `Task` 填写初始需求并添加图片。模板只有 Developer、Reviewer 两名参与者，生成以下五个执行步骤；步骤名、预设和结束条件都可编辑：
+应用模板后，在 `Task` 填写初始需求并添加图片。模板只有 Developer、Reviewer 两名参与者，生成以下七个执行步骤；步骤名、预设和批准条件都可编辑：
 
 | 步骤 | 执行者 | 原始任务 | 等待与接收 | 本次预设 |
 | --- | --- | --- | --- | --- |
 | Initial development | Developer | 文字与附件 | 首次入口，无上游 | 留空，只执行原始任务 |
-| Review | Reviewer | 不接收 | 等开发完成，仅完成信号 | 检查实现与测试；满足用户配置的结束条件时调用结束工具，否则输出问题 |
+| Review | Reviewer | 不接收 | 等开发完成，仅完成信号 | 检查实现与测试；默认没有 P2 及以上问题时批准退出循环，否则输出问题 |
 | Judge findings | 同一个 Developer | 不接收 | 接收 Review 的完整文字结果 | 判断 Accepted／Rejected，给出理由，本次不修复 |
 | Repair instructions | 内容步骤 | 不接收 | 等判断完成，仅完成信号 | 修复 Accepted 项并验证 |
 | Repair | 同一个 Developer | 不接收 | 接收 Repair instructions 的输出 | 留空，按内容步骤指令修复 |
+| Commit | 同一个 Developer | 不接收 | 仅在 Review 批准后接收其完整结果 | 按 Conventional Commits 提交已评审修改并报告验证结果 |
+| Merge | 同一个 Developer | 不接收 | 接收 Commit 的完整结果 | 主工作区分别合入其他工作区分支；关联工作区则将 main 合入当前分支，保留未提交修改 |
 
-例如 Review 的完整任务预设可以是「使用 $review-changes 审查当前工作区。直至没有 P3 及以上问题项就退出 workflow」，也可以在同一段里加上「评审报告保存为 review.md」。结束权限开关只决定该步骤能否调用结束工具，不存放业务条件。
+例如可以把 Review 的批准条件改为「没有 P3 及以上问题」，也可以在同一段里加上「评审报告保存为 review.md」。批准条件仍是可编辑的任务文字，不增加独立的业务条件字段。
 
 代码、报告及其它文件保存在约定的工作区，由后续 Agent 直接读取。普通文字结果由工作流按连接配置交接。人工添加的图片通过附件上传和领取，不提供 Agent 文件发布命令。
 
-`First step` 是 Initial development；`Final step` 是 Repair；开启重复，`Repeat from` 选择 Review；`Include final output on repeat` 关闭，默认最多五轮。Reviewer 的 Review 步骤获准结束工作流，具体结束条件由本工作流的配置决定；「允许结束」只授予调用能力。手动编排时在获授权步骤的预设中填写结束条件。满足条件后需实际调用结束工具；只在回答里写「通过」不会结束运行。功能、skill 和 CLI 不内置 P 级别阈值或其他业务标准，执行器也不解析这些自然语言条件。
+`First step` 是 Initial development；循环的 `Final step` 是 Repair；`Repeat from` 选择 Review；`Include final output on repeat` 关闭，默认最多 100 轮。Review 的批准出口连接 Commit → Merge，通过时需实际调用任务中提供的 `ctrlx workflow exit-loop`；只在回答里写「通过」不会进入收尾。Review 不能用 `finish` 绕过收尾链。P2 阈值仅为本模板的默认任务文字，执行器和 CLI 不解析问题等级或其他自然语言条件。
 
-第一轮执行全部五步。后续轮次只执行 Review → Judge findings → Repair instructions → Repair，不再次发送原始任务或图片。Reviewer 再次只接收评审指引；Developer 的判断与修复是两次独立调用，保留同一个标签、实例和原生对话，因此修复时能使用刚才判断的 Accepted 项。内容步骤不会额外调用 Agent。
+首轮从 Initial development 开始，需要修复时执行 Review → Judge findings → Repair instructions → Repair。后续轮次只重复这四步，不再次发送原始任务或图片；首次评审就通过时直接进入 Commit。Developer 的判断与修复是两次独立调用，保留同一个标签、实例和原生对话，因此修复时能使用刚才判断的 Accepted 项。内容步骤不会额外调用 Agent。
 
-达到最大轮数时暂停等待人工处理。Reviewer 每次都可提前请求结束；结束后保留两个 Agent 标签，不再派发判断或修复任务。
+达到最大轮数时暂停等待人工处理。Reviewer 每次都可批准退出循环；Host 核验该次 Review 的最终答复后，不再派发判断或修复任务，依次执行 Commit、Merge，收尾完成后才通知整个工作流完成。运行结束后保留两个 Agent 标签。
 
-需要在通过后收尾时，在 Review 的 `More options` 选择 `Add step on loop approval`，添加 Agent 或内容步骤，例如「总结与验收」。后续新增步骤默认接在收尾链末尾。保留 Review 中的通过条件，任务会给该步骤提供 `ctrlx workflow exit-loop` 命令。通过时，Host 核验 Review 的最终答复，再将答复交给收尾链。需要修改时，照常完成 Review 并进入判断和修复。轮数到达上限时暂停；收尾链完成后，整个工作流才完成。
+模板更新只影响以后应用模板的新配置，不改写已保存配置或运行快照，也不复制本机 Agent ID、目录或初始任务。其他没有批准出口的循环仍可在 Review 的 `More options` 选择 `Add step on loop approval` 添加收尾；已有收尾链的新增步骤默认接在其末尾。
 
 同一个实例的多个步骤必须通过依赖明确排出先后。配置阶段拒绝可能并行写入同一实例的图；它们是同一固定角色的不同任务，而非多个独立角色。
 
@@ -167,7 +169,7 @@ Mac Host、Mac Viewer 和 iOS 的 Agent 步骤可以在 `Model and effort…` �
 
 模型选择保存在配置和运行快照中，编辑保存配置不会修改在途步骤。管理协议和账本当前为 7，Host／Viewer 均需更新，防止旧客户端忽略稳定标签关联或重试记录。账本 1–6 迁移保留原配置、结果和恢复规则；根据已存目录和运行快照补充目标 UUID，并为旧调用保存原实例快照。无法找回位置的旧配置要求重新选择标签，不能按名称猜测。缺少模型字段的步骤继续沿用当前 Agent 设置。
 
-skill 作为可编辑的纯文本指令保留；模板默认不依赖特定 skill 的安装。用户可将 Review、Judge findings、Repair instructions 改为自己使用的 skill 调用。
+Review、Judge findings、Repair instructions 分别建议优先使用 `review-changes`、`triage-review-findings`、`fix-accepted-findings` skill，并保留直接执行的完整说明；没有安装这些 skill 时也能使用。skill 指令仍是可编辑的纯文本，不增加安装依赖。
 
 ### 内容节点
 

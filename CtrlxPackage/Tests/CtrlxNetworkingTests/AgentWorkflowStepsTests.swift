@@ -26,15 +26,38 @@ struct AgentWorkflowStepsTests {
     func templateUsesTwoParticipantsAndRepeatsOnlyTheReviewRepairSection() throws {
         let definition = sample()
         try definition.validate()
-        #expect(definition.nodes.map(\.completion) == [.explicit, .replyEnded, .replyEnded, .replyEnded, .explicit])
+        #expect(definition.nodes.map(\.name) == ["Initial development", "Review", "Judge findings", "Repair instructions", "Repair", "Commit", "Merge"])
+        #expect(definition.nodes.map(\.completion) == [.explicit, .replyEnded, .explicit, .replyEnded, .explicit, .replyEnded, .replyEnded])
         #expect(definition.agents.map(\.name) == ["Developer", "Reviewer"])
         #expect(definition.agentInstanceIDs.count == 2)
-        #expect(definition.nodes.filter { $0.agentInstanceID == definition.agents[0].id }.count == 3)
+        #expect(definition.nodes.filter { $0.agentInstanceID == definition.agents[0].id }.count == 5)
         #expect(definition.activeNodeIDs(round: 1).count == 5)
-        #expect(definition.activeNodeIDs(round: 2) == Set(definition.nodes.dropFirst().map(\.id)))
+        #expect(definition.activeNodeIDs(round: 2) == Set(definition.nodes[1...4].map(\.id)))
         #expect(definition.entryNodeID(round: 2) == definition.nodes[1].id)
         #expect(definition.loop?.includesResult == false)
+        #expect(definition.loop?.maximumRounds == 100)
+        #expect(definition.loop?.finalNodeID == definition.nodes[4].id)
+        #expect(definition.loopExit == .init(source: definition.nodes[1].id, target: definition.nodes[5].id))
+        #expect(definition.afterLoopNodeIDs == Set(definition.nodes[5...6].map(\.id)))
+        #expect(definition.upstream(of: definition.nodes[6].id).map(\.id) == [definition.nodes[5].id])
         #expect(try JSONDecoder().decode(AgentWorkflowDefinition.self, from: JSONEncoder().encode(definition)) == definition)
+    }
+
+    @Test
+    func templateApprovalPromptsLeadToCommitAndMergeWithPortableSkillInstructions() {
+        let definition = sample()
+        let review = AgentWorkflowPrompt.preview(definition: definition, node: definition.nodes[1], round: 1).text
+        #expect(review.contains("review-changes skill when available"))
+        #expect(review.contains("no P2 or higher-priority findings"))
+        #expect(review.contains("ctrlx workflow exit-loop") && review.contains("continue to Commit"))
+        #expect(!review.contains("ctrlx workflow finish"))
+        #expect(definition.nodes[2].input.text.contains("triage-review-findings skill when available"))
+        #expect(definition.nodes[3].input.text.contains("fix-accepted-findings skill when available"))
+        let commit = AgentWorkflowPrompt.preview(definition: definition, node: definition.nodes[5], round: 1).text
+        #expect(commit.contains("Answer from Review") && !commit.contains("Initial task:"))
+        let merge = AgentWorkflowPrompt.preview(definition: definition, node: definition.nodes[6], round: 1).text
+        #expect(merge.contains("Answer from Commit") && !merge.contains("Initial task:"))
+        #expect(merge.contains("primary working tree") && merge.contains("linked worktree") && merge.contains("merge main"))
     }
 
     @Test(arguments: [

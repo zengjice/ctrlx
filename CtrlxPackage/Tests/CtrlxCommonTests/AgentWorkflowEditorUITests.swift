@@ -475,7 +475,7 @@
             try await click("workflow-agents-toggle", in: window)
             try await addExistingAgent(instances[1], in: window)
             try await click("workflow-agents-toggle", in: window)
-            for index in [0, 1, 2, 4] {
+            for index in copy.nodes.indices where copy.nodes[index].kind == .agent {
                 if index == 1 {
                     try await click("workflow-agents-toggle", in: window)
                     try await addExistingAgent(instances[0], in: window)
@@ -488,7 +488,7 @@
                 try await click("workflow-choose-agent-\(instance.id)", in: window)
                 try await wait { window.sheets.isEmpty }
                 #expect(inputs(in: hosting).first?.string == node.input.text)
-                if index != 4 {
+                if node.id != copy.nodes.last?.id {
                     try await click("workflow-editor-save", in: window)
                     #expect(saved == nil)
                 }
@@ -502,7 +502,7 @@
             #expect(value.agentInstanceIDs.isDisjoint(with: instances.map(\.id)))
             #expect(value.instance(for: value.nodes[0].agentInstanceID, in: instances)?.id == instances[1].id)
             #expect(value.instance(for: value.nodes[1].agentInstanceID, in: instances)?.id == instances[0].id)
-            #expect(value.nodes[0].agentInstanceID == value.nodes[2].agentInstanceID && value.nodes[0].agentInstanceID == value.nodes[4].agentInstanceID)
+            #expect(value.nodes.enumerated().filter { $0.element.kind == .agent && $0.offset != 1 }.allSatisfy { $0.element.agentInstanceID == value.nodes[0].agentInstanceID })
             #expect(value.initialInput == .init() && value.attachmentIDs.isEmpty)
             #expect(value.nodes.map(\.input.text) == original.nodes.map(\.input.text))
             #expect(value.edges == original.edges && value.loop == original.loop)

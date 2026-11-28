@@ -132,6 +132,7 @@ struct AgentWorkflowEditingTests {
         let developer = UUID()
         var definition = AgentWorkflowDefinition(name: "Review loop", hostID: UUID(), nodes: [], edges: [], entryNodeID: UUID())
         AgentWorkflowReviewTemplate.apply(to: &definition, developerID: developer, reviewerID: UUID())
+        definition.removeLoopExit()
         let original = definition
         let next = AgentWorkflowNode(name: "Final check", agentInstanceID: developer, initialTask: .omit)
         definition.appendStep(next)
@@ -150,6 +151,7 @@ struct AgentWorkflowEditingTests {
         let developer = UUID()
         var definition = AgentWorkflowDefinition(name: "Review loop", hostID: UUID(), nodes: [], edges: [], entryNodeID: UUID())
         AgentWorkflowReviewTemplate.apply(to: &definition, developerID: developer, reviewerID: UUID())
+        definition.removeLoopExit()
         let review = try #require(definition.nodes.first { $0.name == "Review" })
         let repair = try #require(definition.loop?.finalNodeID)
         let summary = AgentWorkflowNode(name: "Summary", agentInstanceID: developer, initialTask: .omit)
@@ -179,6 +181,7 @@ struct AgentWorkflowEditingTests {
     func removingApprovalFromBranchedAfterLoopRequiresOneFinalStepWhileRepeating() throws {
         var definition = AgentWorkflowDefinition(name: "Review loop", hostID: UUID(), nodes: [], edges: [], entryNodeID: UUID())
         AgentWorkflowReviewTemplate.apply(to: &definition, developerID: UUID(), reviewerID: UUID())
+        definition.removeLoopExit()
         let review = try #require(definition.nodes.first { $0.name == "Review" })
         let summary = AgentWorkflowNode(name: "Summary", content: .init(text: "Summarize this review"))
         let handoff = AgentWorkflowNode(name: "Handoff", content: .init(text: "Hand off this review"))
