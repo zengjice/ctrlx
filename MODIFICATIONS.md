@@ -7,6 +7,17 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.1.4 — Stable terminal scrolling and focused iOS sessions
+
+- Preserve terminal screen modes when selected Pane content scrolls, keeping the
+  merged tmux stream and bootstrap snapshot consistent.
+- Hide completed and ended Workflow history from iOS Session rows while keeping
+  active Workflows and unanswered questions visible.
+- Validation: targeted regression tests passed serially (153 tests across 34
+  suites). SwiftFormat, CtrlX boundary checks, and Git diff checks passed.
+- The formal release publishes macOS with Developer ID signing and notarization.
+  The same version is then built for Ad Hoc distribution and installed on iPhone.
+
 ## 3.1.3 — Agent notes, provider recovery and richer Orbie
 
 - Add per-Agent notes on Mac, with an editor whose color matches the Agent card.
