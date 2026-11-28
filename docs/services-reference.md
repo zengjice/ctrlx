@@ -1922,8 +1922,10 @@ transports. Tapping opens that exact run on the authenticated paired Host;
 ordinary Agent navigation is cancelled on iOS. Older alerts without this target
 retain their generic behavior. Terminal toolbars keep the active or most recent
 run, show Running/Verifying/Paused/Completed/Ended independently of Agent bells,
-and open the run on click. iOS session rows also show the latest run's name,
-step, round and status, with a green completion check and a separate Ended state.
+and open the run on click. iOS session rows show the name, step, round and status
+of active workflows, deduplicated per run. Completed and Ended runs do not add
+session-list rows; their records remain in Workflow history and the terminal
+toolbar, and successful completion still sends the normal workflow alert.
 This metadata travels in ordinary pane snapshots rather than polling each list
 row. A blocking run contributes one attention entry when no asking/approval
 Agent already represents it; that entry opens the run. An unread Agent completion

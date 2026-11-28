@@ -81,6 +81,13 @@ public extension Collection where Element == PaneState {
             : nil
     }
 
+    /// Live workflow context for one session; finished runs remain in history
+    /// and pane metadata without adding rows to the session list.
+    var activeWorkflowStatuses: [AgentWorkflowPaneStatus] {
+        Dictionary(grouping: compactMap(\.workflow).filter { !$0.status.isTerminal }, by: \.runID)
+            .values.compactMap(\.first).sorted { $0.name < $1.name }
+    }
+
     /// Groups these panes into terminal-only sessions: one entry per session
     /// whose panes ALL lack an agent session, sorted by session name — a
     /// deterministic output order; callers that need a display order sort the

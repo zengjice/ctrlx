@@ -553,7 +553,7 @@
             // Real terminal progress wins across the session; a working agent
             // supplies an indeterminate fallback when no pane reports progress.
             let sessionProgress = panes.effectiveProgress
-            let workflows = Dictionary(grouping: panes.compactMap(\.workflow), by: \.runID).values.compactMap(\.first).sorted { $0.name < $1.name }
+            let workflows = panes.activeWorkflowStatuses
 
             NavigationLink(value: SessionNavigation(
                 sessionName: session.sessionName,
