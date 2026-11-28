@@ -7,6 +7,21 @@
 - **Upstream**: [gpambrozio/Gallager](https://github.com/gpambrozio/Gallager)
 - **License**: GNU AGPL-3.0
 
+## 3.1.3 — Agent notes, provider recovery and richer Orbie
+
+- Add per-Agent notes on Mac, with an editor whose color matches the Agent card.
+- Keep the default Codex provider first without duplicate choices, and persist the
+  selected provider so restored native sessions resume with the correct profile.
+- Preserve the correct source Tab when using Quick Fork.
+- Render repository images and HTML previews in Orbie, defer diagram loading, and
+  cache chat assets for faster reuse.
+- Add commit and merge actions to the Workflow review template.
+- Merge the `bugfix` and `orbie` branches into `main`.
+- Validation: targeted regression suites passed serially (307 tests across 29
+  suites). SwiftFormat, CtrlX boundary checks, and Git diff checks passed.
+- This release builds macOS only. The final artifact is produced by the formal
+  Developer ID signed and notarized release workflow.
+
 ## 3.1.2 — Workflow polish and iOS tab groups
 
 - Acknowledge explicit completion calls for steps configured to finish when the
