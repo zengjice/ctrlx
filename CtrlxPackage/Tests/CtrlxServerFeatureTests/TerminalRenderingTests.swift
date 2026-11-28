@@ -54,6 +54,30 @@
 
     @Suite("Terminal Rendering - Garbled Output Investigation")
     struct TerminalRenderingTests {
+        @Test("Snapshot coordinates and visible rows stay within the pane", arguments: [
+            "4294967295,4294967295,1",
+            "9223372036854775807,9223372036854775807,1",
+            "-1,-1,1",
+            "1,0,1,1,4294967295,4294967295",
+        ])
+        @MainActor
+        func snapshotCoordinatesAreBounded(cursor: String) {
+            let snapshot = TmuxService().processCapturePaneForStreaming(
+                scrollbackOutput: nil,
+                visibleOutput: Array(repeating: "VISIBLE", count: 30).joined(separator: "\n"),
+                cursorOutput: cursor, width: 20, height: 4,
+                savedScreenOutput: "NORMAL"
+            )
+            #expect(snapshot.count < 1_024)
+            let (terminal, delegate) = makeTerminal(cols: 20, rows: 4)
+            withExtendedLifetime(delegate) {
+                terminal.feed(byteArray: Array(snapshot))
+                #expect(getRowText(terminal, row: 0).filter { $0 != "\0" } == "VISIBLE")
+                #expect((0..<4).contains(terminal.buffer.y))
+                #expect((0..<20).contains(terminal.buffer.x))
+            }
+        }
+
         // MARK: - H1: filterToColorCodesOnly strips too aggressively
 
         @Suite("H1: filterToColorCodesOnly behavior")
@@ -1842,7 +1866,9 @@
             var allContent: [String] = []
             for row in 0..<oversizedRows {
                 let text = getRowText(terminal, row: row).filter { $0 != "\0" }
-                if !text.isEmpty { allContent.append(text) }
+                if !text.isEmpty {
+                    allContent.append(text)
+                }
             }
 
             // Scrollback should be suppressed despite having many lines
@@ -2188,7 +2214,9 @@
             func scrollbackRow(containing needle: String) -> Int? {
                 for row in 0..<total {
                     guard let line = terminal.getScrollInvariantLine(row: row) else { continue }
-                    if line.translateToString(trimRight: true).contains(needle) { return row }
+                    if line.translateToString(trimRight: true).contains(needle) {
+                        return row
+                    }
                 }
                 return nil
             }
@@ -2238,10 +2266,10 @@
             let rebuildWidth = 120
             let postResizeCols = 40
 
-            /// Each row is ~32 chars of content padded to the full 120 width —
-            /// exactly what `-N` emits. Content stays under postResizeCols so a
-            /// *trimmed* row never wraps; an *untrimmed* 120-wide row would wrap
-            /// into 3 rows whose last two are blank.
+            // Each row is ~32 chars of content padded to the full 120 width —
+            // exactly what `-N` emits. Content stays under postResizeCols so a
+            // *trimmed* row never wraps; an *untrimmed* 120-wide row would wrap
+            // into 3 rows whose last two are blank.
             func pad(_ s: String) -> String {
                 s + String(repeating: " ", count: max(0, rebuildWidth - s.count))
             }

@@ -193,9 +193,22 @@ stateDiagram-v2
 `subscribe(paneId:target:...)` follows the canonical sequence:
 
 1. Register the subscriber's private bootstrap gate and enable `%output` for the pane.
-2. Capture history, visible cells and cursor in one command-list transaction through that same session connection.
+2. Capture history, saved normal-screen cells, current cells, cursor and alternate-screen state in one command-list transaction through that same session connection.
 3. At the transaction's final `%end`, discard pre-boundary bytes already represented by the snapshot.
 4. Return `snapshot + post-boundary bytes`, then route subsequent `%output` live.
+
+Snapshots restore the native buffer as well as text. For an already-running
+alternate-screen TUI, the bootstrap first rebuilds its saved normal screen and
+cursor, then enters the alternate screen and draws the current cells. This lets
+late subscribers route TUI scrolling correctly and return to the saved screen
+when the app exits. A normal-screen snapshot stays in the normal buffer.
+Modes 47/1047 may report an unset saved cursor (`UINT_MAX`); the bootstrap
+uses the current cursor in that case, and rendering is bounded by the pane grid.
+Because `capture-pane -a` crops a saved grid to the current width, an alternate
+screen exit triggers the existing pane-wide ordered resync. The control-output
+token framer recognizes the exit even across chunks, without interpreting
+escape-like text inside OSC/DCS strings. The resulting snapshot restores tmux's
+actual normal screen after a resize before post-boundary output resumes.
 
 When the last subscriber leaves, the manager disables `%output` for that pane. The FIFO remains attached in scan-only mode, so OSC side effects keep flowing for desktop notifications and sidebar UI.
 

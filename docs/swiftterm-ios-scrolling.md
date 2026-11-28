@@ -964,6 +964,19 @@ Called on:
 
 ### Text Selection Across the Outer Viewport
 
+The Host bootstrap restores the native normal/alternate buffer state together
+with captured text and cursor, including when the Viewer joins an already-running
+TUI, reconnects or resynchronizes. The saved normal screen is rebuilt before
+entering an alternate screen, so leaving the TUI restores its original content
+and cursor. Without that mode restoration, the Viewer mistakes fullscreen Codex
+for normal history and sends selected drags to the outer viewport. This correction
+is in the Host snapshot producer; existing iOS selection routing consumes the
+restored mode without Agent-name heuristics.
+The Host bounds snapshot coordinates and handles the unset saved cursor used
+by modes 47/1047. On alternate-screen exit it resynchronizes from tmux, because
+a saved-screen capture taken after narrowing can omit cells that tmux restores
+on exit. This uses the existing ordered stream reset for Mac and iOS Viewers.
+
 The pinned SwiftTerm fork distinguishes selection-handle drags from ordinary pans and
 auto-scrolls near the vertically clipped viewport edges. CtrlX installs itself as the
 delegate of lazily added pans that have no delegate, so SwiftTerm's handle hit test is

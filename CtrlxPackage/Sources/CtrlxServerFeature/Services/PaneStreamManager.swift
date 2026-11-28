@@ -384,8 +384,14 @@
                 guard let self, self.readers[paneId]?.serverID == serverID else { return }
                 self.updateDimensions(paneId: paneId, width: width, height: height)
             }
-            controlClientManager.setOnOutput { [weak self] paneId, data, serverID in
+            controlClientManager.setOnOutput { [weak self] paneId, data, serverID, didExitAlternateScreen in
                 guard let self, self.readers[paneId]?.serverID == serverID else { return }
+                // capture-pane -a crops the saved grid to the current width.
+                // Only tmux can restore the complete normal screen after a
+                // resize, so cross an ordered snapshot boundary on exit.
+                if didExitAlternateScreen, let context = self.readers[paneId] {
+                    self.requestResync(paneId: paneId, subscriptionIds: context.subscriberIds)
+                }
                 self.handleControlOutput(paneId: paneId, data: data)
             }
             controlClientManager.setOnConnectionReady { [weak self] sessionName, serverID in
@@ -534,17 +540,19 @@
 
             // Refresh dimensions for every bootstrap. A pane may have changed
             // since discovery even when another subscriber is already live.
-            if let dims = try? await tmuxService.getPaneDimensions(target),
-               var refreshed = readers[paneId],
-               refreshed.reader === context.reader {
+            if
+                let dims = try? await tmuxService.getPaneDimensions(target),
+                var refreshed = readers[paneId],
+                refreshed.reader === context.reader {
                 refreshed.width = dims.width
                 refreshed.height = dims.height
                 readers[paneId] = refreshed
             }
 
-            guard var captureContext = readers[paneId],
-                  captureContext.reader === context.reader,
-                  captureContext.subscriberIds.contains(subscriptionId) else {
+            guard
+                var captureContext = readers[paneId],
+                captureContext.reader === context.reader,
+                captureContext.subscriberIds.contains(subscriptionId) else {
                 await rollbackBootstrap(
                     subscriptionId: subscriptionId,
                     paneId: paneId
@@ -603,11 +611,12 @@
             // No await after this transition: MainActor cannot deliver another
             // pipe event between making the subscription live and returning its
             // complete initial byte stream to the caller.
-            guard var readySubscription = subscriptions[subscriptionId],
-                  readySubscription.bootstrap.hasSnapshotBoundary,
-                  let readyContext = readers[paneId],
-                  readyContext.reader === context.reader,
-                  readyContext.subscriberIds.contains(subscriptionId) else {
+            guard
+                var readySubscription = subscriptions[subscriptionId],
+                readySubscription.bootstrap.hasSnapshotBoundary,
+                let readyContext = readers[paneId],
+                readyContext.reader === context.reader,
+                readyContext.subscriberIds.contains(subscriptionId) else {
                 await rollbackBootstrap(
                     subscriptionId: subscriptionId,
                     paneId: paneId
@@ -688,13 +697,14 @@
         /// mirror before buffered live bytes resume.
         public func updateDimensions(paneId: String, width: Int, height: Int) {
             guard var context = readers[paneId] else { return }
-            guard let boundary = PaneDimensionResyncBoundary(
-                currentWidth: context.width,
-                currentHeight: context.height,
-                newWidth: width,
-                newHeight: height,
-                subscriptionIds: context.subscriberIds
-            ) else { return }
+            guard
+                let boundary = PaneDimensionResyncBoundary(
+                    currentWidth: context.width,
+                    currentHeight: context.height,
+                    newWidth: width,
+                    newHeight: height,
+                    subscriptionIds: context.subscriberIds
+                ) else { return }
             context.width = boundary.width
             context.height = boundary.height
             readers[paneId] = context
@@ -1219,8 +1229,9 @@
                 // Keep feeding their private buffers, even while live mirrors
                 // are suppressed behind the pane-wide resync boundary.
                 for subscriberId in readers[paneId]?.subscriberIds ?? [] {
-                    guard var subscription = subscriptions[subscriberId],
-                          subscription.bootstrap.isCollecting else { continue }
+                    guard
+                        var subscription = subscriptions[subscriberId],
+                        subscription.bootstrap.isCollecting else { continue }
                     _ = subscription.bootstrap.route(data)
                     subscriptions[subscriberId] = subscription
                 }
@@ -1324,9 +1335,10 @@
                 // title/session metadata may have changed while it was pending.
                 // Revalidate even on query failure and do not revive a reader
                 // whose resync was cancelled by teardown.
-                guard !Task.isCancelled, !isShuttingDown,
-                      var context = readers[paneId],
-                      context.reader === originalContext.reader else { return }
+                guard
+                    !Task.isCancelled, !isShuttingDown,
+                    var context = readers[paneId],
+                    context.reader === originalContext.reader else { return }
                 if let dimensions {
                     context.width = dimensions.width
                     context.height = dimensions.height
@@ -1360,13 +1372,16 @@
                         }
                     )
                 } catch {
-                    if Task.isCancelled { return }
+                    if Task.isCancelled {
+                        return
+                    }
                     let failureTargets = targets
                         .union(readers[paneId]?.subscriberIds ?? [])
                         .union(pendingResyncRequests.take(paneId: paneId))
                     for subscriptionId in failureTargets {
-                        guard let subscription = subscriptions[subscriptionId],
-                              !subscription.bootstrap.isCollecting else { continue }
+                        guard
+                            let subscription = subscriptions[subscriptionId],
+                            !subscription.bootstrap.isCollecting else { continue }
                         subscription.onResync?(.failure(error))
                     }
                     logger.error("Failed to resynchronize pane stream", metadata: [
@@ -1376,8 +1391,9 @@
                     return
                 }
 
-                guard !Task.isCancelled, !isShuttingDown,
-                      readers[paneId]?.reader === context.reader else { return }
+                guard
+                    !Task.isCancelled, !isShuttingDown,
+                    readers[paneId]?.reader === context.reader else { return }
                 guard var bootstrap = resyncBootstraps[paneId], bootstrap.hasSnapshotBoundary else {
                     logger.error("Missing ordered snapshot boundary", metadata: [
                         "paneId": "\(paneId)",
@@ -1391,8 +1407,9 @@
                 // subscribers must receive this snapshot before the tail.
                 let currentSubscriberIds = readers[paneId]?.subscriberIds ?? []
                 for subscriptionId in currentSubscriberIds {
-                    guard let subscription = subscriptions[subscriptionId],
-                          !subscription.bootstrap.isCollecting else { continue }
+                    guard
+                        let subscription = subscriptions[subscriptionId],
+                        !subscription.bootstrap.isCollecting else { continue }
                     subscription.onResync?(.success(SubscriptionResult(
                         subscriptionId: subscriptionId,
                         initialContent: captured,
@@ -1409,8 +1426,9 @@
                 resyncingPaneIds.remove(paneId)
                 if !postSnapshotData.isEmpty {
                     for subscriptionId in currentSubscriberIds {
-                        guard let subscription = subscriptions[subscriptionId],
-                              !subscription.bootstrap.isCollecting else { continue }
+                        guard
+                            let subscription = subscriptions[subscriptionId],
+                            !subscription.bootstrap.isCollecting else { continue }
                         // Collecting subscriptions already buffered these bytes
                         // against their private boundary; never append twice.
                         subscription.onData(postSnapshotData)

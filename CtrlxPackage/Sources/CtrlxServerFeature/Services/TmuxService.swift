@@ -1377,6 +1377,8 @@ final public class TmuxService {
         return result.stdout
     }
 
+    private static let streamingScreenStateFormat = "#{cursor_x},#{cursor_y},#{cursor_flag},#{alternate_on},#{alternate_saved_x},#{alternate_saved_y}"
+
     /// Captures pane content with scrollback via subprocess.
     /// Kept for standalone capture tests and fallback scenarios. Streaming must
     /// use `capturePaneViaControlMode` so snapshots and live output are ordered.
@@ -1409,22 +1411,26 @@ final public class TmuxService {
         } else {
             ProcessResult(exitCode: 0, stdout: Data(), stderr: Data())
         }
+        let savedScreenResult = try await runTmuxCommand(
+            ["capture-pane", "-t", target, "-p", "-e", "-N", "-a", "-q"]
+        )
         let visibleResult = try await runTmuxCommand(
             ["capture-pane", "-t", target, "-p", "-e", "-N"]
         )
-        guard visibleResult.isSuccess else {
+        let cursorResult = try await runTmuxCommand(
+            ["display-message", "-t", target, "-p", Self.streamingScreenStateFormat]
+        )
+        guard visibleResult.isSuccess, savedScreenResult.isSuccess, cursorResult.isSuccess else {
             throw TmuxError.invalidPane(target: target)
         }
-        let cursorResult = try await runTmuxCommand(
-            ["display-message", "-t", target, "-p", "#{cursor_x},#{cursor_y},#{cursor_flag}"]
-        )
 
         return processCapturePaneForStreaming(
             scrollbackOutput: scrollbackResult.isSuccess ? scrollbackResult.stdoutString : nil,
             visibleOutput: visibleResult.stdoutString,
             cursorOutput: cursorResult.stdoutString,
             width: width,
-            height: height
+            height: height,
+            savedScreenOutput: savedScreenResult.stdoutString
         )
     }
 
@@ -1479,8 +1485,9 @@ final public class TmuxService {
         if scrollbackLines > 0 {
             commands.append("capture-pane -t '\(paneId)' -p -e -N -S -\(scrollbackLines) -E -1")
         }
+        commands.append("capture-pane -t '\(paneId)' -p -e -N -a -q")
         commands.append("capture-pane -t '\(paneId)' -p -e -N")
-        commands.append("display-message -t '\(paneId)' -p '#{cursor_x},#{cursor_y},#{cursor_flag}'")
+        commands.append("display-message -t '\(paneId)' -p '\(Self.streamingScreenStateFormat)'")
 
         if expectedWorkspacePane != nil {
             commands.append("display-message -t '\(paneId)' -p '#{pid}:#{start_time}|#{\(WorkspaceTmuxRecovery.paneKey)}'")
@@ -1515,7 +1522,8 @@ final public class TmuxService {
             visibleOutput: responses[responses.count - 2].output,
             cursorOutput: responses[responses.count - 1].output,
             width: width,
-            height: height
+            height: height,
+            savedScreenOutput: responses[responses.count - 3].output
         )
     }
 
@@ -1530,14 +1538,49 @@ final public class TmuxService {
         visibleOutput: String,
         cursorOutput: String,
         width: Int,
-        height: Int
+        height: Int,
+        savedScreenOutput: String = ""
     ) -> Data {
+        let fields = cursorOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: ",", omittingEmptySubsequences: false)
+        guard fields.count == 6 else {
+            return renderCapturedScreen(scrollbackOutput: scrollbackOutput, visibleOutput: visibleOutput, cursorOutput: cursorOutput, width: width, height: height)
+        }
+
+        // A late subscriber never saw the app enter its alternate screen.
+        // Rebuild the saved normal screen first so the eventual exit restores it.
+        let alternate = fields[3] == "1"
+        var output = Data("\u{1b}[?1049l".utf8)
+        if alternate {
+            // Modes 47/1047 do not save a cursor; tmux reports UINT_MAX.
+            // In that case retain the current cursor rather than rendering it
+            // as a row/column in the saved normal screen.
+            let savedX = Int(fields[4]).flatMap { (0..<max(0, width)).contains($0) ? $0 : nil }
+            let savedY = Int(fields[5]).flatMap { (0..<max(0, height)).contains($0) ? $0 : nil }
+            output.append(renderCapturedScreen(
+                scrollbackOutput: scrollbackOutput, visibleOutput: savedScreenOutput,
+                cursorOutput: "\(savedX.map(String.init) ?? String(fields[0])),\(savedY.map(String.init) ?? String(fields[1])),1", width: width, height: height
+            ))
+            output.append(Data("\u{1b}[?1049h".utf8))
+        }
+        output.append(renderCapturedScreen(
+            scrollbackOutput: alternate ? nil : scrollbackOutput,
+            visibleOutput: visibleOutput, cursorOutput: cursorOutput, width: width, height: height
+        ))
+        return output
+    }
+
+    private func renderCapturedScreen(
+        scrollbackOutput: String?, visibleOutput: String, cursorOutput: String,
+        width: Int, height: Int
+    ) -> Data {
+        guard width > 0, height > 0 else { return Data() }
         // Parse cursor position and visibility flag
         // Format: "x,y,flag" where flag is 1 (visible) or 0 (hidden via DECTCEM)
         let cursorPos = cursorOutput.trimmingCharacters(in: .whitespacesAndNewlines)
         let cursorParts = cursorPos.split(separator: ",")
-        let cursorX = Int(cursorParts.first ?? "0") ?? 0
-        let cursorY = cursorParts.count >= 2 ? (Int(cursorParts[1]) ?? 0) : 0
+        let cursorX = min(max(Int(cursorParts.first ?? "0") ?? 0, 0), width - 1)
+        let cursorY = min(max(cursorParts.count >= 2 ? (Int(cursorParts[1]) ?? 0) : 0, 0), height - 1)
         let cursorVisible = cursorParts.count >= 3 ? (Int(cursorParts[2]) ?? 1) != 0 : true
 
         var output = ""
@@ -1550,6 +1593,7 @@ final public class TmuxService {
         }
         let visibleLines = visibleContent
             .split(separator: "\n", omittingEmptySubsequences: false)
+            .prefix(height)
             .map(String.init)
 
         // Part 1: Output scrollback with filtered escape codes (keep only SGR/colors)

@@ -163,7 +163,7 @@ actor TmuxControlClient {
     private var _onLayoutChange: (@Sendable () -> Void)?
     private var _onSessionChanged: (@Sendable (String, String) -> Void)?
     private var _onExit: (@Sendable (String?) -> Void)?
-    private var _onOutput: (@MainActor @Sendable (String, Data) -> Void)?
+    private var _onOutput: (@MainActor @Sendable (String, Data, Bool) -> Void)?
     private var outputEnabledPaneIds: Set<String> = []
     private var outputFramers: [String: TerminalOutputTokenFramer] = [:]
     private var outputSanitizers: [String: TerminalOutputSanitizer] = [:]
@@ -241,7 +241,7 @@ actor TmuxControlClient {
         _onExit = handler
     }
 
-    func setOnOutput(_ handler: @escaping @MainActor @Sendable (String, Data) -> Void) {
+    func setOnOutput(_ handler: @escaping @MainActor @Sendable (String, Data, Bool) -> Void) {
         _onOutput = handler
     }
 
@@ -592,6 +592,7 @@ actor TmuxControlClient {
         // that tiny prefix is what makes its first snapshot boundary safe.
         var framer = outputFramers[output.paneId] ?? TerminalOutputTokenFramer()
         let framedData = framer.frame(output.data)
+        let didExitAlternateScreen = framer.didExitAlternateScreen
         outputFramers[output.paneId] = framer
 
         guard outputEnabledPaneIds.contains(output.paneId), !framedData.isEmpty else { return }
@@ -606,7 +607,7 @@ actor TmuxControlClient {
             metrics.record(.outputMainActorWait, since: waiting)
             let delivering = metrics.begin()
             defer { metrics.record(.outputCallback, since: delivering) }
-            onOutput(output.paneId, data)
+            onOutput(output.paneId, data, didExitAlternateScreen)
         }
     }
 

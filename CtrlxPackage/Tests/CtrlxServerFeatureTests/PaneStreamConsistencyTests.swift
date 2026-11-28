@@ -11,6 +11,117 @@
     @Suite("Pane stream consistency", .serialized)
     @MainActor
     struct PaneStreamConsistencyTests {
+        @Test("Opening an already-fullscreen pane restores its buffer and later returns to the saved normal screen", arguments: [47, 1_047, 1_049])
+        func lateSubscriptionRestoresAlternateScreen(mode: Int) async throws {
+            try await withPane(height: 58) { fixture in
+                try await fixture.write("NORMAL_SCREEN")
+                try await fixture.tmux.sendRawBytes(fixture.pane.paneId, data: Data("\u{1b}[?\(mode)h\u{1b}[?1000h\u{1b}[?1006h\u{1b}[HFULLSCREEN_TRANSCRIPT".utf8))
+                try await fixture.waitForText("FULLSCREEN_TRANSCRIPT")
+
+                let rendered = CapturedTerminal(cols: fixture.pane.width, rows: fixture.pane.height)
+                var resets = 0
+                let subscription = try await fixture.streams.subscribe(
+                    paneId: fixture.pane.paneId, target: fixture.pane.paneId,
+                    onData: { rendered.feed($0) },
+                    onResync: { result in
+                        switch result {
+                        case let .success(snapshot):
+                            rendered.replace(with: snapshot)
+                            resets += 1
+                        case let .failure(error): Issue.record("Alternate-screen resync failed: \(error)")
+                        }
+                    }
+                )
+                rendered.feed(subscription.initialContent)
+                // The UIKit replay consumes these exact Host bootstrap bytes.
+                if let path = ProcessInfo.processInfo.environment["CTRLX_TERMINAL_SNAPSHOT_EVIDENCE"] {
+                    var bootstrap = subscription.initialContent
+                    bootstrap.append(await fixture.streams.mouseModeSequences(for: fixture.pane.paneId))
+                    try bootstrap.write(to: URL(fileURLWithPath: path))
+                }
+                try #require(rendered.isAlternate)
+                #expect(try rendered.text == (await fixture.visibleText()))
+
+                let standalone = CapturedTerminal(cols: fixture.pane.width, rows: fixture.pane.height)
+                try standalone.feed(await fixture.tmux.capturePaneWithScrollbackForStreaming(fixture.pane.paneId))
+                #expect(standalone.isAlternate && standalone.text == rendered.text)
+
+                fixture.streams.requestResync(subscriptionId: subscription.subscriptionId)
+                try await waitUntil { resets > 0 }
+                let previousResets = resets
+                let client = try await fixture.clients.getClient(for: fixture.pane.sessionName)
+                await client.disconnect()
+                _ = try await fixture.clients.getClient(for: fixture.pane.sessionName)
+                try await waitUntil { resets > previousResets }
+                #expect(rendered.isAlternate)
+                #expect(try rendered.text == (await fixture.visibleText()))
+
+                try await fixture.write("LIVE_UPDATE")
+                try await waitUntil { rendered.text.contains("LIVE_UPDATE") }
+                try await fixture.tmux.sendRawBytes(fixture.pane.paneId, data: Data("\u{1b}[?\(mode)l\r\nSHELL_RESUMED".utf8))
+                try await fixture.waitForText("SHELL_RESUMED")
+                try await waitUntil { !rendered.isAlternate && rendered.text.contains("SHELL_RESUMED") }
+                #expect(rendered.text.contains("NORMAL_SCREEN"))
+                #expect(try rendered.text == (await fixture.visibleText()))
+                var normalSnapshot = try await fixture.tmux.capturePaneWithScrollbackForStreaming(fixture.pane.paneId)
+                let normal = CapturedTerminal(cols: fixture.pane.width, rows: fixture.pane.height)
+                normal.feed(normalSnapshot)
+                #expect(!normal.isAlternate && normal.text == rendered.text)
+                if let path = ProcessInfo.processInfo.environment["CTRLX_TERMINAL_SNAPSHOT_EVIDENCE"] {
+                    normalSnapshot.append(await fixture.streams.mouseModeSequences(for: fixture.pane.paneId))
+                    try normalSnapshot.write(to: URL(fileURLWithPath: path + ".normal"))
+                }
+                await fixture.streams.unsubscribe(subscription.subscriptionId)
+            }
+        }
+
+        @Test("Exiting a narrowed alternate screen restores tmux's complete normal grid", arguments: [47, 1_047, 1_049])
+        func alternateExitAfterNarrowing(mode: Int) async throws {
+            try await withPane(width: 80, height: 24) { fixture in
+                try await fixture.tmux.sendRawBytes(
+                    fixture.pane.paneId,
+                    data: Data("\u{1b}[2J\u{1b}[HLEFT\u{1b}[1;62HRIGHT_SIDE_MARKER\u{1b}[?\(mode)h\u{1b}[HALT_READY".utf8)
+                )
+                try await fixture.waitForText("ALT_READY")
+                try await fixture.tmux.resizePane(fixture.pane.paneId, width: 40, height: 24)
+                let rendered = CapturedTerminal(cols: 40, rows: 24)
+                var normalResets = 0
+                let subscription = try await fixture.streams.subscribe(
+                    paneId: fixture.pane.paneId, target: fixture.pane.paneId,
+                    onData: { rendered.feed($0) },
+                    onResync: { result in
+                        switch result {
+                        case let .success(snapshot):
+                            rendered.replace(with: snapshot)
+                            if !rendered.isAlternate {
+                                normalResets += 1
+                            }
+                        case let .failure(error): Issue.record("Normal-screen resync failed: \(error)")
+                        }
+                    }
+                )
+                rendered.feed(subscription.initialContent)
+                #expect(rendered.isAlternate)
+                let cropped = CapturedTerminal(cols: subscription.width, rows: subscription.height)
+                cropped.feed(subscription.initialContent)
+                cropped.feed(Data("\u{1b}[?\(mode)l".utf8))
+                #expect(!cropped.text.contains("RIGHT_SIDE_MARKER"))
+                try await fixture.tmux.sendRawBytes(fixture.pane.paneId, data: Data("\u{1b}[?\(mode)l".utf8))
+                try await waitUntil { normalResets > 0 }
+                let normalText = try await fixture.visibleText()
+                #expect(rendered.gridText == normalText)
+                #expect(rendered.text.contains("RIGHT_SIDE_MARKER"))
+
+                let previousResets = normalResets
+                try await fixture.tmux.resizePane(fixture.pane.paneId, width: 80, height: 24)
+                try await waitUntil { normalResets > previousResets }
+                let widenedText = try await fixture.visibleText()
+                #expect(rendered.gridText == widenedText)
+                #expect(rendered.text.contains("RIGHT_SIDE_MARKER"))
+                await fixture.streams.unsubscribe(subscription.subscriptionId)
+            }
+        }
+
         @Test("Stable pane targets share the discovery session's control connection")
         func stableTargetUsesOneConnection() async throws {
             try await withPane { fixture in
@@ -65,7 +176,7 @@
                 try await Task.sleep(for: .milliseconds(100))
 
                 #expect(rendered.text.components(separatedBy: "LIVE_ONCE").count - 1 == 1)
-                #expect(rendered.text == (try await fixture.visibleText()))
+                #expect(try rendered.text == (await fixture.visibleText()))
                 #expect(try await fixture.controlClientCount() == 1)
                 await fixture.streams.unsubscribe(second.subscriptionId)
             }
@@ -111,7 +222,9 @@
                         }
                     }
                     var clients: [TmuxControlClient] = []
-                    for try await client in group { clients.append(client) }
+                    for try await client in group {
+                        clients.append(client)
+                    }
                     return clients
                 }
                 #expect(Set(clients.map(ObjectIdentifier.init)).count == 1)
@@ -175,7 +288,9 @@
                     try await fixture.waitForText("ROW_80")
                     try await Task.sleep(for: .milliseconds(100))
                     let expected = try await fixture.visibleText()
-                    for rendered in terminals { #expect(rendered.text == expected) }
+                    for rendered in terminals {
+                        #expect(rendered.text == expected)
+                    }
                     #expect(try await fixture.controlClientCount() == 1)
                 } catch {
                     writer.cancel()
@@ -213,11 +328,13 @@
                     paneId: fixture.pane.paneId, target: fixture.pane.paneId,
                     onData: { joining.feed($0) },
                     onResync: { result in
-                        if case let .success(snapshot) = result { joining.replace(with: snapshot) }
+                        if case let .success(snapshot) = result {
+                            joining.replace(with: snapshot)
+                        }
                     }
                 )
                 joining.feed(second.initialContent)
-                #expect(joining.text == (try await fixture.visibleText()))
+                #expect(try joining.text == (await fixture.visibleText()))
                 // Output after the newcomer's snapshot but before the shared
                 // resync boundary must not vanish when that boundary commits.
                 try await fixture.write("\r\nDURING_RESYNC\r\n")
@@ -245,7 +362,11 @@
                 let first = try await fixture.streams.subscribe(
                     paneId: fixture.pane.paneId, target: fixture.pane.paneId,
                     onData: { _ in },
-                    onResync: { if case .success = $0 { resets += 1 } }
+                    onResync: {
+                        if case .success = $0 {
+                            resets += 1
+                        }
+                    }
                 )
                 let leaving = try await fixture.streams.subscribe(
                     paneId: fixture.pane.paneId, target: fixture.pane.paneId,
@@ -298,9 +419,11 @@
         }
 
         enum ResyncTrigger: CaseIterable, Sendable {
-            case backpressure, resize
+            case backpressure
+            case resize
 
-            @MainActor fileprivate func request(_ fixture: Fixture, subscriptionId: UUID) {
+            @MainActor
+            fileprivate func request(_ fixture: Fixture, subscriptionId: UUID) {
                 switch self {
                 case .backpressure:
                     fixture.streams.requestResync(subscriptionId: subscriptionId)
@@ -320,7 +443,9 @@
                     paneId: fixture.pane.paneId, target: fixture.pane.paneId,
                     onData: { firstTerminal.feed($0) },
                     onResync: { result in
-                        if case let .success(snapshot) = result { firstTerminal.replace(with: snapshot) }
+                        if case let .success(snapshot) = result {
+                            firstTerminal.replace(with: snapshot)
+                        }
                     }
                 )
                 firstTerminal.feed(first.initialContent)
@@ -343,7 +468,9 @@
                             paneId: fixture.pane.paneId, target: fixture.pane.paneId,
                             onData: { rendered.feed($0) },
                             onResync: { result in
-                                if case let .success(snapshot) = result { rendered.replace(with: snapshot) }
+                                if case let .success(snapshot) = result {
+                                    rendered.replace(with: snapshot)
+                                }
                             }
                         )
                         rendered.feed(subscription.initialContent)
@@ -353,7 +480,9 @@
                     try await fixture.write("\r\nCOMPOSER_READY\r\n")
                     try await waitUntil { terminals.allSatisfy { $0.text.contains("COMPOSER_READY") } }
                     let expected = try await fixture.visibleText()
-                    for rendered in terminals { #expect(rendered.text == expected) }
+                    for rendered in terminals {
+                        #expect(rendered.text == expected)
+                    }
                 } catch {
                     writer.cancel()
                     _ = try? await writer.value
@@ -368,7 +497,10 @@
             private var armed = false
             private var failOnResume = false
             private var continuation: CheckedContinuation<Void, Never>?
-            var isPaused: Bool { continuation != nil }
+            var isPaused: Bool {
+                continuation != nil
+            }
+
             private(set) var cancellationObserved = false
 
             func arm(failOnResume: Bool = false) {
@@ -384,10 +516,14 @@
                 } onCancel: {
                     Task { await self.recordCancellation() }
                 }
-                if failOnResume { throw FixtureError.dimensionQueryFailed }
+                if failOnResume {
+                    throw FixtureError.dimensionQueryFailed
+                }
             }
 
-            private func recordCancellation() { cancellationObserved = true }
+            private func recordCancellation() {
+                cancellationObserved = true
+            }
 
             func release() {
                 armed = false
@@ -399,7 +535,9 @@
         private func waitUntil(_ predicate: @MainActor () async throws -> Bool) async throws {
             let deadline = ContinuousClock.now.advanced(by: .seconds(5))
             repeat {
-                if try await predicate() { return }
+                if try await predicate() {
+                    return
+                }
                 try await Task.sleep(for: .milliseconds(10))
             } while ContinuousClock.now < deadline
             throw FixtureError.outputTimeout
@@ -443,6 +581,8 @@
         }
 
         private func withPane(
+            width: Int = 40,
+            height: Int = 12,
             dimensionGate: DimensionQueryGate? = nil,
             _ operation: @MainActor (Fixture) async throws -> Void
         ) async throws {
@@ -472,7 +612,7 @@
                     )
                 }
                 _ = try await run([
-                    "new-session", "-d", "-s", "fixture", "-x", "40", "-y", "12",
+                    "new-session", "-d", "-s", "fixture", "-x", String(width), "-y", String(height),
                     "/bin/sh -c 'stty raw -echo; printf CTRLX_READY; exec /bin/cat'",
                 ])
                 let tmux = TmuxService(tmuxPath: tmuxPath, socketPath: socketPath)
@@ -482,8 +622,14 @@
                 )
                 do {
                     let pane = try #require(await tmux.refreshPanes().first)
-                    let fixture = Fixture(tmux: tmux, clients: clients, streams: streams, pane: pane,
-                                          tmuxPath: tmuxPath, socketPath: socketPath)
+                    let fixture = Fixture(
+                        tmux: tmux,
+                        clients: clients,
+                        streams: streams,
+                        pane: pane,
+                        tmuxPath: tmuxPath,
+                        socketPath: socketPath
+                    )
                     try await fixture.waitForText("CTRLX_READY")
                     try await operation(fixture)
                 } catch {
@@ -529,7 +675,9 @@
             func waitForText(_ text: String) async throws {
                 let deadline = ContinuousClock.now.advanced(by: .seconds(5))
                 repeat {
-                    if try await visibleText().contains(text) { return }
+                    if try await visibleText().contains(text) {
+                        return
+                    }
                     try await Task.sleep(for: .milliseconds(10))
                 } while ContinuousClock.now < deadline
                 throw FixtureError.outputTimeout
@@ -539,14 +687,20 @@
         private enum FixtureError: Error { case outputTimeout, dimensionQueryFailed }
 
         @MainActor
-        private final class CapturedTerminal: TerminalDelegate {
+        final private class CapturedTerminal: TerminalDelegate {
             private lazy var terminal = Terminal(delegate: self)
+
+            var isAlternate: Bool {
+                terminal.isCurrentBufferAlternate
+            }
 
             init(cols: Int, rows: Int) {
                 terminal.resize(cols: cols, rows: rows)
             }
 
-            func feed(_ data: Data) { terminal.feed(byteArray: Array(data)) }
+            func feed(_ data: Data) {
+                terminal.feed(byteArray: Array(data))
+            }
 
             func replace(with snapshot: PaneStreamManager.SubscriptionResult) {
                 terminal = Terminal(delegate: self)
@@ -564,6 +718,17 @@
                     .map {
                         $0.translateToString(trimRight: true, skipNullCellsFollowingWide: true)
                             .trimmingCharacters(in: .whitespaces)
+                    }
+                    .joined(separator: "\n")
+                    .trimmingCharacters(in: .newlines)
+            }
+
+            var gridText: String {
+                (0..<terminal.rows).compactMap { terminal.getLine(row: $0) }
+                    .map {
+                        let text = $0.translateToString(trimRight: true, skipNullCellsFollowingWide: true)
+                            .replacingOccurrences(of: "\0", with: " ")
+                        return String(text.reversed().drop(while: { $0 == " " }).reversed())
                     }
                     .joined(separator: "\n")
                     .trimmingCharacters(in: .newlines)

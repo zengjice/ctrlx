@@ -45,7 +45,7 @@
         private var _onPanesChanged: (@MainActor () -> Void)?
 
         /// Decoded and sanitized live terminal bytes.
-        private var _onOutput: (@MainActor (String, Data, String) -> Void)?
+        private var _onOutput: (@MainActor (String, Data, String, Bool) -> Void)?
         private var onConnectionReady: (@MainActor (String, String) -> Void)?
 
         /// Pane output remains disabled until at least one mirror subscribes.
@@ -69,7 +69,7 @@
             _onPanesChanged = handler
         }
 
-        public func setOnOutput(_ handler: @escaping @MainActor (String, Data, String) -> Void) {
+        public func setOnOutput(_ handler: @escaping @MainActor (String, Data, String, Bool) -> Void) {
             _onOutput = handler
         }
 
@@ -155,11 +155,11 @@
                 }
             }
 
-            await client.setOnOutput { [weak self, weak client] paneId, data in
+            await client.setOnOutput { [weak self, weak client] paneId, data, didExitAlternateScreen in
                 guard
                     let self, let client,
                     let serverID = self.clientServerIDs[ObjectIdentifier(client)] else { return }
-                self._onOutput?(paneId, data, serverID)
+                self._onOutput?(paneId, data, serverID, didExitAlternateScreen)
             }
 
             do {

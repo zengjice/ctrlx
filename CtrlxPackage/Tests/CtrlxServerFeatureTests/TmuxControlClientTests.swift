@@ -52,12 +52,42 @@
     final private class CapturingControlOutput {
         var events: [String] = []
         var dataEvents: [Data] = []
+        var alternateExits: [Bool] = []
     }
 
     @Suite("TmuxControlClient Tests")
     struct TmuxControlClientTests {
         @Suite("Control Output")
         struct ControlOutputTests {
+            @Test("Alternate-screen exit is detected across output chunks", arguments: [47, 1_047, 1_049])
+            @MainActor
+            func alternateExitIsFramed(mode: Int) async {
+                let client = TmuxControlClient()
+                let capture = CapturingControlOutput()
+                await client.setOnOutput { _, data, didExitAlternateScreen in
+                    capture.dataEvents.append(data)
+                    capture.alternateExits.append(didExitAlternateScreen)
+                }
+                await client.testSetPaneOutputEnabled("%7", enabled: true)
+                await client.testProcessIncomingData(Data("%output %7 \\033[?\(mode)\n".utf8))
+                #expect(capture.alternateExits.isEmpty)
+                await client.testProcessIncomingData(Data("%output %7 ;1000lRESTORED\n".utf8))
+                await client.testProcessIncomingData(Data("%output %7 ordinary\n".utf8))
+                #expect(capture.alternateExits == [true, false])
+                #expect(capture.dataEvents.first == Data("\u{1b}[?\(mode);1000lRESTORED".utf8))
+            }
+
+            @Test("Strings and unrelated modes cannot trigger an alternate-screen resync")
+            func onlyPrivateScreenResetsTriggerExit() {
+                var framer = TerminalOutputTokenFramer()
+                for token in ["\u{1b}]2;\u{1b}[?1049l\u{7}", "\u{1b}P\u{1b}[?47l\u{1b}\\", "\u{1b}[?1000l", "\u{1b}[?1049h", "\u{1b}[1049l"] {
+                    #expect(framer.frame(Data(token.utf8)) == Data(token.utf8))
+                    #expect(!framer.didExitAlternateScreen)
+                }
+                #expect(framer.frame(Data([0x9B] + Array("?1049l".utf8))) == Data([0x9B] + Array("?1049l".utf8)))
+                #expect(framer.didExitAlternateScreen)
+            }
+
             @Test("Octal escapes decode without changing UTF-8 bytes")
             func octalEscapesDecodeAtByteLevel() throws {
                 var line = Data("%output %7 中文".utf8)
@@ -85,7 +115,7 @@
             func splitUTF8ScalarIsReassembled() async {
                 let client = TmuxControlClient()
                 let capture = CapturingControlOutput()
-                await client.setOnOutput { _, data in
+                await client.setOnOutput { _, data, _ in
                     capture.dataEvents.append(data)
                 }
                 await client.testSetPaneOutputEnabled("%7", enabled: true)
@@ -109,7 +139,7 @@
                 let client = TmuxControlClient()
                 let capture = CapturingControlOutput()
                 await client.testMarkInitialAttachHandled()
-                await client.setOnOutput { _, data in
+                await client.setOnOutput { _, data, _ in
                     capture.dataEvents.append(data)
                     capture.events.append("output")
                 }
@@ -145,7 +175,7 @@
             func preSubscriptionPrefixIsRetained() async {
                 let client = TmuxControlClient()
                 let capture = CapturingControlOutput()
-                await client.setOnOutput { _, data in
+                await client.setOnOutput { _, data, _ in
                     capture.dataEvents.append(data)
                 }
 
@@ -164,7 +194,7 @@
                 let client = TmuxControlClient()
                 let capture = CapturingControlOutput()
                 await client.testMarkInitialAttachHandled()
-                await client.setOnOutput { _, data in
+                await client.setOnOutput { _, data, _ in
                     capture.events.append("output:\(String(decoding: data, as: UTF8.self))")
                 }
                 await client.testSetPaneOutputEnabled("%7", enabled: true)
@@ -321,7 +351,7 @@
                     )
                     let client = TmuxControlClient(tmuxPath: tmuxPath, socketPath: socketPath)
                     let capture = CapturingControlOutput()
-                    await client.setOnOutput { _, data in
+                    await client.setOnOutput { _, data, _ in
                         capture.events.append(String(decoding: data, as: UTF8.self))
                     }
                     try await client.connect(sessionTarget: created.sessionName)
@@ -527,7 +557,7 @@
             let client = TmuxControlClient(performanceMetrics: metrics)
             await client.testMarkInitialAttachHandled()
             let capture = CapturingControlOutput()
-            await client.setOnOutput { _, _ in capture.events.append("live") }
+            await client.setOnOutput { _, _, _ in capture.events.append("live") }
             await client.testSetPaneOutputEnabled("%7", enabled: true)
             let transaction = Task {
                 try await client.testEnqueueCommandList(id: 1, count: 3) { _ in

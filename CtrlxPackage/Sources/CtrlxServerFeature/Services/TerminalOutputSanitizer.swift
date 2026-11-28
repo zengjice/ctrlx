@@ -31,8 +31,10 @@
         private var state = State.ground
         private var pendingToken = Data()
         private var isDiscardingOversizedToken = false
+        private(set) var didExitAlternateScreen = false
 
         mutating func frame(_ data: Data) -> Data {
+            didExitAlternateScreen = false
             guard !data.isEmpty else { return Data() }
 
             var framed = Data()
@@ -75,11 +77,17 @@
                         state = .csi
                     case 0x5D: // ] — OSC
                         state = .osc
-                    case 0x50, 0x58, 0x5E, 0x5F, 0x6B: // DCS, SOS, PM, APC, tmux title
+                    case 0x50,
+                         0x58,
+                         0x5E,
+                         0x5F,
+                         0x6B: // DCS, SOS, PM, APC, tmux title
                         state = .controlString
-                    case 0x20 ... 0x2F:
+                    case 0x20...0x2F:
                         state = .escapeIntermediate
-                    case 0x30 ... 0x7E, 0x18, 0x1A:
+                    case 0x30...0x7E,
+                         0x18,
+                         0x1A:
                         finishToken(into: &framed)
                     default:
                         // C0 controls execute without leaving escape state.
@@ -89,7 +97,9 @@
                 case .escapeIntermediate:
                     appendPending(current)
                     switch current {
-                    case 0x30 ... 0x7E, 0x18, 0x1A:
+                    case 0x30...0x7E,
+                         0x18,
+                         0x1A:
                         finishToken(into: &framed)
                     case 0x1B:
                         state = .escape
@@ -100,7 +110,9 @@
                 case .csi:
                     appendPending(current)
                     switch current {
-                    case 0x40 ... 0x7E, 0x18, 0x1A:
+                    case 0x40...0x7E,
+                         0x18,
+                         0x1A:
                         finishToken(into: &framed)
                     case 0x1B:
                         state = .escape
@@ -111,7 +123,10 @@
                 case .osc:
                     appendPending(current)
                     switch current {
-                    case 0x07, 0x9C, 0x18, 0x1A: // BEL, ST, CAN, SUB
+                    case 0x07,
+                         0x9C,
+                         0x18,
+                         0x1A: // BEL, ST, CAN, SUB
                         finishToken(into: &framed)
                     case 0x1B:
                         state = .oscEscape
@@ -130,7 +145,9 @@
                 case .controlString:
                     appendPending(current)
                     switch current {
-                    case 0x9C, 0x18, 0x1A: // ST, CAN, SUB
+                    case 0x9C,
+                         0x18,
+                         0x1A: // ST, CAN, SUB
                         finishToken(into: &framed)
                     case 0x1B:
                         state = .controlStringEscape
@@ -164,13 +181,16 @@
                 beginToken(byte, state: .csi)
             case 0x9D:
                 beginToken(byte, state: .osc)
-            case 0x90, 0x98, 0x9E, 0x9F:
+            case 0x90,
+                 0x98,
+                 0x9E,
+                 0x9F:
                 beginToken(byte, state: .controlString)
-            case 0xC2 ... 0xDF:
+            case 0xC2...0xDF:
                 beginToken(byte, state: .utf8(continuations: 1))
-            case 0xE0 ... 0xEF:
+            case 0xE0...0xEF:
                 beginToken(byte, state: .utf8(continuations: 2))
-            case 0xF0 ... 0xF4:
+            case 0xF0...0xF4:
                 beginToken(byte, state: .utf8(continuations: 3))
             default:
                 framed.append(byte)
@@ -194,6 +214,16 @@
 
         private mutating func finishToken(into framed: inout Data) {
             if !isDiscardingOversizedToken {
+                if case .csi = state, pendingToken.last == 0x6C { // l — DECRST
+                    let prefixLength = pendingToken.first == 0x9B ? 1 : 2
+                    let parameters = pendingToken.dropFirst(prefixLength).dropLast()
+                    if parameters.first == 0x3F { // ? — private modes
+                        let modes = parameters.dropFirst().split(separator: 0x3B)
+                        if modes.contains(where: { [47, 1_047, 1_049].contains(Int(String(decoding: $0, as: UTF8.self)) ?? 0) }) {
+                            didExitAlternateScreen = true
+                        }
+                    }
+                }
                 framed.append(pendingToken)
             }
             pendingToken.removeAll(keepingCapacity: true)
@@ -277,7 +307,9 @@
 
         mutating func sanitize(_ data: Data) -> Data {
             guard !data.isEmpty else { return Data() }
-            if canUsePlainDataPath(data) { return data }
+            if canUsePlainDataPath(data) {
+                return data
+            }
 
             let tmuxFiltered = titleFilter.filter(data)
             guard !tmuxFiltered.isEmpty else { return Data() }
